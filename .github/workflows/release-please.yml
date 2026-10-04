@@ -1,0 +1,91 @@
+name: release-please
+
+# Runs on every push to main. release-please reads the conventional
+# commits accumulated since the last release, opens (or updates) a
+# "Release PR" with the next version and a generated CHANGELOG.md
+# section. Merging the Release PR creates the git tag and a GitHub
+# Release in one step. No release ever happens without a human merge of
+# the Release PR — release-please is suggestion + bookkeeping, not
+# auto-deploy.
+#
+# The release lines are fixed by the specification (build phases):
+# 0.1.x is alpha (α), 0.2.x is beta, 1.0.0 is the first public release.
+# The minor names the line, so nothing here moves it by accident.
+#
+# Starting point: nothing has been released. The manifest states 0.0.0,
+# which release-please reads as "no release yet", and
+# release-please-config.json sets initial-version to 0.1.0, so the first
+# Release PR proposes α 0.1.0 and nothing else: never 0.0.1, and never
+# the 1.0.0 release-please would default to. bootstrap-sha names the
+# commit this went in on top of, so earlier history is not listed.
+#
+# Until α 0.1.0 is cut, the Release PR stays open, titled
+# "release 0.1.0", and collects the changelog. It opens with the first
+# feat, fix, perf, revert, refactor or docs commit on main. Cutting α
+# 0.1.0 is merging that pull request, which is done on purpose, when the
+# entry criteria on the build phases page are met. Do not merge it
+# before then.
+#
+# Version bump rules after 0.1.0, while the version is below 1.0.0:
+#   feat: / fix: / perf:       patch (0.y.Z)
+#   revert: / refactor: /
+#     docs:                    patch (0.y.Z); they have a visible
+#                              changelog section, so they release
+#   feat!: / fix!: /
+#     BREAKING CHANGE:         minor (0.Y.0), see below
+#   chore / style / test / build / ci → no bump, no Release PR
+#
+# A feature does not move the minor (bump-patch-for-minor-pre-major). A
+# breaking change proposes the next minor and never 1.0.0
+# (bump-minor-pre-major). Within a line that proposal is usually not
+# wanted, because the next minor is the next line: hold the line with a
+# footer naming the patch, as below.
+#
+# Moving to a new line (0.1 → 0.2, → 1.0.0), holding a line against a
+# breaking change, and naming any exact version are done on purpose with
+# a footer on a commit that lands on main:
+#
+#   chore: start the beta line
+#
+#   Release-As: 0.2.0
+#
+# The open Release PR then proposes exactly that version.
+#
+# release-type is "simple" because there is no package.json yet: the
+# version is written to version.txt. When package.json arrives, change
+# release-type to "node" in release-please-config.json so that its
+# version field is written instead, and delete version.txt.
+#
+# Config lives in release-please-config.json; current version in
+# .release-please-manifest.json.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    # release-please-action@v4 still ships as a Node 20 JavaScript action.
+    # Opt this job into Node 24, as the documentation repository does, so
+    # it runs on the runtime the runners now provide.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      # Pinned to a commit, with the release in the comment, because this job
+      # holds contents: write and a moved tag upstream must not run under it.
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # Token defaults to GITHUB_TOKEN, which has contents:write +
+          # pull-requests:write via the `permissions` block above.
+          # No external secret required. A pull request opened with that
+          # token does not start other workflows, so checks added later do
+          # not run on the Release PR itself; they run on main when it is
+          # merged.

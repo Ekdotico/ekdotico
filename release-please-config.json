@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "initial-version": "0.1.0",
+  "draft": false,
+  "prerelease": false,
+  "bootstrap-sha": "afb1493a418b48c979420596b3e58055c46cadd8",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "ekdotico",
+      "changelog-path": "CHANGELOG.md",
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Bug Fixes" },
+        { "type": "perf", "section": "Performance" },
+        { "type": "revert", "section": "Reverts" },
+        { "type": "refactor", "section": "Code refactoring" },
+        { "type": "docs", "section": "Documentation" },
+        { "type": "style", "section": "Styles", "hidden": true },
+        { "type": "chore", "section": "Chores", "hidden": true },
+        { "type": "build", "section": "Build system", "hidden": true },
+        { "type": "ci", "section": "Continuous integration", "hidden": true },
+        { "type": "test", "section": "Tests", "hidden": true }
+      ]
+    }
+  }
+}
