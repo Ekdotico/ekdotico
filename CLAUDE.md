@@ -6,7 +6,11 @@ Loaded into every Claude Code session in this repository. Project rules override
 
 This repository is the Ekdotico **application**. **Istorico is out of scope**: do not build FR-PR, FR-VR, the signer host, the reconciler, the key registry, anchoring, the record bundle, or `verify.ekdoti.co`. They live in `Ekdotico/istorico`, which has its own owner and rules.
 
-The application still owes Istorico a seam: signal emission, session lifecycle on the Hocuspocus connection, lock and seal calls, lock-time document facts, and lineage on Revise and Branch. Build the seam as a **port** with a no-op adapter (see `analysis/srs-analysis.md`, section 3). Never stub Istorico's internals, and never invent a signed payload.
+The application meets Istorico only through the **integration contract** (`app/(site)/design/integration-contract/page.mdx` in the Docs; NFR-IC-15). Build the seam as a **port** with a no-op adapter, exactly as clause IC-49 defines it for α 0.1.0; IC-18 lists what α builds and what it leaves to the release that links Istorico. Never stub Istorico's internals, and never invent a signed payload. `analysis/srs-analysis.md` is history: it was written against SRS 1.5.0, before the contract existed, and binds nothing.
+
+## Releases
+
+0.1.x is alpha (α), 0.2.x is beta, 1.0 is the first public release. **α 0.1.0 is defined by requirement ID** on `app/(site)/implementation/build-phases/page.mdx`, with its exclusions and entry criteria. A requirement not listed there is not in α 0.1.0, however small. The application runs on Node.js 26 only (NFR-IC-03).
 
 ## The specification is the source of truth
 
@@ -15,7 +19,13 @@ The application still owes Istorico a seam: signal emission, session lifecycle o
 - **Read `origin/main`, not the working tree.** The local `../docs` checkout may be on a feature branch far behind main. Run `git -C ../docs fetch origin`, then `git -C ../docs show origin/main:<path>`. Record the commit with `git -C ../docs rev-parse --short origin/main` and cite it in commit messages.
 - Treat `../docs` as read-only. Never edit, branch, or commit there from this repository.
 - Where the locked stack (NFR-IC-01) allows a choice, or a detail is internal (file layout, function names, test structure), the decision is yours. A choice becomes a gap when it changes observable behaviour, stored data, a displayed word, a threshold, or a security or data-protection property that the Docs do not settle.
-- Items the Docs mark "initial value" or "proposal" are parameters: make them configurable, defaulting to the stated value. "Not decided" items (N1 to N13 in `srs/2-functional-requirements/_notes.md`) are not implemented in any form.
+- The design pages live under `app/(site)/` in the Docs. The SRS files under `srs/` are normative; the integration contract is normative for the boundary with Istorico; the other design pages follow the SRS and never override it.
+- **The open questions register** (`app/(site)/implementation/open-questions/page.mdx`) is the one place that says whether something is settled. Check it before building anything that touches a marked item:
+  - **Not decided** (N, P, Q, R, and L rows): not implemented in any form, including behind a flag or as a placeholder. If the task needs one, stop.
+  - **Assumed, confirm** (A rows): the text is written as fact so that nothing is undefined, and it may change when the person named confirms it. Implement it as written, keep it isolated so that it is cheap to change, and name the A row in the commit message.
+  - **Decided** (D rows): binding.
+  - A row marked "Issue" must be closed before the release or the event it names; do not work past it.
+- Items the Docs mark "initial value" or "proposal" are parameters: make them configurable, defaulting to the stated value. A value "to be set" has no default: stop.
 
 ### When the Docs are missing, ambiguous, contradictory, or wrong: stop
 
