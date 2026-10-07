@@ -229,6 +229,15 @@ Given on the decisions page and read back from its store. They bind the build fr
 | Q16 | All four as recommended |
 | Email (review of pull request 2) | **Not answered.** Whether the requirements that A52 and A72 block are built against a local sink before the service is checked. The merged rules carry the owner's instruction to build against a sink and send nothing real |
 
+### Rows raised by the review of slice 0
+
+Written for the register in its own columns, and held here until the amendment to the Docs is requested.
+
+| What is open | Where | Recommendation | Alternatives | Who decides | α 0.1.0 |
+|---|---|---|---|---|---|
+| **The runtime role can change the migration history.** NFR-IC-17 gives `ekdotico_app` "read and write on the application schema", and NFR-IC-16 puts the one migration history inside that schema. So the runtime role may delete or alter rows of `_prisma_migrations` (shown on PostgreSQL 17: `DELETE 1`). A runtime that has been taken over could make the next deployment skip a migration or run one again, under the migration role. **The owner's answer of 7 October 2026: leave it as the text has it, and record it.** | NFR-IC-16, NFR-IC-17; contract IC-23, IC-51; `scripts/provision.sql` in the `ekdotico` repository (Docs commit `f4ec614`) | Left as it is in the α line. The runtime role already may delete every row of the application, so the history adds little to what a takeover reaches, and closing it changes the provisioning from one run before the first deployment to a second run after it | (1) The script revokes the role's privileges on the table where it exists, and is run again after the first deployment; each later run must make the revoke after its grants. (2) The history is moved out of the application schema, which NFR-IC-16 forbids as written | The owner | In the release, as written. Reviewed again before the beta line |
+| **Two privileges the provisioning script cannot take away.** A role of the application may still connect to another database of the same cluster, since that is revoked on the other database and not from this one. And `ekdotico_backup`, whose privileges are "select on the application schema, and nothing else", can still create a large object, which is a privilege of the cluster and belongs to no schema | NFR-IC-17; register A28; `scripts/provision.sql`, header | The cluster holds the application's database and no other that a role of the application should reach; where it holds one, connection is revoked on it by hand, and the procedure says so. The large object is accepted and stated in A28 | (1) The script is given the names of the other databases and revokes on each. (2) `lo_creat` is revoked from PUBLIC on the cluster, which needs a superuser and so cannot be done on a managed cluster | The owner | In the release, as written |
+
 ## 7. Disagreements found, where the governing text is clear
 
 Reported as the rules ask. In each, I follow the SRS, or the contract at the boundary; none needs a decision, and each wants a correction in the Docs.
