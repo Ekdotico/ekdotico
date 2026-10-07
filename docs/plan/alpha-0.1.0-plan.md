@@ -1,6 +1,6 @@
 # Ekdotico α 0.1.0: implementation plan
 
-Status: **proposed, awaiting the owner**. Nothing beyond the walking skeleton is built until this is accepted.
+Status: **accepted by the owner on 7 October 2026**, with the answers recorded at the end of section 6. Two points are open: the admission signature format (Q9), which holds slice 3, and whether email is built before the service is checked.
 
 Written on 7 October 2026 against Docs commit `f4ec614` (612 requirements, decisions D1 to D121).
 
@@ -202,6 +202,32 @@ Each is written as a ready-made row. "Blocks" names the slice that cannot be fin
 | Q14 | **How the 100 MB of a document is counted.** Every stored object, or only the images that still appear in the document; an image taken out stays stored for up to 30 days. And what an undo shows when it brings back an image whose object the timer has deleted | Every stored object counts. An image that reappears before its deletion is kept. After it, the block shows that the image is no longer available | (1) Only images that appear count, which lets a document hold more than 100 MB for 30 days. (2) An image taken out is deleted at once, and undo cannot bring it back | The owner | Issue: blocks slice 19 |
 | Q15 | **Details of the draft export.** Unstated: the names of the front-matter keys other than `draft`, and the form of the date; the extensions and content types; a table whose header row is off; the width of a resized image | Keys `title`, `date` (the day, ISO 8601, UTC), `id`, `draft`. `.zip` and `.md` from the same stem. A table without a header row is written with an empty header row. The width is not written | (1) The width as an HTML `img` element. (2) A table without a header as HTML | The owner | Issue: blocks slice 21 |
 | Q16 | **Smaller points of the editor.** (a) Whether the four inline Markdown rows of FR-ED-14 (bold, italic, strikethrough, code) are in, since the cut says "the rows for the block types above". (b) Whether a colour freed by a closed connection is reused, and what "order of connection" means across two instances (FR-ED-17). (c) Where footnote entries are shown, and what `/footnote` inserts (FR-ED-05). (d) FR-AU-82's refusal of a password that "contains" the local part of the address has no rule for case or for a very short local part | (a) In; their marks are in FR-ED-02 whole. (b) The lowest free colour, taken from the shared count. (c) At the end of the document; the palette inserts the marker and opens its entry. (d) Without regard to case, and only for a local part of four characters or more | For each, the opposite | The owner | Issue: (a) slice 11, (b) 14, (c) 20, (d) 3 |
+
+### The owner's answers of 7 October 2026
+
+Given on the decisions page and read back from its store. They bind the build from here; each still wants its row in the register, which the owner has asked to be requested in one amendment to the Docs once every question has an answer.
+
+| # | Answer |
+|---|---|
+| Plan | The plan stands; slice 0 starts |
+| Gap reports | A register row, handed to the owner in the conversation |
+| Q1 | The three rows are exempt from the 429 and give their uniform answer; per-address rows still answer 429 |
+| Q2 | A second way to the acceptance page, keyed by the invitation's identifier, for the signed-in account that holds the invited address |
+| Q3 | As the lock link: a page with one control; every session ends except the confirming browser's own |
+| Q4 | A table in the `ekdotico` schema: time, kind, user identifier, document identifier |
+| Q5 | A setting for the number of trusted proxies, default 0 |
+| Q6 | Written under the Expression Guidelines and approved in the pull request that adds each text |
+| Q7 | Refused with a 422; the Reviewer column stays in the stored set |
+| Q8 | "Check the docs repo, it should define this. If it doesn't go with recommended." Checked at `f4ec614`: API design says only that "error shapes are consistent across all routes", and no page defines one. So the recommended answer stands: one shape `{ "error": { "code", "message" } }`, 415 and 413 for the image refusals, 404 for both document cases, 403 for the gate, authorisation before validation |
+| Q9 | **Left until Praktico's side is written.** This holds slice 3: the three admission endpoints and the command cannot be built without a signature format, and no account can be created without them. Slice 2 can be built; slices 4 to 8 can be built and tested only against accounts made directly in a test database, and cannot be used by a person |
+| Q10 | Every wrong password at any prompt counts; a refused attempt counts toward nothing; a locked signed-in user is given the statement and stays signed in |
+| Q11 | The capability is read before the insert; three guarded call sites of `erase`; the start-up check is built |
+| Q12 | The α script grants nothing for the `vector` extension |
+| Q13 | Our own removal of metadata for the four formats, with a test file for each kind and an independent review |
+| Q14 | Every stored object counts toward the 100 MB |
+| Q15 | Keys `title`, `date`, `id`, `draft`; plain Markdown; width not written |
+| Q16 | All four as recommended |
+| Email (review of pull request 2) | **Not answered.** Whether the requirements that A52 and A72 block are built against a local sink before the service is checked. The merged rules carry the owner's instruction to build against a sink and send nothing real |
 
 ## 7. Disagreements found, where the governing text is clear
 
