@@ -8,7 +8,7 @@
   "engines": {
     "node": ">=26 <27"
   },
-  "packageManager": "pnpm@10.33.2",
+  "packageManager": "pnpm@10.34.6",
   "scripts": {
     "dev": "next dev",
     "dev:collab": "node --watch src/collab/server.ts",

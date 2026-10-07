@@ -5,7 +5,7 @@
 
 | Purpose                    | Tool                             | Version        |
 | -------------------------- | -------------------------------- | -------------- |
-| Package manager            | pnpm                             | 10.33.2        |
+| Package manager            | pnpm                             | 10.34.6        |
 | Unit and integration tests | Vitest                           | 5.0.3          |
 | End-to-end tests           | Playwright                       | 1.63.0         |
 | Lint                       | ESLint with `eslint-config-next` | 9.39.5, 16.4.0 |

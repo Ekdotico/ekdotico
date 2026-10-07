@@ -16,11 +16,4 @@ describe('loadSettings (FR-AU-83; register A102)', () => {
     });
     expect(foundingTeamEmails).toEqual(['one@example.com', 'two@example.com']);
   });
-
-  it('keeps FEEDBACK_INTAKE_ENABLED off unless it is exactly "true"', () => {
-    const base = { FOUNDING_TEAM_EMAILS: '' };
-    expect(loadSettings(base).feedbackIntakeEnabled).toBe(false);
-    expect(loadSettings({ ...base, FEEDBACK_INTAKE_ENABLED: '1' }).feedbackIntakeEnabled).toBe(false);
-    expect(loadSettings({ ...base, FEEDBACK_INTAKE_ENABLED: 'true' }).feedbackIntakeEnabled).toBe(true);
-  });
 });

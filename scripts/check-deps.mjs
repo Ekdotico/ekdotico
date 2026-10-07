@@ -2,7 +2,8 @@
 //
 // NFR-IC-08: every dependency is pinned to an exact version.
 // NFR-IC-12: every direct dependency carries a licence that needs no review, or
-// is listed below with the review that admitted it.
+// is listed below with the review that admitted it. A package that states no
+// licence as a single string is not admitted.
 import { readFileSync } from 'node:fs';
 
 const FREE = new Set(['MIT', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0', 'ISC', 'CC0-1.0']);
@@ -12,7 +13,7 @@ const REVIEWED = {
 };
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-const direct = { ...pkg.dependencies, ...pkg.devDependencies };
+const direct = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
 const faults = [];
 
 for (const [name, version] of Object.entries(direct)) {
@@ -26,10 +27,10 @@ for (const [name, version] of Object.entries(direct)) {
     faults.push(`${name}: not installed, so its licence cannot be read`);
     continue;
   }
-  const reviewed = REVIEWED[name];
-  if (!FREE.has(license) && reviewed?.license !== license) {
+  const admitted = typeof license === 'string' && (FREE.has(license) || REVIEWED[name]?.license === license);
+  if (!admitted) {
     faults.push(
-      `${name}: licence "${license}" needs a review recorded in scripts/check-deps.mjs (NFR-IC-12)`,
+      `${name}: licence ${JSON.stringify(license)} needs a review recorded in scripts/check-deps.mjs (NFR-IC-12)`,
     );
   }
 }

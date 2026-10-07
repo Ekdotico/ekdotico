@@ -40,9 +40,13 @@ Start PostgreSQL 17 and Valkey:
 docker compose up -d
 ```
 
-A PostgreSQL 17 server that is already running on the machine serves as well; use its superuser connection in place of the one below.
+A PostgreSQL 17 server that is already running on the machine serves as well. Create the database on it, UTF8 with the `en_US.UTF-8` locale, which the provisioning script requires (NFR-I18-03), and use that server's superuser connection in place of the one below:
 
-Copy the settings:
+```bash
+psql postgres -c "CREATE DATABASE ekdotico ENCODING 'UTF8' LOCALE 'en_US.UTF-8' LOCALE_PROVIDER libc TEMPLATE template0"
+```
+
+Copy the settings of the web application. Only `pnpm dev` and `pnpm start` read `.env.local`; everything else takes its settings from the command line, as shown below:
 
 ```bash
 cp .env.example .env.local
@@ -89,6 +93,12 @@ Each refuses to start where `FOUNDING_TEAM_EMAILS` is absent; an empty value is 
 | `pnpm build`            | The production build                                                                                                             |
 | `pnpm test:e2e`         | The end-to-end tests, on a production build                                                                                      |
 
-The integration test creates a database of its own and drops it. The three roles belong to the server, so they stay, with the development passwords above.
+The integration test runs only against a local server. It creates databases of its own and drops them. The three roles belong to the server, so they stay, with the development passwords above.
+
+The end-to-end tests need Playwright's browser once:
+
+```bash
+pnpm exec playwright install chromium
+```
 
 CI runs all of them on every pull request, on Node.js 26.

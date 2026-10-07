@@ -4,8 +4,6 @@
 export interface Settings {
   /** The founding team's addresses, lower case (FR-AU-83; register D114, A102). */
   foundingTeamEmails: readonly string[];
-  /** Step (c) of an account deletion (FR-AU-58; register D112). Off in α 0.1.0. */
-  feedbackIntakeEnabled: boolean;
 }
 
 export function loadSettings(env: Record<string, string | undefined> = process.env): Settings {
@@ -23,6 +21,5 @@ export function loadSettings(env: Record<string, string | undefined> = process.e
       .split(',')
       .map((address) => address.trim().toLowerCase())
       .filter(Boolean),
-    feedbackIntakeEnabled: env.FEEDBACK_INTAKE_ENABLED === 'true',
   };
 }
