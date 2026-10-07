@@ -1,0 +1,16 @@
+# 0002 — Dependencies held below their latest stable release
+
+- **Date:** 7 October 2026, at repository initialisation.
+- **Requirement:** NFR-IC-04. Every dependency is installed at its latest stable release unless a constraint is recorded. These are the constraints. Each was measured on the day against the registry.
+
+| Dependency                         | Installed       | Latest stable | Why it is held                                                                                                                                        |
+| ---------------------------------- | --------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `react`, `react-dom`               | 19.2.8          | 19.3.0        | NFR-IC-01 locks React 19.2. 19.2.8 is the latest release of that line                                                                                 |
+| `@types/react`, `@types/react-dom` | 19.2.18, 19.2.7 | 19.3.0        | They follow the React line                                                                                                                            |
+| `typescript`                       | 6.0.3           | 7.0.2         | `eslint-config-next` 16.4.0 depends on `typescript-eslint` `^8.56.0`, whose peer range is `typescript >=4.8.4 <6.1.0`                                 |
+| `eslint`                           | 9.39.5          | 10.12.0       | `eslint-config-next` 16.4.0 depends on `eslint-plugin-react`, `eslint-plugin-jsx-a11y`, and `eslint-plugin-import`, whose peer ranges end at ESLint 9 |
+| `prisma`                           | 7.10.0          | 7.10.0        | Not held. The registry's `latest` tag points at 8.0.0-rc.21, which is a pre-release, and NFR-IC-04 means the most recent release that is not one      |
+
+Measure each range again before repeating it: `npm view <package> peerDependencies`.
+
+`vite` is a direct development dependency only because `vitest` declares it as a peer and peers are not installed automatically here (`auto-install-peers=false`).

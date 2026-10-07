@@ -51,10 +51,9 @@ name: release-please
 #
 # The open Release PR then proposes exactly that version.
 #
-# release-type is "simple" because there is no package.json yet: the
-# version is written to version.txt. When package.json arrives, change
-# release-type to "node" in release-please-config.json so that its
-# version field is written instead, and delete version.txt.
+# release-type is "node": the version is written to the version field of
+# package.json. It was "simple", writing version.txt, until package.json
+# arrived with the walking skeleton.
 #
 # Config lives in release-please-config.json; current version in
 # .release-please-manifest.json.
@@ -75,7 +74,7 @@ jobs:
     # Opt this job into Node 24, as the documentation repository does, so
     # it runs on the runtime the runners now provide.
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
       # Pinned to a commit, with the release in the comment, because this job
       # holds contents: write and a moved tag upstream must not run under it.

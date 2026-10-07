@@ -1,0 +1,52 @@
+{
+  "name": "ekdotico",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ekdotico, the academic writing application.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "next dev",
+    "dev:collab": "node --watch src/collab/server.ts",
+    "build": "next build",
+    "start": "next start",
+    "start:collab": "node src/collab/server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "playwright test",
+    "check:deps": "node scripts/check-deps.mjs",
+    "db:migrate": "prisma migrate deploy"
+  },
+  "dependencies": {
+    "@ekdotico/domico": "0.25.0",
+    "next": "16.4.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.6.4",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.4.0",
+    "prettier": "3.9.9",
+    "prisma": "7.10.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "prisma"
+    ]
+  }
+}
