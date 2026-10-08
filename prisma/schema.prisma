@@ -44,11 +44,13 @@ model User {
   closedAlphaNoticeAcknowledgedAt DateTime?
   closedAlphaNoticeVersion        Int?
 
-  sessions  Session[]
-  accounts  Account[]
-  twoFactor TwoFactor?
+  sessions          Session[]
+  accounts          Account[]
+  twoFactor         TwoFactor?
   // FR-AU-09: at most one, by the unique `Workspace.ownerId`.
   personalWorkspace Workspace? @relation("PersonalWorkspace")
+  // FR-ED-19: the documents the account is the Owner of.
+  ownedDocuments    Document[] @relation("DocumentOwner")
 }
 
 model Session {
@@ -200,10 +202,63 @@ model Workspace {
   ownerId   String?       @unique
   createdAt DateTime      @default(now())
 
-  owner User? @relation("PersonalWorkspace", fields: [ownerId], references: [id], onDelete: Restrict)
+  owner     User?      @relation("PersonalWorkspace", fields: [ownerId], references: [id], onDelete: Restrict)
+  documents Document[]
 }
 
 enum WorkspaceType {
   PERSONAL
   INSTITUTIONAL
+}
+
+// ── Documents ───────────────────────────────────────────────────────────────
+// The columns of the slice that creates, lists and renames a document (Data
+// models, "What α 0.1.0 migrates"). `yjsState` arrives with the editor,
+// `deletedById` with deletion, and `clearingAt` with the clearing of an
+// account's documents.
+//
+// Neither relation deletes a document: a document goes by its own deletion
+// (FR-ED-36) and never because its Owner's row or its workspace's row went
+// (plan, C17).
+//
+// The migration adds what this file cannot say: that a title has 1 to 200
+// characters.
+model Document {
+  // FR-ED-35: a UUID in canonical lower-case text, which is how PostgreSQL
+  // writes one (contract IC-25). Version 4, issued by the database (plan, C16).
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // FR-AU-13: never changed after creation, but for a transfer of ownership.
+  workspaceId   String
+  // FR-ED-19: exactly one Owner, by `User.id` and never by an address (FR-AU-04).
+  ownerId       String
+  // FR-ED-35: at most 200 characters. Stored as written (NFR-SE-08).
+  title         String         @default("Untitled document")
+  // FR-ED-44, FR-ED-45: the permission set, stored whole: every permission of
+  // the table for every role, the Reviewer column and the comment rows
+  // included, written at creation with the defaults. A column and not rows,
+  // because the set is read with the document on every request (FR-ED-39) and
+  // is always read and written whole. Its form is in
+  // src/lib/documents/permissions.ts, which is also the only reader: a cell the
+  // table fixes is decided from the table, whatever is stored here.
+  permissionSet Json
+  // FR-ED-43, contract IC-16: fixed at creation from the capability the
+  // Istorico port reports, and never changed. No default, so that no row is
+  // written without the capability having been read.
+  recording     RecordingState
+  // FR-ED-36: set by the deletion of a later slice. It is here now because the
+  // one reader of a document's row and the list both leave a deleted document
+  // out, and the index below is theirs (plan, C17).
+  deletedAt     DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  owner     User      @relation("DocumentOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([ownerId, deletedAt])
+}
+
+enum RecordingState {
+  RECORDED
+  UNRECORDED
 }

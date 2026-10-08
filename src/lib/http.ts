@@ -50,6 +50,44 @@ export function textFields<Name extends string>(
 }
 
 /**
+ * The bytes of a request's body, or null where it is longer than `maxBytes`.
+ * Bounded, so that no request makes a process hold more than its route
+ * expects; the reading stops at the bound.
+ */
+export async function readBytes(request: Request, maxBytes: number): Promise<Buffer | null> {
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * The JSON of a request's body, or null where the body is longer than
+ * `maxBytes`, is not UTF-8, or is not JSON.
+ */
+export async function readJson(request: Request, maxBytes: number): Promise<unknown> {
+  const bytes = await readBytes(request, maxBytes);
+  if (!bytes) return null;
+  try {
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Where a person is returned to after signing in (FR-AU-07): a path of this
  * origin, and `/` for anything else. A value that begins `//` or `/\` names
  * another host to a browser, and one with a scheme does too, so neither is ever

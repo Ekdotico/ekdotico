@@ -114,6 +114,10 @@ The end-to-end tests need Playwright's browser once:
 pnpm exec playwright install chromium
 ```
 
-They build the application and serve it on port 3000. Where that port is taken, `E2E_PORT` names another: `E2E_PORT=3105 pnpm test:e2e`.
+They build the application and serve it on port 3000. Where `pnpm dev` holds that port, `E2E_PORT` names another, and with `ADMIN_DATABASE_URL` the run makes a database of its own and leaves the development database alone:
+
+```bash
+ADMIN_DATABASE_URL=postgresql://localhost:5432/postgres E2E_PORT=3109 pnpm test:e2e
+```
 
 CI runs all of them on every pull request, on Node.js 26.
