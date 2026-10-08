@@ -4,7 +4,17 @@
 // application has made of it.
 import net from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cookiesOf, createAccount, DAY, load, ORIGIN, PASSWORD, prepare, signIn } from './identity.ts';
+import {
+  cookiesOf,
+  createAccount,
+  DAY,
+  handle,
+  load,
+  ORIGIN,
+  PASSWORD,
+  prepare,
+  signIn,
+} from './identity.ts';
 
 const database = prepare('authconfig', {
   TRUSTED_PROXY_COUNT: '1',
@@ -17,7 +27,8 @@ const { auth, IDENTITY_ENDPOINTS, db, valkey, validateSessionRow } = await load(
 
 let userId = '';
 const request = (method: string, path: string, headers: Record<string, string> = {}) =>
-  auth().handler(
+  handle(
+    auth,
     new Request(`${ORIGIN}${path}`, {
       method,
       headers: {
@@ -204,6 +215,7 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
         'sendVerificationEmail',
         'setPassword',
         'signInEmail',
+        'signInLink',
         'signInSocial',
         'signOut',
         'signUpEmail',
@@ -218,9 +230,10 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     );
   });
 
-  it('serves these twelve and no other', () => {
+  it('serves these thirteen and no other', () => {
     expect([...IDENTITY_ENDPOINTS]).toEqual([
       'POST /sign-in/email', // FR-AU-81
+      'POST /sign-in/link', // FR-AU-81: the link of a lock email (register D115; A104)
       'POST /sign-out', // FR-AU-84
       'POST /request-password-reset', // FR-AU-86
       'POST /reset-password', // FR-AU-86
@@ -479,6 +492,68 @@ describe('signing out (FR-AU-84)', () => {
       expect(response.headers.getSetCookie(), origin).toEqual([]);
     }
     expect(await db().session.count({ where: { id: session.id } })).toBe(1);
+  });
+});
+
+// NFR-SE-17 (c): the library checks the origin only of a request that carries
+// a cookie, and these carry no session. Each endpoint checks it itself, since
+// the proxy can be skipped, and answers as the proxy does.
+describe('the endpoints without a session, from another origin (NFR-SE-17 (c))', () => {
+  const FORBIDDEN =
+    '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}';
+  const TOKEN = 'A'.repeat(43);
+  // Each with a body that the endpoint would act on, or answer in its own words.
+  const ENDPOINTS: [path: string, body: unknown, own: number][] = [
+    ['/sign-in/email', { email: 'person@example.com', password: PASSWORD }, 200],
+    ['/sign-in/link', { token: TOKEN }, 409],
+    ['/request-password-reset', { email: 'person@example.com' }, 200],
+    ['/reset-password', { token: TOKEN, newPassword: 'a new password, long enough' }, 409],
+    ['/two-factor/verify-totp', { code: '123456' }, 401],
+    ['/two-factor/verify-backup-code', { code: 'abcde-fghij' }, 401],
+  ];
+  const send = (path: string, body: unknown, headers: Record<string, string>) =>
+    handle(
+      auth,
+      new Request(`${ORIGIN}/api/auth${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it.each(ENDPOINTS)('%s is refused as the proxy refuses it, and does nothing', async (path, body, own) => {
+    const from = { 'x-forwarded-for': `203.0.113.${ENDPOINTS.findIndex(([each]) => each === path) + 1}` };
+    const sessions = await db().session.count();
+    const tokens = await db().verification.count();
+    const entries = vi.spyOn(db().securityLogEntry, 'create');
+    const asked = vi.spyOn(valkey(), 'eval');
+    const foreign: Record<string, string>[] = [
+      { origin: 'https://evil.example' },
+      { origin: 'null' },
+      { origin: `${ORIGIN}.evil.example` },
+      { origin: ORIGIN.toUpperCase() },
+      // No header at all: not from a page of the application.
+      {},
+    ];
+    for (const headers of foreign) {
+      const response = await send(path, body, { ...headers, ...from });
+      expect(response.status, JSON.stringify(headers)).toBe(403);
+      expect(await response.text()).toBe(FORBIDDEN);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.getSetCookie()).toEqual([]);
+    }
+    // Nothing was read of the request: no limit was asked or counted, no
+    // session and no token was written.
+    expect(asked).not.toHaveBeenCalled();
+    expect(await db().session.count()).toBe(sessions);
+    expect(await db().verification.count()).toBe(tokens);
+    // NFR-SE-19: a 403 has its entry, with no user, and one for the period and
+    // the network address however many requests are refused in it.
+    expect(entries.mock.calls.map(([{ data }]) => data)).toEqual([
+      { kind: 'forbidden', userId: undefined, documentId: undefined },
+    ]);
+    // From the application's own origin the endpoint answers for itself.
+    expect((await send(path, body, { origin: ORIGIN, ...from })).status).toBe(own);
   });
 });
 

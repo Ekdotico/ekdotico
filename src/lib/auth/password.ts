@@ -30,10 +30,11 @@ import { logLimitReached, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
-import { notAdmitted, tooManyRequests, unauthenticated } from './route-answers.ts';
+import { notAdmitted, refusedOrigin, tooManyRequests, unauthenticated } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
 import { SECOND_STEP } from './second-step.ts';
+import { liftLock, voidSignInLinks } from './sign-in-lock.ts';
 
 /** FR-AU-86: the one answer to every request for a reset, verbatim. */
 export const RESET_REQUESTED =
@@ -117,6 +118,9 @@ export const requestPasswordReset = createAuthEndpoint(
   '/request-password-reset',
   { method: 'POST' },
   async (ctx) => {
+    // NFR-SE-17 (c): before anything of the request is read.
+    const foreign = await refusedOrigin(ctx.headers);
+    if (foreign) return foreign;
     assertCollecting();
     const entered = textFields(ctx.body, 'email');
     if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.requestShape);
@@ -178,6 +182,9 @@ const passwordRefused = (refusal: string) =>
  * no cookie of a session.
  */
 export const resetPassword = createAuthEndpoint('/reset-password', { method: 'POST' }, async (ctx) => {
+  // NFR-SE-17 (c): before anything of the request is read.
+  const foreign = await refusedOrigin(ctx.headers);
+  if (foreign) return foreign;
   // The notice is left for after the answer, which only a request that
   // collects can take: asked now, before anything is written.
   assertCollecting();
@@ -220,9 +227,10 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
     });
     // "Setting it ends every session of the account" (FR-AU-85).
     await tx.session.deleteMany({ where: { userId: reset.userId } });
-    // FR-AU-81, FR-AU-86: the slice that builds the lock lifts it here, in
-    // this transaction (`User.lockedUntil`, a column that does not exist
-    // yet), and makes void the sign-in link of its email.
+    // FR-AU-86: it "lifts a lock on the account where one is in force", and
+    // makes void "the sign-in link of a lock email where one is outstanding".
+    // A second step begun from that link went with the steps, above.
+    await liftLock(tx, reset.userId);
     return true;
   });
   if (!completed) return notValid();
@@ -352,8 +360,11 @@ export const changePassword = createAuthEndpoint(
           where: { value: session.userId, identifier: { startsWith: SECOND_STEP } },
         });
         await tx.session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
-        // FR-AU-81: the slice that builds the lock makes void the sign-in link
-        // of a lock email here ("when the password … of the account is changed").
+        // FR-AU-81: the sign-in link of a lock email is void "when the
+        // password … of the account is changed". The lock itself stays: only
+        // a completed reset and the link lift one. A step begun from the link
+        // went with the steps, above.
+        await voidSignInLinks(tx, session.userId);
         return 'changed';
       })
       .catch((error: unknown) => {

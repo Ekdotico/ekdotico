@@ -2,7 +2,7 @@
 // cookies across several answers, the secret as an authenticator application
 // holds it, and an enrolment made as a person makes one (FR-AU-83).
 import { totpAt, totpStep } from '../../src/lib/auth/two-factor.ts';
-import { ORIGIN, PASSWORD, post, signIn, type load } from './identity.ts';
+import { handle, ORIGIN, PASSWORD, post, signIn, type load } from './identity.ts';
 
 type Auth = Awaited<ReturnType<typeof load>>['auth'];
 
@@ -110,7 +110,8 @@ export function secondStep(
   kind: 'totp' | 'backup-code' = 'totp',
   headers: Record<string, string> = {},
 ) {
-  return auth().handler(
+  return handle(
+    auth,
     new Request(`${ORIGIN}/api/auth/two-factor/verify-${kind}`, {
       method: 'POST',
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie, ...headers },

@@ -19,6 +19,10 @@ import { hashToken, newToken } from '../token.ts';
 // and the expiry is the 10 minutes of FR-AU-83. A reset and a change of the
 // password delete the rows of the account by the prefix (password.ts).
 export const SECOND_STEP = 'second-step:';
+// A step that began from the sign-in link of a lock email (FR-AU-81; register
+// A104, assumed) is told by this longer prefix, which no hash begins with.
+// Whatever deletes the steps of an account by `SECOND_STEP` deletes these too.
+export const LINK_STEP = `${SECOND_STEP}link:`;
 
 /** The cookie that holds the token of the step. The name is the library's own for it. */
 export const SECOND_STEP_COOKIE = 'two_factor';
@@ -29,17 +33,27 @@ export const SECOND_STEP_COOKIE = 'two_factor';
  * which has the attributes of every cookie of the application (NFR-SE-17 (c))
  * and lasts as long as the step. The token has 256 bits and is stored only as
  * a hash. Returns the identifier of the row, for a caller that must undo it.
+ *
+ * `linkUntil` is given where the step begins from the sign-in link of a lock
+ * email, and is the end of that link: the step is marked, and is over no
+ * later than the link is ("the link is valid until the lock would have ended").
  */
-export async function beginSecondStep(ctx: GenericEndpointContext, userId: string): Promise<string> {
+export async function beginSecondStep(
+  ctx: GenericEndpointContext,
+  userId: string,
+  linkUntil?: Date,
+): Promise<string> {
   const token = newToken();
   // FR-AU-83: "completed within 10 minutes of the password (an initial value)".
-  const seconds = settings().secondStepSeconds;
+  const now = Date.now();
+  const ends = Math.min(now + settings().secondStepSeconds * 1000, linkUntil?.getTime() ?? Infinity);
+  const seconds = Math.max(1, Math.ceil((ends - now) / 1000));
   const { id } = await db().verification.create({
     data: {
       id: randomUUID(),
-      identifier: SECOND_STEP + hashToken(token),
+      identifier: (linkUntil ? LINK_STEP : SECOND_STEP) + hashToken(token),
       value: userId,
-      expiresAt: new Date(Date.now() + seconds * 1000),
+      expiresAt: new Date(ends),
     },
     select: { id: true },
   });

@@ -8,7 +8,18 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, post, prepare, signIn, sunk } from './identity.ts';
+import {
+  cookiesOf,
+  createAccount,
+  handle,
+  load,
+  ORIGIN,
+  PASSWORD,
+  post,
+  prepare,
+  signIn,
+  sunk,
+} from './identity.ts';
 import {
   codeAt,
   enrol,
@@ -446,7 +457,8 @@ describe('the second step of a sign-in (FR-AU-81, FR-AU-83)', () => {
     await db().session.deleteMany({ where: { userId: id } });
     for (const kind of ['totp', 'backup-code'] as const) {
       const step = await passwordStep(auth, email, fresh());
-      const response = await auth().handler(
+      const response = await handle(
+        auth,
         new Request(`${ORIGIN}/api/auth/two-factor/verify-${kind}`, {
           method: 'POST',
           headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: step },

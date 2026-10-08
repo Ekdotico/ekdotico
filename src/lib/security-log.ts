@@ -18,6 +18,11 @@ import { settings } from './settings.ts';
 // that adds a kind, and the list is checked here before every write.
 const KINDS = [
   'sign_in_refused',
+  // The owner's decision of 9 October 2026 on pull request 17 (its register
+  // row is pending): a lock that begins, and a sign-in by the link of its
+  // email (FR-AU-81). Each is written in the transaction of the change.
+  'sign_in_locked',
+  'sign_in_by_link',
   'forbidden',
   'rate_limit_reached',
   'signature_invalid',
