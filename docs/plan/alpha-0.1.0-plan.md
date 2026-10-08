@@ -1,6 +1,6 @@
 # Ekdotico α 0.1.0: implementation plan
 
-Status: **accepted by the owner on 7 October 2026**, with the answers recorded at the end of section 6. Slice 0 is merged. One point is open: how far "not at the moment" reaches for email, which decides whether slice 3 can deliver an invitation link at all.
+Status: **accepted by the owner on 7 October 2026**, with the answers recorded at the end of section 6. Slice 0 is merged. Every question of section 6 has an answer; the amendment to the Docs that records them is requested in the `docs` repository.
 
 Written on 7 October 2026 against Docs commit `f4ec614` (612 requirements, decisions D1 to D121).
 
@@ -227,7 +227,7 @@ Given on the decisions page and read back from its store. They bind the build fr
 | Q14 | Every stored object counts toward the 100 MB |
 | Q15 | Keys `title`, `date`, `id`, `draft`; plain Markdown; width not written |
 | Q16 | All four as recommended |
-| Email (review of pull request 2) | **"Not at the moment"** (8 October 2026), read as: the requirements that A52 and A72 block are not built yet, against a sink or otherwise. That is FR-ED-21, the emails of FR-ED-47 and FR-ED-48, and FR-AU-86, FR-AU-87, and FR-AU-89's email. To be confirmed by the owner, since it stops the admission email of slice 3 and with it the only way a person receives an invitation link |
+| Email (review of pull request 2) | **Built against a local sink** (8 October 2026, after a first "not at the moment"). The requirements that A52 and A72 mark as blocked are built behind an interface, with a local sink as the only sender in use, and no real email is sent until the owner confirms the checks of the service. This departs from the entry criterion "The email service checked, before FR-ED-21 is built", by the owner's instruction, and the amendment to the Docs records it |
 
 ### Rows raised by the review of slice 0
 
