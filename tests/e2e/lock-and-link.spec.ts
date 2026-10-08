@@ -32,7 +32,7 @@ const NAMES = (email: string) =>
   `This link signs in to the Ekdotico account with the email address ${email}, and lifts the lock on sign-in to it.`;
 const OTHER_ACCOUNT = 'This browser is signed in to another account. Signing in here ends that session.';
 
-const firstScreen = { level: 1, name: 'Signed in' } as const;
+const firstScreen = { level: 1, name: 'Documents' } as const;
 const LINK = /\/sign-in\/link\/[A-Za-z0-9_-]{43}/;
 
 /** An account that has acknowledged the notice, signed in on this page. */
