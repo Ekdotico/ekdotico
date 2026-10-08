@@ -13,7 +13,7 @@ const database = prepare('authconfig', {
   SESSION_RENEW_SECONDS: String(DAY / 2),
   COOKIE_CACHE_SECONDS: '45',
 });
-const { auth, IDENTITY_ENDPOINTS, db, valkey } = await load();
+const { auth, IDENTITY_ENDPOINTS, db, valkey, validateSessionRow } = await load();
 
 let userId = '';
 const request = (method: string, path: string, headers: Record<string, string> = {}) =>
@@ -472,10 +472,30 @@ describe('what is logged (NFR-SE-19)', () => {
     }
     expect(response.status).toBe(500);
     expect(await response.text()).not.toMatch(/User|person|prisma/i);
-    // Not the only line: the router under the library prints the error itself
-    // as well (`# SERVER_ERROR`, better-call 1.4.0), which the configuration
-    // does not yet keep it from. That is reported, and not settled here.
-    expect(errors.mock.calls[0]).toEqual(['identity: request failed (PrismaClientKnownRequestError P2021)']);
+    // The only line: the router under the library would print the error
+    // itself (`# SERVER_ERROR`, better-call 1.4.0), and the API error thrown
+    // from `onAPIError.onError` in auth.ts keeps it from that.
+    expect(errors.mock.calls).toEqual([['identity: request failed (PrismaClientKnownRequestError P2021)']]);
+  });
+
+  // The library reads a session and then its user, in a second query. At
+  // 1.7.7 a fault of that query was handed whole to `console.error`, past the
+  // logger configured above: the message of the database, with the query. The
+  // line is patched out (patches/@better-auth__core@1.7.7.patch; decision 0004).
+  it('prints nothing of a fault in the second query of a session but that there was one', async () => {
+    const headers = await sessionHeaders('person@example.com');
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+    database.sql('ALTER TABLE "User" RENAME TO "UserAway"');
+    try {
+      await expect(validateSessionRow(headers)).rejects.toThrow();
+    } finally {
+      database.sql('ALTER TABLE "UserAway" RENAME TO "User"');
+    }
+    const printed = spies.flatMap((spy) => spy.mock.calls);
+    expect(printed.length).toBeGreaterThan(0);
+    for (const line of printed) expect(line).toEqual(['identity: library reported (error)']);
   });
 
   it('answers a failed sign-in in one way, whether or not the address has an account (FR-AU-81)', async () => {

@@ -9,6 +9,7 @@ beforeAll(async () => {
     APP_ORIGIN: OWN,
     EMAIL_TRANSPORT: 'sink',
     EMAIL_SINK_DIRECTORY: '/unused',
+    TRUSTED_PROXY_COUNT: '1',
     AUTH_SECRET: 'a-test-secret-of-at-least-thirty-two-characters',
     DATABASE_URL: 'postgresql://unused',
     VALKEY_URL: 'redis://unused',

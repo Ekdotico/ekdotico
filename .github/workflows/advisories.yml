@@ -5,10 +5,13 @@ name: advisories
 # every build and at least once a day"; NFR-IC-10: a security patch for a direct
 # dependency within 14 days; NFR-SE-06, A03).
 #
-# The specification names no severity and no scope, so this takes the stricter
-# of each: every dependency, development ones included (NFR-IC-08 binds both),
-# and every severity from low up. A run fails while any advisory stands. It
-# reads the lockfile, so nothing is installed and no install script runs.
+# The owner's decision of 8 October 2026: all dependencies, development ones
+# included, at every severity from low up, and a run fails on any finding. One
+# that cannot be fixed is ignored by its advisory identifier, in
+# `pnpm.auditConfig` of package.json, with a dated reason in
+# docs/operations/advisories.md; tests/unit/advisories.test.ts holds the two
+# together. It reads the lockfile, so nothing is installed and no install
+# script runs.
 #
 # A scheduled run that fails is shown on the Actions tab, and GitHub emails the
 # user who last changed the cron line below, if their notification settings
