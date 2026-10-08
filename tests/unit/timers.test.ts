@@ -8,6 +8,10 @@ const deleteExpiredSecurityLog = vi.hoisted(() => vi.fn<() => Promise<number>>()
 const deleteExpiredDocuments = vi.hoisted(() => vi.fn<() => Promise<{ deleted: number; kept: number }>>());
 vi.mock('../../src/lib/security-log.ts', () => ({ deleteExpiredSecurityLog }));
 vi.mock('../../src/lib/documents/deletion.ts', () => ({ deleteExpiredDocuments }));
+// The two other timers, which run beside it and here find nothing to delete
+// (tests/integration/session-list.test.ts runs them against a database).
+vi.mock('../../src/lib/auth/password.ts', () => ({ deleteExpiredTokens: async () => 0 }));
+vi.mock('../../src/lib/auth/session-list.ts', () => ({ deleteEndedSessions: async () => 0 }));
 
 const HOUR_MS = 60 * 60 * 1000;
 let stdout: ReturnType<typeof vi.spyOn>;

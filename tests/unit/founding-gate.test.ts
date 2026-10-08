@@ -7,6 +7,7 @@ beforeAll(async () => {
     // Entries are lowered when the list is read (FR-AU-83).
     FOUNDING_TEAM_EMAILS: 'Founder@Example.com, second@example.com',
     APP_ORIGIN: 'https://app.example.test',
+    TRUSTED_PROXY_COUNT: '1',
     EMAIL_TRANSPORT: 'sink',
     EMAIL_SINK_DIRECTORY: '/unused',
     AUTH_SECRET: 'a-test-secret-of-at-least-thirty-two-characters',

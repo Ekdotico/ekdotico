@@ -9,7 +9,33 @@ const env = {
   DATABASE_URL: 'postgresql://ekdotico_app:x@localhost:5432/ekdotico',
   VALKEY_URL: 'redis://localhost:6379',
   AUTH_SECRET: 'a-test-secret-of-at-least-thirty-two-characters',
+  TRUSTED_PROXY_COUNT: '1',
 };
+
+// NFR-SE-07; the owner's decision of 8 October 2026: away from localhost a
+// process does not start without a proxy that writes the address of a client,
+// since every client would then share one count.
+describe('loadSettings: TRUSTED_PROXY_COUNT and the origin', () => {
+  const LOCAL = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://localhost'];
+
+  it.each([undefined, '', '0'])('refuses to start away from localhost where it is %j', (value) => {
+    const start = () => loadSettings({ ...env, TRUSTED_PROXY_COUNT: value });
+    expect(start).toThrow(/^TRUSTED_PROXY_COUNT must be 1 or more, except on localhost: /);
+    expect(start).toThrow(/count every client as one/);
+  });
+
+  it.each(['1', '2'])('starts away from localhost with %s', (value) => {
+    expect(loadSettings({ ...env, TRUSTED_PROXY_COUNT: value }).trustedProxyCount).toBe(Number(value));
+  });
+
+  it.each(LOCAL)('starts on %s with 0, set or left out', (origin) => {
+    expect(loadSettings({ ...env, APP_ORIGIN: origin, TRUSTED_PROXY_COUNT: '0' }).trustedProxyCount).toBe(0);
+    expect(
+      loadSettings({ ...env, APP_ORIGIN: origin, TRUSTED_PROXY_COUNT: undefined }).trustedProxyCount,
+    ).toBe(0);
+    expect(loadSettings({ ...env, APP_ORIGIN: origin, TRUSTED_PROXY_COUNT: '1' }).trustedProxyCount).toBe(1);
+  });
+});
 
 describe('loadSettings (FR-AU-83; register A102)', () => {
   it('refuses to start where FOUNDING_TEAM_EMAILS is absent', () => {
@@ -149,8 +175,9 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     }
   });
 
-  it('trusts no proxy unless told how many there are', () => {
-    expect(settings.trustedProxyCount).toBe(0);
+  it('trusts no proxy unless told how many there are, which only localhost admits', () => {
+    const local = { ...env, APP_ORIGIN: 'http://localhost:3000', TRUSTED_PROXY_COUNT: undefined };
+    expect(loadSettings(local).trustedProxyCount).toBe(0);
   });
 
   it('holds the limits of NFR-SE-07', () => {
@@ -221,9 +248,10 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(() => loadSettings({ ...env, [name]: '0' })).toThrow(`${name} must be a whole number, 1 or more.`);
   });
 
-  it('admits 1 for each of them, and 0 proxies and a signed copy that lives 0 seconds', () => {
+  it('admits 1 for each of them, and on localhost 0 proxies, and a signed copy that lives 0 seconds', () => {
     const least = loadSettings({
       ...env,
+      APP_ORIGIN: 'http://localhost:3000',
       SESSION_IDLE_SECONDS: '1',
       SESSION_RENEW_SECONDS: '1',
       SESSION_MAX_SECONDS: '1',

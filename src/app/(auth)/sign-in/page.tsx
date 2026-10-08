@@ -1,14 +1,15 @@
 // The sign-in page (FR-AU-81, FR-AU-88). It offers sign-up to no one
-// (FR-AU-57). The link to a password reset joins it with the reset page
-// (FR-AU-86), which is a later slice.
+// (FR-AU-57), and leads to the page that asks for a password reset (FR-AU-86).
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { PageHeading } from '@ekdotico/domico/components';
 import { validateSession } from '../../../lib/auth/session.ts';
 import { returnPath } from '../../../lib/http.ts';
 import { RETURN_PARAMETER } from '../../../proxy.ts';
 import { reading } from '../../page-fault.ts';
+import styles from '../../pages.module.css';
 import { SignInForm } from './sign-in-form.tsx';
 
 export const metadata: Metadata = { title: 'Sign in' };
@@ -34,6 +35,14 @@ export default async function SignIn({
     <>
       <PageHeading>Sign in</PageHeading>
       <SignInForm returnTo={returnTo} />
+      {/* FR-AU-86. The words are those the email of the account uses for it:
+          "set a new password from the sign-in page" (FR-AU-87 (d)). Not
+          fetched ahead: each request to these pages is counted (NFR-SE-07). */}
+      <p className={styles.text}>
+        <Link href="/reset-password" prefetch={false}>
+          Set a new password
+        </Link>
+      </p>
     </>
   );
 }

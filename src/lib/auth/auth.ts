@@ -10,8 +10,18 @@ import { admissionSignUp } from '../admission/sign-up.ts';
 import { clientAddress, UNKNOWN_ADDRESS } from '../client-address.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
+import { INTERNAL_FAULT } from '../http.ts';
+import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
+import { changePassword, requestPasswordReset, resetPassword } from './password.ts';
+import { FORBIDDEN } from './route-answers.ts';
+import { revokeOtherSessions, revokeSession } from './session-list.ts';
 import { signInEmail, signOut } from './sign-in.ts';
+
+// Text for a person, for the owner's approval: the statement of the router's
+// 400 and 415, which the library words in its own way.
+const NOT_JSON =
+  'The request could not be read, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
 
 /** Where the library's handler is mounted (API design, "Sign-in and identity"). */
 export const IDENTITY_BASE_PATH = '/api/auth';
@@ -36,6 +46,19 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // FR-AU-84: signing out ends the session at once and clears the browser's
   // cookies. The application's own too.
   'POST /sign-out',
+  // FR-AU-86: the request for a password reset, and its completion by the
+  // token of the emailed link. Both the application's own (password.ts).
+  'POST /request-password-reset',
+  'POST /reset-password',
+  // FR-AU-85: the change of the password in the account settings, which ends
+  // every other session. The application's own (password.ts).
+  'POST /change-password',
+  // FR-AU-85: ending one session, named by its identifier and never by its
+  // token, and ending all but the one in use. The application's own
+  // (session-list.ts). The list itself is read by the settings page and is no
+  // endpoint: the library's returns every session's token.
+  'POST /revoke-session',
+  'POST /revoke-other-sessions',
 ]);
 
 // FR-AU-81, FR-AU-84: the application's sign-in and sign-out. A plugin's
@@ -44,6 +67,14 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
 const ownSignIn = {
   id: 'ekdotico-sign-in',
   endpoints: { signInEmail, signOut },
+} satisfies BetterAuthPlugin;
+
+// FR-AU-85, FR-AU-86: the same for the password and the sessions. The
+// library's `requestPasswordResetCallback`, `listSessions` and
+// `revokeSessions` are left as they are and answer nothing.
+const ownCredentials = {
+  id: 'ekdotico-credentials',
+  endpoints: { requestPasswordReset, resetPassword, changePassword, revokeSession, revokeOtherSessions },
 } satisfies BetterAuthPlugin;
 
 // The application's own gate, and no feature of the library.
@@ -101,7 +132,7 @@ function create() {
     // email exists only where a function to send one is configured; none is.
     // `admissionSignUp` (FR-AU-90) has one endpoint, without a path: the
     // handler cannot reach it, and only `POST /api/sign-up` calls it.
-    plugins: [twoFactor(), surface, ownSignIn, admissionSignUp],
+    plugins: [twoFactor(), surface, ownSignIn, ownCredentials, admissionSignUp],
     // NFR-SE-17 (d): each is off in the library by default but the linking of
     // accounts; all three are written so that a changed default changes nothing.
     account: { accountLinking: { enabled: false } },
@@ -160,20 +191,30 @@ function create() {
     },
     onAPIError: {
       onError: (error) => {
-        // A refusal of the request itself, the library's or its router's, is no fault.
-        if (isAPIError(error) && error.statusCode < 500) return;
+        // The router answers an API error thrown from this function: the one
+        // shape of an error (the owner's answer to Q8), in the words of proxy.ts.
+        const answer = (status: 400 | 403 | 415 | 500, code: string, message: string) =>
+          new APIError(status, { error: { code, message } }, { 'Cache-Control': 'no-store' });
+        if (isAPIError(error) && error.statusCode < 500) {
+          // The library's own refusal of a request from another origin, or of
+          // a place to go to on one. NFR-SE-19: a 403 has its entry; no user
+          // is known here. The library does not wait for this function, so
+          // the entry is not waited for; writing it never rejects.
+          if (error.statusCode === 403) {
+            void securityLog({ kind: 'forbidden' });
+            throw answer(403, 'forbidden', FORBIDDEN);
+          }
+          // Its router's refusal of a body that is not JSON, or not sent as JSON.
+          if (error.statusCode === 400 || error.statusCode === 415) {
+            throw answer(error.statusCode, 'invalid_request', NOT_JSON);
+          }
+          // Any other refusal of the request itself is no fault.
+          return;
+        }
         console.error(`identity: request failed (${faultOf(error)})`);
         // Left here, the library's router prints the fault whole, with whatever
-        // the database or Valkey put in it, and answers with no body. It
-        // answers an API error thrown from this function instead: the one
-        // shape of an error, in the words of proxy.ts (NFR-SE-06 A10).
-        throw new APIError('INTERNAL_SERVER_ERROR', {
-          error: {
-            code: 'internal',
-            message:
-              'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
-          },
-        });
+        // the database or Valkey put in it, and answers with no body (NFR-SE-06 A10).
+        throw answer(500, 'internal', INTERNAL_FAULT);
       },
     },
   });

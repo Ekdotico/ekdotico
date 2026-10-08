@@ -3,6 +3,7 @@
 // ./access.ts first. Nothing here is of Next.js.
 import type { Document } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
+import { fieldText } from '../field-text.ts';
 import { istorico } from '../istorico/index.ts';
 import { ensurePersonalWorkspace } from '../workspace.ts';
 import { defaultPermissionSet } from './permissions.ts';
@@ -36,11 +37,13 @@ export function summary({
  * The title to store for what a request gave, or why it is refused.
  *
  * FR-ED-35: "a title longer than 200 characters is refused, and an empty title
- * is stored as the default". NFR-SE-08, NFR-I18-03: a title is stored as
- * written, and no character is removed from it, so nothing is trimmed, and
- * markup stays what was typed. A character is one Unicode code point, as in
- * the name of an account (FR-AU-90). A title with nothing in it but white
- * space is taken as empty: it would name nothing on the screen.
+ * is stored as the default". The owner's decision of 8 October 2026, which
+ * amends NFR-SE-08 for it: the white space at the two ends of a title is not
+ * part of it, exactly as of the name of an account (FR-AU-90), by the one
+ * function for both. Whether a title is empty, and how long it is, are judged
+ * of what is left, a character being one Unicode code point. Nothing else is
+ * removed (NFR-SE-08, NFR-I18-03): what is between the ends is stored as
+ * written, and markup stays what was typed.
  *
  * Two things PostgreSQL cannot store as text are refused and not removed: the
  * character U+0000, and half of a surrogate pair.
@@ -50,8 +53,9 @@ export function readTitle(
 ): { ok: true; title: string } | { ok: false; reason: 'not_text' | 'too_long' | 'not_storable' } {
   if (typeof value !== 'string') return { ok: false, reason: 'not_text' };
   if (value.includes('\u0000') || !value.isWellFormed()) return { ok: false, reason: 'not_storable' };
-  if ([...value].length > TITLE_MAX_CHARACTERS) return { ok: false, reason: 'too_long' };
-  return { ok: true, title: value.trim() === '' ? DEFAULT_TITLE : value };
+  const { text, characters } = fieldText(value);
+  if (characters > TITLE_MAX_CHARACTERS) return { ok: false, reason: 'too_long' };
+  return { ok: true, title: characters === 0 ? DEFAULT_TITLE : text };
 }
 
 /**
@@ -115,8 +119,9 @@ export async function createDocument(userId: string): Promise<DocumentSummary> {
  * personal workspace. The documents it holds another role on join with the
  * slice that builds sharing. A deleted document is in no list (FR-ED-36).
  *
- * The order is not given by the specification (reported as a gap): the newest
- * first, by the time of creation, which is the date the list shows.
+ * The order is the owner's decision of 8 October 2026: the newest first, by
+ * the time of creation, which is the date the list shows. Two documents of
+ * one instant keep one order between them, by their identifiers.
  */
 export async function listDocuments(userId: string): Promise<DocumentSummary[]> {
   const documents = await db().document.findMany({

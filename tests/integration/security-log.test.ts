@@ -12,6 +12,7 @@ process.env.FOUNDING_TEAM_EMAILS ??= '';
 process.env.APP_ORIGIN ??= 'https://app.example.test';
 process.env.EMAIL_TRANSPORT ??= 'sink';
 process.env.EMAIL_SINK_DIRECTORY ??= '/unused';
+process.env.TRUSTED_PROXY_COUNT ??= '1';
 process.env.VALKEY_URL ??= 'redis://valkey.example.test:6379';
 process.env.AUTH_SECRET ??= 'a-test-secret-of-at-least-thirty-two-characters';
 delete process.env.SECURITY_LOG_RETENTION_DAYS;
