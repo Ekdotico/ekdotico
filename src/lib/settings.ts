@@ -1,6 +1,7 @@
 // Settings read from the environment when a process starts. The web application
 // and the collaboration server both load them through this one module
 // (NFR-SE-17 (f)). Every secret is read here and nowhere else (NFR-SE-19).
+import { addressSpelling } from './field-text.ts';
 
 /** A limit of NFR-SE-07: at most `max` in any `windowSeconds`. */
 export interface Limit {
@@ -254,7 +255,7 @@ export function loadSettings(env: Env = process.env): Settings {
   return {
     foundingTeamEmails: list
       .split(',')
-      .map((address) => address.trim().toLowerCase())
+      .map((address) => addressSpelling(address.trim()))
       .filter(Boolean),
     appOrigin,
     databaseUrl: required(env, 'DATABASE_URL', 'Set it to the connection string of the role ekdotico_app.'),

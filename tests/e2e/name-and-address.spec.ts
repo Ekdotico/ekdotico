@@ -1,6 +1,8 @@
 // The change of the name and of the email address in the account settings,
 // and the page that the confirmation link opens (FR-AU-03, FR-AU-87 (b), (e),
-// FR-AU-88, FR-AU-90; the owner's answer to Q3 of the plan).
+// FR-AU-88, FR-AU-90; the owner's answer to Q3 of the plan, and the owner's
+// decision of 9 October 2026 that the change is confirmed only under a
+// session of the account that asked for it).
 import { expect, test, type Page } from '@playwright/test';
 import {
   SIGN_IN_REFUSED,
@@ -28,6 +30,8 @@ const ASKED =
   'Ekdotico sends a confirmation link only to an address that can become the address of this account. If the new address can, it receives an email with a link that works once and is valid for 1 hour. The address of the account stays as it is until that link is opened.';
 const NOT_VALID =
   'This link is no longer valid. A link to confirm a new email address works once and is valid for 1 hour. Ask for a new one in the account settings.';
+const SIGN_IN_FIRST =
+  'To confirm a new email address, sign in to the Ekdotico account that asked for the change, then open the link in the email again.';
 const NAMES = (email: string) =>
   `This link changes the email address of an Ekdotico account to ${email}. After the change, the account signs in with this address, and every other session of the account ends.`;
 const DONE = (email: string) =>
@@ -42,6 +46,29 @@ async function ready(page: Page, person = newPerson()) {
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
   return person;
+}
+
+/** Asks for the change in the account settings, and reads the link where the person would. */
+async function askFor(page: Page, person: { password: string }, next: string) {
+  await page.goto('/settings');
+  const part = page.getByRole('region', { name: 'Email address' });
+  await part.getByLabel('New email address').fill(next);
+  await part.getByLabel('Current password', { exact: true }).fill(person.password);
+  await part.getByRole('button', { name: 'Change email address' }).click();
+  await expect(part.getByRole('status')).toHaveText(ASKED);
+  return (await mailFor(next, LINK)).found;
+}
+
+/** All that a browser without a session is shown: one statement and the way to the sign-in page. */
+async function expectSignInFirst(page: Page) {
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm the new email address');
+  await expect(page.getByRole('main')).toContainText(SIGN_IN_FIRST);
+  await expect(page.getByRole('button')).toHaveCount(0);
+  await expect(page.getByRole('textbox')).toHaveCount(0);
+  await expect(alertOn(page)).toHaveCount(0);
+  // No address, and nothing of whether the link is valid.
+  await expect(page.getByRole('main')).not.toContainText('@');
+  await expect(page.getByRole('main')).not.toContainText('no longer valid');
 }
 
 test('the name is changed in the account settings, under the rule of the sign-up', async ({ page }) => {
@@ -76,7 +103,7 @@ test('the name is changed in the account settings, under the rule of the sign-up
   expect(elsewhere).toEqual([]);
 });
 
-test('the address is changed by a link sent to the new one, which is confirmed by a control and works once', async ({
+test('the address is changed by a link sent to the new one, which is confirmed under a session of the account and works once', async ({
   page,
   browser,
 }) => {
@@ -128,14 +155,34 @@ test('the address is changed by a link sent to the new one, which is confirmed b
     page.getByRole('region', { name: 'Email address' }).getByLabel('Current email address'),
   ).toHaveValue(person.email);
 
-  // The link is opened in a browser without a session, as a program that
-  // fetches the links of an email would open it: a page with one control.
+  // The link is opened in a browser without a session, as the person who
+  // reads the email on another device opens it, and as a program that fetches
+  // the links of an email would: one statement, no control, and no address.
   const mailbox = await (await browser.newContext()).newPage();
   const strangers = watchOrigins(mailbox);
   const opened = await mailbox.goto(link);
+  expect(opened!.status()).toBe(200);
   expect(opened!.headers()['referrer-policy']).toBe('no-referrer');
   await expect(mailbox).toHaveTitle('Confirm the new email address – Ekdotico');
   await expect(mailbox.locator('meta[name="referrer"]')).toHaveAttribute('content', 'no-referrer');
+  await expectSignInFirst(mailbox);
+  await expectNoSidewaysScroll(mailbox);
+  await screens(mailbox, 'confirm-address-sign-in-first');
+  // Without a session the token alone confirms nothing.
+  const bare = await mailbox.request.post('/api/auth/verify-email', {
+    headers: { origin: APP_ORIGIN },
+    data: { token: link.split('/').at(-1) },
+  });
+  expect(bare.status()).toBe(401);
+
+  // The way to the sign-in page carries neither the token nor a place to return to.
+  await mailbox.getByRole('link', { name: 'Sign in' }).click();
+  await expect(mailbox).toHaveURL('/sign-in');
+  await signIn(mailbox, person);
+  await expect(mailbox.getByRole('heading', firstScreen)).toBeVisible();
+
+  // The link opened again, under a session of the account: a page with one control.
+  await mailbox.goto(link);
   await expect(mailbox.getByRole('heading', { level: 1 })).toHaveText('Confirm the new email address');
   await expect(mailbox.getByText(NAMES(next))).toBeVisible();
   // Nothing of the account but the new address: not the old one.
@@ -146,26 +193,24 @@ test('the address is changed by a link sent to the new one, which is confirmed b
   await screens(mailbox, 'confirm-address');
 
   // "Opening the page alone changes nothing": read again, the old address
-  // still stands and both sessions with it.
+  // still stands and the sessions with it.
   await mailbox.reload();
   await expect(mailbox.getByText(NAMES(next))).toBeVisible();
   await other.goto('/settings');
   await expect(other).toHaveURL('/settings');
 
-  // The one control, by the keyboard alone.
+  // The one control, by the keyboard alone, once the page is ready for it
+  // (src/components/ready.ts): a control that is disabled takes no focus.
+  await expect(mailbox.getByRole('button', { name: 'Confirm the new address' })).toBeEnabled();
   await mailbox.getByRole('button', { name: 'Confirm the new address' }).focus();
   await mailbox.keyboard.press('Enter');
   await expect(mailbox.getByText(DONE(next))).toBeVisible();
   await expect(mailbox.getByRole('status')).toHaveText('The email address is changed.');
   await expect(mailbox.getByRole('button')).toHaveCount(0);
   await screens(mailbox, 'confirm-address-done');
-  // It signed no one in: the way on leads to the sign-in page.
-  await mailbox.getByRole('link', { name: 'Open Ekdotico' }).click();
-  await expect(mailbox).toHaveURL(/\/sign-in/);
 
-  // "Every other session of the account ends": the browser that confirmed
-  // held none, so both browsers are signed out where they would change
-  // something, at once.
+  // "Every other session of the account ends": the two other browsers are
+  // signed out where they would change something, at once.
   for (const browserPage of [page, other]) {
     const refused = await browserPage.request.post('/api/auth/update-user', {
       headers: { origin: APP_ORIGIN },
@@ -173,23 +218,28 @@ test('the address is changed by a link sent to the new one, which is confirmed b
     });
     expect(refused.status()).toBe(401);
   }
-
-  // FR-AU-87 (e): the notice to the old address, which "no longer signs in".
-  await mailFor(person.email, NOTICE_EMAIL);
-  await signIn(mailbox, person);
-  await expect(alertOn(mailbox)).toHaveText(SIGN_IN_REFUSED);
-  await signIn(mailbox, { ...person, email: next });
+  // The browser that confirmed stays signed in, and shows the new address at once.
+  await mailbox.getByRole('link', { name: 'Open Ekdotico' }).click();
   await expect(mailbox.getByRole('heading', firstScreen)).toBeVisible();
   await mailbox.goto('/settings');
   await expect(
     mailbox.getByRole('region', { name: 'Email address' }).getByLabel('Current email address'),
   ).toHaveValue(next);
 
-  // The link works once: opened again, it shows the one statement, as part
-  // of the page and no alert, and no control.
+  // FR-AU-87 (e): the notice to the old address, which "no longer signs in".
+  await mailFor(person.email, NOTICE_EMAIL);
+  await other.goto('/sign-in');
+  await signIn(other, person);
+  await expect(alertOn(other)).toHaveText(SIGN_IN_REFUSED);
+  await signIn(other, { ...person, email: next });
+  await expect(other.getByRole('heading', firstScreen)).toBeVisible();
+
+  // The link works once: opened again under the account's session, it shows
+  // the one statement, as part of the page and no alert, and no control.
   await mailbox.goto(link);
   await expect(mailbox.getByText(NOT_VALID)).toBeVisible();
   await expect(mailbox.getByRole('button')).toHaveCount(0);
+  await expect(alertOn(mailbox)).toHaveCount(0);
   await expectNoSidewaysScroll(mailbox);
   await screens(mailbox, 'confirm-address-not-valid');
 
@@ -199,20 +249,29 @@ test('the address is changed by a link sent to the new one, which is confirmed b
   await mailbox.context().close();
 });
 
-test('the browser that confirms under a session of the account stays signed in, and shows the new address', async ({
+test('a browser signed in to another account is shown the link as one that is not valid, and confirms nothing', async ({
   page,
+  browser,
 }) => {
   test.slow();
   const person = await ready(page);
   const next = newPerson().email;
-  await page.goto('/settings');
-  const part = page.getByRole('region', { name: 'Email address' });
-  await part.getByLabel('New email address').fill(next);
-  await part.getByLabel('Current password', { exact: true }).fill(person.password);
-  await part.getByRole('button', { name: 'Change email address' }).click();
-  await expect(part.getByRole('status')).toHaveText(ASKED);
+  const link = await askFor(page, person, next);
 
-  const { found: link } = await mailFor(next, LINK);
+  const stranger = await (await browser.newContext()).newPage();
+  await ready(stranger);
+  await stranger.goto(link);
+  await expect(stranger.getByText(NOT_VALID)).toBeVisible();
+  await expect(stranger.getByRole('button')).toHaveCount(0);
+  await expect(stranger.getByRole('main')).not.toContainText(next);
+  const refused = await stranger.request.post('/api/auth/verify-email', {
+    headers: { origin: APP_ORIGIN },
+    data: { token: link.split('/').at(-1) },
+  });
+  expect(refused.status()).toBe(409);
+  await stranger.context().close();
+
+  // Nothing was spent: the account that asked confirms with the same link.
   await page.goto(link);
   await page.getByRole('button', { name: 'Confirm the new address' }).click();
   await expect(page.getByText(DONE(next))).toBeVisible();
@@ -225,10 +284,17 @@ test('the browser that confirms under a session of the account stays signed in, 
   ).toHaveValue(next);
 });
 
-test('a link that is not known shows the one statement, and no control', async ({ page }) => {
-  const opened = await page.goto(`/confirm-address/${'x'.repeat(43)}`);
+test('a link that is not known shows a browser without a session what a valid one shows it, and a signed-in one the one statement', async ({
+  page,
+}) => {
+  const unknown = `/confirm-address/${'x'.repeat(43)}`;
+  const opened = await page.goto(unknown);
   expect(opened!.status()).toBe(200);
   expect(opened!.headers()['referrer-policy']).toBe('no-referrer');
+  await expectSignInFirst(page);
+
+  await ready(page);
+  await page.goto(unknown);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm the new email address');
   await expect(page.getByText(NOT_VALID)).toBeVisible();
   await expect(page.getByRole('button')).toHaveCount(0);

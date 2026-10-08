@@ -24,6 +24,7 @@ import { afterResponse, assertCollecting } from '../after-response.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
+import { enteredAddress } from '../field-text.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { checkLimit, logLimitReached, takeLimit, type LimitResult } from '../rate-limit.ts';
 import { securityLog, securityLogIn } from '../security-log.ts';
@@ -124,14 +125,14 @@ const generationKey = (email: string) =>
  * too (FR-AU-81).
  */
 export async function clearFailedSignIns(email: string): Promise<void> {
-  await valkey().incr(generationKey(email.toLowerCase()));
+  await valkey().incr(generationKey(normalised(email)));
 }
 
 /** A limit on failed sign-ins as a check found it, with the key it is counted under. */
 type Reached = [name: LimitName, key: string, limit: LimitResult];
 
-/** The address as it is stored and compared (FR-AU-02), and bounded: no address is longer than 254 characters. */
-const normalised = (email: string) => email.slice(0, 255).toLowerCase();
+/** The address as it is stored and compared (FR-AU-02), in its one spelling, and bounded (../field-text.ts). */
+const normalised = enteredAddress;
 
 /**
  * The keys of the two counts of NFR-SE-07 for an address as `normalised`

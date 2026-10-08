@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, useSyncExternalStore } from 'react';
 import { Badge, Button, Cluster, FormFault, Stack } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { send, type Fault } from '../../../components/send.ts';
 import type { SessionView } from '../../../lib/auth/session-list.ts';
 import styles from '../../pages.module.css';
@@ -47,6 +48,7 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
   const [attempt, setAttempt] = useState(0);
   // The identifier of the session being ended, or 'others'.
   const [pending, setPending] = useState<string | null>(null);
+  const ready = useReady();
 
   async function end(path: string, which: string, body?: unknown, own = false) {
     setPending(which);
@@ -88,6 +90,7 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
                   variant="secondary"
                   // The same label on each; what it ends is read with it.
                   aria-describedby={`session-${session.id}`}
+                  disabled={!ready}
                   pending={pending === session.id}
                   pendingLabel="Ending session…"
                   onClick={() =>
@@ -105,6 +108,7 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
         <div>
           <Button
             variant="secondary"
+            disabled={!ready}
             pending={pending === 'others'}
             pendingLabel="Ending sessions…"
             onClick={() => end('/api/auth/revoke-other-sessions', 'others')}

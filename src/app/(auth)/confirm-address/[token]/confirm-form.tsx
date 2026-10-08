@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Button, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
+import { useReady } from '../../../../components/ready.ts';
 import { send, type Fault } from '../../../../components/send.ts';
 import styles from '../../../pages.module.css';
 
@@ -34,11 +35,36 @@ export function NotValid({ announce = false }: { announce?: boolean }) {
   );
 }
 
+/**
+ * All that the page shows to a browser without a session (the owner's decision
+ * of 9 October 2026): no control, and nothing of the link, of whether it is
+ * valid, or of the address. The way to the sign-in page carries no token and
+ * no place to return to; the person opens the link in the email again. Text
+ * for a person, for the owner's approval.
+ */
+export function SignInFirst() {
+  return (
+    <>
+      <PageHeading>{TITLE}</PageHeading>
+      <p className={styles.text}>
+        To confirm a new email address, sign in to the Ekdotico account that asked for the change, then open
+        the link in the email again.
+      </p>
+      <p className={styles.text}>
+        <Link href="/sign-in" prefetch={false}>
+          Sign in
+        </Link>
+      </p>
+    </>
+  );
+}
+
 /** FR-AU-03: the address the account will have, and the one control. */
 export function ConfirmForm({ token, newEmail }: { token: string; newEmail: string }) {
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
   const [done, setDone] = useState(false);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -80,7 +106,13 @@ export function ConfirmForm({ token, newEmail }: { token: string; newEmail: stri
               account signs in with this address, and every other session of the account ends.
             </p>
             <div>
-              <Button variant="primary" type="submit" pending={pending} pendingLabel="Confirming…">
+              <Button
+                variant="primary"
+                type="submit"
+                disabled={!ready}
+                pending={pending}
+                pendingLabel="Confirming…"
+              >
                 Confirm the new address
               </Button>
             </div>

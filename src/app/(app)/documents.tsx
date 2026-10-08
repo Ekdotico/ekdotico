@@ -12,6 +12,7 @@ import {
   TextField,
   Tooltip,
 } from '@ekdotico/domico/components';
+import { useReady } from '../../components/ready.ts';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 
@@ -125,6 +126,7 @@ export function Documents({ documents }: { documents: DocumentItem[] }) {
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [creating, setCreating] = useState(false);
+  const ready = useReady();
   const [renaming, setRenaming] = useState<DocumentItem | null>(null);
 
   async function create() {
@@ -146,7 +148,13 @@ export function Documents({ documents }: { documents: DocumentItem[] }) {
     <Stack gap={6}>
       <Cluster justify="between" gap={4}>
         <PageHeading>Documents</PageHeading>
-        <Button variant="primary" pending={creating} pendingLabel="Creating document…" onClick={create}>
+        <Button
+          variant="primary"
+          disabled={!ready}
+          pending={creating}
+          pendingLabel="Creating document…"
+          onClick={create}
+        >
           New document
         </Button>
       </Cluster>
@@ -174,6 +182,7 @@ export function Documents({ documents }: { documents: DocumentItem[] }) {
                 </Stack>
                 <Button
                   variant="quiet"
+                  disabled={!ready}
                   aria-describedby={`title-${document.id}`}
                   onClick={() => setRenaming(document)}
                 >

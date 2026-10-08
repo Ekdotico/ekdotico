@@ -16,7 +16,11 @@
 // page with one control, the change is made by that control, and "every
 // session ends except the confirming browser's own". Next.js serves no route
 // handler where a page is, so the control is `POST /api/auth/verify-email`
-// with the token in its body, as the link of a lock email has its own.
+// with the token in its body, as the link of a lock email has its own. By the
+// owner's decision of 9 October 2026 (its register row is pending) that
+// control needs a session of the account that asked for the change, so the
+// confirming browser always has one; the part of Q3 that let the link be
+// confirmed in a browser without a session is taken back.
 //
 // NFR-SE-19: nothing here logs an address, a name, a token or a password. The
 // token leaves this module once, inside the email of FR-AU-87 (b).
@@ -26,10 +30,10 @@ import { afterResponse, assertCollecting } from '../after-response.ts';
 import { db } from '../db.ts';
 import { handOver } from '../email/hand-over.ts';
 import type { EmailMessage } from '../email/index.ts';
-import { acceptedAddress, acceptedName, NAME_REFUSAL } from '../field-text.ts';
+import { acceptedAddress, acceptedName, addressSpelling, NAME_REFUSAL } from '../field-text.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { takeLimit } from '../rate-limit.ts';
-import { securityLog } from '../security-log.ts';
+import { securityLog, securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, RESET_LINK, TOKEN } from '../token.ts';
 import { ADDRESS_LINK, changeOf, pendingChange, voidAddressLinks } from './address-links.ts';
@@ -106,7 +110,7 @@ export function addressChangedEmail(to: string): EmailMessage {
 const ACCOUNT = { email: true, emailVerified: true, twoFactorEnabled: true } as const;
 
 /** FR-AU-03, FR-AU-83 (register A102, assumed): whether an address is on the list of the founding team. */
-const listed = (email: string) => settings().foundingTeamEmails.includes(email.toLowerCase());
+const listed = (email: string) => settings().foundingTeamEmails.includes(addressSpelling(email));
 
 // ── The name ────────────────────────────────────────────────────────────────
 
@@ -159,7 +163,11 @@ export const updateUser = createAuthEndpoint(
  *   says of it only that it "is never taken"; that nothing is sent to it is
  *   this file's reading, and its register row is pending.
  *
- * Otherwise the new link takes the place of an earlier one (address-links.ts).
+ * Every request that passed its prompt makes void the earlier link of the
+ * account, before any of that is looked at (the owner, 9 October 2026: "a
+ * later request voids the earlier link"). Were the earlier link left standing
+ * where nothing is sent, the person who asked would read from their own link
+ * whether the address they named next belongs to an account or is listed.
  */
 async function sendConfirmation(
   userId: string,
@@ -167,11 +175,11 @@ async function sendConfirmation(
   newEmail: string,
   now: Date = new Date(),
 ): Promise<void> {
-  if (ofFoundingTeam(account) || listed(newEmail)) return;
   const token = newToken();
   const written = await db().$transaction(async (tx) => {
-    if ((await tx.user.count({ where: { email: newEmail } })) > 0) return false;
     await voidAddressLinks(tx, userId);
+    if (ofFoundingTeam(account) || listed(newEmail)) return false;
+    if ((await tx.user.count({ where: { email: newEmail } })) > 0) return false;
     await tx.verification.create({
       data: {
         id: randomUUID(),
@@ -279,19 +287,26 @@ export async function findOpenAddressChange(
 
 // Thrown inside the transaction that makes the change, to undo it.
 const LINK_GONE = new Error('address confirmation: the link is void');
+const SESSION_ENDED = new Error('address confirmation: session ended');
 // The unique index of the address refused the row: the address was taken meanwhile.
 const isUniqueViolation = (error: unknown) => (error as { code?: unknown } | null)?.code === 'P2002';
 
 /**
  * FR-AU-03: `POST /api/auth/verify-email`, with `{ "token" }`: the one control
- * of the page that the confirmation link opens. No session: the request is
- * authorised by the token of a pending change, and by nothing else. The answer
- * to success is `{}`; it signs no one in and sets no cookie of a session.
+ * of the page that the confirmation link opens. The answer to success is
+ * `{}`; it signs no one in and sets no cookie of a session.
+ *
+ * The owner's decision of 9 October 2026 (its register row is pending), which
+ * takes back the part of the answer to Q3 that let the link be confirmed
+ * "elsewhere": the request needs a session of the account, read from its row,
+ * and the token of a change that this account asked for. The token alone
+ * confirms nothing, so a new address that was typed wrongly does not hand the
+ * account to whoever holds that mailbox. A link of another account is answered
+ * as one that is not valid, and no refused attempt spends a link.
  *
  * "When the change takes effect the application sends a notice to the old
  * address (FR-AU-87) and every other session of the account ends": every
- * session but that of the browser that confirms, where it holds one of this
- * account (the answer to Q3). The link of a lock email is void "when the …
+ * session but that of the browser that confirms. The link of a lock email is void "when the …
  * address of the account is changed" (FR-AU-81). With them, in the one
  * transaction: the reset links that were mailed to the old address, the second
  * steps that a sign-in with the old address began, and every other pending
@@ -299,84 +314,111 @@ const isUniqueViolation = (error: unknown) => (error as { code?: unknown } | nul
  *
  * It reads and writes rows, and never the signed copy (NFR-SE-17 (c)).
  */
-export const verifyEmail = createAuthEndpoint('/verify-email', { method: 'POST' }, async (ctx) => {
-  // NFR-SE-17 (c): the request carries no session, so the library checks no
-  // origin for it. Before anything of the request is read.
-  const foreign = await refusedOrigin(ctx.headers);
-  if (foreign) return foreign;
-  // The notice is left for after the answer: asked now, before anything is written.
-  assertCollecting();
-  const entered = textFields(ctx.body, 'token');
-  if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.tokenShape);
+export const verifyEmail = createAuthEndpoint(
+  '/verify-email',
+  { method: 'POST', requireHeaders: true },
+  async (ctx) => {
+    // NFR-SE-17 (c): the library checks the origin only of a request that
+    // carries a cookie, so the endpoint checks it for every request, before
+    // anything of the request is read.
+    const foreign = await refusedOrigin(ctx.headers);
+    if (foreign) return foreign;
+    // The notice is left for after the answer: asked now, before anything is written.
+    assertCollecting();
+    // NFR-SE-17 (c): a request that changes state reads the session's row. An
+    // account that the founding-team gate stops is answered 403 (FR-AU-83).
+    const validation = await validateSessionRow(ctx.headers);
+    const own = validation.session;
+    if (!own) return notAdmitted(validation);
+    const entered = textFields(ctx.body, 'token');
+    if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.tokenShape);
 
-  const notValid = () => errorResponse(409, 'address_link_not_valid', MESSAGES.linkNotValid);
-  const change = await findOpenAddressChange(entered.token);
-  if (!change) return notValid();
-  const { userId, oldEmail, newEmail } = change;
-  // The password of the account as it is now, to be asked again by the
-  // transaction. No account is without one (FR-AU-90).
-  const credential = await db().account.findFirst({
-    where: { userId, providerId: 'credential' },
-    select: { id: true, password: true, updatedAt: true },
-  });
-  if (!credential?.password) return notValid();
-  const password = { id: credential.id, hash: credential.password, updatedAt: credential.updatedAt };
-  const { authCookies, secret } = ctx.context;
-  const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
-
-  const changed = await db()
-    .$transaction(async (tx) => {
-      // The rows are taken in the order a reset and a change of the password
-      // take them (password.ts), so that none waits for another in a circle:
-      // the reset links, the link of this change, the credentials, the steps,
-      // the sessions, and the row of the account last, as a lock takes it.
-      await tx.verification.deleteMany({ where: { value: userId, identifier: { startsWith: RESET_LINK } } });
-      // The claim is one conditional statement: of two confirmations of one
-      // link the second waits for the first, then deletes nothing and changes
-      // nothing. A reset or a change of the password that committed first has
-      // deleted the row (address-links.ts).
-      const claimed = await tx.verification.deleteMany({
-        where: { id: change.id, expiresAt: { gt: new Date() } },
-      });
-      if (claimed.count !== 1) throw LINK_GONE;
-      // The row of the credentials, written with its own values: a sign-in
-      // with the old address that is on its way waits here, and then finds the
-      // new address (sign-in.ts, `stillSignsIn`). One whose password was set
-      // meanwhile and has not yet made this link void finds another hash.
-      if (!(await stillVerified(password, tx))) throw LINK_GONE;
-      await voidAddressLinks(tx, userId);
-      // Before the sessions, as at a reset: a second step makes its session
-      // first and claims its row after.
-      await tx.verification.deleteMany({ where: { value: userId, identifier: { startsWith: SECOND_STEP } } });
-      // Of this account alone: the token of a session of another account
-      // matches none of these rows, and all of them end.
-      await tx.session.deleteMany({ where: { userId, ...(held ? { NOT: { token: held } } : {}) } });
-      // Only over the address the link was asked under, and only for an
-      // account that is still in use. The address stays verified: the link
-      // reached the new one (FR-AU-81).
-      const moved = await tx.user.updateMany({
-        where: { id: userId, email: oldEmail, emailVerified: true },
-        data: { email: newEmail },
-      });
-      if (moved.count !== 1) throw LINK_GONE;
-      await voidSignInLinks(tx, userId);
-      return true;
-    })
-    .catch((error: unknown) => {
-      if (error === LINK_GONE || isUniqueViolation(error)) return false;
-      throw error;
+    const notValid = () => errorResponse(409, 'address_link_not_valid', MESSAGES.linkNotValid);
+    const change = await findOpenAddressChange(entered.token);
+    // The link of a change that another account asked for is answered as one
+    // that is not valid, and nothing of it is spent or said.
+    if (!change || change.userId !== own.userId) return notValid();
+    const { userId, oldEmail, newEmail } = change;
+    // The password of the account as it is now, to be asked again by the
+    // transaction. No account is without one (FR-AU-90).
+    const credential = await db().account.findFirst({
+      where: { userId, providerId: 'credential' },
+      select: { id: true, password: true, updatedAt: true },
     });
-  if (!changed) return notValid();
+    if (!credential?.password) return notValid();
+    const password = { id: credential.id, hash: credential.password, updatedAt: credential.updatedAt };
 
-  // FR-ED-40 (d): the slice that builds the collaboration server publishes the
-  // end of the account's other sessions here, once the transaction has committed.
+    const changed = await db()
+      .$transaction(async (tx) => {
+        // The rows are taken in the order a reset and a change of the password
+        // take them (password.ts), so that none waits for another in a circle:
+        // the reset links, the link of this change, the credentials, the steps,
+        // the sessions, and the row of the account last, as a lock takes it.
+        await tx.verification.deleteMany({
+          where: { value: userId, identifier: { startsWith: RESET_LINK } },
+        });
+        // The claim is one conditional statement: of two confirmations of one
+        // link the second waits for the first, then deletes nothing and changes
+        // nothing. A reset or a change of the password that committed first has
+        // deleted the row (address-links.ts).
+        const claimed = await tx.verification.deleteMany({
+          where: { id: change.id, expiresAt: { gt: new Date() } },
+        });
+        if (claimed.count !== 1) throw LINK_GONE;
+        // The row of the credentials, written with its own values: a sign-in
+        // with the old address that is on its way waits here, and then finds the
+        // new address (sign-in.ts, `stillSignsIn`). One whose password was set
+        // meanwhile and has not yet made this link void finds another hash.
+        if (!(await stillVerified(password, tx))) throw LINK_GONE;
+        await voidAddressLinks(tx, userId);
+        // FR-AU-84: a session that has ended since it was read changes nothing.
+        // After the credentials, where a change of the password holds its own.
+        if (!(await holdSession(tx, own))) throw SESSION_ENDED;
+        // Before the sessions, as at a reset: a second step makes its session
+        // first and claims its row after.
+        await tx.verification.deleteMany({
+          where: { value: userId, identifier: { startsWith: SECOND_STEP } },
+        });
+        // Every session of the account but the one that confirms.
+        await tx.session.deleteMany({ where: { userId, id: { not: own.sessionId } } });
+        // Only over the address the link was asked under, and only for an
+        // account that is still in use. The address stays verified: the link
+        // reached the new one (FR-AU-81).
+        const moved = await tx.user.updateMany({
+          where: { id: userId, email: oldEmail, emailVerified: true },
+          data: { email: newEmail },
+        });
+        if (moved.count !== 1) throw LINK_GONE;
+        // Again, now that the row of the account is held: a request for a reset
+        // holds that row while it writes its link (password.ts), so one written
+        // since the first statement above has committed by now, and is found.
+        await tx.verification.deleteMany({
+          where: { value: userId, identifier: { startsWith: RESET_LINK } },
+        });
+        // NFR-SE-19; the owner's decision of 9 October 2026 (S9): one entry for
+        // each completed change, in its transaction. The user, never an address.
+        await securityLogIn(tx, { kind: 'address_changed', userId });
+        await voidSignInLinks(tx, userId);
+        return true;
+      })
+      .catch((error: unknown) => {
+        if (error === SESSION_ENDED) return 'ended' as const;
+        if (error === LINK_GONE || isUniqueViolation(error)) return false;
+        throw error;
+      });
+    if (changed === 'ended') return unauthenticated();
+    if (!changed) return notValid();
 
-  // FR-AU-87 (e): the notice to the old address, after the answer.
-  afterResponse('address notice', () => handOver(addressChangedEmail(oldEmail)));
-  // The signed copy carries the address: the browser that confirmed under a
-  // session reads the new one at once. Every other session has ended, and its
-  // copy reads for up to a minute more and changes nothing (NFR-SE-17 (c)).
-  if (held) await freshCopy(ctx, 'address');
-  ctx.setHeader('Cache-Control', 'no-store');
-  return ctx.json({});
-});
+    // FR-ED-40 (d): the slice that builds the collaboration server publishes the
+    // end of the account's other sessions here, once the transaction has committed.
+
+    // FR-AU-87 (e): the notice to the old address, after the answer.
+    afterResponse('address notice', () => handOver(addressChangedEmail(oldEmail)));
+    // The signed copy carries the address: the browser that confirmed reads the
+    // new one at once. Every other session has ended, and its copy reads for up
+    // to a minute more and changes nothing (NFR-SE-17 (c)).
+    await freshCopy(ctx, 'address');
+    ctx.setHeader('Cache-Control', 'no-store');
+    return ctx.json({});
+  },
+);

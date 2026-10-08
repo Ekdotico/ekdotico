@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 
@@ -23,6 +24,7 @@ export function ChangeAddressForm({ email, foundingTeam }: { email: string; foun
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
   const [asked, setAsked] = useState<string | null>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -102,7 +104,13 @@ export function ChangeAddressForm({ email, foundingTeam }: { email: string; foun
           required
         />
         <div>
-          <Button variant="secondary" type="submit" pending={pending} pendingLabel="Sending request…">
+          <Button
+            variant="secondary"
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Sending request…"
+          >
             Change email address
           </Button>
         </div>

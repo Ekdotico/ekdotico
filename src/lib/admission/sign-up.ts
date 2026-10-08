@@ -15,6 +15,7 @@ import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { acceptedName, NAME_REFUSAL } from '../field-text.ts';
 import { readBytes } from '../http.ts';
+import { orEndSession } from '../auth/sign-in.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
 
@@ -111,7 +112,11 @@ export const admissionSignUp = {
           const user = await internalAdapter.findUserById(account.userId);
           if (!user) throw new Error('The new account was not found.');
           const session = await internalAdapter.createSession(user.id);
-          await setSessionCookie(ctx, { session, user });
+          // The owner's decision of 9 October 2026, as at a sign-in: a fault
+          // between the making of the session and the answer leaves no session
+          // behind. The browser is given no cookie for it, so no one could use
+          // the row or end it. The account stands, and the answer is as below.
+          await orEndSession(session.token, () => setSessionCookie(ctx, { session, user }));
         } catch (error) {
           console.error(`sign-up: account created, session not started (${faultOf(error)})`);
           if (held) deleteSessionCookie(ctx);

@@ -111,6 +111,51 @@ function hold<T extends object>(object: T, method: keyof T & string) {
   return { reached, open };
 }
 
+/**
+ * In the next transaction that is opened, the first call of `table.method`
+ * is handed to `around`, which runs the statement itself when it calls `run`:
+ * what it does before is between the transaction's earlier statements and
+ * this one, and what it does after is between this one and the next.
+ */
+function atStatement(
+  table: string,
+  method: string,
+  around: (run: () => Promise<unknown>) => Promise<unknown>,
+) {
+  type Work = (tx: Record<string, unknown>) => Promise<unknown>;
+  const client = db() as unknown as { $transaction: (work: Work) => Promise<unknown> };
+  const original = client.$transaction.bind(client);
+  vi.spyOn(client, '$transaction').mockImplementationOnce((work) =>
+    original((tx) => {
+      let first = true;
+      const rows = new Proxy(tx[table] as object, {
+        get(target, key) {
+          const statement = Reflect.get(target, key) as (...args: unknown[]) => Promise<unknown>;
+          if (key !== method || !first) return statement;
+          return (...args: unknown[]) => {
+            first = false;
+            return around(() => statement.apply(target, args));
+          };
+        },
+      });
+      return work(new Proxy(tx, { get: (target, key) => (key === table ? rows : Reflect.get(target, key)) }));
+    }),
+  );
+}
+
+/** Waits until a statement of this database waits for a row that another holds. */
+async function untilOneWaits() {
+  for (let n = 0; n < 200; n++) {
+    const waiting = database.sql(
+      "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+    );
+    // The answer follows the line of the statement that sets the schema.
+    if (Number(waiting.split('\n').at(-1)) > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('no statement came to wait');
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await db().securityLogEntry.deleteMany();
@@ -156,6 +201,12 @@ describe('a change of the name (FR-AU-90)', () => {
     ['101 characters', 'x'.repeat(101)],
     ['101 characters that are each two units', '😀'.repeat(101)],
     ['a control character', 'Ada\u0000Lovelace'],
+    // The owner's decision of 9 October 2026 (tests/unit/field-text.test.ts has each class).
+    ['a character that overrides the direction of text', `${String.fromCodePoint(0x202e)}evil`],
+    ['a zero-width space alone', String.fromCodePoint(0x200b)],
+    ['a blank letter alone', String.fromCodePoint(0x3164)],
+    ['a line separator inside', `a${String.fromCodePoint(0x2028)}b`],
+    ['a C1 control character', `a${String.fromCodePoint(0x85)}b`],
   ])('refuses a name of %s under the rule of the sign-up, and changes nothing', async (_what, name) => {
     const { id, cookie } = await person();
     const refused = await rename(cookie, { name });
@@ -165,7 +216,9 @@ describe('a change of the name (FR-AU-90)', () => {
         code: 'invalid',
         message:
           'The name was not changed, because it does not meet its rule. Change what is marked and try again.',
-        fields: { name: 'A name has 1 to 100 characters. Enter a name of that length.' },
+        fields: {
+          name: 'A name has 1 to 100 characters, at least one of which can be seen, and holds no control character and no character that changes the direction of text. Enter a name of that kind.',
+        },
       },
     });
     expect((await rowOf(id)).name).toBe('A Person');
@@ -209,6 +262,22 @@ describe('a change of the name (FR-AU-90)', () => {
     expect(ended.response.status).toBe(401);
     expect(await ended.response.text()).toBe(UNAUTHENTICATED);
     expect((await rowOf(id)).name).toBe('A Person');
+  });
+
+  // NFR-SE-17 (c): the row is what is asked, and never the signed copy. The
+  // row is still there, so nothing but its own expiry refuses the request.
+  it('is refused, as a request for a change of the address is, under a session whose row has expired and whose signed copy is fresh', async () => {
+    const { id, email, cookie, sessionId } = await person();
+    await db().session.update({ where: { id: sessionId }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    // The copy in the cookie still reads, as it does for up to a minute.
+    expect((await validateSession('GET', new Headers({ cookie }))).session?.userId).toBe(id);
+    for (const refused of [await rename(cookie, { name: 'Ada' }), await ask(cookie, unused())]) {
+      expect(refused.response.status).toBe(401);
+      expect(await refused.response.text()).toBe(UNAUTHENTICATED);
+      expect(refused.left).toBe(0);
+    }
+    expect(await rowOf(id)).toMatchObject({ name: 'A Person', email });
+    expect(await pending(id)).toEqual([]);
   });
 
   it('changes nothing under a session that was ended while the request was on its way', async () => {
@@ -276,7 +345,14 @@ describe('asking for a change of the address (FR-AU-03)', () => {
     const { id, email, cookie } = await person();
     const free = unused();
     const answers: { status: number; body: string; headers: [string, string][]; left: number }[] = [];
+    /** Whether the link the person already held still opens after each request. */
+    const earlierStands: boolean[] = [];
     for (const address of [free, other.email, email, other.email.toUpperCase(), 'listed@example.com']) {
+      // The person holds a link to a mailbox of their own before they ask.
+      const earlier = await linkFor(cookie, unused());
+      // The requests are more than the three of an hour: the count is put
+      // back, so that each is answered as a first one.
+      await clearLimit('CONFIRMATION_EMAIL_PER_USER', id);
       const asked = await ask(cookie, address);
       answers.push({
         status: asked.response.status,
@@ -285,17 +361,20 @@ describe('asking for a change of the address (FR-AU-03)', () => {
         left: asked.left,
       });
       // Whatever depends on the address waits for the answer.
-      expect(await pending(id)).toEqual([]);
+      expect((await findOpenAddressChange(earlier))?.userId).toBe(id);
+      expect(await pending(id)).toHaveLength(1);
       await asked.after();
-      // Only one of the five writes a link, the first.
+      // The earlier link is void whatever the address, so that its fate shows
+      // nothing of the address; only one of the five writes a new one, the first.
+      earlierStands.push((await findOpenAddressChange(earlier)) !== null);
+      expect((await confirm(earlier, { cookie })).response.status).toBe(409);
       expect(await pending(id)).toHaveLength(address === free ? 1 : 0);
       await db().verification.deleteMany({ where: { value: { startsWith: `${id} ` } } });
-      // Five requests are more than the three of an hour: the count is put
-      // back, so that each is answered as a first one.
       await clearLimit('CONFIRMATION_EMAIL_PER_USER', id);
     }
     expect(answers[0]).toEqual({ status: 200, body: ASKED, headers: expect.any(Array), left: 1 });
     for (const answer of answers.slice(1)) expect(answer).toEqual(answers[0]);
+    expect(earlierStands).toEqual([false, false, false, false, false]);
 
     // One email in all, to the address that could be taken.
     expect(await mailTo(free, CONFIRM_SUBJECT)).toHaveLength(1);
@@ -311,6 +390,16 @@ describe('asking for a change of the address (FR-AU-03)', () => {
     const team = await person('team@example.com');
     // With two-factor authentication on, as the gate requires of it.
     await db().user.update({ where: { id: team.id }, data: { twoFactorEnabled: true } });
+    // A link from before the address came onto the list: no request of the
+    // account writes one now, and this request makes it void as any other does.
+    await db().verification.create({
+      data: {
+        id: `earlier-${team.id}`,
+        identifier: `confirm-address:${'1'.repeat(64)}`,
+        value: `${team.id} ${unused()}`,
+        expiresAt: new Date(Date.now() + HOUR_MS),
+      },
+    });
     const next = unused();
     const asked = await ask(team.cookie, next);
     expect(asked.response.status).toBe(200);
@@ -328,14 +417,31 @@ describe('asking for a change of the address (FR-AU-03)', () => {
     const mixed = `Mixed.Case${++people}@Example.COM`;
     const token = await linkFor(cookie, mixed);
     expect((await pending(id))[0]!.value).toBe(`${id} ${mixed.toLowerCase()}`);
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
     expect((await rowOf(id)).email).toBe(mixed.toLowerCase());
+
+    // FR-AU-02; the owner's decision of 9 October 2026: the one spelling of
+    // an address. A Greek address in capitals that ends in sigma is the
+    // address of the account that holds it in small letters, and is not taken.
+    const greek = (points: number[]) => `${String.fromCodePoint(...points)}${people}@example.gr`;
+    const holder = await person(greek([0x3bf, 0x3b4, 0x3bf, 0x3c3]));
+    const asked = await ask(cookie, greek([0x39f, 0x394, 0x39f, 0x3a3]));
+    await asked.after();
+    expect(await pending(id)).toEqual([]);
+    expect(await signsIn(greek([0x3bf, 0x3b4, 0x3bf, 0x3c2]))).toBe(true);
+    expect((await rowOf(holder.id)).email).toBe(holder.email);
 
     const again = await person();
     const longest = `${'a'.repeat(242)}@example.com`;
     expect(longest).toHaveLength(254);
     for (const address of [
       `a${longest}`,
+      // The owner's decision of 9 October 2026: what a header reads as more than one address.
+      'x<attacker@evil.example>',
+      'a@b.example,c',
+      '"a"@b.example',
+      'a@b.example;c@d.example',
+      'a@[127.0.0.1]',
       'no-at-sign.example.com',
       'two@@example.com',
       'a space@example.com',
@@ -365,23 +471,43 @@ describe('asking for a change of the address (FR-AU-03)', () => {
     expect((await pending(again.id))[0]!.value).toBe(`${again.id} ${longest}`);
   });
 
-  it('lets a later request take the place of an earlier link, and a request that sends nothing leave it', async () => {
-    const other = await person();
+  // The owner, 9 October 2026: "a later request voids the earlier link".
+  it('lets a later request take the place of an earlier link', async () => {
     const { id, email, cookie } = await person();
     const [mistyped, meant] = [unused(), unused()];
     const first = await linkFor(cookie, mistyped);
-    // Answered as any other, sends nothing: the link that stands is left.
-    await (await ask(cookie, other.email)).after();
-    expect((await findOpenAddressChange(first))?.newEmail).toBe(mistyped);
-
     const second = await linkFor(cookie, meant);
     expect(await pending(id)).toHaveLength(1);
-    const late = await confirm(first);
+    const late = await confirm(first, { cookie });
     expect(late.response.status).toBe(409);
     expect(await late.response.text()).toBe(NOT_VALID);
     expect((await rowOf(id)).email).toBe(email);
-    expect((await confirm(second)).response.status).toBe(200);
+    expect((await confirm(second, { cookie })).response.status).toBe(200);
     expect((await rowOf(id)).email).toBe(meant);
+  });
+
+  // Were the earlier link left where nothing is sent, the person who asked
+  // would read from it whether the address they named belongs to an account.
+  it('makes the earlier link void by a request that sends nothing too, so that the link shows nothing of the address named', async () => {
+    const other = await person();
+    const { id, email, cookie } = await person();
+    const first = await linkFor(cookie, unused());
+    await (await ask(cookie, other.email)).after();
+    expect(await findOpenAddressChange(first)).toBeNull();
+    expect(await pending(id)).toEqual([]);
+    const late = await confirm(first, { cookie });
+    expect(late.response.status).toBe(409);
+    expect(await late.response.text()).toBe(NOT_VALID);
+    expect((await rowOf(id)).email).toBe(email);
+  });
+
+  it('leaves the earlier link where the request did not pass its prompt, or named no address', async () => {
+    const { id, cookie } = await person();
+    const first = await linkFor(cookie, unused());
+    expect((await ask(cookie, unused(), 'a wrong password, long enough')).response.status).toBe(403);
+    expect((await ask(cookie, 'not an address')).response.status).toBe(422);
+    expect(await pending(id)).toHaveLength(1);
+    expect((await confirm(first, { cookie })).response.status).toBe(200);
   });
 });
 
@@ -535,17 +661,131 @@ describe('what the request for a change may say, and who may make it', () => {
   });
 });
 
+// The owner's decision of 9 October 2026 (its register row is pending): the
+// token alone confirms nothing. A new address typed wrongly would otherwise
+// hand the account to whoever holds that mailbox.
+describe('who may confirm a changed address (FR-AU-03; the owner’s decision of 9 October 2026)', () => {
+  /** Nothing was changed, nothing ended, and the link still makes the change for the account that asked. */
+  async function untouched(asker: { id: string; email: string; cookie: string }, token: string) {
+    expect((await rowOf(asker.id)).email).toBe(asker.email);
+    expect(await pending(asker.id)).toHaveLength(1);
+    expect(await stands(asker.cookie)).toBe(true);
+    expect(await entries()).toEqual([]);
+    expect(await mailTo(asker.email, NOTICE_SUBJECT)).toEqual([]);
+    expect((await confirm(token, { cookie: asker.cookie })).response.status).toBe(200);
+  }
+
+  it('answers 401 without a session, whatever the token, and neither changes nor spends anything', async () => {
+    const asker = await person();
+    const token = await linkFor(asker.cookie, unused());
+    const looked = vi.spyOn(db().verification, 'findFirst');
+    for (const headers of NO_SESSION) {
+      for (const body of [{ token }, { token: 'x'.repeat(43) }, { nothing: 1 }]) {
+        const refused = await post(auth, '/verify-email', body, { ...fresh(), ...headers });
+        expect(refused.response.status).toBe(401);
+        expect(await refused.response.text()).toBe(UNAUTHENTICATED);
+        expect(refused.left).toBe(0);
+      }
+    }
+    // Authorisation first: the link was not looked at.
+    expect(looked).not.toHaveBeenCalled();
+    await untouched(asker, token);
+  });
+
+  it('answers a session of another account as a link that is not valid, and neither changes nor spends anything', async () => {
+    const asker = await person();
+    const stranger = await person();
+    const token = await linkFor(asker.cookie, unused());
+    const refused = await confirm(token, { cookie: stranger.cookie });
+    expect(refused.response.status).toBe(409);
+    expect(await refused.response.text()).toBe(NOT_VALID);
+    expect(refused.left).toBe(0);
+    // The same answer, to the byte, as to a token that is not known.
+    const unknown = await confirm('x'.repeat(43), { cookie: stranger.cookie });
+    expect(unknown.response.status).toBe(409);
+    expect([...refused.response.headers].sort()).toEqual([...unknown.response.headers].sort());
+    // Nothing of the other account either.
+    expect((await rowOf(stranger.id)).email).toBe(stranger.email);
+    expect(await stands(stranger.cookie)).toBe(true);
+    await untouched(asker, token);
+  });
+
+  it('is made under any session of the account: one on a second device confirms', async () => {
+    const { id, email, cookie } = await person();
+    const second = await session(email);
+    const next = unused();
+    const token = await linkFor(cookie, next);
+    expect((await confirm(token, { cookie: second })).response.status).toBe(200);
+    expect((await rowOf(id)).email).toBe(next);
+    expect(await stands(second)).toBe(true);
+    expect(await stands(cookie)).toBe(false);
+  });
+
+  it('is refused under a session whose row has ended or expired, though its signed copy is fresh', async () => {
+    for (const end of ['ended', 'expired'] as const) {
+      const { id, email, cookie, sessionId } = await person();
+      const other = await session(email);
+      const token = await linkFor(cookie, unused());
+      if (end === 'ended') await db().session.delete({ where: { id: sessionId } });
+      else {
+        await db().session.update({
+          where: { id: sessionId },
+          data: { expiresAt: new Date(Date.now() - 1000) },
+        });
+      }
+      expect((await validateSession('GET', new Headers({ cookie }))).session?.userId).toBe(id);
+      const refused = await confirm(token, { cookie });
+      expect(refused.response.status, end).toBe(401);
+      expect(await refused.response.text()).toBe(UNAUTHENTICATED);
+      expect((await rowOf(id)).email).toBe(email);
+      expect(await pending(id)).toHaveLength(1);
+      expect(await stands(other)).toBe(true);
+    }
+  });
+
+  it('changes nothing under a session that was ended while the confirmation was on its way, and spends nothing', async () => {
+    const { id, email, cookie, sessionId } = await person();
+    const other = await session(email);
+    const token = await linkFor(cookie, unused());
+    type Work = (tx: unknown) => Promise<unknown>;
+    const client = db() as unknown as { $transaction: (work: Work) => Promise<unknown> };
+    const original = client.$transaction.bind(client);
+    vi.spyOn(client, '$transaction').mockImplementationOnce(async (work) => {
+      await db().session.delete({ where: { id: sessionId } });
+      return original(work);
+    });
+    const refused = await confirm(token, { cookie });
+    expect(refused.response.status).toBe(401);
+    expect(await refused.response.text()).toBe(UNAUTHENTICATED);
+    expect(refused.left).toBe(0);
+    expect((await rowOf(id)).email).toBe(email);
+    expect(await stands(other)).toBe(true);
+    // Undone whole: the link is as it was.
+    expect((await confirm(token, { cookie: other })).response.status).toBe(200);
+  });
+
+  // FR-AU-83 (register A102, assumed): the gate is asked before the link.
+  it('answers 403 to an account that the founding-team gate stops, with its entry', async () => {
+    const team = await person('listed@example.com');
+    const refused = await confirm('x'.repeat(43), { cookie: team.cookie });
+    expect(refused.response.status).toBe(403);
+    expect((await refused.response.json()).error.code).toBe('two_factor_required');
+    expect(await entries()).toEqual([['forbidden', team.id]]);
+  });
+});
+
 describe('the confirmation of a changed address (FR-AU-03; the owner’s answer to Q3)', () => {
-  it('makes the change, answers {}, signs no one in, and sends the notice to the old address after the answer', async () => {
+  it('makes the change, answers {}, makes no session, and sends the notice to the old address after the answer', async () => {
     const { id, email, cookie } = await person();
     const next = unused();
     const token = await linkFor(cookie, next);
-    // A browser without a session: the link was opened elsewhere.
-    const done = await confirm(token);
+    const done = await confirm(token, { cookie });
     expect(done.response.status).toBe(200);
     expect(await done.response.text()).toBe('{}');
     expect(done.response.headers.get('cache-control')).toBe('no-store');
-    expect(done.response.headers.getSetCookie()).toEqual([]);
+    // The session in use stays, and no other is made.
+    expect(done.response.headers.getSetCookie().join('\n')).not.toMatch(/session_token=/);
+    expect(await db().session.count({ where: { userId: id } })).toBe(1);
 
     expect(await rowOf(id)).toMatchObject({ email: next, emailVerified: true });
     // "This address no longer signs in to it."
@@ -579,23 +819,13 @@ describe('the confirmation of a changed address (FR-AU-03; the owner’s answer 
     expect(await pending(id)).toEqual(before);
     expect((await rowOf(id)).email).toBe(email);
     expect(await stands(cookie)).toBe(true);
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
   });
 
-  it('ends every session of the account when the browser that confirms holds none', async () => {
-    const { id, email, cookie } = await person();
-    const others = [await session(email), await session(email)];
-    const stranger = await person();
-    const token = await linkFor(cookie, unused());
-    expect((await confirm(token)).response.status).toBe(200);
-    expect(await db().session.count({ where: { userId: id } })).toBe(0);
-    for (const each of [cookie, ...others]) expect(await stands(each)).toBe(false);
-    expect(await stands(stranger.cookie)).toBe(true);
-  });
-
-  it('ends every session but that of the browser that confirms, and writes its signed copy again', async () => {
+  it('ends every session but that of the browser that confirms, and none of another account, and writes its signed copy again', async () => {
     const { id, email, cookie, sessionId } = await person();
     const others = [await session(email), await session(email)];
+    const stranger = await person();
     const next = unused();
     const token = await linkFor(others[0]!, next);
     const done = await confirm(token, { cookie });
@@ -609,6 +839,7 @@ describe('the confirmation of a changed address (FR-AU-03; the owner’s answer 
       // Refused at once by a request that changes state.
       expect((await rename(each, { name: 'Ada' })).response.status).toBe(401);
     }
+    expect(await stands(stranger.cookie)).toBe(true);
     // The token of the session is not set again; its copy is, with the new address.
     const set = done.response.headers.getSetCookie().join('\n');
     expect(set).toContain('session_data=');
@@ -622,33 +853,14 @@ describe('the confirmation of a changed address (FR-AU-03; the owner’s answer 
     expect(response?.session.id).toBe(sessionId);
   });
 
-  it('ends every session of the account, and none of another, where the browser that confirms is signed in to another account', async () => {
-    const { id, email, cookie } = await person();
-    const other = await session(email);
-    const stranger = await person();
-    const token = await linkFor(cookie, unused());
-    const done = await confirm(token, { cookie: stranger.cookie });
-    expect(done.response.status).toBe(200);
-    expect(await db().session.count({ where: { userId: id } })).toBe(0);
-    expect(await stands(other)).toBe(false);
-    expect(await stands(stranger.cookie)).toBe(true);
-    // The other account's browser is given nothing of this account.
-    const browser = withCookies(stranger.cookie, done.response);
-    const { response } = await auth().api.getSession({
-      headers: new Headers({ cookie: browser }),
-      returnHeaders: true,
-    });
-    expect(response?.user.email).toBe(stranger.email);
-  });
-
   it('works once: a second confirmation is refused, and changes nothing more', async () => {
     const { id, cookie } = await person();
     const next = unused();
     const token = await linkFor(cookie, next);
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
     const kept = await session(next);
 
-    const again = await confirm(token);
+    const again = await confirm(token, { cookie });
     expect(again.response.status).toBe(409);
     expect(await again.response.text()).toBe(NOT_VALID);
     expect(again.left).toBe(0);
@@ -663,7 +875,7 @@ describe('the confirmation of a changed address (FR-AU-03; the owner’s answer 
     const { id, email, cookie } = await person();
     const next = unused();
     const token = await linkFor(cookie, next);
-    const sent = await Promise.all(Array.from({ length: 6 }, () => confirm(token)));
+    const sent = await Promise.all(Array.from({ length: 6 }, () => confirm(token, { cookie })));
     const statuses = sent.map((each) => each.response.status).sort();
     expect(statuses).toEqual([200, 409, 409, 409, 409, 409]);
     for (const each of sent) await each.after();
@@ -704,12 +916,12 @@ describe('the confirmation of a changed address (FR-AU-03; the owner’s answer 
       (await mailTo(email, 'Set a new password for Ekdotico')).at(-1)!.text,
     )![1]!;
     for (const token of ['x'.repeat(43), 'short', '', `${'x'.repeat(42)}%`, reset]) {
-      const refused = await confirm(token);
+      const refused = await confirm(token, { cookie });
       expect(refused.response.status, token).toBe(409);
       expect(await refused.response.text()).toBe(NOT_VALID);
     }
     for (const body of [{}, { token: 7 }, { token: 'x'.repeat(43), userId: 'another' }, ['x']]) {
-      const refused = await post(auth, '/verify-email', body, fresh());
+      const refused = await post(auth, '/verify-email', body, { cookie, ...fresh() });
       expect(refused.response.status).toBe(422);
       expect(await refused.response.json()).toEqual({
         error: {
@@ -720,15 +932,18 @@ describe('the confirmation of a changed address (FR-AU-03; the owner’s answer 
     }
   });
 
-  // NFR-SE-17 (c): the request carries no session, so the endpoint checks the origin itself.
+  // NFR-SE-17 (c): the library checks the origin only of a request with a
+  // cookie, so the endpoint checks it itself, first, with a session or without.
   it('is refused from another origin and without one, before the token is read, and changes nothing', async () => {
     const { id, email, cookie } = await person();
     const token = await linkFor(cookie, unused());
     const looked = vi.spyOn(db().verification, 'findFirst');
     for (const origin of ['https://evil.example', 'null', `${ORIGIN}.evil.example`, '']) {
-      const refused = await confirm(token, { origin });
-      expect(refused.response.status, origin).toBe(403);
-      expect(await refused.response.text()).toBe(FOREIGN);
+      for (const sent of [{ cookie }, {}] as Record<string, string>[]) {
+        const refused = await confirm(token, { ...sent, origin });
+        expect(refused.response.status, origin).toBe(403);
+        expect(await refused.response.text()).toBe(FOREIGN);
+      }
     }
     expect(looked).not.toHaveBeenCalled();
     expect((await rowOf(id)).email).toBe(email);
@@ -770,7 +985,7 @@ describe('what a change of the address makes void (FR-AU-03, FR-AU-81, FR-AU-86)
       (await sunk(sink)).filter((m) => m.to === email && /locked/.test(m.subject ?? '')).at(-1)!.text,
     )![1]!;
 
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
 
     expect(await kinds(id)).toEqual([]);
     expect(await kinds(stranger.id)).toEqual(['reset-password', 'second-step', 'sign-in-link']);
@@ -797,10 +1012,10 @@ describe('what a change of the address makes void (FR-AU-03, FR-AU-81, FR-AU-86)
         expiresAt: new Date(Date.now() + HOUR_MS),
       },
     });
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
     expect(await pending(id)).toEqual([]);
     expect(await pending(stranger.id)).toHaveLength(1);
-    expect((await confirm(theirs)).response.status).toBe(200);
+    expect((await confirm(theirs, { cookie: stranger.cookie })).response.status).toBe(200);
   });
 
   it('is itself made void by a change of the password, and by a completed reset', async () => {
@@ -814,7 +1029,8 @@ describe('what a change of the address makes void (FR-AU-03, FR-AU-81, FR-AU-86)
     );
     expect(changed.response.status).toBe(200);
     expect(await pending(changer.id)).toEqual([]);
-    const refused = await confirm(first);
+    // The session that changed the password stays (FR-AU-85), and confirms nothing.
+    const refused = await confirm(first, { cookie: changer.cookie });
     expect(refused.response.status).toBe(409);
     expect(await refused.response.text()).toBe(NOT_VALID);
     expect((await rowOf(changer.id)).email).toBe(changer.email);
@@ -831,10 +1047,12 @@ describe('what a change of the address makes void (FR-AU-03, FR-AU-81, FR-AU-86)
       (await post(auth, '/reset-password', { token: reset, newPassword: 'a new password, long enough' }))
         .response.status,
     ).toBe(200);
-    expect((await confirm(second)).response.status).toBe(409);
+    // The reset ended every session: under a new one, with the new password.
+    const again = cookiesOf(await signIn(auth, resetter.email, 'a new password, long enough', fresh()));
+    expect((await confirm(second, { cookie: again })).response.status).toBe(409);
     expect((await rowOf(resetter.id)).email).toBe(resetter.email);
     // The link of another account still makes its change.
-    expect((await confirm(theirs)).response.status).toBe(200);
+    expect((await confirm(theirs, { cookie: stranger.cookie })).response.status).toBe(200);
   });
 
   it('leaves the pending change as it was where a change of the password is refused', async () => {
@@ -848,7 +1066,7 @@ describe('what a change of the address makes void (FR-AU-03, FR-AU-81, FR-AU-86)
     );
     expect(refused.response.status).toBe(403);
     expect(await pending(id)).toHaveLength(1);
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
   });
 });
 
@@ -870,12 +1088,33 @@ describe('a confirmation on its way while its link is made void (FR-AU-03)', () 
     const token = await linkFor(cookie, unused());
     // As a change of the password, or a later request, deletes it.
     beforeTheChange(() => db().verification.deleteMany({ where: { value: { startsWith: `${id} ` } } }));
-    const refused = await confirm(token);
+    const refused = await confirm(token, { cookie });
     expect(refused.response.status).toBe(409);
     expect(await refused.response.text()).toBe(NOT_VALID);
     expect(refused.left).toBe(0);
     expect((await rowOf(id)).email).toBe(email);
     expect(await stands(other)).toBe(true);
+  });
+
+  // The read of the link asks its hour, and so does the claim, of its own:
+  // only the second is in the transaction that makes the change.
+  it('changes nothing where the hour of the link passed after it was read: the claim asks the time itself', async () => {
+    const { id, email, cookie } = await person();
+    const other = await session(email);
+    const token = await linkFor(cookie, unused());
+    beforeTheChange(() =>
+      db().verification.updateMany({
+        where: { value: { startsWith: `${id} ` } },
+        data: { expiresAt: new Date(Date.now() - 1) },
+      }),
+    );
+    const refused = await confirm(token, { cookie });
+    expect(refused.response.status).toBe(409);
+    expect(await refused.response.text()).toBe(NOT_VALID);
+    expect(refused.left).toBe(0);
+    expect((await rowOf(id)).email).toBe(email);
+    expect(await stands(other)).toBe(true);
+    expect(await entries()).toEqual([]);
   });
 
   it('changes nothing where the password was set after the link was read, and leaves the link as it was', async () => {
@@ -889,7 +1128,7 @@ describe('a confirmation on its way while its link is made void (FR-AU-03)', () 
         data: { password: await context.password.hash('a password set meanwhile') },
       });
     });
-    const refused = await confirm(token);
+    const refused = await confirm(token, { cookie });
     expect(refused.response.status).toBe(409);
     expect(await refused.response.text()).toBe(NOT_VALID);
     expect((await rowOf(id)).email).toBe(email);
@@ -928,7 +1167,7 @@ describe('an address that can no longer be taken when the link is opened (FR-AU-
     const count = vi.spyOn(db().user, 'count');
     count.mockResolvedValueOnce(0 as never);
 
-    const refused = await confirm(token);
+    const refused = await confirm(token, { cookie });
     expect(refused.response.status).toBe(409);
     expect(await refused.response.text()).toBe(NOT_VALID);
     expect(errors).not.toHaveBeenCalled();
@@ -938,6 +1177,8 @@ describe('an address that can no longer be taken when the link is opened (FR-AU-
     expect(await stands(other)).toBe(true);
     expect(await db().verification.count({ where: { value: id } })).toBe(1);
     expect(await pending(id)).toHaveLength(1);
+    // NFR-SE-19: and the entry of the change, which did not take effect.
+    expect(await entries()).toEqual([]);
     expect(await signsIn(email)).toBe(true);
   });
 
@@ -951,19 +1192,21 @@ describe('an address that can no longer be taken when the link is opened (FR-AU-
       // As the processes would read it after a restart with a new list.
       list.push(next);
       expect(await findOpenAddressChange(token)).toBeNull();
-      expect((await confirm(token)).response.status).toBe(409);
+      expect((await confirm(token, { cookie })).response.status).toBe(409);
       list.pop();
       list.push(email);
       expect(await findOpenAddressChange(token)).toBeNull();
-      const refused = await confirm(token);
-      expect(refused.response.status).toBe(409);
-      expect(await refused.response.text()).toBe(NOT_VALID);
+      // The account is now one that the gate stops (FR-AU-83): its session
+      // confirms nothing, and is answered as the gate answers.
+      const refused = await confirm(token, { cookie });
+      expect(refused.response.status).toBe(403);
+      expect((await refused.response.json()).error.code).toBe('two_factor_required');
     } finally {
       list.pop();
     }
     expect((await rowOf(id)).email).toBe(email);
     // The list as it was: the link, which nothing spent, makes the change.
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
   });
 
   it('is refused for an account whose address is no longer the one the link was asked under', async () => {
@@ -978,7 +1221,7 @@ describe('an address that can no longer be taken when the link is opened (FR-AU-
       await db().user.update({ where: { id }, data: { email: moved } });
       return original(work);
     });
-    expect((await confirm(token)).response.status).toBe(409);
+    expect((await confirm(token, { cookie })).response.status).toBe(409);
     expect((await rowOf(id)).email).toBe(moved);
     // Undone: the link was not spent by the attempt.
     expect(await pending(id)).toHaveLength(1);
@@ -987,15 +1230,17 @@ describe('an address that can no longer be taken when the link is opened (FR-AU-
 
 describe('a sign-in with the old address on its way (FR-AU-03: "this address no longer signs in to it")', () => {
   it('leaves no session where the change was confirmed after the password was checked', async () => {
-    const { id, email, cookie } = await person();
+    const { id, email, cookie, sessionId } = await person();
     const next = unused();
     const token = await linkFor(cookie, next);
     const held = hold((await auth().$context).internalAdapter, 'createSession');
 
     const signing = signIn(auth, email, PASSWORD, fresh());
     await held.reached;
-    expect((await confirm(token)).response.status).toBe(200);
-    expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
+    // The session that confirmed, and no other.
+    const kept = async () => (await db().session.findMany({ where: { userId: id } })).map((row) => row.id);
+    expect(await kept()).toEqual([sessionId]);
     held.open();
     const signed = await signing;
 
@@ -1004,7 +1249,7 @@ describe('a sign-in with the old address on its way (FR-AU-03: "this address no 
       '{"error":{"code":"sign_in_refused","message":"The email address or the password is not correct."}}',
     );
     expect(signed.headers.getSetCookie()).toEqual([]);
-    expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    expect(await kept()).toEqual([sessionId]);
     expect(await signsIn(next)).toBe(true);
   });
 
@@ -1017,7 +1262,7 @@ describe('a sign-in with the old address on its way (FR-AU-03: "this address no 
 
     const signing = signIn(auth, email, PASSWORD, fresh());
     await held.reached;
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
     held.open();
     const signed = await signing;
 
@@ -1036,7 +1281,7 @@ describe('the counts of failed sign-ins, and the lock, at a change of the addres
     await beginLock(email);
     const until = (await rowOf(id)).lockedUntil;
     expect(until).not.toBeNull();
-    expect((await confirm(token)).response.status).toBe(200);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
     expect((await rowOf(id)).lockedUntil).toEqual(until);
     // Locked under its new address as it was under the old.
     expect(await signsIn(next)).toBe(false);
@@ -1058,7 +1303,7 @@ describe('an endpoint that leaves work for after its answer, called where none c
       );
     const asked = vi.spyOn(valkey(), 'eval');
     for (const response of [
-      await bare('/verify-email', { token }),
+      await bare('/verify-email', { token }, { cookie }),
       await bare('/change-email', { newEmail: unused(), password: PASSWORD }, { cookie }),
     ]) {
       expect(response.status).toBe(500);
@@ -1068,6 +1313,151 @@ describe('an endpoint that leaves work for after its answer, called where none c
     expect((await rowOf(id)).email).toBe(email);
     expect(await pending(id)).toHaveLength(1);
     expect(await stands(cookie)).toBe(true);
+  });
+});
+
+describe('a lock or a reset begun for the old address beside the confirmation (FR-AU-03: "this address no longer signs in to it")', () => {
+  const LOCKED = /^Sign-in to your Ekdotico account is locked/;
+  const RESET_SUBJECT = 'Set a new password for Ekdotico';
+  const resetRows = (userId: string) =>
+    db().verification.count({ where: { value: userId, identifier: { startsWith: 'reset-password:' } } });
+
+  it('begins no lock, writes no link and sends nothing where the address was changed after the lock read the account', async () => {
+    const { id, email, cookie } = await person();
+    const next = unused();
+    const token = await linkFor(cookie, next);
+    let confirmed = 0;
+    // The confirmation commits between the lock's read of the account by its
+    // old address and the statement that begins the lock.
+    atStatement('user', 'findUnique', async (run) => {
+      const found = await run();
+      confirmed = (await confirm(token, { cookie })).response.status;
+      return found;
+    });
+    await beginLock(email);
+
+    expect(confirmed).toBe(200);
+    expect(await rowOf(id)).toMatchObject({ email: next, lockedUntil: null });
+    expect(await db().verification.count({ where: { value: id } })).toBe(0);
+    expect(
+      (await sunk(sink)).filter((m) => LOCKED.test(m.subject ?? '') && [email, next].includes(m.to!)),
+    ).toEqual([]);
+    // NFR-SE-19: no entry says a lock began.
+    expect(await entries()).toEqual([['address_changed', id]]);
+    expect(await signsIn(next)).toBe(true);
+  });
+
+  it('writes no reset link and sends nothing where the address was changed after the reset read the account', async () => {
+    const { id, email, cookie } = await person();
+    const next = unused();
+    const token = await linkFor(cookie, next);
+    const asked = await post(auth, '/request-password-reset', { email }, fresh());
+    let confirmed = 0;
+    // The account is read by its old address, and the change commits before the link is written.
+    const users = db().user as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const read = users.findUnique!.bind(users);
+    vi.spyOn(users, 'findUnique').mockImplementationOnce(async (...args) => {
+      const found = await read(...args);
+      confirmed = (await confirm(token, { cookie })).response.status;
+      return found;
+    });
+    await asked.after();
+
+    expect(confirmed).toBe(200);
+    expect((await rowOf(id)).email).toBe(next);
+    expect(await resetRows(id)).toBe(0);
+    for (const address of [email, next]) expect(await mailTo(address, RESET_SUBJECT)).toEqual([]);
+  });
+
+  it('leaves no reset link that was written while the confirmation was on its way: the link mailed to the old address sets no password', async () => {
+    const { id, email, cookie } = await person();
+    const next = unused();
+    const token = await linkFor(cookie, next);
+    const asked = await post(auth, '/request-password-reset', { email }, fresh());
+    let confirming!: ReturnType<typeof confirm>;
+    // The reset holds the row of the account and has written its link, not
+    // yet committed: the confirmation has deleted the reset links it could
+    // see, and waits for the row of the account.
+    atStatement('verification', 'create', async (run) => {
+      const written = await run();
+      confirming = confirm(token, { cookie });
+      await untilOneWaits();
+      return written;
+    });
+    await asked.after();
+    expect((await confirming).response.status).toBe(200);
+
+    expect((await rowOf(id)).email).toBe(next);
+    expect(await resetRows(id)).toBe(0);
+    // The email had left for the old address; its link is void.
+    const mailed = (await mailTo(email, RESET_SUBJECT)).at(-1);
+    const reset = /\/reset-password\/([A-Za-z0-9_-]+)/.exec(mailed!.text)![1]!;
+    const late = await post(auth, '/reset-password', {
+      token: reset,
+      newPassword: 'the old mailbox sets this',
+    });
+    expect(late.response.status).toBe(409);
+    expect(await signsIn(next)).toBe(true);
+    expect(await signsIn(next, 'the old mailbox sets this')).toBe(false);
+  });
+});
+
+describe('the entry of a change of the address in the security log (NFR-SE-19; the owner’s decision S9)', () => {
+  it('writes one entry for a change that took effect, with the user and nothing else', async () => {
+    const { id, cookie } = await person();
+    const token = await linkFor(cookie, unused());
+    expect(await entries()).toEqual([]);
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
+    expect(await db().securityLogEntry.findMany()).toEqual([
+      {
+        id: expect.any(String),
+        createdAt: expect.any(Date),
+        kind: 'address_changed',
+        userId: id,
+        documentId: null,
+      },
+    ]);
+    // A link that is spent writes no second one.
+    expect((await confirm(token, { cookie })).response.status).toBe(409);
+    expect((await entries()).filter(([kind]) => kind === 'address_changed')).toHaveLength(1);
+  });
+
+  it('writes one entry where the confirmations arrive together', async () => {
+    const { id, cookie } = await person();
+    const token = await linkFor(cookie, unused());
+    await Promise.all(Array.from({ length: 6 }, () => confirm(token, { cookie })));
+    expect(await entries()).toEqual([['address_changed', id]]);
+  });
+
+  it('writes none for a link that is not known, void, or expired', async () => {
+    const { id, cookie } = await person();
+    const first = await linkFor(cookie, unused());
+    const second = await linkFor(cookie, unused());
+    await db().verification.updateMany({
+      where: { value: { startsWith: `${id} ` } },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    for (const token of ['x'.repeat(43), first, second]) {
+      expect((await confirm(token, { cookie })).response.status).toBe(409);
+    }
+    expect(await entries()).toEqual([]);
+  });
+
+  it('writes the entry in the transaction of the change: no change without its entry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { id, email, cookie } = await person();
+    const other = await session(email);
+    const token = await linkFor(cookie, unused());
+    atStatement('securityLogEntry', 'create', () => Promise.reject(new Error('the entry was not written')));
+    const failed = await confirm(token, { cookie });
+    expect(failed.response.status).toBe(500);
+    expect(failed.left).toBe(0);
+    expect((await rowOf(id)).email).toBe(email);
+    expect(await stands(other)).toBe(true);
+    expect(await entries()).toEqual([]);
+    // The link was not spent by the fault.
+    expect((await confirm(token, { cookie })).response.status).toBe(200);
+    expect(await entries()).toEqual([['address_changed', id]]);
   });
 });
 
@@ -1090,9 +1480,9 @@ describe('what is logged (NFR-SE-19)', () => {
       (await mailTo(next, CONFIRM_SUBJECT)).at(-1)!.text,
     )![1]!;
     await confirm('x'.repeat(43));
-    const done = await confirm(token);
+    const done = await confirm(token, { cookie });
     await done.after();
-    await confirm(token);
+    await confirm(token, { cookie });
 
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(out).not.toHaveBeenCalled();

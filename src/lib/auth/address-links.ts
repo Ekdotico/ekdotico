@@ -27,14 +27,17 @@ export function changeOf(value: string): { userId: string; newEmail: string } {
 }
 
 /**
- * Makes void every pending change of address of the account: where a later
- * request writes a new link, where a change completes, and where the password
- * of the account is reset or changed (password.ts).
+ * Makes void every pending change of address of the account: at every later
+ * request that passed its prompt, whether or not it writes a new link (the
+ * owner, 9 October 2026: "a later request voids the earlier link"), where a
+ * change completes, and where the password of the account is reset or changed
+ * (password.ts).
  *
- * FR-AU-03 states none of the three; its register row is pending. Built as
- * the safer of the readings: a link sent to an address typed wrongly does not
- * outlive the request that corrects it, and a change asked for under a
- * password that has since been set anew is not confirmed after it.
+ * FR-AU-03 states none of the three; its register row is pending. A link sent
+ * to an address typed wrongly does not outlive the request that corrects it,
+ * the fate of an earlier link shows nothing of the address named after it,
+ * and a change asked for under a password that has since been set anew is not
+ * confirmed after it.
  */
 export async function voidAddressLinks(
   tx: Pick<ReturnType<typeof db>, 'verification'>,

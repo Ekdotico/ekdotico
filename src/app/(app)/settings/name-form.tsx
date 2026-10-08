@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, FormFault, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 
@@ -19,6 +20,7 @@ export function NameForm({ name }: { name: string }) {
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
   const [changed, setChanged] = useState(false);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -61,7 +63,13 @@ export function NameForm({ name }: { name: string }) {
           error={refusal}
         />
         <div>
-          <Button variant="secondary" type="submit" pending={pending} pendingLabel="Changing name…">
+          <Button
+            variant="secondary"
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Changing name…"
+          >
             Change name
           </Button>
         </div>
