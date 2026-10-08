@@ -53,14 +53,18 @@ function view(row: Row, now: Date): InvitationView {
 const ADDRESS = /^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+\.[^\s@\u0000-\u001f\u007f]+$/;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
-// FR-AU-87 (a), verbatim. Plain text; it carries nothing of a person but the
-// address it is sent to.
-function invitationEmail(to: string, token: string): EmailMessage {
+// FR-AU-87 (a). Plain text; it carries nothing of a person but the address it
+// is sent to. Verbatim but for two things, by the owner's decision of
+// 8 October 2026: the link stands on a line of its own, with nothing touching
+// it, so the full stop that followed it is gone (a mail reader could take it
+// into the link); and the number of days is the setting, never a literal.
+export function invitationEmail(to: string, token: string): EmailMessage {
   const link = `${settings().appOrigin}/sign-up/${token}`;
+  const days = settings().admissionInvitationDays;
   return {
     to,
     subject: 'Your invitation to Ekdotico Closed α',
-    text: `The Ekdotico team has invited you to test Ekdotico in Closed α. To create your account, open this link and choose a password: ${link}. The link works once and is valid for 30 days. If you did not expect this invitation, you can ignore this email.`,
+    text: `The Ekdotico team has invited you to test Ekdotico in Closed α. To create your account, open this link and choose a password:\n${link}\nThe link works once and is valid for ${days} ${days === 1 ? 'day' : 'days'}. If you did not expect this invitation, you can ignore this email.`,
   };
 }
 

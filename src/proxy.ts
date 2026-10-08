@@ -40,6 +40,7 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   { group: 'a', methods: ['GET'], path: '/sign-in' }, // FR-AU-81
   { group: 'a', methods: ['GET'], path: '/sign-in/two-factor' }, // FR-AU-81, FR-AU-83, FR-AU-88: the page of the second step, between the password and the session; the path is this application's
   { group: 'a', methods: ['GET', 'POST'], path: '/sign-in/link/[token]' }, // FR-AU-81: the link of a lock email; the POST is its one control (register D115; A104, assumed)
+  { group: 'a', methods: ['GET'], path: '/sign-up' }, // FR-AU-90: "without a token" it shows the fixed statement (the owner's decision of 8 October 2026)
   { group: 'a', methods: ['GET'], path: '/sign-up/[token]' }, // FR-AU-90: the link of an admission invitation
   { group: 'a', methods: ['GET'], path: '/reset-password' }, // FR-AU-86
   { group: 'a', methods: ['GET'], path: '/reset-password/[token]' }, // FR-AU-86

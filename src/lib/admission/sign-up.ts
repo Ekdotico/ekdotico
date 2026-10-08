@@ -10,7 +10,8 @@
 // that even reached by mistake it creates nothing for anyone without one.
 import type { BetterAuthPlugin } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
-import { setSessionCookie } from 'better-auth/cookies';
+import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
+import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
@@ -111,13 +112,25 @@ export const admissionSignUp = {
         // fault here is not answered as a failure to create it: the person signs
         // in on the sign-in page, where the form sends them. NFR-SE-19: the
         // class of the fault and its code, and nothing else.
+        //
+        // The owner's decision of 8 October 2026: a session the browser already
+        // holds is ended, whoever it belongs to, as at a sign-in. Its row is
+        // deleted by the application's own client, which rejects on a fault and
+        // is quiet where the row is absent (src/lib/auth/sign-in.ts). A fault
+        // of the deletion is reported as one of the session is, and the
+        // browser's cookies are then cleared, so that it does not go on as the
+        // earlier account.
+        const { authCookies, secret, internalAdapter } = ctx.context;
+        const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
         try {
-          const user = await ctx.context.internalAdapter.findUserById(account.userId);
+          if (held) await db().session.deleteMany({ where: { token: held } });
+          const user = await internalAdapter.findUserById(account.userId);
           if (!user) throw new Error('The new account was not found.');
-          const session = await ctx.context.internalAdapter.createSession(user.id);
+          const session = await internalAdapter.createSession(user.id);
           await setSessionCookie(ctx, { session, user });
         } catch (error) {
           console.error(`sign-up: account created, session not started (${faultOf(error)})`);
+          if (held) deleteSessionCookie(ctx);
           return { outcome: 'created', signedIn: false };
         }
         return { outcome: 'created', signedIn: true };
