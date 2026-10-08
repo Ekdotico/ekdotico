@@ -1,20 +1,17 @@
 /* The placement of the pages, and nothing else. Every control is the package's
    (FR-AU-88), the heading of a page among them, and every value here is one of
    its tokens, with no fallback and no token declared (@ekdotico/domico
-   AGENTS.md, rules 1 to 3), but for two literals:
-   - `28rem`, the width of the form column. The catalogue of 0.26.0 has no
-     width for one: `--content-w` is the content column, and `--measure` caps
-     running prose. It is reported to the package's owner as a missing token,
-     and is replaced by the token when there is one.
-   - `1px`, the width of the header's rule. The catalogue gives a rule no
-     width token and says "Always `1px`" (design-tokens.md, "Rule").
+   AGENTS.md, rules 1 to 3), but for one literal: `1px`, the width of the
+   header's rule. The catalogue gives a rule no width token and says "Always
+   `1px`" (design-tokens.md, "Rule"). The width of the form column is
+   `--form-w`, which the package has from 0.27.0.
    The properties are logical ones (NFR-I18-07). */
 
 /* One narrow column for a form: it grows into scroll and is never cut off at
    320 CSS pixels or at 200% zoom (FR-AU-88). */
 .column {
   inline-size: 100%;
-  max-inline-size: 28rem;
+  max-inline-size: var(--form-w);
   margin-inline: auto;
   padding: var(--sp-9) var(--gutter);
 }
@@ -60,7 +57,7 @@
 
 /* A form inside a wide page keeps the width of the form pages. */
 .narrow {
-  max-inline-size: 28rem;
+  max-inline-size: var(--form-w);
 }
 
 /* A list of records, one under another, each closed by a rule. */

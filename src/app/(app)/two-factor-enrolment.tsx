@@ -6,22 +6,32 @@ import {
   FormFault,
   OneTimeCodeField,
   PasswordField,
+  QrCode,
   Stack,
   TextArea,
   TextField,
 } from '@ekdotico/domico/components';
+import { QR_SIZE, qrFits } from '../../components/qr-size.ts';
 import { sendFor, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 
 // Text for a person (the owner's answer to Q6 of the plan). FR-AU-83 fixes
-// none of it.
+// none of it. `withCode` is what stands beside the QR code and names it
+// first; `withoutCode` is what stood there before there was one, and stands
+// there still where the code is not drawn (qr-size.ts).
 const TEXT = {
   secretHeading: 'Add this account to an authenticator application',
-  secretBody:
-    'An authenticator application shows a six-digit code that changes every 30 seconds. Add this account to one: open the link on a device that has the application, or type the secret into it. Then enter the code it shows.',
+  withCode: {
+    body: 'An authenticator application shows a six-digit code that changes every 30 seconds. To add this account to one, scan the QR code with the application. Where the QR code cannot be scanned, open the link on a device that has the application, or type the secret into it. Then enter the code it shows.',
+    hint: 'Type this into the authenticator application where the QR code cannot be scanned and the link cannot be opened. The account is named Ekdotico, and the code is based on the time.',
+  },
+  withoutCode: {
+    body: 'An authenticator application shows a six-digit code that changes every 30 seconds. Add this account to one: open the link on a device that has the application, or type the secret into it. Then enter the code it shows.',
+    hint: 'Type this into the authenticator application where the link cannot be opened. The account is named Ekdotico, and the code is based on the time.',
+  },
+  // The name of the image: all that a screen reader is given of it.
+  qrLabel: 'QR code for an authenticator application',
   secretLink: 'Open in the authenticator application on this device',
-  secretHint:
-    'Type this into the authenticator application where the link cannot be opened. The account is named Ekdotico, and the code is based on the time.',
   codesHeading: 'Keep the recovery codes',
   codesHint:
     'Each recovery code signs this account in once, in place of a code from the authenticator application. Keep them where only you can read them. They are shown here once and cannot be shown again.',
@@ -86,10 +96,12 @@ type Stage =
  * application shows, …, and confirms with one code from it; only then is it
  * on", and then the recovery codes, once.
  *
- * The secret is shown as text and as a link that holds it. FR-AU-83 asks for
- * a QR code as well; the package has no control that draws one and the
- * application has no encoder, so the image waits for one (reported to the
- * owner with the pull request).
+ * The secret is shown "as a QR code and as text", and as a link that holds
+ * it. The code is the package's control (FR-AU-88) and is drawn here, in the
+ * browser, from the address the answer of the password carried: the secret
+ * goes into no further request, no address of a page, and no log. The image
+ * is never the only way in, since a person who cannot use a camera has the
+ * link and the text.
  */
 export function TwoFactorEnrolment({
   email,
@@ -171,20 +183,27 @@ export function TwoFactorEnrolment({
   ) : null;
 
   if (stage.name === 'code') {
+    const coded = qrFits(stage.uri);
+    const text = coded ? TEXT.withCode : TEXT.withoutCode;
     return (
       <form method="post" noValidate onSubmit={confirm}>
         <Stack gap={5}>
           <Heading ref={secretHeading} tabIndex={-1} className={styles.heading}>
             {TEXT.secretHeading}
           </Heading>
-          <p className={styles.text}>{TEXT.secretBody}</p>
+          <p className={styles.text}>{text.body}</p>
+          {coded ? (
+            <div>
+              <QrCode value={stage.uri} label={TEXT.qrLabel} size={QR_SIZE} />
+            </div>
+          ) : null}
           <p className={styles.text}>
             <a href={stage.uri}>{TEXT.secretLink}</a>
           </p>
           <TextField
             id="two-factor-secret"
             label="Secret"
-            hint={TEXT.secretHint}
+            hint={text.hint}
             value={stage.secret}
             readOnly
             spellCheck={false}
