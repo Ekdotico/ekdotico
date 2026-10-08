@@ -8,7 +8,6 @@
 import { db } from '../db.ts';
 import { onlyReads } from '../http.ts';
 import { settings } from '../settings.ts';
-import { auth } from './auth.ts';
 
 /** What a validated session yields, and nothing a caller does not need. */
 export interface ValidSession {
@@ -27,6 +26,12 @@ export interface Validation {
 }
 
 async function validate(headers: Headers, readRow: boolean): Promise<Validation> {
+  // Loaded here and not at the head of the file: the application's own
+  // endpoints inside the library validate through this module (password.ts,
+  // session-list.ts), and auth.ts mounts them. A static import would close
+  // that circle, and whichever of the modules was loaded first would be read
+  // by the others before it had a value.
+  const { auth } = await import('./auth.ts');
   // The library tests the 7 days (it refuses and deletes an expired session)
   // and renews. With `disableCookieCache` it reads the row; without, it may
   // answer from the signed copy, which is at most `cookieCacheSeconds` old.

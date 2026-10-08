@@ -36,7 +36,12 @@ export async function send(path: string, body?: unknown): Promise<Fault | null> 
   } catch {
     return { code: 'not_reached', message: NOT_REACHED };
   }
-  if (response.ok) return null;
+  if (response.ok) {
+    // Read to its end and dropped: a body that is left unread keeps its
+    // request open in the browser for as long as the page stays.
+    await response.arrayBuffer().catch(() => undefined);
+    return null;
+  }
   try {
     const { error } = (await response.json()) as { error?: Partial<Fault> };
     if (typeof error?.code === 'string' && typeof error.message === 'string' && error.message) {

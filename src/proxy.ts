@@ -5,17 +5,16 @@
 // It exports no `config.matcher`: it runs on every request. A path a matcher
 // left out would be a path without validation that the list below does not
 // show, and the list is what is reviewed on each deployment (NFR-SE-05).
-import { createHmac } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
+import { tooManyRequests } from './lib/auth/route-answers.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { errorResponse, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
-import { settings, type LimitName } from './lib/settings.ts';
-import { valkey } from './lib/valkey.ts';
+import { settings } from './lib/settings.ts';
 
 /** Where a visitor without a session is sent (FR-AU-07; API design, "Sign-in and identity"). */
 export const SIGN_IN_PATH = '/sign-in';
@@ -48,6 +47,8 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   // /api/auth is validated here like any route. Each is also on the list of
   // src/lib/auth/auth.ts, without which the handler does not serve it.
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/sign-in/email` }, // FR-AU-81
+  { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/request-password-reset` }, // FR-AU-86
+  { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/reset-password` }, // FR-AU-86: authorised by the token of a reset link
   // (a) The application's own endpoint that accepts an admission invitation.
   { group: 'a', methods: ['POST'], path: '/api/sign-up' }, // FR-AU-90
   // (b) The admission endpoints, authenticated by signature in the route (FR-AU-89).
@@ -88,8 +89,6 @@ const MESSAGES = {
   unauthenticated: 'This request needs a signed-in session. Sign in and try again.',
   forbidden:
     'This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again.',
-  rateLimited: (seconds: number) =>
-    `Too many requests were made in a short time. Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
   internal:
     'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
 };
@@ -103,28 +102,6 @@ function withCookies<T extends Response>(response: T, setCookie: readonly string
 async function forbidden(userId?: string): Promise<Response> {
   await securityLog({ kind: 'forbidden', userId });
   return errorResponse(403, 'forbidden', MESSAGES.forbidden);
-}
-
-// NFR-SE-07: a 429 that states when the caller may try again, in a header and
-// in words. NFR-SE-19: an entry when the limit is reached, with the user where
-// there is one and never the address. One entry for each period of a limit and
-// not one for each request refused in it, or a flood over the limit would
-// write to the database at the rate the limit exists to keep from it. The mark
-// is in Valkey, under a keyed digest, so that it holds across instances and
-// holds no address.
-async function tooManyRequests(
-  limit: LimitName,
-  key: string,
-  seconds: number,
-  userId?: string,
-): Promise<Response> {
-  const digest = createHmac('sha256', settings().authSecret).update(`${limit}:${key}`).digest('hex');
-  if ((await valkey().set(`limit-logged:${digest}`, '1', 'EX', seconds, 'NX')) === 'OK') {
-    await securityLog({ kind: 'rate_limit_reached', userId });
-  }
-  return errorResponse(429, 'rate_limited', MESSAGES.rateLimited(seconds), {
-    'Retry-After': String(seconds),
-  });
 }
 
 async function decide(request: NextRequest): Promise<Response> {

@@ -43,6 +43,8 @@ export default defineConfig({
     env: {
       FOUNDING_TEAM_EMAILS: '',
       APP_ORIGIN,
+      // `next start` listens where PORT says.
+      PORT: new URL(APP_ORIGIN).port,
       DATABASE_URL: process.env.E2E_DATABASE_URL,
       VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
       AUTH_SECRET: 'a-secret-for-the-smoke-tests-and-nothing-else',
@@ -52,6 +54,9 @@ export default defineConfig({
       // of 20 a minute (docs/operations/deployment.md), which one run of the
       // tests would use up.
       RATE_LIMIT_SESSIONLESS_PER_ADDRESS: '100000/60',
+      // The same for the requests for a password reset, 10 an hour, which
+      // the runs of an afternoon would use up between them.
+      RATE_LIMIT_RESET_PER_ADDRESS: '100000/3600',
     },
     reuseExistingServer: false,
     timeout: 180_000,

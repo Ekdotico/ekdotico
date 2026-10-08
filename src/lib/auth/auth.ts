@@ -10,6 +10,8 @@ import { admissionSignUp } from '../admission/sign-up.ts';
 import { clientAddress, UNKNOWN_ADDRESS } from '../client-address.ts';
 import { db } from '../db.ts';
 import { settings } from '../settings.ts';
+import { changePassword, requestPasswordReset, resetPassword } from './password.ts';
+import { revokeOtherSessions, revokeSession } from './session-list.ts';
 import { signInEmail, signOut } from './sign-in.ts';
 
 /** Where the library's handler is mounted (API design, "Sign-in and identity"). */
@@ -35,6 +37,19 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // FR-AU-84: signing out ends the session at once and clears the browser's
   // cookies. The application's own too.
   'POST /sign-out',
+  // FR-AU-86: the request for a password reset, and its completion by the
+  // token of the emailed link. Both the application's own (password.ts).
+  'POST /request-password-reset',
+  'POST /reset-password',
+  // FR-AU-85: the change of the password in the account settings, which ends
+  // every other session. The application's own (password.ts).
+  'POST /change-password',
+  // FR-AU-85: ending one session, named by its identifier and never by its
+  // token, and ending all but the one in use. The application's own
+  // (session-list.ts). The list itself is read by the settings page and is no
+  // endpoint: the library's returns every session's token.
+  'POST /revoke-session',
+  'POST /revoke-other-sessions',
 ]);
 
 // FR-AU-81, FR-AU-84: the application's sign-in and sign-out. A plugin's
@@ -43,6 +58,14 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
 const ownSignIn = {
   id: 'ekdotico-sign-in',
   endpoints: { signInEmail, signOut },
+} satisfies BetterAuthPlugin;
+
+// FR-AU-85, FR-AU-86: the same for the password and the sessions. The
+// library's `requestPasswordResetCallback`, `listSessions` and
+// `revokeSessions` are left as they are and answer nothing.
+const ownCredentials = {
+  id: 'ekdotico-credentials',
+  endpoints: { requestPasswordReset, resetPassword, changePassword, revokeSession, revokeOtherSessions },
 } satisfies BetterAuthPlugin;
 
 // The application's own gate, and no feature of the library.
@@ -106,7 +129,7 @@ function create() {
     // email exists only where a function to send one is configured; none is.
     // `admissionSignUp` (FR-AU-90) has one endpoint, without a path: the
     // handler cannot reach it, and only `POST /api/sign-up` calls it.
-    plugins: [twoFactor(), surface, ownSignIn, admissionSignUp],
+    plugins: [twoFactor(), surface, ownSignIn, ownCredentials, admissionSignUp],
     // NFR-SE-17 (d): each is off in the library by default but the linking of
     // accounts; all three are written so that a changed default changes nothing.
     account: { accountLinking: { enabled: false } },

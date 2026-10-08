@@ -12,6 +12,7 @@
 // the address belongs to an account (FR-AU-81).
 import { createHmac, randomUUID } from 'node:crypto';
 import { setTimeout as pause } from 'node:timers/promises';
+import type { AuthContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { addressBucket } from '../client-address.ts';
@@ -73,26 +74,61 @@ async function inTurn<T>(email: string, work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
-export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST' }, async (ctx) => {
-  const entered = credentials(ctx.body);
-  if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
-  // FR-AU-02: an address is stored, and so compared, in lower case.
-  // No address is longer than 254 characters; what is looked up and counted
-  // is bounded, whatever was sent.
-  const email = entered.email.slice(0, 255).toLowerCase();
-  const { internalAdapter, password: hasher, authCookies, secret } = ctx.context;
-  // NFR-SE-07: 5 in 15 minutes "for one email address from one network
-  // address", and 20 in an hour for the address entered, from everywhere. A
-  // bucket holds no space, so the first key cannot be read in two ways.
-  const pair = `${addressBucket(ctx.headers ?? new Headers())} ${email}`;
+// NFR-SE-07: "a completed password reset … clears the counters of this row for
+// that email address". The count for one address from one network address is
+// kept under a key for each network address, and those cannot be listed to be
+// deleted. So every key of both counts holds a number kept for the address,
+// and clearing raises the number: the counts made under the earlier one are
+// never read again, and leave Valkey when their periods have passed.
+// ponytail: the number has no expiry, one small key for each address that ever
+// reset; were Valkey to evict it, the counts made since the reset are lost with it.
+const generationKey = (email: string) =>
+  `sign-in-generation:${createHmac('sha256', settings().authSecret).update(`sign-in-generation:${email}`).digest('hex')}`;
 
-  const { user, passed } = await inTurn(email, async () => {
+/**
+ * Clears both counts of failed sign-ins for an email address, from every
+ * network address (NFR-SE-07, FR-AU-86). The link of a lock email calls it
+ * too (FR-AU-81).
+ */
+export async function clearFailedSignIns(email: string): Promise<void> {
+  await valkey().incr(generationKey(email.toLowerCase()));
+}
+
+/** The address as it is stored and compared (FR-AU-02), and bounded: no address is longer than 254 characters. */
+const normalised = (email: string) => email.slice(0, 255).toLowerCase();
+
+/**
+ * One check of a password for an email address, as a sign-in makes it and as
+ * every prompt for the current password does: "every wrong password at any
+ * prompt counts" as a failed sign-in, "a refused attempt counts toward
+ * nothing" (the owner's answer to Q10). It checks the two limits of
+ * NFR-SE-07, verifies, and counts a failure, as one step for the address.
+ *
+ * `passed` is false whatever the cause, and the caller answers with the one
+ * statement of FR-AU-81. `user` is the account of the address, where there is one.
+ */
+export async function checkCredentials(
+  context: Pick<AuthContext, 'internalAdapter' | 'password'>,
+  headers: Headers | undefined,
+  enteredEmail: string,
+  enteredPassword: string,
+) {
+  const email = normalised(enteredEmail);
+  const { internalAdapter, password: hasher } = context;
+
+  return inTurn(email, async () => {
+    // NFR-SE-07: 5 in 15 minutes "for one email address from one network
+    // address", and 20 in an hour for the address entered, from everywhere.
+    // Neither the number nor a bucket holds a space, so the first key cannot
+    // be read in two ways.
+    const generation = (await valkey().get(generationKey(email))) ?? '0';
+    const pair = `${generation} ${addressBucket(headers ?? new Headers())} ${email}`;
+    const everywhere = `${generation} ${email}`;
     // Both are asked, and the account is read, on every path: the same work
     // whether a limit is reached, the address is known, or the password is right.
     const [byPair, byEmail] = await Promise.all([
       checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair),
-      checkLimit('FAILED_SIGN_IN_PER_EMAIL', email),
+      checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere),
     ]);
     const open = byPair.ok && byEmail.ok;
     // Two reads on every path. Asked for the user with its credentials in one
@@ -109,8 +145,8 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // Every other attempt hashes once instead, as the library does for an
     // unknown address, so each path runs scrypt exactly once.
     const passed =
-      open && user?.emailVerified && hash && passwordLength(entered.password) <= settings().passwordMaxLength
-        ? await hasher.verify({ hash, password: entered.password })
+      open && user?.emailVerified && hash && passwordLength(enteredPassword) <= settings().passwordMaxLength
+        ? await hasher.verify({ hash, password: enteredPassword })
         : (await hasher.hash(''), false);
     // Counted on each failure, for an address that belongs to no account as
     // for one that does. An attempt refused by a limit is not counted and
@@ -119,10 +155,18 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // nothing else.
     if (open && !passed) {
       await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
-      await takeLimit('FAILED_SIGN_IN_PER_EMAIL', email);
+      await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
     }
     return { user, passed };
   });
+}
+
+/** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
+export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST' }, async (ctx) => {
+  const entered = credentials(ctx.body);
+  if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
+  const { internalAdapter, authCookies, secret } = ctx.context;
+  const { user, passed } = await checkCredentials(ctx.context, ctx.headers, entered.email, entered.password);
 
   if (!user || !passed) {
     // NFR-SE-19: the user where the address belongs to an account, and never the address.

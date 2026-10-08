@@ -114,4 +114,6 @@ The end-to-end tests need Playwright's browser once:
 pnpm exec playwright install chromium
 ```
 
+They build the application and serve it on port 3000. Where that port is taken, `E2E_PORT` names another: `E2E_PORT=3105 pnpm test:e2e`.
+
 CI runs all of them on every pull request, on Node.js 26.

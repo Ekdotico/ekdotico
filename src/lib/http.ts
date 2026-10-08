@@ -25,6 +25,22 @@ export function errorResponse(
 }
 
 /**
+ * The JSON of a request as exactly the named fields, each of them text, or
+ * null (API design: "any other field is refused"). So a request chooses
+ * nothing that its endpoint does not name.
+ */
+export function textFields<Name extends string>(
+  body: unknown,
+  ...names: Name[]
+): Record<Name, string> | null {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
+  const given = body as Record<string, unknown>;
+  if (Object.keys(given).length !== names.length) return null;
+  if (!names.every((name) => Object.hasOwn(given, name) && typeof given[name] === 'string')) return null;
+  return given as Record<Name, string>;
+}
+
+/**
  * Where a person is returned to after signing in (FR-AU-07): a path of this
  * origin, and `/` for anything else. A value that begins `//` or `/\` names
  * another host to a browser, and one with a scheme does too, so neither is ever

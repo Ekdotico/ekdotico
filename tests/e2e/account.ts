@@ -59,6 +59,30 @@ export function invite(email: string): string {
   return link![0];
 }
 
+/**
+ * What `pattern` finds in the newest message the local sink holds for an
+ * address, once the message is there: the email of the account is handed over
+ * after the response has been returned (FR-AU-87). `text` is the whole message.
+ */
+export async function mailFor(email: string, pattern: RegExp): Promise<{ found: string; text: string }> {
+  const sink = process.env.E2E_EMAIL_SINK!;
+  let result: { found: string; text: string } | undefined;
+  await expect
+    .poll(
+      () => {
+        for (const name of readdirSync(sink).sort().reverse()) {
+          const text = readFileSync(join(sink, name), 'utf8');
+          const found = text.includes(`To: ${email}\n`) ? pattern.exec(text) : null;
+          if (found) return ((result = { found: found[0], text }), true);
+        }
+        return false;
+      },
+      { message: `an email to the address that holds ${pattern}`, timeout: 15_000 },
+    )
+    .toBe(true);
+  return result!;
+}
+
 /** Opens the invitation and creates the account. The person ends on the Closed α notice. */
 export async function signUp(page: Page, person: Person, link = invite(person.email)): Promise<void> {
   await page.goto(link);

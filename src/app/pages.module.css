@@ -50,6 +50,48 @@
   color: var(--fg-1);
 }
 
+/* The heading of a part of a page. */
+.heading {
+  margin: var(--sp-0);
+  font-family: var(--font-serif);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-snug);
+  color: var(--fg-1);
+}
+
+/* A form inside a wide page keeps the width of the form pages. */
+.narrow {
+  max-inline-size: 28rem;
+}
+
+/* A list of records, one under another, each closed by a rule. */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin: var(--sp-0);
+  padding: var(--sp-0);
+  list-style: none;
+}
+
+.item {
+  padding-block-end: var(--sp-4);
+  border-block-end: 1px solid var(--rule);
+}
+
+.meta {
+  margin: var(--sp-0);
+  font-size: var(--fs-sm);
+  color: var(--fg-3);
+}
+
+/* The product's name as a link: classed, so that it carries no underline
+   (the package underlines a link written in copy, and this one is chrome). */
+.home {
+  display: inline-flex;
+}
+
 /* Rule 4 of the package: the reading serif has no Greek, so a Greek letter in
    a heading is set in the sans. */
 .greek {

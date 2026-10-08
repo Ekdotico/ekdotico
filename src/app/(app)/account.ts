@@ -10,12 +10,12 @@ import type { Metadata } from 'next';
 import { cache } from 'react';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { validateSession } from '../../lib/auth/session.ts';
+import { validateSession, type ValidSession } from '../../lib/auth/session.ts';
 import { CLOSED_ALPHA_NOTICE_TITLE, onboardingDue } from '../../lib/onboarding.ts';
 import { ensurePersonalWorkspace } from '../../lib/workspace.ts';
 import { SIGN_IN_PATH } from '../../proxy.ts';
 
-export const currentAccount = cache(async (): Promise<{ userId: string; noticeDue: boolean }> => {
+export const currentAccount = cache(async (): Promise<ValidSession & { noticeDue: boolean }> => {
   // The proxy has validated the session already, but Next.js skips the proxy
   // for a request that carries the build's identifier
   // (docs/operations/deployment.md), so the pages do not rest on it. A page is
@@ -33,7 +33,7 @@ export const currentAccount = cache(async (): Promise<{ userId: string; noticeDu
   // turns two-factor authentication on, with the notice after it").
 
   // FR-AU-55, FR-AU-56: decided on the server, from the recorded acknowledgement.
-  return { userId: session.userId, noticeDue: await onboardingDue(session.userId) };
+  return { ...session, noticeDue: await onboardingDue(session.userId) };
 });
 
 /** The title of a signed-in page, or the notice's while the notice is shown in its place. */
