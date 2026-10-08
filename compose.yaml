@@ -1,9 +1,10 @@
 # Local equivalents of the production services, for development only.
 # Production is DigitalOcean Frankfurt and is the owner's to provision.
 #
-# The object store for images and the reverse proxy that puts the collaboration
-# server on the application's origin join this file with the slices that first
-# use them.
+# The object store for images joins this file with the slice that first uses
+# it. There is no reverse proxy here: on a development machine the web
+# application serves the collaboration server on its own origin itself
+# (COLLAB_PROXY_TARGET; README.md).
 services:
   postgres:
     image: postgres:17

@@ -90,6 +90,12 @@ export interface Settings {
    */
   collabStoreDelayMs: number;
   collabStoreMaxMs: number;
+  /**
+   * FR-ED-23: how long the editor tries to restore a lost connection before
+   * the sync status indicator shows its error state. Milliseconds; the initial
+   * value is 30 seconds. The page hands it to the editor.
+   */
+  collabErrorAfterMs: number;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -277,6 +283,7 @@ export function loadSettings(env: Env = process.env): Settings {
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     collabStoreDelayMs,
     collabStoreMaxMs,
+    collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),
     limits: Object.fromEntries(
       (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
     ) as Record<LimitName, Limit>,

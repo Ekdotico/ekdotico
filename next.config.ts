@@ -17,8 +17,39 @@ export const TOKEN_PAGES = [
   '/confirm-address/:token',
 ];
 
+const onLocalhost = (url: string | undefined) =>
+  URL.canParse(url ?? '') && ['localhost', '127.0.0.1'].includes(new URL(url!).hostname);
+
+/**
+ * DEVELOPMENT ONLY. The session cookie is host-only, so a page reaches the
+ * collaboration server on its own origin and nowhere else (FR-AU-08). A
+ * deployment's reverse proxy serves `/collab` there
+ * (docs/operations/deployment.md); a development machine has none, so where
+ * `COLLAB_PROXY_TARGET` is set the web application itself passes `/collab`,
+ * the WebSocket upgrade included, to the collaboration server. The `Origin`
+ * and `Cookie` headers travel as the browser sent them, and the collaboration
+ * server checks both exactly as it does in production: nothing here answers
+ * for it.
+ *
+ * Refused unless the application and the target are both on localhost, so
+ * that no deployment comes to rest on it: there the proxy's rules for
+ * `X-Forwarded-For` and `x-prerender-revalidate` must hold in front of both
+ * processes, and this would put one behind the other.
+ */
+export function collabRewrites(env: Record<string, string | undefined> = process.env) {
+  const target = env.COLLAB_PROXY_TARGET;
+  if (!target) return [];
+  if (!onLocalhost(env.APP_ORIGIN) || !onLocalhost(target)) {
+    throw new Error(
+      'COLLAB_PROXY_TARGET is for a development machine: unset it, or set it and APP_ORIGIN to addresses on localhost.',
+    );
+  }
+  return [{ source: '/collab', destination: `${new URL(target).origin}/collab` }];
+}
+
 const config: NextConfig = {
   poweredByHeader: false,
+  rewrites: async () => collabRewrites(),
   // The development server would write an AGENTS.md of its own into the repository.
   agentRules: false,
   headers: async () =>

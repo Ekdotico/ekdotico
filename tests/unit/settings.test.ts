@@ -218,6 +218,13 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(changed).toMatchObject({ collabStoreDelayMs: 1000, collabStoreMaxMs: 3000 });
   });
 
+  // FR-ED-23: "30 seconds (an initial value)".
+  it('shows the error state of the editor after 30 seconds without a connection', () => {
+    expect(settings.collabErrorAfterMs).toBe(30000);
+    expect(loadSettings({ ...env, COLLAB_ERROR_AFTER_MS: '5000' }).collabErrorAfterMs).toBe(5000);
+    expect(() => loadSettings({ ...env, COLLAB_ERROR_AFTER_MS: '0' })).toThrow(/COLLAB_ERROR_AFTER_MS/);
+  });
+
   it('refuses a period of the storing too short for the write to fit in it', () => {
     expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '999' })).toThrow(/COLLAB_STORE_DELAY_MS/);
     expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '0' })).toThrow(/COLLAB_STORE_DELAY_MS/);

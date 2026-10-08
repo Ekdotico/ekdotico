@@ -164,8 +164,13 @@ test('the explanation of "Not recorded": by keyboard, by pointer, and to a scree
   await expect(mark).toHaveAccessibleDescription(EXPLANATION);
 
   // "Shown … when the mark receives keyboard focus, so the mark can be reached
-  // by keyboard": the next stop after the control that creates a document.
+  // by keyboard": after the control that creates a document comes the title,
+  // which is the link to the document's page, and then the mark beside it.
   await page.getByRole('button', { name: 'New document' }).focus();
+  await page.keyboard.press('Tab');
+  const title = page.getByRole('link', { name: DEFAULT_TITLE });
+  await expect(title).toBeFocused();
+  expect(await title.getAttribute('href')).toMatch(/^\/documents\/[0-9a-f-]{36}$/);
   await page.keyboard.press('Tab');
   await expect(mark).toBeFocused();
   await expect(explanation).toBeVisible();
