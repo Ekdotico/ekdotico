@@ -5,9 +5,15 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const { loadSettings } = await import('./lib/settings.ts');
     const { assertContractVersion } = await import('./lib/istorico/index.ts');
+    const { startTimers } = await import('./lib/timers.ts');
+    const { auth } = await import('./lib/auth/auth.ts');
     try {
       loadSettings();
       assertContractVersion();
+      // NFR-SE-17: a configuration the library would not take as written stops the process here.
+      auth();
+      // NFR-RE-15: the scheduled work of the application runs on timers in this process.
+      startTimers();
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);

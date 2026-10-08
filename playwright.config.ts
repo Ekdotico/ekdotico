@@ -14,7 +14,15 @@ export default defineConfig({
   webServer: {
     command: process.env.CI ? 'pnpm start' : 'pnpm build && pnpm start',
     url: 'http://127.0.0.1:3000/api/health',
-    env: { FOUNDING_TEAM_EMAILS: '' },
+    // No page of the smoke tests reaches the database: the address is the local
+    // development one of README.md. The secret is for this run and nothing else.
+    env: {
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN: 'http://127.0.0.1:3000',
+      DATABASE_URL: 'postgresql://ekdotico_app:local-app@localhost:5432/ekdotico',
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET: 'a-secret-for-the-smoke-tests-and-nothing-else',
+    },
     reuseExistingServer: false,
     timeout: 180_000,
   },

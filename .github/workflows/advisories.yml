@@ -1,0 +1,56 @@
+name: advisories
+
+# Checks the installed dependencies against published security advisories on
+# every pull request, on every push to main, and once a day (NFR-IC-20: "on
+# every build and at least once a day"; NFR-IC-10: a security patch for a direct
+# dependency within 14 days; NFR-SE-06, A03).
+#
+# The specification names no severity and no scope, so this takes the stricter
+# of each: every dependency, development ones included (NFR-IC-08 binds both),
+# and every severity from low up. A run fails while any advisory stands. It
+# reads the lockfile, so nothing is installed and no install script runs.
+#
+# A scheduled run that fails is shown on the Actions tab, and GitHub emails the
+# user who last changed the cron line below, if their notification settings
+# include Actions. No other service is involved.
+#
+# GitHub runs a schedule only from the default branch, and stops running it
+# after 60 days without repository activity in a public repository.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '17 5 * * *'
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: advisories-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Reads @ekdotico/domico from GitHub Packages. The package has to grant
+      # this repository access under "Manage Actions access".
+      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://npm.pkg.github.com
+          scope: '@ekdotico'
+      # No --ignore-registry-errors: an audit endpoint that cannot be reached
+      # fails the run, so that a missing check is never taken for a clean one.
+      - run: pnpm audit --audit-level low

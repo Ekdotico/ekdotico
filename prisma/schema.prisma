@@ -102,3 +102,25 @@ model TwoFactor {
   @@index([userId])
   @@index([secret])
 }
+
+// ── Security log ────────────────────────────────────────────────────────────
+// One row for each event NFR-SE-19 lists. An entry holds the time, the kind,
+// the application's user identifier and the document identifier, "and nothing
+// else about a person": a column added here is how personal data would get in,
+// and a test fails on one. The kinds are text, listed in src/lib/security-log.ts.
+//
+// No relation to `User` or to a document, on purpose: an entry outlives the
+// row it names (a deleted document, a tombstone), and a sign-in refused for an
+// unknown address has no user. Entries are deleted after their retention, by
+// the time, hence the index (NFR-RE-15).
+model SecurityLogEntry {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  kind       String
+  // The identity library's identifier of a user (`User.id`).
+  userId     String?
+  // `Document.id`, a UUID.
+  documentId String?  @db.Uuid
+
+  @@index([createdAt])
+}

@@ -35,12 +35,22 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      valkey:
+        image: valkey/valkey:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       # Reads @ekdotico/domico from GitHub Packages. The package has to grant
       # this repository access under "Manage Actions access".
       NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       FOUNDING_TEAM_EMAILS: ''
       ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      VALKEY_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
