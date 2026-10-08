@@ -26,7 +26,15 @@ One interface is defined here and not in the specification, provisionally: the w
 
 - Node.js 26 (`.nvmrc`), and pnpm 10.
 - `psql`, the PostgreSQL client, for the provisioning script and its test.
-- A token that can read GitHub Packages, in `NODE_AUTH_TOKEN`, to install `@ekdotico/domico`.
+- A token that can read GitHub Packages, to install `@ekdotico/domico`.
+
+pnpm takes a registry credential only from your own `~/.npmrc`, never from the one in this repository. Put this line in `~/.npmrc` once; it names a variable and holds no token:
+
+```
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+Then pass the token for the one command:
 
 ```bash
 NODE_AUTH_TOKEN="$(gh auth token)" pnpm install
