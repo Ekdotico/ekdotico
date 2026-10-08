@@ -4,11 +4,11 @@
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { PageHeading } from '@ekdotico/domico/components';
 import { validateSession } from '../../../lib/auth/session.ts';
 import { returnPath } from '../../../lib/http.ts';
 import { RETURN_PARAMETER } from '../../../proxy.ts';
 import { reading } from '../../page-fault.ts';
-import styles from '../../pages.module.css';
 import { SignInForm } from './sign-in-form.tsx';
 
 export const metadata: Metadata = { title: 'Sign in' };
@@ -32,7 +32,7 @@ export default async function SignIn({
 
   return (
     <>
-      <h1 className={styles.title}>Sign in</h1>
+      <PageHeading>Sign in</PageHeading>
       <SignInForm returnTo={returnTo} />
     </>
   );

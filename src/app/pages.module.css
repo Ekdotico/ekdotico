@@ -1,8 +1,8 @@
 /* The placement of the pages, and nothing else. Every control is the package's
-   (FR-AU-88), and every value here is one of its tokens, with no fallback and
-   no token declared (@ekdotico/domico AGENTS.md, rules 1 to 3), but for two
-   literals:
-   - `28rem`, the width of the form column. The catalogue of 0.25.0 has no
+   (FR-AU-88), the heading of a page among them, and every value here is one of
+   its tokens, with no fallback and no token declared (@ekdotico/domico
+   AGENTS.md, rules 1 to 3), but for two literals:
+   - `28rem`, the width of the form column. The catalogue of 0.26.0 has no
      width for one: `--content-w` is the content column, and `--measure` caps
      running prose. It is reported to the package's owner as a missing token,
      and is replaced by the token when there is one.
@@ -48,21 +48,7 @@
   padding: var(--sp-8) var(--gutter);
 }
 
-.title {
-  margin: var(--sp-0);
-  font-family: var(--font-serif);
-  font-size: var(--fs-2xl);
-  font-weight: var(--fw-semi);
-  line-height: var(--lh-snug);
-  color: var(--fg-1);
-}
-
-/* Rule 4 of the package: the reading serif has no Greek, so a Greek letter in
-   a heading is set in the sans. */
-.greek {
-  font-family: var(--font-sans);
-}
-
+/* A paragraph of a page. */
 .text {
   margin: var(--sp-0);
   max-inline-size: var(--measure);

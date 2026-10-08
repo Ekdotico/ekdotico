@@ -192,7 +192,7 @@ test('an invitation that is not open shows the fixed statement and nothing to fi
   const elsewhere = watchOrigins(page);
   // 43 characters of the alphabet a token is made of, and no invitation's.
   await page.goto(`/sign-up/${'x'.repeat(43)}`);
-  await expect(page.getByRole('main').getByRole('paragraph')).toHaveText(NOT_OPEN);
+  await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_OPEN);
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await expect(page.getByRole('button')).toHaveCount(0);
@@ -223,7 +223,7 @@ test('an invitation that was accepted is not open, to its own link or to a secon
   await expect(other.getByRole('textbox')).toHaveCount(0);
 
   await other.reload();
-  await expect(other.getByRole('main').getByRole('paragraph')).toHaveText(NOT_OPEN);
+  await expect(other.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_OPEN);
   await other.context().close();
 });
 
@@ -257,7 +257,7 @@ test('the team lists the invitations and revokes one, whose link is then not ope
   await expect(alertOn(page)).toHaveText(NOT_OPEN);
   // And the link, opened again.
   await page.goto(link);
-  await expect(page.getByRole('main').getByRole('paragraph')).toHaveText(NOT_OPEN);
+  await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_OPEN);
   await expect(page.getByRole('textbox')).toHaveCount(0);
 });
 
