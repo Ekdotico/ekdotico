@@ -1,9 +1,11 @@
-// FR-ED-35: one document's metadata, and its renaming (API design,
-// "Documents"). Each handler is made by `documentRoute`, which validates the
-// session and authorises the request through src/lib/documents/access.ts,
-// against the caller's role and the document's permission set as they are now
-// (FR-ED-39, NFR-SE-04), and hands over the one document it allowed. The Yjs
-// state joins the GET with the editor.
+// FR-ED-35, FR-ED-36: one document's metadata, its renaming, and its deletion
+// (API design, "Documents"). Each handler is made by `documentRoute`, which
+// validates the session and authorises the request through
+// src/lib/documents/access.ts, against the caller's role and the document's
+// permission set as they are now (FR-ED-39, NFR-SE-04), and hands over the one
+// document it allowed. The Yjs state joins the GET with the editor.
+import { refusal } from '../../../../lib/documents/access.ts';
+import { deleteDocument } from '../../../../lib/documents/deletion.ts';
 import {
   readTitle,
   renameDocument,
@@ -63,4 +65,20 @@ export const PATCH = documentRoute('document.rename', async ({ request, document
   }
 
   return Response.json(await renameDocument(document.id, read.title), { headers: NO_STORE });
+});
+
+/**
+ * FR-ED-36: the Owner deletes the document. `document.delete` is fixed to the
+ * Owner and can be given to no other role (FR-ED-44). It changes state, so
+ * the session's row is read. The request has no body, and none is read.
+ *
+ * The answer is a 204 with nothing in it: the page gives no status for it
+ * (reported). A document that a request beside this one deleted first is no
+ * longer there for this one, and is answered as any document that is not.
+ */
+export const DELETE = documentRoute('document.delete', async ({ document, session }) => {
+  if (!(await deleteDocument(document, session.userId))) {
+    return refusal({ outcome: 'not_found' }, session.userId, document.id);
+  }
+  return new Response(null, { status: 204, headers: NO_STORE });
 });

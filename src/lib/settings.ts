@@ -76,6 +76,8 @@ export interface Settings {
   admissionInvitationDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
   securityLogRetentionDays: number;
+  /** FR-ED-36: how long a deleted document is retained, and can be restored, before it is deleted permanently. */
+  deletedDocumentRetentionDays: number;
   /** Where the local sink writes each message (register D70 (the three checks stand), D92: no real email yet). */
   emailSinkDirectory: string;
   /** The address messages are sent from. */
@@ -246,6 +248,9 @@ export function loadSettings(env: Env = process.env): Settings {
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
+    // At least 1: with 0 a deletion would be permanent at the next run of the
+    // timer, and the confirmation would have promised a restore that is not there.
+    deletedDocumentRetentionDays: wholeNumber(env, 'DELETED_DOCUMENT_RETENTION_DAYS', 30, 1),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     collabStoreDelayMs,

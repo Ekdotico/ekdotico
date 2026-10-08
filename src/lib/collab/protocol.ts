@@ -54,7 +54,13 @@ export const REFUSAL = {
   LIMITED: 'limited',
   /** Reserved for the limit of ten connections (NFR-PE-05, FR-ED-18); not sent yet. */
   CAPACITY: 'capacity',
-  /** Reserved for the end of the account's access to the document (FR-ED-40, FR-ED-41); not sent yet. */
+  /**
+   * The account's access to the document has ended (FR-ED-40, FR-ED-41). It is
+   * the reason of the close of an open connection, sent so far for one event:
+   * the document was deleted (FR-ED-40 (c)). The client does not try again,
+   * discards what the server had not acknowledged, leaves the document, and
+   * states that access has ended, as no fault (FR-ED-41).
+   */
   ACCESS_ENDED: 'access-ended',
   /** Reserved for the end of the session the connection was opened under (NFR-SE-03 (b), (e)); not sent yet. */
   SESSION_ENDED: 'session-ended',

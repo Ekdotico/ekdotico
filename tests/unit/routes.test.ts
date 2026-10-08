@@ -10,7 +10,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/lib/documents/permissions.ts';
-import { documentRoute, permissionOf } from '../../src/lib/documents/route.ts';
+import { deletedDocumentRoute, documentRoute, permissionOf, stateOf } from '../../src/lib/documents/route.ts';
 import { routes, SESSIONLESS, withSession } from '../routes.ts';
 
 // NFR-SE-04, FR-ED-39: every access control decision for a document is made
@@ -30,6 +30,8 @@ const WITHOUT_A_DOCUMENT: Record<string, string> = {
     'lists the documents of the session’s own account and takes no identifier from the request',
   'src/app/api/documents/route.ts POST':
     'creates in the personal workspace of the session’s own account and refuses any other (FR-AU-12)',
+  'src/app/api/documents/deleted/route.ts GET':
+    'lists the deleted documents the session’s own account is the Owner of and takes no identifier from the request (FR-ED-36)',
 };
 
 // The permission each handler asks for, as the Auth column of the API design
@@ -39,7 +41,16 @@ const WITHOUT_A_DOCUMENT: Record<string, string> = {
 const PERMISSION: Record<string, Permission> = {
   'src/app/api/documents/[id]/route.ts GET': 'document.view',
   'src/app/api/documents/[id]/route.ts PATCH': 'document.rename', // FR-ED-35, FR-ED-44
+  'src/app/api/documents/[id]/route.ts DELETE': 'document.delete', // FR-ED-36: the Owner
+  'src/app/api/documents/[id]/restore/route.ts POST': 'document.delete', // FR-ED-36: "deleting and restoring"
 };
+
+// The handlers that act on a DELETED document: each is made by
+// `deletedDocumentRoute`, which asks `authoriseDeleted`. Every other is made by
+// `documentRoute`, which asks `authorise` and is never handed a deleted
+// document. A handler made by the wrong one of the two fails below: one that
+// would restore a document that is not deleted, or rename one that is.
+const ON_A_DELETED_DOCUMENT = ['src/app/api/documents/[id]/restore/route.ts POST'];
 
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const routeOf = (row: string) => row.split(' ')[0]!;
@@ -102,12 +113,19 @@ describe('the route handlers of a document', () => {
         expect(permission, `${route} ${method} has no row in PERMISSION`).toBeDefined();
         expect(permissionOf(handler), `${route} ${method} was not made by documentRoute`).toBeDefined();
         expect(permissionOf(handler)).toBe(permission);
+        expect(stateOf(handler), `${route} ${method}`).toBe(
+          ON_A_DELETED_DOCUMENT.includes(`${route} ${method}`) ? 'deleted' : 'live',
+        );
       }
     },
   );
 
   it('names no handler that does not exist', async () => {
-    for (const row of [...Object.keys(PERMISSION), ...Object.keys(WITHOUT_A_DOCUMENT)]) {
+    for (const row of [
+      ...Object.keys(PERMISSION),
+      ...Object.keys(WITHOUT_A_DOCUMENT),
+      ...ON_A_DELETED_DOCUMENT,
+    ]) {
       expect(documentRoutes).toContain(routeOf(row));
       const methods = (await handlersOf(routeOf(row))).map(([method]) => method);
       expect(methods, row).toContain(row.split(' ')[1]);
@@ -124,6 +142,16 @@ describe('the route handlers of a document', () => {
     expect(permissionOf(Object.assign(() => new Response(), made))).toBeUndefined();
     expect(permissionOf(made.bind(null))).toBeUndefined();
     expect(permissionOf(undefined)).toBeUndefined();
+  });
+
+  it('knows which of the two decisions a handler rests on, and the permission of a restore', () => {
+    expect(stateOf(documentRoute('document.delete', () => new Response()))).toBe('live');
+    const restore = deletedDocumentRoute(() => new Response());
+    expect(stateOf(restore)).toBe('deleted');
+    // FR-ED-36, FR-ED-44: not a parameter, so no route can ask for a lesser one.
+    expect(permissionOf(restore)).toBe('document.delete');
+    expect(stateOf(async () => new Response())).toBeUndefined();
+    expect(stateOf(restore.bind(null))).toBeUndefined();
   });
 
   // What construction cannot show: the route without a document is read as

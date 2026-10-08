@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Button,
@@ -14,6 +15,7 @@ import {
 } from '@ekdotico/domico/components';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
+import { InBrowser, LocalTime } from './local-time.tsx';
 
 // FR-ED-43, the two fixed texts, word for word: the mark, and its explanation.
 const NOT_RECORDED = 'Not recorded';
@@ -31,33 +33,63 @@ export interface DocumentItem {
   createdAt: string;
 }
 
-const two = (value: number) => String(value).padStart(2, '0');
+/** Where the list of deleted documents is (FR-ED-36): the application's choice, the Docs name no page. */
+const DELETED_PATH = '/deleted';
+const DELETE_STATEMENT_ID = 'delete-document-statement';
+const CANCEL_ID = 'delete-document-cancel';
 
-/** The day and the minute in the zone of the browser, in the one form the Expression Guidelines give a date (ISO 8601). */
-function localTime(iso: string): string {
-  const at = new Date(iso);
-  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
-}
-
-const never = () => () => {};
+/** FR-ED-36: the retention as the confirmation states it, "30 days" by default. */
+const days = (count: number) => `${count} ${count === 1 ? 'day' : 'days'}`;
 
 /**
- * NFR-I18-06: a date is shown "in the user's local timezone as reported by the
- * browser". The server does not know that zone, so it renders no date at all,
- * and the browser writes it once the page is its own: nothing the server sent
- * is contradicted, and no date is ever shown in the server's zone.
+ * FR-ED-36: the confirmation of a deletion, which states what happens before
+ * anything does (Expression Guidelines, system feedback, rule 13). The words
+ * are the application's: the requirement gives none (the owner's answer to Q6
+ * of the plan: approved with the pull request). Focus opens on Cancel, the
+ * way that deletes nothing.
  */
-function Created({ at }: { at: string }) {
-  const inBrowser = useSyncExternalStore(
-    never,
-    () => true,
-    () => false,
-  );
-  if (!inBrowser) return null;
+function DeleteConfirmation({
+  document,
+  retentionDays,
+  onDeleted,
+  onCancel,
+}: {
+  document: DocumentItem;
+  retentionDays: number;
+  onDeleted: () => void;
+  onCancel: () => void;
+}) {
+  const [fault, setFault] = useState<Fault | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [pending, setPending] = useState(false);
+
+  async function confirm() {
+    setPending(true);
+    const refused = await send(`/api/documents/${document.id}`, undefined, 'DELETE');
+    setPending(false);
+    if (!refused) return onDeleted();
+    setFault(refused);
+    setAttempt((count) => count + 1);
+  }
+
   return (
-    <p className={styles.meta}>
-      Created <time dateTime={at}>{localTime(at)}</time>
-    </p>
+    <Stack gap={5}>
+      {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
+      <p id={DELETE_STATEMENT_ID} className={styles.text}>
+        Deleting “<bdi>{document.title}</bdi>” removes it from the list of documents and closes every open
+        connection to it. Ekdotico keeps the document for {days(retentionDays)} in the list of deleted
+        documents, where it can be restored. After {days(retentionDays)} Ekdotico deletes the document
+        permanently, and it cannot be restored.
+      </p>
+      <Cluster gap={3}>
+        <Button variant="destructive" pending={pending} pendingLabel="Deleting document…" onClick={confirm}>
+          Delete document
+        </Button>
+        <Button id={CANCEL_ID} onClick={onCancel}>
+          Cancel
+        </Button>
+      </Cluster>
+    </Stack>
   );
 }
 
@@ -119,13 +151,43 @@ function RenameForm({
   );
 }
 
-/** FR-ED-35, FR-ED-43: the list of the account's documents, the creation of one, and the renaming of one. */
-export function Documents({ documents }: { documents: DocumentItem[] }) {
+/**
+ * FR-ED-35, FR-ED-36, FR-ED-43: the list of the account's documents, the
+ * creation of one, the renaming of one, and the deletion of one.
+ * `retentionDays` is the server's setting, which the confirmation states.
+ */
+export function Documents({
+  documents,
+  retentionDays,
+}: {
+  documents: DocumentItem[];
+  retentionDays: number;
+}) {
   const router = useRouter();
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<DocumentItem | null>(null);
+  const [deleting, setDeleting] = useState<DocumentItem | null>(null);
+  // How many documents were deleted from this page: the statement of the last
+  // deletion is shown, and takes focus each time one is made.
+  const [deleted, setDeleted] = useState(0);
+  const statement = useRef<HTMLParagraphElement>(null);
+  // The row of a deleted document is gone, and the control that had focus with
+  // it. Focus goes to the statement of what was done, which is so read out.
+  useEffect(() => {
+    if (deleted > 0) statement.current?.focus();
+  }, [deleted]);
+  // Where the confirmation opens: on Cancel, which deletes nothing. The
+  // package's Button takes no ref (reported), so the control is found by its id.
+  const cancel = useMemo(
+    () => ({
+      get current() {
+        return globalThis.document.getElementById(CANCEL_ID);
+      },
+    }),
+    [],
+  );
 
   async function create() {
     setCreating(true);
@@ -146,11 +208,19 @@ export function Documents({ documents }: { documents: DocumentItem[] }) {
     <Stack gap={6}>
       <Cluster justify="between" gap={4}>
         <PageHeading>Documents</PageHeading>
-        <Button variant="primary" pending={creating} pendingLabel="Creating document…" onClick={create}>
-          New document
-        </Button>
+        <Cluster gap={4}>
+          <Link href={DELETED_PATH}>Deleted documents</Link>
+          <Button variant="primary" pending={creating} pendingLabel="Creating document…" onClick={create}>
+            New document
+          </Button>
+        </Cluster>
       </Cluster>
       {fault ? <FormFault title={fault.message} focusKey={attempt} /> : null}
+      {deleted > 0 ? (
+        <p ref={statement} role="status" tabIndex={-1} className={styles.text}>
+          Document deleted. Ekdotico keeps it for {days(retentionDays)} in the list of deleted documents.
+        </p>
+      ) : null}
       {documents.length === 0 ? (
         <p className={styles.text}>No documents yet. Choose New document to create the first one.</p>
       ) : (
@@ -170,15 +240,28 @@ export function Documents({ documents }: { documents: DocumentItem[] }) {
                       <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
                     ) : null}
                   </Cluster>
-                  <Created at={document.createdAt} />
+                  <InBrowser>
+                    <p className={styles.meta}>
+                      Created <LocalTime at={document.createdAt} />
+                    </p>
+                  </InBrowser>
                 </Stack>
-                <Button
-                  variant="quiet"
-                  aria-describedby={`title-${document.id}`}
-                  onClick={() => setRenaming(document)}
-                >
-                  Rename
-                </Button>
+                <Cluster gap={2}>
+                  <Button
+                    variant="quiet"
+                    aria-describedby={`title-${document.id}`}
+                    onClick={() => setRenaming(document)}
+                  >
+                    Rename
+                  </Button>
+                  <Button
+                    variant="quiet"
+                    aria-describedby={`title-${document.id}`}
+                    onClick={() => setDeleting(document)}
+                  >
+                    Delete document
+                  </Button>
+                </Cluster>
               </Cluster>
             </li>
           ))}
@@ -192,6 +275,27 @@ export function Documents({ documents }: { documents: DocumentItem[] }) {
             onCancel={() => setRenaming(null)}
             onRenamed={() => {
               setRenaming(null);
+              router.refresh();
+            }}
+          />
+        ) : null}
+      </Dialog>
+      <Dialog
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        title="Delete document"
+        aria-describedby={DELETE_STATEMENT_ID}
+        initialFocusRef={cancel}
+      >
+        {deleting ? (
+          <DeleteConfirmation
+            key={deleting.id}
+            document={deleting}
+            retentionDays={retentionDays}
+            onCancel={() => setDeleting(null)}
+            onDeleted={() => {
+              setDeleting(null);
+              setDeleted((count) => count + 1);
               router.refresh();
             }}
           />

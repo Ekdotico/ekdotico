@@ -26,7 +26,7 @@ const NOT_READ = 'Ekdotico could not complete the request. Try again in a few mi
 export async function send(
   path: string,
   body?: unknown,
-  method: 'POST' | 'PATCH' = 'POST',
+  method: 'POST' | 'PATCH' | 'DELETE' = 'POST',
 ): Promise<Fault | null> {
   const sent = await sendFor(path, body, method);
   return 'fault' in sent ? sent.fault : null;
@@ -36,7 +36,7 @@ export async function send(
 export async function sendFor(
   path: string,
   body?: unknown,
-  method: 'POST' | 'PATCH' = 'POST',
+  method: 'POST' | 'PATCH' | 'DELETE' = 'POST',
 ): Promise<{ fault: Fault } | { answer: unknown }> {
   let response: Response;
   try {

@@ -124,6 +124,14 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(settings.securityLogRetentionDays).toBe(30);
   });
 
+  // FR-ED-36: "retained for 30 days (an initial value)".
+  it('retains a deleted document for 30 days, or for the days it is told', () => {
+    expect(settings.deletedDocumentRetentionDays).toBe(30);
+    expect(loadSettings({ ...env, DELETED_DOCUMENT_RETENTION_DAYS: '7' }).deletedDocumentRetentionDays).toBe(
+      7,
+    );
+  });
+
   it('trusts no proxy unless told how many there are', () => {
     expect(settings.trustedProxyCount).toBe(0);
   });
@@ -188,6 +196,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'SESSION_RENEW_SECONDS',
     'SESSION_MAX_SECONDS',
     'SECURITY_LOG_RETENTION_DAYS',
+    'DELETED_DOCUMENT_RETENTION_DAYS',
     'PASSWORD_MIN_LENGTH',
     'PASSWORD_MAX_LENGTH',
     'ADMISSION_INVITATION_DAYS',
@@ -202,6 +211,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
       SESSION_RENEW_SECONDS: '1',
       SESSION_MAX_SECONDS: '1',
       SECURITY_LOG_RETENTION_DAYS: '1',
+      DELETED_DOCUMENT_RETENTION_DAYS: '1',
       PASSWORD_MIN_LENGTH: '1',
       PASSWORD_MAX_LENGTH: '1',
       ADMISSION_INVITATION_DAYS: '1',

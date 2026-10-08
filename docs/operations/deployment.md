@@ -19,7 +19,13 @@ It is a process of its own, `pnpm start:collab`, with the same settings as the w
 
 **A deployment stops it with `SIGTERM` and waits for it to exit.** On `SIGTERM` or `SIGINT` it accepts no further handshake, stores every open document, and exits with 0; it exits with 1 where a document could not be stored after three attempts, and at once on a second signal (NFR-RE-07). A process that is killed stores nothing: what it had received in the 2 seconds before (`COLLAB_STORE_DELAY_MS`), or in the 10 seconds before while changes kept arriving (`COLLAB_STORE_MAX_MS`), is held only by the browsers that sent it, which send it again when they reconnect.
 
-**One instance only, for now.** Two instances do not yet share a document: each would hold its own copy and store over the other's (NFR-SC-04 is not built). And a connection that was accepted stays open until its browser closes it: the server does not yet end it when the session ends, when the account loses its role, or when the document is deleted (NFR-SE-03 (b) to (e) are not built). Both are later slices of the plan.
+**One instance only, for now.** Two instances do not yet share a document: each would hold its own copy and store over the other's (NFR-SC-04 is not built). And a connection that was accepted stays open until its browser closes it: the server does not yet end it when the session ends or when the account loses its role (of NFR-SE-03 (b) to (e), only the deletion of a document is built). Both are later slices of the plan.
+
+**It hears of a deleted document over Valkey, and listens only once it does.** The web application publishes the deletion of a document on a Valkey channel, and every collaboration server instance closes its connections to that document at once (FR-ED-40 (c), NFR-SE-03 (d); `src/lib/collab/events.ts`). So the two processes must share one Valkey, and a collaboration server that cannot reach it at start does not open its port, and its health check does not answer, until it can. A notice that is lost, because Valkey was away for a moment, leaves a connection open: the re-check that closes it within 60 seconds (FR-ED-41) is a later slice.
+
+## Deleted documents
+
+A deleted document is kept for `DELETED_DOCUMENT_RETENTION_DAYS`, 30 where unset, and is then deleted permanently, with its state, by a timer in the web application that runs at start and each hour (FR-ED-36, NFR-RE-15). Any number of instances may run it: each document is claimed by one of them. A line `permanent deletion: document kept (…)` on stderr names a document that could not be deleted in that run and is tried again in the next.
 
 ## The build output is kept as a secret is
 

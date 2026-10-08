@@ -210,13 +210,13 @@ enum WorkspaceType {
 model Document {
   // FR-ED-35: a UUID in canonical lower-case text, which is how PostgreSQL
   // writes one (contract IC-25). Version 4, issued by the database (plan, C16).
-  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   // FR-AU-13: never changed after creation, but for a transfer of ownership.
-  workspaceId   String
+  workspaceId       String
   // FR-ED-19: exactly one Owner, by `User.id` and never by an address (FR-AU-04).
-  ownerId       String
+  ownerId           String
   // FR-ED-35: at most 200 characters. Stored as written (NFR-SE-08).
-  title         String         @default("Untitled document")
+  title             String         @default("Untitled document")
   // FR-ED-44, FR-ED-45: the permission set, stored whole: every permission of
   // the table for every role, the Reviewer column and the comment rows
   // included, written at creation with the defaults. A column and not rows,
@@ -224,21 +224,31 @@ model Document {
   // is always read and written whole. Its form is in
   // src/lib/documents/permissions.ts, which is also the only reader: a cell the
   // table fixes is decided from the table, whatever is stored here.
-  permissionSet Json
+  permissionSet     Json
   // NFR-RE-07: the document's live state, written by the collaboration server
   // and by nothing else. Null until the document is first stored. The encoding
   // is in src/lib/collab/state.ts, and only there.
-  yjsState      Bytes?
+  yjsState          Bytes?
   // FR-ED-43, contract IC-16: fixed at creation from the capability the
   // Istorico port reports, and never changed. No default, so that no row is
   // written without the capability having been read.
-  recording     RecordingState
-  // FR-ED-36: set by the deletion of a later slice. It is here now because the
-  // one reader of a document's row and the list both leave a deleted document
-  // out, and the index below is theirs (plan, C17).
-  deletedAt     DateTime?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  recording         RecordingState
+  // FR-ED-36: the soft deletion (Data models, "Soft delete"): when the Owner
+  // deleted the document, and who did. Both null for a document that is not
+  // deleted, and again after it is restored. The row and its state stay for
+  // the retention, and are then deleted by the timer
+  // (src/lib/documents/deletion.ts). `deletedById` is an identifier and no
+  // relation, as the page has it. The index below is the two lists' (plan, C17).
+  deletedAt         DateTime?
+  deletedById       String?
+  // NFR-RE-15, plan C8: the claim of the permanent deletion, so that with two
+  // instances one of them deletes the document. Set by the instance that
+  // takes it, and never cleared but where Istorico did not erase; a claim
+  // that was not finished is taken over once it is an hour old. NOT on the
+  // Data models page: reported to the owner, with the plan's choice.
+  deletionClaimedAt DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   owner     User      @relation("DocumentOwner", fields: [ownerId], references: [id], onDelete: Restrict)
