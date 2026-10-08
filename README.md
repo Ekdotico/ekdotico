@@ -20,6 +20,8 @@ git -C ../docs show origin/main:srs/2-functional-requirements/2.2.06-fr-ed.md
 
 The working rules are in [`CLAUDE.md`](CLAUDE.md), and the decision records in [`docs/decisions`](docs/decisions).
 
+One interface is defined here and not in the specification, provisionally: the wire format of the signed admission requests, in [`docs/contracts/admission-signature.md`](docs/contracts/admission-signature.md). It belongs to Praktico and is replaced when Praktico's specification states one.
+
 ## Requirements
 
 - Node.js 26 (`.nvmrc`), and pnpm 10.
