@@ -382,12 +382,14 @@ export function createCollabServer(store: StoreSettings) {
 
     async onRequest({ request, response }) {
       // NFR-SE-05 (c): reports whether the service is up and returns nothing
-      // else. It checks no dependency (plan, C20), the subscription to the
-      // channel of deletions among them: after start it answers 200 whether
-      // or not this instance can hear one (docs/operations/deployment.md;
-      // whether that should be a 503 has been put to the owner).
-      const up = request.method === 'GET' && request.url === HEALTH_PATH;
-      response.writeHead(up ? 200 : 404, { 'Cache-Control': 'no-store' }).end();
+      // else. It checks no dependency (plan, C20) but one, by the owner's
+      // amendment of 8 October 2026: an instance that is not subscribed to
+      // the channel of deletions cannot be told to close a connection
+      // (FR-ED-40), and is not up. Nothing is asked of Valkey or of the
+      // database for the answer: it is what the subscription last said.
+      const health = request.method === 'GET' && request.url === HEALTH_PATH;
+      const status = !health ? 404 : events?.isSubscribed() ? 200 : 503;
+      response.writeHead(status, { 'Cache-Control': 'no-store' }).end();
       return answered();
     },
 

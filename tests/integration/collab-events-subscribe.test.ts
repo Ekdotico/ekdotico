@@ -1,8 +1,10 @@
 // A Valkey that accepts the connection and refuses the subscription, as a
 // managed one does whose ACL lacks the channel (`NOPERM`): how often the
 // subscriber of src/lib/collab/events.ts asks, and what it prints (FR-ED-40,
-// NFR-SE-19). The server here is a fake that speaks enough of the protocol
+// NFR-SE-19), and what the health check of the collaboration server answers
+// meanwhile. The server here is a fake that speaks enough of the protocol
 // for the client to become ready; the real Valkey is not touched.
+import { spawn } from 'node:child_process';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, expect, it, vi } from 'vitest';
@@ -116,6 +118,65 @@ it(
       ]);
     } finally {
       subscription.client.disconnect();
+    }
+  },
+);
+
+// The owner's amendment to choice C20 of the plan (8 October 2026): an
+// instance that cannot be told to close a connection is not up (FR-ED-40).
+it(
+  'answers its health check 200 while subscribed, an empty 503 while the subscription is lost, and 200 once subscribed again',
+  { timeout: 30_000 },
+  async () => {
+    refusing = false;
+    const child = spawn('node', ['src/collab/server.ts'], {
+      env: { ...process.env, COLLAB_PORT: '0' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    try {
+      let stderr = '';
+      child.stderr.on('data', (chunk) => (stderr += chunk));
+      // It listens only once it is subscribed.
+      const port = await new Promise<string>((resolve, reject) => {
+        let stdout = '';
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk;
+          const match = /listening on (\d+)/.exec(stdout);
+          if (match) resolve(match[1]!);
+        });
+        child.once('exit', () => reject(new Error(`the collaboration server did not start: ${stderr}`)));
+      });
+      const health = () => fetch(`http://127.0.0.1:${port}/collab/health`);
+      const answersWith = (status: number) =>
+        vi.waitFor(async () => expect((await health()).status).toBe(status), {
+          timeout: 10_000,
+          interval: 50,
+        });
+
+      const up = await health();
+      expect(up.status).toBe(200);
+      expect(await up.text()).toBe('');
+
+      // The connection is lost, and the Valkey it finds again refuses the channel.
+      refusing = true;
+      for (const peer of peers) peer.destroy();
+      await answersWith(503);
+      await vi.waitFor(() => expect(stderr).toContain('collab events: not subscribed (ReplyError NOPERM)'), {
+        timeout: 10_000,
+        interval: 50,
+      });
+      const down = await health();
+      expect(down.status).toBe(503);
+      expect(down.headers.get('cache-control')).toBe('no-store');
+      expect(await down.text()).toBe('');
+      // Nothing else it answers has changed.
+      expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(404);
+
+      refusing = false;
+      await answersWith(200);
+      expect(stderr).toContain('collab events: subscribed again');
+    } finally {
+      child.kill('SIGKILL');
     }
   },
 );

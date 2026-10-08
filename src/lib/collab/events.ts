@@ -110,6 +110,8 @@ function subscribeFault(error: unknown): string {
 export interface CollabEventSubscription {
   /** Resolves when the channel is first subscribed to. It never rejects. */
   subscribed: Promise<void>;
+  /** Whether the channel is subscribed to now: false until the first time, and from the loss of the connection until it is subscribed again. */
+  isSubscribed: () => boolean;
   /** The connection, for the process that holds it to end, and for the tests. */
   client: Redis;
 }
@@ -154,6 +156,10 @@ export function subscribeCollabEvents(
   let failures = 0;
   let said: string | undefined;
   let attempts = 0;
+  // Whether this connection holds the subscription: a subscription lives and
+  // ends with its connection, however that ends.
+  let live = false;
+  client.on('close', () => (live = false));
   client.on('ready', () => {
     const attempt = ++attempts;
     client.subscribe(COLLAB_EVENTS_CHANNEL).then(
@@ -161,6 +167,8 @@ export function subscribeCollabEvents(
         if (said !== undefined) console.error('collab events: subscribed again');
         failures = 0;
         said = undefined;
+        // Not where the connection was ended meanwhile, by `disconnect` or `quit`.
+        live = client.status === 'ready';
         first();
       },
       (error: unknown) => {
@@ -187,5 +195,5 @@ export function subscribeCollabEvents(
       );
     });
   });
-  return { subscribed, client };
+  return { subscribed, isSubscribed: () => live, client };
 }
