@@ -93,6 +93,21 @@ describe('what is configured (NFR-SE-17)', () => {
       }
     }
   });
+
+  // The web application awaits this when it starts (src/instrumentation.ts):
+  // the library builds its configuration in the background and would refuse it
+  // here. A database that cannot be reached does not keep the process from starting.
+  it('is built without a connection to the database', async () => {
+    vi.resetModules();
+    const url = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgresql://ekdotico_app:x@127.0.0.1:1/nowhere';
+    try {
+      const fresh = await import('../../src/lib/auth/auth.ts');
+      expect((await fresh.auth().$context).options.basePath).toBe('/api/auth');
+    } finally {
+      process.env.DATABASE_URL = url;
+    }
+  });
 });
 
 describe('nothing leaves the process (NFR-SE-17 (b), NFR-DP-05)', () => {
@@ -368,6 +383,20 @@ describe('signing out (FR-AU-84)', () => {
       expect(cleared.find((cookie) => cookie.includes(`${name}=;`))).toContain('Max-Age=0');
     }
   });
+
+  // NFR-SE-17 (c): the handler checks the origin itself, since the proxy can
+  // be skipped (docs/operations/deployment.md). The library would leave the
+  // check off under NODE_ENV=test, which is how this file runs.
+  it('is refused from any origin but the own, and the session stands', async () => {
+    const signedIn = cookiesOf(await signIn(auth, 'person@example.com'));
+    const { session } = (await auth().api.getSession({ headers: new Headers({ cookie: signedIn }) }))!;
+    for (const origin of ['https://evil.example', 'null', `${ORIGIN}.evil.example`]) {
+      const response = await request('POST', '/api/auth/sign-out', { cookie: signedIn, origin });
+      expect(response.status, origin).toBe(403);
+      expect(response.headers.getSetCookie(), origin).toEqual([]);
+    }
+    expect(await db().session.count({ where: { id: session.id } })).toBe(1);
+  });
 });
 
 describe('what is logged (NFR-SE-19)', () => {
@@ -387,6 +416,38 @@ describe('what is logged (NFR-SE-19)', () => {
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(out).not.toHaveBeenCalled();
     expect(err).not.toHaveBeenCalled();
+  });
+
+  // The library logs an error and continues past it. That it did is printed,
+  // and nothing it said: its message and what came with it can hold an address.
+  it('prints that the library reported an error, and neither its message nor what came with it', async () => {
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+    const { logger } = await auth().$context;
+    const carried = [{ email: 'person@example.com' }, new Error('a query with person@example.com')];
+    logger.error('Failed to read the session of person@example.com', ...carried);
+    for (const level of ['warn', 'info', 'success', 'debug'] as const) {
+      logger[level]('User not found: person@example.com', ...carried);
+    }
+    expect(spies.flatMap((spy) => spy.mock.calls)).toEqual([['identity: library reported (error)']]);
+  });
+
+  it('reports a fault of the handler by its class and code, and answers nothing of it', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    database.sql('ALTER TABLE "User" RENAME TO "UserAway"');
+    let response: Response;
+    try {
+      response = await signIn(auth, 'person@example.com');
+    } finally {
+      database.sql('ALTER TABLE "UserAway" RENAME TO "User"');
+    }
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toMatch(/User|person|prisma/i);
+    // Not the only line: the router under the library prints the error itself
+    // as well (`# SERVER_ERROR`, better-call 1.4.0), which the configuration
+    // does not yet keep it from. That is reported, and not settled here.
+    expect(errors.mock.calls[0]).toEqual(['identity: request failed (PrismaClientKnownRequestError P2021)']);
   });
 
   it('answers a failed sign-in in one way, whether or not the address has an account (FR-AU-81)', async () => {

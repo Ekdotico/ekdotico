@@ -10,6 +10,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
+import { faultOf } from './lib/fault.ts';
 import { errorResponse, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
@@ -38,7 +39,7 @@ type Group = 'a' | 'b' | 'c';
 export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; path: string }[] = [
   // (a) The pages a person without a session opens (FR-AU-88).
   { group: 'a', methods: ['GET'], path: '/sign-in' }, // FR-AU-81
-  { group: 'a', methods: ['GET', 'POST'], path: '/sign-in/link/[token]' }, // FR-AU-81: the link of a lock email; the POST is its one control (register D115, A104)
+  { group: 'a', methods: ['GET', 'POST'], path: '/sign-in/link/[token]' }, // FR-AU-81: the link of a lock email; the POST is its one control (register D115; A104, assumed)
   { group: 'a', methods: ['GET'], path: '/sign-up/[token]' }, // FR-AU-90: the link of an admission invitation
   { group: 'a', methods: ['GET'], path: '/reset-password' }, // FR-AU-86
   { group: 'a', methods: ['GET'], path: '/reset-password/[token]' }, // FR-AU-86
@@ -127,7 +128,12 @@ async function tooManyRequests(
   });
 }
 
-async function decide(request: NextRequest): Promise<Response> {
+/** What a request was waiting on, set before each wait, so that the line of a fault names it. */
+interface Progress {
+  stage: 'start' | 'limit' | 'session' | 'origin' | 'log mark';
+}
+
+async function decide(request: NextRequest, progress: Progress): Promise<Response> {
   const { method, headers } = request;
   const { pathname, search } = request.nextUrl;
   const changesState = !onlyReads(method);
@@ -153,11 +159,18 @@ async function decide(request: NextRequest): Promise<Response> {
   // that the refusals below are bounded too.
   if (group === 'a') {
     const address = addressBucket(headers);
+    progress.stage = 'limit';
     const limit = await takeLimit('SESSIONLESS_PER_ADDRESS', address);
-    if (!limit.ok) return tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds);
+    if (!limit.ok) {
+      progress.stage = 'log mark';
+      return await tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds);
+    }
     // NFR-SE-17 (c): "every request that changes state", a sign-in and the
     // acceptance of an invitation among them.
-    if (changesState && !isOwnOrigin(headers.get('origin'))) return forbidden();
+    if (changesState && !isOwnOrigin(headers.get('origin'))) {
+      progress.stage = 'origin';
+      return await forbidden();
+    }
     return NextResponse.next();
   }
 
@@ -167,6 +180,7 @@ async function decide(request: NextRequest): Promise<Response> {
   // the request itself, which is the route's (422 and the rest). The limit
   // comes after the origin check, so that a page on another origin cannot
   // spend a user's limit with requests that are refused anyway.
+  progress.stage = 'session';
   const { session, setCookie } = await validateSession(method, headers);
   if (!session) {
     // FR-AU-07: 401 for an API route, and for anything that changes state. A
@@ -180,7 +194,10 @@ async function decide(request: NextRequest): Promise<Response> {
   }
 
   // NFR-SE-17 (c): refused unless the `Origin` header is the application's own.
-  if (changesState && !isOwnOrigin(headers.get('origin'))) return forbidden(session.userId);
+  if (changesState && !isOwnOrigin(headers.get('origin'))) {
+    progress.stage = 'origin';
+    return await forbidden(session.userId);
+  }
 
   // The founding-team gate of FR-AU-83 sits here, in the slice that builds
   // two-factor authentication: an account on the list without it reaches
@@ -188,9 +205,11 @@ async function decide(request: NextRequest): Promise<Response> {
 
   // NFR-SE-07: requests to API routes, for each authenticated user.
   if (pathname.startsWith('/api/')) {
+    progress.stage = 'limit';
     const limit = await takeLimit('API_PER_USER', session.userId);
     if (!limit.ok) {
-      return tooManyRequests('API_PER_USER', session.userId, limit.retryAfterSeconds, session.userId);
+      progress.stage = 'log mark';
+      return await tooManyRequests('API_PER_USER', session.userId, limit.retryAfterSeconds, session.userId);
     }
   }
 
@@ -200,13 +219,15 @@ async function decide(request: NextRequest): Promise<Response> {
 }
 
 export async function proxy(request: NextRequest): Promise<Response> {
+  const progress: Progress = { stage: 'start' };
   try {
-    return await decide(request);
+    return await decide(request, progress);
   } catch (error) {
     // NFR-SE-06, A10: where the database, Valkey, or the library cannot answer,
     // the request is refused and never passed on, and the answer says nothing
-    // of the fault. The log holds its class alone (NFR-SE-19).
-    console.error(`proxy: request refused (${error instanceof Error ? error.name : 'unknown'})`);
+    // of the fault. The log holds the stage it was at, and the class and code
+    // of the fault, and nothing else (NFR-SE-19).
+    console.error(`proxy: request refused at ${progress.stage} (${faultOf(error)})`);
     return errorResponse(500, 'internal', MESSAGES.internal);
   }
 }

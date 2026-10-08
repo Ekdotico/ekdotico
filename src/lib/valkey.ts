@@ -2,6 +2,7 @@
 // instances live here and never in the memory of one instance (NFR-SE-07,
 // NFR-SC-04).
 import { Redis } from 'ioredis';
+import { faultOf } from './fault.ts';
 import { settings } from './settings.ts';
 
 let client: Redis | undefined;
@@ -16,7 +17,7 @@ export function valkey(): Redis {
     commandTimeout: 5000,
   });
   // Without a listener the client prints the error itself, with the address
-  // of the server. NFR-SE-19: the class of the fault and nothing else.
-  client.on('error', (error) => console.error(`valkey: connection fault (${error.name})`));
+  // of the server. NFR-SE-19: the class of the fault, its code, and nothing else.
+  client.on('error', (error) => console.error(`valkey: connection fault (${faultOf(error)})`));
   return client;
 }

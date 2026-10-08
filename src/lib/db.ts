@@ -9,6 +9,18 @@ let client: PrismaClient | undefined;
 
 export function db(): PrismaClient {
   return (client ??= new PrismaClient({
-    adapter: new PrismaPg({ connectionString: settings().databaseUrl }, { schema: 'ekdotico' }),
+    adapter: new PrismaPg(
+      {
+        connectionString: settings().databaseUrl,
+        // NFR-SE-06 (A10): a database that does not answer fails the request
+        // within seconds; it never holds it open. The first bounds the wait
+        // for a connection, the second is kept by the server, and the third by
+        // the driver where the server itself has gone quiet.
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 5000,
+        query_timeout: 5000,
+      },
+      { schema: 'ekdotico' },
+    ),
   }));
 }
