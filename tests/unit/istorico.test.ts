@@ -82,13 +82,20 @@ describe('the no-op adapter (IC-14)', () => {
     // It can reach no database, file, network, or clock: the module imports
     // nothing and names none of them.
     expect(source).not.toMatch(/\bimport\b|\brequire\b|\bprocess\b|\bglobalThis\b|\bfetch\b|\bDate\b/);
+    // No module-level binding exists that could hold state, and no source of an
+    // identifier, a time, or a random value is named.
+    expect(source.match(/\b(?:const|let|var|class|function)\s+\w+/g)).toEqual([
+      'const CONTRACT_VERSION',
+      'const noopAdapter',
+    ]);
+    expect(source).not.toMatch(/\b(?:crypto|performance|Math|Intl|Temporal)\b/);
     // It keeps nothing between calls: a second call answers as the first did,
     // whatever came between, and the capabilities never change.
     const first = await port.erase(erasure);
     await port.registerDocument(registration);
     expect(await port.erase(erasure)).toEqual(first);
     expect(port.capabilities()).toEqual(port.capabilities());
-    // It does not hold on to what it is given, nor change it.
+    // It does not change what it is given.
     const frozen = Object.freeze({ ...erasure, documents: Object.freeze([...erasure.documents]) });
     await expect(port.erase(frozen as ErasureRequest)).resolves.toMatchObject({ ok: true });
   });
