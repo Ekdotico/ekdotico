@@ -5,6 +5,7 @@
 import type { Metadata } from 'next';
 import { findOpenReset } from '../../../../lib/auth/password.ts';
 import { settings } from '../../../../lib/settings.ts';
+import { reading } from '../../../page-fault.ts';
 import { NotValid, ResetForm } from './reset-form.tsx';
 
 // FR-AU-81 asks `Referrer-Policy: no-referrer` of the page of a lock's link;
@@ -18,8 +19,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function ResetPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  // One answer for a link that is spent, expired, or not known.
-  const reset = await findOpenReset(token);
+  // One answer for a link that is spent, expired, or not known. A fault of
+  // the read is the page of a fault, and never that answer (page-fault.ts).
+  const reset = await reading(() => findOpenReset(token));
   if (!reset) return <NotValid />;
 
   const { passwordMinLength, passwordMaxLength } = settings();

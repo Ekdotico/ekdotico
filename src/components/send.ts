@@ -23,32 +23,38 @@ const NOT_READ = 'Ekdotico could not complete the request. Try again in a few mi
  * password or the token of a link (NFR-SE-19).
  */
 export async function send(path: string, body?: unknown): Promise<Fault | null> {
+  const sent = await sendFor(path, body);
+  return 'fault' in sent ? sent.fault : null;
+}
+
+/** As `send`, for a page that reads the answer to success: its JSON, or null where it holds none. */
+export async function sendFor(path: string, body?: unknown): Promise<{ fault: Fault } | { answer: unknown }> {
   let response: Response;
   try {
     response = await fetch(path, {
       method: 'POST',
       credentials: 'same-origin',
       cache: 'no-store',
+      // Every route answers in JSON and none redirects, so a redirect is an
+      // intermediary's, and the page it leads to is never read as success.
+      redirect: 'error',
       ...(body === undefined
         ? {}
         : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     });
   } catch {
-    return { code: 'not_reached', message: NOT_REACHED };
+    return { fault: { code: 'not_reached', message: NOT_REACHED } };
   }
-  if (response.ok) {
-    // Read to its end and dropped: a body that is left unread keeps its
-    // request open in the browser for as long as the page stays.
-    await response.arrayBuffer().catch(() => undefined);
-    return null;
-  }
+  // Read to its end whatever it holds: a body that is left unread keeps its
+  // request open in the browser for as long as the page stays.
+  if (response.ok) return { answer: await response.json().catch(() => null) };
   try {
     const { error } = (await response.json()) as { error?: Partial<Fault> };
     if (typeof error?.code === 'string' && typeof error.message === 'string' && error.message) {
-      return { code: error.code, message: error.message, fields: error.fields };
+      return { fault: { code: error.code, message: error.message, fields: error.fields } };
     }
   } catch {
     // Not JSON: stated below.
   }
-  return { code: 'not_read', message: NOT_READ };
+  return { fault: { code: 'not_read', message: NOT_READ } };
 }

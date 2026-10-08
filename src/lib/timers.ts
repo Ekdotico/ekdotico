@@ -2,17 +2,20 @@
 // job. Started once when a process starts.
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
+import { faultOf } from './fault.ts';
 import { deleteExpiredSecurityLog } from './security-log.ts';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 let started = false;
 
-// Each is scheduled, at least once a day, and idempotent. None needs a claim
-// to be safe on two instances: both delete the rows older than the same
-// moment, the second finds what the first left, which is nothing, and neither
-// fails.
-export const DAILY: Readonly<Record<string, () => Promise<unknown>>> = {
+// Each is scheduled, at least once a day, and idempotent, and answers with
+// the number of rows it deleted. They run each hour, so that a run that
+// failed, the one at start among them, is repeated within the hour. None needs
+// a claim to be safe on two instances: both delete the rows older than the
+// same moment, the second finds what the first left, which is nothing, and
+// neither fails.
+export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // NFR-RE-15, "deletion of log entries after their retention" (NFR-SE-19).
   'security-log-deletion': () => deleteExpiredSecurityLog(),
   // NFR-RE-15, "removal of ended sessions, of expired reset and confirmation
@@ -22,17 +25,24 @@ export const DAILY: Readonly<Record<string, () => Promise<unknown>>> = {
   'expired-token-removal': () => deleteExpiredTokens(),
 };
 
-function runDaily(): void {
-  for (const [name, run] of Object.entries(DAILY)) {
-    // Only the name of the timer is reported: an error's message can quote a row.
-    run().catch(() => console.error(`timer failed: ${name}`));
+function runTimers(): void {
+  for (const [name, run] of Object.entries(TIMERS)) {
+    run().then(
+      // A run that found nothing to delete says nothing, or the log would hold a line an hour.
+      (count) => {
+        if (count > 0) console.log(`timer ran: ${name} (${count} deleted)`);
+      },
+      // The name of the timer, and the class and code of the fault: an error's
+      // message can quote a row (NFR-SE-19).
+      (error) => console.error(`timer failed: ${name} (${faultOf(error)})`),
+    );
   }
 }
 
 export function startTimers(): void {
   if (started) return;
   started = true;
-  runDaily();
+  runTimers();
   // unref: a timer never keeps a stopping process alive.
-  setInterval(runDaily, DAY_MS).unref();
+  setInterval(runTimers, HOUR_MS).unref();
 }

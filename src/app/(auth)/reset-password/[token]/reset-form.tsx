@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { Button, FormFault, PageHeading, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
 import { send, type Fault } from '../../../../components/send.ts';
 import styles from '../../../pages.module.css';
 
@@ -18,15 +18,15 @@ const CHANGED =
 /**
  * All that the page shows for a link that is spent, expired, or not known, and
  * the way to a new one. `announce` is for the statement that takes the form's
- * place after a submission, so that a screen reader says it (FR-AU-88).
+ * place after a submission: a screen reader says it, and it takes focus
+ * (FR-AU-88). On a page that opens with the statement it is part of the page
+ * and no alert, since an alert there from the first paint announces nothing.
  */
 export function NotValid({ announce = false }: { announce?: boolean }) {
   return (
     <>
-      <h1 className={styles.title}>Set a new password</h1>
-      <p className={styles.text} role={announce ? 'alert' : undefined}>
-        {NOT_VALID}
-      </p>
+      <PageHeading>Set a new password</PageHeading>
+      <FormFault title={NOT_VALID} announce={announce ? undefined : 'off'} />
       <p className={styles.text}>
         <Link href="/reset-password" prefetch={false}>
           Set a new password
@@ -80,7 +80,7 @@ export function ResetForm({
   if (changed) {
     return (
       <>
-        <h1 className={styles.title}>Set a new password</h1>
+        <PageHeading>Set a new password</PageHeading>
         <p ref={statement} tabIndex={-1} role="status" className={styles.text}>
           {CHANGED}
         </p>
@@ -96,7 +96,7 @@ export function ResetForm({
   const refusal = fault?.fields?.newPassword;
   return (
     <>
-      <h1 className={styles.title}>Set a new password</h1>
+      <PageHeading>Set a new password</PageHeading>
       <form method="post" noValidate onSubmit={submit}>
         <Stack gap={5}>
           {fault ? (

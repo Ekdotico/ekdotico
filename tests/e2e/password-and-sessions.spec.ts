@@ -121,7 +121,7 @@ test('a password is reset by an emailed link, which works once, and the old pass
 
   // The link works once: opened again, it shows the one statement and the way to a new link.
   await page.goto(link);
-  await expect(page.getByRole('main').getByRole('paragraph').first()).toHaveText(NOT_VALID);
+  await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_VALID);
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Set a new password' })).toHaveAttribute(
     'href',
@@ -186,7 +186,7 @@ test('the reset page answers an address without an account as any other, by keyb
 
 test('a link that is not known shows the statement and nothing to fill in', async ({ page }) => {
   await page.goto(`/reset-password/${'x'.repeat(43)}`);
-  await expect(page.getByRole('main').getByRole('paragraph').first()).toHaveText(NOT_VALID);
+  await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_VALID);
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await expect(page.getByRole('button')).toHaveCount(0);

@@ -1,25 +1,22 @@
 'use client';
 
 import { useState } from 'react';
-import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
-import { send, type Fault } from '../../../../components/send.ts';
-import styles from '../../../pages.module.css';
-
-// FR-AU-90, the fixed statement, word for word.
-const NOT_OPEN = 'This invitation is not open. Ask the Ekdotico team for a new one.';
+import { Button, FormFault, PageHeading, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { sendFor, type Fault } from '../../../../components/send.ts';
+import { INVITATION_NOT_OPEN } from '../../../../lib/admission/statements.ts';
 
 /**
  * All that the page shows for an invitation that is not open (FR-AU-90).
  * `announce` is for the statement that takes the form's place after a
- * submission, so that a screen reader says it (FR-AU-88).
+ * submission: a screen reader says it, and it takes focus (FR-AU-88). On a
+ * page that opens with the statement it is part of the page and no alert,
+ * since an alert there from the first paint announces nothing.
  */
 export function NotOpen({ announce = false }: { announce?: boolean }) {
   return (
     <>
-      <h1 className={styles.title}>Invitation</h1>
-      <p className={styles.text} role={announce ? 'alert' : undefined}>
-        {NOT_OPEN}
-      </p>
+      <PageHeading>Invitation</PageHeading>
+      <FormFault title={INVITATION_NOT_OPEN} announce={announce ? undefined : 'off'} />
     </>
   );
 }
@@ -46,19 +43,22 @@ export function SignUp({
     if (pending) return;
     const form = new FormData(event.currentTarget);
     setPending(true);
-    const refused = await send('/api/sign-up', {
+    const sent = await sendFor('/api/sign-up', {
       token,
       name: form.get('name'),
       password: form.get('password'),
     });
-    if (!refused) {
+    if (!('fault' in sent)) {
       // Signed in (FR-AU-90). The first screen is the server's to decide: the
-      // Closed α notice (FR-AU-55).
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a full navigation on purpose: the server renders the next page under the new session
-      window.location.assign('/');
+      // Closed α notice (FR-AU-55). Where the account was created and its
+      // session could not be started, the answer says so, and the person signs
+      // in on the sign-in page.
+      const signedIn = (sent.answer as { signedIn?: unknown } | null)?.signedIn !== false;
+      // A full navigation on purpose: the server renders the next page under the new session.
+      window.location.assign(signedIn ? '/' : '/sign-in');
       return;
     }
-    setFault(refused);
+    setFault(sent.fault);
     setAttempt((count) => count + 1);
     setPending(false);
   }
@@ -69,7 +69,7 @@ export function SignUp({
   const fields = fault?.fields ?? {};
   return (
     <>
-      <h1 className={styles.title}>Create account</h1>
+      <PageHeading>Create account</PageHeading>
       <form method="post" noValidate onSubmit={submit}>
         <Stack gap={5}>
           {fault ? (

@@ -4,6 +4,8 @@
 // one. The modules under test are imported after `prepare` has set the
 // environment, since they read their settings once.
 import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createDatabase } from './database.ts';
 
 export const ORIGIN = 'https://app.example.test';
@@ -16,6 +18,7 @@ export function prepare(label: string, env: Record<string, string> = {}) {
     FOUNDING_TEAM_EMAILS: '',
     APP_ORIGIN: ORIGIN,
     EMAIL_TRANSPORT: 'sink',
+    EMAIL_SINK_DIRECTORY: join(tmpdir(), 'ekdotico-test-mail'),
     DATABASE_URL: database.appUrl,
     // The limiter keys its counters by this secret, so a secret of its own
     // gives each run counters of its own in the shared Valkey.

@@ -9,6 +9,8 @@ import { twoFactor } from 'better-auth/plugins';
 import { admissionSignUp } from '../admission/sign-up.ts';
 import { clientAddress, UNKNOWN_ADDRESS } from '../client-address.ts';
 import { db } from '../db.ts';
+import { faultOf } from '../fault.ts';
+import { INTERNAL_FAULT } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { changePassword, requestPasswordReset, resetPassword } from './password.ts';
@@ -88,15 +90,9 @@ const surface = {
 } satisfies BetterAuthPlugin;
 
 function create() {
-  // NFR-SE-17 (b), (c): the library also reads variables of its own, which can
-  // switch its telemetry on and add trusted origins whatever is written below.
-  // The configuration is this file and the application's settings, and nothing else.
-  const stray = Object.keys(process.env).filter((name) => name.startsWith('BETTER_AUTH_'));
-  if (stray.length > 0) {
-    throw new Error(
-      `Unset ${stray.join(', ')}: the identity library is configured by the application alone.`,
-    );
-  }
+  // NFR-SE-17 (b), (c): the configuration is this file and the application's
+  // settings, and nothing else. The settings refuse to load where a variable
+  // of the library's own is set (settings.ts).
   const {
     appOrigin,
     authSecret,
@@ -183,9 +179,16 @@ function create() {
     // It is off; the proxy limits the handler's paths from Valkey.
     rateLimit: { enabled: false },
     // NFR-SE-19: the library logs what a request carried (an address at
-    // sign-up, a database fault with the values of its query). It logs nothing,
-    // and a fault is reported by its class alone.
-    logger: { disabled: true },
+    // sign-up, a database fault with the values of its query). Of what it
+    // logs, only that it reported an error is printed, never the message or
+    // what came with it: an error it logs and continues past would otherwise
+    // go unseen. A fault it throws is reported by its class and code.
+    logger: {
+      level: 'error',
+      log: (level) => {
+        if (level === 'error') console.error('identity: library reported (error)');
+      },
+    },
     onAPIError: {
       onError: (error) => {
         // The router answers an API error thrown from this function: the one
@@ -208,14 +211,10 @@ function create() {
           // Any other refusal of the request itself is no fault.
           return;
         }
-        console.error(`identity: request failed (${error instanceof Error ? error.name : 'unknown'})`);
+        console.error(`identity: request failed (${faultOf(error)})`);
         // Left here, the library's router prints the fault whole, with whatever
         // the database or Valkey put in it, and answers with no body (NFR-SE-06 A10).
-        throw answer(
-          500,
-          'internal',
-          'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
-        );
+        throw answer(500, 'internal', INTERNAL_FAULT);
       },
     },
   });

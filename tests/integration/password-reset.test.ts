@@ -688,7 +688,7 @@ describe('the completion of a reset (FR-AU-86, FR-AU-82, FR-AU-85)', () => {
       database.sql('ALTER TABLE "AccountAway" RENAME TO "Account"');
     }
     expect(errors.mock.calls).toHaveLength(1);
-    expect(String(errors.mock.calls[0])).toMatch(/^identity: request failed \(\w+\)$/);
+    expect(errors.mock.calls[0]).toEqual(['identity: request failed (PrismaClientKnownRequestError P2021)']);
     // The link was not spent, and the password is the old one.
     expect((await findOpenReset(token))?.userId).toBe(id);
     expect((await signIn(auth, email, PASSWORD, fresh())).status).toBe(200);

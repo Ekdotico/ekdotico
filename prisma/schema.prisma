@@ -2,7 +2,8 @@
 // created by scripts/provision.sql and never by a migration (contract IC-51).
 // No `vector` extension is declared: α 0.1.0 stores none (contract IC-23).
 // A model arrives with the slice that first uses it, and of a model only the
-// columns that slice uses (Data models, "What α 0.1.0 migrates").
+// columns that slice uses (Data models, "What α 0.1.0 migrates"). `Verification`
+// and `TwoFactor` arrive unused: the identity library refuses to start without them.
 
 generator client {
   provider = "prisma-client"

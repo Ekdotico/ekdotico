@@ -3,7 +3,14 @@
 // the time, the kind, the application's user identifier and the document
 // identifier, "and nothing else about a person", so the entry type has no free
 // text and no bag of extras, and the kind is one of a closed list.
+//
+// `securityLog` below never rejects, and that rule is for the refusals alone.
+// The entry of a change (the collaborators, the permission set, the Owner, a
+// deletion, each step of an account deletion) is written in the transaction of
+// the change, so that neither stands without the other, by a variant that a
+// later slice adds.
 import { db } from './db.ts';
+import { faultOf } from './fault.ts';
 import { settings } from './settings.ts';
 
 // One kind for each event NFR-SE-19 lists. An entry holds no detail, so each
@@ -39,8 +46,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * logs; were a failed write to throw, that response would become a 500, or a
  * careless `catch` could let the request through. So the failure changes no
  * control flow: the refusal stands.
- * A09: the failure is not silent. It is reported on stderr with the kind alone,
- * never the database's message, which can quote the values of the row.
+ * A09: the failure is not silent. It is reported on stderr with the kind and
+ * with the class and code of the fault, never the database's message, which
+ * can quote the values of the row.
  */
 export async function securityLog(entry: {
   kind: SecurityLogKind;
@@ -58,8 +66,8 @@ export async function securityLog(entry: {
     await db().securityLogEntry.create({
       data: { kind: entry.kind, userId: entry.userId, documentId: entry.documentId },
     });
-  } catch {
-    console.error(`security log: entry not written (${entry.kind})`);
+  } catch (error) {
+    console.error(`security log: entry not written (${entry.kind}: ${faultOf(error)})`);
   }
 }
 

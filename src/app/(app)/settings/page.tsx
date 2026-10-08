@@ -3,10 +3,11 @@
 // address, two-factor authentication and the deletion join it with the slices
 // that build them. The path is this application's choice: no page of the
 // specification names one.
-import { Stack } from '@ekdotico/domico/components';
+import { PageHeading, Stack } from '@ekdotico/domico/components';
 import { listSessions } from '../../../lib/auth/session-list.ts';
 import { db } from '../../../lib/db.ts';
 import { settings } from '../../../lib/settings.ts';
+import { reading } from '../../page-fault.ts';
 import styles from '../../pages.module.css';
 import { currentAccount, titled } from '../account.ts';
 import { ChangePasswordForm } from './change-password-form.tsx';
@@ -20,15 +21,18 @@ export default async function AccountSettings() {
   // A page is read, so the session may have been validated against its signed
   // copy (NFR-SE-02); everything this page changes goes through an endpoint
   // that reads the row.
-  const [user, sessions] = await Promise.all([
-    db().user.findUnique({ where: { id: userId }, select: { email: true } }),
-    listSessions(userId, sessionId),
-  ]);
+  // A fault of either read is the page of a fault, and one line (page-fault.ts).
+  const [user, sessions] = await reading(() =>
+    Promise.all([
+      db().user.findUnique({ where: { id: userId }, select: { email: true } }),
+      listSessions(userId, sessionId),
+    ]),
+  );
   const { passwordMinLength, passwordMaxLength } = settings();
 
   return (
     <Stack gap={8}>
-      <h1 className={styles.title}>Account settings</h1>
+      <PageHeading>Account settings</PageHeading>
       <section aria-labelledby="password-heading" className={styles.narrow}>
         <Stack gap={5}>
           <h2 id="password-heading" className={styles.heading}>

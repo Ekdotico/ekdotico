@@ -1,24 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Button, Cluster, FormFault, Stack } from '@ekdotico/domico/components';
+import { Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { SignOutButton } from './sign-out-button.tsx';
-
-// Rule 4 of the package: a Greek letter is never set in the reading serif,
-// which has none. The heading keeps the serif and its α takes the sans.
-function withGreek(text: string) {
-  return text.split(/(\p{Script=Greek}+)/u).map((part, index) =>
-    index % 2 ? (
-      <span key={index} className={styles.greek}>
-        {part}
-      </span>
-    ) : (
-      part
-    ),
-  );
-}
 
 /**
  * The onboarding wizard and its one step, the Closed α notice (FR-AU-55,
@@ -72,11 +58,15 @@ export function ClosedAlphaNotice({
   return (
     <main className={styles.prose}>
       <Stack gap={5}>
-        <h1 ref={heading} tabIndex={-1} className={styles.title}>
-          {withGreek(title)}
-        </h1>
+        {/* The package sets the α of the title in the sans (its rule 4). */}
+        <PageHeading ref={heading} tabIndex={-1}>
+          {title}
+        </PageHeading>
         <p className={styles.text}>{body}</p>
-        {fault ? <FormFault title={fault.message} focusKey={attempt} /> : null}
+        {/* Announced, and focus stays on the button that was pressed, which is
+            beside it and is the way to try again. A new statement for each
+            attempt, so that a second refusal is announced as the first was. */}
+        {fault ? <FormFault key={attempt} title={fault.message} autoFocus={false} /> : null}
         <Cluster gap={3}>
           <Button variant="primary" pending={pending} pendingLabel="Continuing…" onClick={acknowledge}>
             Continue

@@ -137,6 +137,23 @@ describe('a password on the list', () => {
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toBe('The list of known passwords could not be read.');
     expect((thrown as Error).message).not.toContain(GOOD);
+    expect((thrown as Error).name).toBe('PasswordListError');
+  });
+
+  // A list with no entry would pass every password (FR-AU-82).
+  it.each([
+    ['is empty', ''],
+    ['holds its heading alone', '# A list.\n# And nothing under it.\n'],
+  ])('refuses every password where the file %s, and reads it again the next time', async (_, text) => {
+    const file = join(root, 'empty.txt');
+    writeFileSync(file, text);
+    const check = await load({ passwordListFile: file });
+    expect(() => check(GOOD, EMAIL)).toThrow('The list of known passwords is empty.');
+    expect(() => check(GOOD, EMAIL)).toThrow(expect.objectContaining({ name: 'PasswordListError' }));
+    // Not kept: once the file holds a password, the same process reads it.
+    writeFileSync(file, 'known-password-one\n');
+    expect(check(GOOD, EMAIL)).toBeNull();
+    expect(check('known-password-one', EMAIL)).toMatch(/on a list/);
   });
 
   it('reads the file shipped with the application', async () => {

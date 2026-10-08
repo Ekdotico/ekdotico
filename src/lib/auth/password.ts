@@ -26,11 +26,11 @@ import { handOver } from '../email/hand-over.ts';
 import type { EmailMessage } from '../email/index.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { checkPassword } from '../password-rules.ts';
-import { takeLimit } from '../rate-limit.ts';
+import { logLimitReached, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
-import { limitReached, tooManyRequests, unauthenticated } from './route-answers.ts';
+import { tooManyRequests, unauthenticated } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
 
@@ -135,7 +135,7 @@ export const requestPasswordReset = createAuthEndpoint(
     if (byEmail.ok) afterResponse('password reset link', () => sendResetLink(email));
     else {
       const seconds = byEmail.retryAfterSeconds;
-      afterResponse('password reset limit', () => limitReached('RESET_PER_EMAIL', email, seconds));
+      afterResponse('password reset limit', () => logLimitReached('RESET_PER_EMAIL', email, seconds));
     }
 
     ctx.setHeader('Cache-Control', 'no-store');

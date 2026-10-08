@@ -333,9 +333,9 @@ describe('the removal of ended sessions (NFR-RE-15, FR-AU-84)', () => {
     expect(await db().session.count({ where: { userId: stranger.id } })).toBe(1);
   });
 
-  it('is among the daily timers of the application, each of which two instances run at once without an error', async () => {
-    const { DAILY } = await import('../../src/lib/timers.ts');
-    expect(Object.keys(DAILY)).toEqual([
+  it('is among the timers of the application, each of which two instances run at once without an error', async () => {
+    const { TIMERS } = await import('../../src/lib/timers.ts');
+    expect(Object.keys(TIMERS)).toEqual([
       'security-log-deletion',
       'ended-session-removal',
       'expired-token-removal',
@@ -350,7 +350,7 @@ describe('the removal of ended sessions (NFR-RE-15, FR-AU-84)', () => {
       data: { id: 'expired', identifier: 'reset-password:x', value: 'u', expiresAt: new Date(0) },
     });
 
-    await Promise.all(Object.values(DAILY).flatMap((run) => [run(), run()]));
+    await Promise.all(Object.values(TIMERS).flatMap((run) => [run(), run()]));
     expect(await db().session.count({ where: { id: idle.sessionId } })).toBe(0);
     expect(await db().session.count({ where: { id: sessionId } })).toBe(1);
     expect(await db().verification.count()).toBe(0);

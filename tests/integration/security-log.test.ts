@@ -11,6 +11,7 @@ process.env.DATABASE_URL = database.appUrl;
 process.env.FOUNDING_TEAM_EMAILS ??= '';
 process.env.APP_ORIGIN ??= 'https://app.example.test';
 process.env.EMAIL_TRANSPORT ??= 'sink';
+process.env.EMAIL_SINK_DIRECTORY ??= '/unused';
 process.env.VALKEY_URL ??= 'redis://valkey.example.test:6379';
 process.env.AUTH_SECRET ??= 'a-test-secret-of-at-least-thirty-two-characters';
 delete process.env.SECURITY_LOG_RETENTION_DAYS;
@@ -111,8 +112,8 @@ describe('securityLog', () => {
   });
 
   // NFR-SE-06, A10 and A09: a write that fails changes nothing for the caller
-  // and is reported on stderr with the kind alone.
-  it('resolves when the database refuses the write, and reports the kind and no identifier', async () => {
+  // and is reported on stderr with the kind and with the class and code of the fault.
+  it('resolves when the database refuses the write, and reports the kind, the fault, and no identifier', async () => {
     database.sql(`ALTER TABLE ${TABLE} ADD CONSTRAINT refuse CHECK (kind <> 'rate_limit_reached')`);
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -122,7 +123,9 @@ describe('securityLog', () => {
     } finally {
       database.sql(`ALTER TABLE ${TABLE} DROP CONSTRAINT refuse`);
     }
-    expect(stderr.mock.calls).toEqual([['security log: entry not written (rate_limit_reached)']]);
+    expect(stderr.mock.calls).toEqual([
+      ['security log: entry not written (rate_limit_reached: PrismaClientKnownRequestError P2039)'],
+    ]);
     expect(count()).toBe(0);
   });
 
@@ -166,7 +169,8 @@ describe('deleteExpiredSecurityLog', () => {
 });
 
 describe('startTimers', () => {
-  it('starts one timer however often it is called, which deletes at start and each day and reports a failure', async () => {
+  it('starts one timer however often it is called, which deletes at start and each hour and reports a failure', async () => {
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
     const setInterval = vi.spyOn(globalThis, 'setInterval');
     insertAt('expired-at-start', new Date('2000-01-01T00:00:00.000Z'));
     insertAt('fresh', new Date());
@@ -178,24 +182,32 @@ describe('startTimers', () => {
     const call = setInterval.mock.calls[0];
     const timer = setInterval.mock.results[0];
     if (!call || !timer) throw new Error('no timer was started');
-    expect(call[1]).toBe(DAY_MS);
+    expect(call[1]).toBe(DAY_MS / 24);
     // unref: the timer does not keep a stopping process alive.
     expect((timer.value as NodeJS.Timeout).hasRef()).toBe(false);
     await vi.waitFor(() => expect(rows(`SELECT id FROM ${TABLE}`)).toEqual(['fresh']));
 
-    // What the timer runs each day.
+    // What the timer runs each hour.
     const tick = call[0] as () => void;
     insertAt('expired-later', new Date('2000-01-01T00:00:00.000Z'));
     tick();
     await vi.waitFor(() => expect(rows(`SELECT id FROM ${TABLE}`)).toEqual(['fresh']));
+    // Each run that deleted something says how much.
+    await vi.waitFor(() =>
+      expect(stdout.mock.calls).toEqual(Array(2).fill(['timer ran: security-log-deletion (1 deleted)'])),
+    );
 
-    // A failure is reported with the name of the timer and nothing else, and
-    // rejects nothing: an unhandled rejection would fail this run.
+    // A failure is reported with the name of the timer and the class and code
+    // of the fault, and rejects nothing: an unhandled rejection would fail this run.
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
     database.sql(`ALTER TABLE ${TABLE} RENAME TO "Elsewhere"`);
     try {
       tick();
-      await vi.waitFor(() => expect(stderr.mock.calls).toEqual([['timer failed: security-log-deletion']]));
+      await vi.waitFor(() =>
+        expect(stderr.mock.calls).toEqual([
+          ['timer failed: security-log-deletion (PrismaClientKnownRequestError P2021)'],
+        ]),
+      );
     } finally {
       database.sql(`ALTER TABLE "Elsewhere" RENAME TO ${TABLE}`);
     }

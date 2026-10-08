@@ -5,11 +5,16 @@
 // the address is not verified, returns the session's token and the user in the
 // body, lets the request choose a session of 1 day (`rememberMe`), and counts
 // nothing; its sign-out reports success where the row could not be deleted.
+// And its deletion of a session reads the row first, takes a fault of that
+// read for an absent row, and then deletes nothing and reports nothing: so a
+// session is deleted here by the application's own client, which rejects.
 //
 // Every refusal of a sign-in is the one statement, the one status, one entry
 // in the security log, and one run of the password hashing function, whatever
 // its cause, so that neither the answer nor the time it takes shows whether
-// the address belongs to an account (FR-AU-81).
+// the address belongs to an account (FR-AU-81). One refusal runs no hashing:
+// that of an attempt which waited 10 seconds for its turn and got none, before
+// anything of the address was read, so its time shows nothing of the address.
 import { createHmac, randomUUID } from 'node:crypto';
 import { setTimeout as pause } from 'node:timers/promises';
 import type { AuthContext } from 'better-auth';
@@ -18,10 +23,10 @@ import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
-import { checkLimit, takeLimit } from '../rate-limit.ts';
+import { checkLimit, logLimitReached, takeLimit, type LimitResult } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { passwordLength } from '../password-rules.ts';
-import { settings } from '../settings.ts';
+import { settings, type LimitName } from '../settings.ts';
 import { valkey } from '../valkey.ts';
 
 /** FR-AU-81: the one fixed statement of a failed sign-in, verbatim. */
@@ -53,9 +58,9 @@ const RELEASE = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call
  * before any of them was counted, and a limit of 5 would admit as many guesses
  * as arrive together. Valkey holds a keyed digest of the address (NFR-SE-01).
  *
- * An attempt that gets no turn in time throws, and the request is refused
- * (NFR-SE-06 A10). A turn ends by itself after `TURN_MS`, so a process that
- * stops holds no address for longer.
+ * An attempt that gets no turn in time throws `NoTurn`, and the sign-in is
+ * refused (NFR-SE-06 A10). A turn ends by itself after `TURN_MS`, so a process
+ * that stops holds no address for longer.
  * ponytail: attempts for one address queue; counting before the verification
  * and taking the count back on success, in rate-limit.ts, would need no turn.
  */
@@ -65,14 +70,28 @@ async function inTurn<T>(email: string, work: () => Promise<T>): Promise<T> {
   const mine = randomUUID();
   const until = Date.now() + TURN_MS;
   while ((await valkey().set(key, mine, 'PX', TURN_MS, 'NX')) !== 'OK') {
-    if (Date.now() > until) throw new Error('sign-in: no turn');
+    if (Date.now() > until) throw new NoTurn('sign-in: no turn');
     await pause(25);
   }
   try {
     return await work();
   } finally {
-    await valkey().eval(RELEASE, 1, key, mine);
+    // A release that fails must not take the place of the outcome, a session
+    // already decided among them: the turn ends by itself after `TURN_MS`.
+    try {
+      await valkey().eval(RELEASE, 1, key, mine);
+    } catch {
+      console.error('sign-in: turn not released');
+    }
   }
+}
+
+// The application's own faults, each told from any other in a fault line by its name (NFR-SE-19).
+class NoTurn extends Error {
+  name = 'SignInNoTurn';
+}
+class NoSession extends Error {
+  name = 'SignInNoSession';
 }
 
 // NFR-SE-07: "a completed password reset … clears the counters of this row for
@@ -95,6 +114,9 @@ export async function clearFailedSignIns(email: string): Promise<void> {
   await valkey().incr(generationKey(email.toLowerCase()));
 }
 
+/** A limit on failed sign-ins as a check found it, with the key it is counted under. */
+type Reached = [name: LimitName, key: string, limit: LimitResult];
+
 /** The address as it is stored and compared (FR-AU-02), and bounded: no address is longer than 254 characters. */
 const normalised = (email: string) => email.slice(0, 255).toLowerCase();
 
@@ -106,7 +128,13 @@ const normalised = (email: string) => email.slice(0, 255).toLowerCase();
  * NFR-SE-07, verifies, and counts a failure, as one step for the address.
  *
  * `passed` is false whatever the cause, and the caller answers with the one
- * statement of FR-AU-81. `user` is the account of the address, where there is one.
+ * statement of FR-AU-81. `user` is the account of the address, where there is
+ * one. `limits` are the two limits as they stood, each with the key it is
+ * counted under, for the caller that logs one reached (NFR-SE-19).
+ *
+ * An attempt that got no turn in time is a refusal and no fault: it verified
+ * nothing and counts nothing, nothing was read of the address, and it is
+ * answered as every other refusal is.
  */
 export async function checkCredentials(
   context: Pick<AuthContext, 'internalAdapter' | 'password'>,
@@ -163,7 +191,14 @@ export async function checkCredentials(
     // later: by then the password may be another (FR-AU-85, FR-AU-86).
     const verified =
       passed && credential && hash ? { id: credential.id, hash, updatedAt: credential.updatedAt } : null;
-    return { user, passed, verified };
+    const limits: Reached[] = [
+      ['FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair, byPair],
+      ['FAILED_SIGN_IN_PER_EMAIL', everywhere, byEmail],
+    ];
+    return { user, passed, verified, limits };
+  }).catch((error: unknown) => {
+    if (error instanceof NoTurn) return { user: undefined, passed: false, verified: null, limits: [] };
+    throw error;
   });
 }
 
@@ -188,7 +223,7 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   const entered = credentials(ctx.body);
   if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
   const { internalAdapter, authCookies, secret } = ctx.context;
-  const { user, verified } = await checkCredentials(
+  const { user, verified, limits } = await checkCredentials(
     ctx.context,
     ctx.headers,
     entered.email,
@@ -197,13 +232,19 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   const refused = async () => {
     // NFR-SE-19: the user where the address belongs to an account, and never the address.
     await securityLog({ kind: 'sign_in_refused', userId: user?.id });
+    // NFR-SE-19: a sign-in refused because a limit was already reached is that
+    // event too, once for each period of the limit. The same work for an
+    // address with an account as for one without.
+    for (const [name, key, limit] of limits) {
+      if (!limit.ok) await logLimitReached(name, key, limit.retryAfterSeconds, user?.id);
+    }
     // The owner's answer to Q1: no 429 for these limits, which would show that an address is limited.
     return errorResponse(401, 'sign_in_refused', SIGN_IN_REFUSED);
   };
   if (!user || !verified) return refused();
 
   const session = await internalAdapter.createSession(user.id);
-  if (!session) throw new Error('sign-in: no session');
+  if (!session) throw new NoSession('sign-in: no session');
   // FR-AU-85, FR-AU-86: "setting it ends every session of the account". A
   // password set since the check has ended the sessions it could see, and this
   // one may not have been among them, so it is ended here: the session is
@@ -211,15 +252,21 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   // one made by the old password stands. Not counted as a failed sign-in: the
   // password was the right one when it was checked.
   if (!(await stillVerified(verified))) {
-    await internalAdapter.deleteSession(session.token);
+    // By the application's own client, which rejects on a fault: the
+    // library's deletion can skip the row without a word.
+    await db().session.deleteMany({ where: { token: session.token } });
     return refused();
   }
 
   // A session the browser already holds is ended, whoever it belongs to: its
-  // cookie is replaced below, and no browser could sign out of it afterwards
-  // (FR-AU-84; FR-AU-81 does the same at the link of a lock email).
+  // cookie is replaced below, and no browser could sign out of it afterwards.
+  // No requirement asks this of a sign-in (FR-AU-81 asks it of the link of a
+  // lock email alone): it is the application's choice, raised with the owner
+  // in the register questions of the pull request. The row is deleted by the
+  // application's own client, which rejects on a fault and is quiet where the
+  // row is absent; the library's deletion can skip the row without a word.
   const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
-  if (held) await internalAdapter.deleteSession(held);
+  if (held) await db().session.deleteMany({ where: { token: held } });
 
   // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
   await setSessionCookie(ctx, { session, user }, false);
@@ -239,7 +286,8 @@ export const signOut = createAuthEndpoint(
   { method: 'POST', requireHeaders: true, disableBody: true },
   async (ctx) => {
     const token = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, ctx.context.secret);
-    if (token) await ctx.context.internalAdapter.deleteSession(token);
+    // The application's own client: it rejects on a fault and is quiet where the row is absent.
+    if (token) await db().session.deleteMany({ where: { token } });
     deleteSessionCookie(ctx);
     ctx.setHeader('Cache-Control', 'no-store');
     return ctx.json({});

@@ -72,7 +72,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - name: Provisioning and migrations against PostgreSQL (contract IC-51)
+      - name: Integration tests against PostgreSQL and Valkey (provisioning and migrations of contract IC-51 among them)
         run: pnpm test:integration
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium

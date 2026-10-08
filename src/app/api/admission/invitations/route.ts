@@ -34,9 +34,11 @@ export function POST(request: Request): Promise<Response> {
     }
     if (result.outcome === 'created') {
       // FR-AU-87, NFR-RE-15: handed to the email service after the response
-      // has been returned, and tried again for up to 10 minutes.
-      const { message } = result;
-      after(() => handOver(message));
+      // has been returned, and tried again for up to 10 minutes. A message
+      // that is lost is named in the log by its invitation, which is no
+      // person's data (NFR-SE-19).
+      const { message, invitation } = result;
+      after(() => handOver(message, `invitation ${invitation.id}`));
     }
     return Response.json(result.invitation, { status: 201, headers: NO_STORE });
   });

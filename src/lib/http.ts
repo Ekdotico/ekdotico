@@ -8,6 +8,15 @@ export function onlyReads(method: string): boolean {
 }
 
 /**
+ * NFR-SE-06, A10: the one statement of a fault on the server, which says
+ * nothing of the fault. The proxy answers a 500 with it, and the page of a
+ * fault shows it (src/app/error.tsx). Text for a person (the owner's answer to
+ * Q6 of the plan).
+ */
+export const INTERNAL_FAULT =
+  'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.';
+
+/**
  * The one body of an error, `{ "error": { "code", "message" } }` (the owner's
  * answer to Q8 of the plan). The message is text for a person. NFR-SE-06, A10:
  * neither field ever carries a stack trace, an internal identifier, or a secret.

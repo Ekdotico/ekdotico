@@ -46,6 +46,10 @@ async function validate(headers: Headers, readRow: boolean): Promise<Validation>
   // signed copy carries the time it began, so the check is made on both paths,
   // and it is written so that a time that cannot be read refuses.
   const { id, userId, createdAt } = response.session;
+  // An answer without its two identifiers is no session (NFR-SE-02). It is
+  // refused before the deletion below, which would otherwise be handed an
+  // undefined `id`, and that deletes every session there is.
+  if (typeof id !== 'string' || typeof userId !== 'string') return { session: null, setCookie: [] };
   const ends = new Date(createdAt).getTime() + settings().sessionMaxSeconds * 1000;
   if (!(Date.now() < ends)) {
     // Ended at once for every other reader too: the row is deleted, and the
