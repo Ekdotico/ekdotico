@@ -284,7 +284,7 @@ describe('create (FR-AU-89 (a))', () => {
     expect(head).toContain('Subject: Your invitation to Ekdotico Closed α');
     const token = tokenIn(text);
     expect(text).toBe(
-      `The Ekdotico team has invited you to test Ekdotico in Closed α. To create your account, open this link and choose a password: ${ORIGIN}/sign-up/${token}. The link works once and is valid for 30 days. If you did not expect this invitation, you can ignore this email.`,
+      `The Ekdotico team has invited you to test Ekdotico in Closed α. To create your account, open this link and choose a password:\n${ORIGIN}/sign-up/${token}\nThe link works once and is valid for 30 days. If you did not expect this invitation, you can ignore this email.`,
     );
     expect(await findOpenInvitation(token)).toEqual({ email: 'person@example.com' });
   });
