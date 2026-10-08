@@ -3,6 +3,7 @@
 // in the account settings, the second step of a sign-in, a recovery code,
 // replacing the codes, turning it off; and an account of the founding team,
 // which meets the enrolment before anything else.
+import { randomUUID } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import {
   NOTICE_TITLE,
@@ -11,6 +12,7 @@ import {
   invite,
   mailFor,
   newPerson,
+  ownDocument,
   screens,
   signIn,
   signUp,
@@ -296,6 +298,22 @@ test('an account of the founding team meets the enrolment first, then the notice
   await expectNoSidewaysScroll(page);
   await screens(page, 'enrolment-gate');
 
+  // The page of a document (E4), for a document that is the account's own: the
+  // answer holds nothing of it, its title in `<title>` included, and is the
+  // answer for an address that holds no document, to the last character.
+  const title = 'A title the gate withholds';
+  const answers: string[] = [];
+  for (const id of [ownDocument(person.email, title), randomUUID()]) {
+    const response = await page.goto(`/documents/${id}`);
+    expect(response!.status()).toBe(200);
+    await expect(enrolment).toBeVisible();
+    await expect(page).toHaveTitle(`${ENROLMENT_TITLE} – Ekdotico`);
+    const sent = await response!.text();
+    expect(sent).not.toContain(title);
+    expect(sent).not.toContain('Page not found');
+    answers.push(sent.replaceAll(id, 'ID'));
+  }
+  expect(answers[0]).toBe(answers[1]);
   // FR-AU-83: every page shows it in place of its content, with only the means to sign out beside it…
   for (const path of ['/settings', '/no-such-page', '/']) {
     await page.goto(path);
