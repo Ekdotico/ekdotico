@@ -88,10 +88,20 @@ export interface Settings {
   admissionInvitationDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
   securityLogRetentionDays: number;
+  /** FR-ED-36: how long a deleted document is retained, and can be restored, before it is deleted permanently. */
+  deletedDocumentRetentionDays: number;
   /** Where the local sink writes each message (register D70 (the three checks stand), D92: no real email yet). */
   emailSinkDirectory: string;
   /** The address messages are sent from. */
   emailFrom: string;
+  /**
+   * NFR-RE-07 (register P14): the collaboration server stores a document's
+   * state no later than the first after the last change it received, and at
+   * least as often as the second while changes continue. Milliseconds; the
+   * initial values are 2 and 10 seconds.
+   */
+  collabStoreDelayMs: number;
+  collabStoreMaxMs: number;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -137,6 +147,7 @@ function admissionSecret(env: Env): string | undefined {
 }
 
 const DAY = 24 * 60 * 60;
+const DELETED_DOCUMENT_RETENTION_MAX_DAYS = 3650;
 
 export function loadSettings(env: Env = process.env): Settings {
   // NFR-SE-17 (b), (c): the identity library also reads variables of its own,
@@ -208,6 +219,15 @@ export function loadSettings(env: Env = process.env): Settings {
   }
   const authSecret = required(env, 'AUTH_SECRET', 'Set it to a random value of at least 32 characters.');
   if (authSecret.length < 32) throw new Error('AUTH_SECRET must be at least 32 characters.');
+  // NFR-RE-07: the collaboration server takes the time of the write itself off
+  // the first period, and the first period twice off the second
+  // (src/collab/server.ts, `storeTimers`), so each has a least value.
+  const collabStoreDelayMs = wholeNumber(env, 'COLLAB_STORE_DELAY_MS', 2000, 1);
+  const collabStoreMaxMs = wholeNumber(env, 'COLLAB_STORE_MAX_MS', 10000, 1);
+  if (collabStoreDelayMs < 1000) throw new Error('COLLAB_STORE_DELAY_MS must be at least 1000.');
+  if (collabStoreMaxMs < 2 * collabStoreDelayMs + 1000) {
+    throw new Error('COLLAB_STORE_MAX_MS must be at least twice COLLAB_STORE_DELAY_MS and 1000 more.');
+  }
   // NFR-SE-17 (e): the secrets differ from one another, so that one that
   // leaks opens one door. The message holds neither.
   const admission = admissionSecret(env);
@@ -229,6 +249,18 @@ export function loadSettings(env: Env = process.env): Settings {
   // FR-AU-82: otherwise no password could be chosen at all.
   if (passwordMinLength > passwordMaxLength) {
     throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
+  }
+  // FR-ED-36. At least 1: with 0 a deletion would be permanent at the next run
+  // of the timer, and the confirmation would have promised a restore that is
+  // not there. At most 3,650, ten years: the days are taken from the present
+  // moment and added to the moment of a deletion, and past some 100,000,000 of
+  // them the result is no date at all, which no query can be asked with. Ten
+  // years is far inside that, and longer than "retained" can honestly mean.
+  const deletedDocumentRetentionDays = wholeNumber(env, 'DELETED_DOCUMENT_RETENTION_DAYS', 30, 1);
+  if (deletedDocumentRetentionDays > DELETED_DOCUMENT_RETENTION_MAX_DAYS) {
+    throw new Error(
+      `DELETED_DOCUMENT_RETENTION_DAYS must be no more than ${DELETED_DOCUMENT_RETENTION_MAX_DAYS}.`,
+    );
   }
 
   return {
@@ -256,8 +288,11 @@ export function loadSettings(env: Env = process.env): Settings {
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
+    deletedDocumentRetentionDays,
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
+    collabStoreDelayMs,
+    collabStoreMaxMs,
     limits: Object.fromEntries(
       (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
     ) as Record<LimitName, Limit>,

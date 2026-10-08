@@ -157,6 +157,31 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(changed).toMatchObject({ secondStepSeconds: 120, secondStepWrongCodes: 3 });
   });
 
+  // FR-ED-36: "retained for 30 days (an initial value)".
+  it('retains a deleted document for 30 days, or for the days it is told', () => {
+    expect(settings.deletedDocumentRetentionDays).toBe(30);
+    expect(loadSettings({ ...env, DELETED_DOCUMENT_RETENTION_DAYS: '7' }).deletedDocumentRetentionDays).toBe(
+      7,
+    );
+  });
+
+  // The days are subtracted from the present moment and added to the moment of
+  // a deletion: about 100,000,001 of them give no date at all.
+  it('retains a deleted document for at most 3,650 days, so that the end of a retention is always a date', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { deletedDocumentRetentionDays: most } = loadSettings({
+      ...env,
+      DELETED_DOCUMENT_RETENTION_DAYS: '3650',
+    });
+    expect(most).toBe(3650);
+    expect(Number.isNaN(new Date(Date.now() - most * DAY_MS).getTime())).toBe(false);
+    for (const days of ['3651', '100000001', '9'.repeat(400)]) {
+      expect(() => loadSettings({ ...env, DELETED_DOCUMENT_RETENTION_DAYS: days })).toThrow(
+        'DELETED_DOCUMENT_RETENTION_DAYS must be no more than 3650.',
+      );
+    }
+  });
+
   it('trusts no proxy unless told how many there are, which only localhost admits', () => {
     const local = { ...env, APP_ORIGIN: 'http://localhost:3000', TRUSTED_PROXY_COUNT: undefined };
     expect(loadSettings(local).trustedProxyCount).toBe(0);
@@ -193,6 +218,23 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(() => loadSettings({ ...env, RATE_LIMIT_API_PER_USER: value })).toThrow(/RATE_LIMIT_API_PER_USER/);
   });
 
+  // NFR-RE-07 (register P14): both periods of the storing are settings.
+  it('stores a document’s state 2 seconds after the last change, and every 10 seconds', () => {
+    expect(settings).toMatchObject({ collabStoreDelayMs: 2000, collabStoreMaxMs: 10000 });
+    const changed = loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '1000', COLLAB_STORE_MAX_MS: '3000' });
+    expect(changed).toMatchObject({ collabStoreDelayMs: 1000, collabStoreMaxMs: 3000 });
+  });
+
+  it('refuses a period of the storing too short for the write to fit in it', () => {
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '999' })).toThrow(/COLLAB_STORE_DELAY_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '0' })).toThrow(/COLLAB_STORE_DELAY_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '2s' })).toThrow(/COLLAB_STORE_DELAY_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_MAX_MS: '4999' })).toThrow(/COLLAB_STORE_MAX_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_MAX_MS: '5000' })).not.toThrow();
+    // The second period is held to the first.
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '5000' })).toThrow(/COLLAB_STORE_MAX_MS/);
+  });
+
   it.each(['-1', '1.5', 'seven', '1e3'])('refuses %s as a whole number', (value) => {
     expect(() => loadSettings({ ...env, TRUSTED_PROXY_COUNT: value })).toThrow(/TRUSTED_PROXY_COUNT/);
   });
@@ -205,6 +247,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'SESSION_RENEW_SECONDS',
     'SESSION_MAX_SECONDS',
     'SECURITY_LOG_RETENTION_DAYS',
+    'DELETED_DOCUMENT_RETENTION_DAYS',
     'PASSWORD_MIN_LENGTH',
     'PASSWORD_MAX_LENGTH',
     'ADMISSION_INVITATION_DAYS',
@@ -222,6 +265,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
       SESSION_RENEW_SECONDS: '1',
       SESSION_MAX_SECONDS: '1',
       SECURITY_LOG_RETENTION_DAYS: '1',
+      DELETED_DOCUMENT_RETENTION_DAYS: '1',
       PASSWORD_MIN_LENGTH: '1',
       PASSWORD_MAX_LENGTH: '1',
       ADMISSION_INVITATION_DAYS: '1',

@@ -22,5 +22,10 @@ export function db(): PrismaClient {
       },
       { schema: 'ekdotico' },
     ),
+    // The content of a document is read by the one query that selects it
+    // (src/lib/collab/state.ts). No other query carries it: not the list of
+    // documents, which would load every document whole, and not a row that a
+    // route answers with or a fault quotes (NFR-SE-19).
+    omit: { document: { yjsState: true } },
   }));
 }
