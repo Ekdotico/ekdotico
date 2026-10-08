@@ -2,8 +2,9 @@
 // revoked on a signed request, and accepted once, by the person the link
 // reached. This is the one code path that writes an invitation, whoever asks.
 //
-// NFR-SE-19: nothing here logs, and no error made here holds an address or a
-// token. The token leaves this module once, inside the email of FR-AU-87 (a).
+// NFR-SE-19: the one line printed here names no invitation and no person, and
+// no error made here holds an address or a token. The token leaves this
+// module once, inside the email of FR-AU-87 (a).
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { AdmissionInvitation } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
@@ -223,8 +224,13 @@ export async function acceptInvitation(
         data: { state: 'ACCEPTED', acceptedAt: now, acceptedById: userId },
         select: { email: true },
       });
+      if (claimed.length === 0) return null;
+      // Neither can happen: the hash of a token is unique, and the claim asks
+      // for an address. Were one to, nothing is written and nothing is said of
+      // the invitation: the transaction ends in a fault.
+      if (claimed.length > 1) throw new Error('admission: more than one invitation claimed');
       const email = claimed[0]?.email;
-      if (claimed.length !== 1 || !email) return null;
+      if (!email) throw new Error('admission: an invitation claimed without its address');
       // The rows the identity library would write for an account with a
       // password (register D96): its endpoint for this is switched off.
       await tx.user.create({ data: { id: userId, name: input.name, email, emailVerified: true } });
@@ -243,8 +249,12 @@ export async function acceptInvitation(
   } catch (error) {
     // The address gained an account after the invitation was created (an
     // account that changed its address to it). The transaction wrote nothing,
-    // and the invitation is answered as not open.
-    if (isUniqueViolation(error)) return null;
+    // and the invitation is answered as not open. The team learns of it here,
+    // since the person is told only that the invitation is not open.
+    if (isUniqueViolation(error)) {
+      console.error('admission: invitation not accepted (address has an account)');
+      return null;
+    }
     throw error;
   }
 }

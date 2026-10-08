@@ -2,7 +2,16 @@
 
 import { useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, Cluster, Dialog, FormFault, Stack, TextField, Tooltip } from '@ekdotico/domico/components';
+import {
+  Button,
+  Cluster,
+  Dialog,
+  FormFault,
+  PageHeading,
+  Stack,
+  TextField,
+  Tooltip,
+} from '@ekdotico/domico/components';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 
@@ -136,7 +145,7 @@ export function Documents({ documents }: { documents: DocumentItem[] }) {
   return (
     <Stack gap={6}>
       <Cluster justify="between" gap={4}>
-        <h1 className={styles.title}>Documents</h1>
+        <PageHeading>Documents</PageHeading>
         <Button variant="primary" pending={creating} pendingLabel="Creating document…" onClick={create}>
           New document
         </Button>

@@ -85,7 +85,7 @@ describe('a pending invitation', () => {
     const response = await submit({ token, name: '  Ada Lovelace  ', password: PASSWORD });
     expect(response.status).toBe(201);
     expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.text()).toBe('{}');
+    expect(await response.text()).toBe('{"signedIn":true}');
 
     // FR-AU-02, FR-AU-90: the invited address, lower case, recorded as verified.
     const user = await db().user.findUniqueOrThrow({ where: { email: 'new.person@example.com' } });
@@ -188,8 +188,6 @@ describe('an invitation that is not open', () => {
     const expired = await invite('expired@example.com', new Date(Date.now() - 31 * 24 * 60 * 60 * 1000));
     const cleared = await invite('cleared@example.com');
     await db().admissionInvitation.update({ where: { id: cleared.id }, data: { email: null } });
-    // Open, but sent in a body too long to be read: no token is found in it.
-    const open = await invite('open@example.com');
 
     const fields = { name: 'A Person', password: PASSWORD };
     const answers = await Promise.all([
@@ -202,10 +200,7 @@ describe('an invitation that is not open', () => {
       submit({ ...fields, token: '' }),
       submit({ ...fields, token: 42 }),
       submit(fields), // without a token
-      submit(null),
-      submit(undefined, 'token=abc'), // not JSON
-      submit(undefined, ''),
-      submit({ ...fields, token: open.token, padding: 'x'.repeat(5000) }),
+      submit({}),
     ]);
     const bodies = new Set<string>();
     for (const response of answers) {
@@ -261,7 +256,8 @@ describe('an invitation that is not open', () => {
     expect((await submit({ token: current.token, name: 'A Person', password: PASSWORD })).status).toBe(201);
   });
 
-  it('is what an invitation is whose address has since gained an account', async () => {
+  it('is what an invitation is whose address has since gained an account, and the team is told', async () => {
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { id, token } = await invite('taken@example.com');
     await createAccount(auth, 'taken@example.com');
     const before = await counts();
@@ -271,6 +267,90 @@ describe('an invitation that is not open', () => {
     expect(await counts()).toEqual(before);
     // The claim was rolled back with the rest.
     expect((await db().admissionInvitation.findUniqueOrThrow({ where: { id } })).state).toBe('PENDING');
+    // One line, which names neither the invitation nor the address (NFR-SE-19).
+    expect(printed.mock.calls).toEqual([['admission: invitation not accepted (address has an account)']]);
+  });
+
+  it('prints nothing for an invitation that is simply not open', async () => {
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await submit({ token: 'A'.repeat(43), name: 'A Person', password: PASSWORD })).status).toBe(409);
+    expect(printed).not.toHaveBeenCalled();
+  });
+});
+
+// A request that cannot be read says nothing of its invitation: it is not
+// answered "not open", which would take the form away from a person whose
+// invitation stands.
+describe('a request that cannot be read', () => {
+  async function refused(response: Response, status: number, token: string) {
+    expect(response.status).toBe(status);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.getSetCookie()).toEqual([]);
+    const body = await response.json();
+    expect(Object.keys(body)).toEqual(['error']);
+    expect(Object.keys(body.error)).toEqual(['code', 'message']);
+    expect(body.error.code).toBe('invalid');
+    expect(body.error.message).not.toBe(STATEMENT);
+    expect(await counts()).toEqual(NOTHING);
+    expect(await findOpenInvitation(token)).not.toBeNull();
+    return body.error.message as string;
+  }
+
+  it('is answered 413 where it is longer than 4,096 bytes, before the invitation is looked at', async () => {
+    const { token } = await invite('open@example.com');
+    const looked = vi.spyOn(db().admissionInvitation, 'findFirst');
+    const fields = { token, password: PASSWORD };
+    const response = await submit({ ...fields, name: 'n'.repeat(5000) });
+    expect(looked).not.toHaveBeenCalled();
+    expect(await refused(response, 413, token)).toBe(
+      'The account was not created, because the request is longer than a name and a password can make it. Shorten the name or the password and try again.',
+    );
+    // To the byte: 4,096 are read, and 4,097 are not.
+    const padded = (bytes: number) => {
+      const empty = JSON.stringify({ ...fields, name: 'A Person', padding: '' });
+      return JSON.stringify({ ...fields, name: 'A Person', padding: 'x'.repeat(bytes - empty.length) });
+    };
+    await refused(await submit(undefined, padded(4097)), 413, token);
+    expect((await submit(undefined, padded(4096))).status).toBe(201);
+  });
+
+  it.each([
+    ['is not JSON', 'token=abc'],
+    ['is empty', ''],
+    ['is JSON and no object: null', 'null'],
+    ['is JSON and no object: a list', '[]'],
+    ['is JSON and no object: text', '"text"'],
+  ])('is answered 422 where it %s, before the invitation is looked at', async (_, raw) => {
+    const { token } = await invite('open@example.com');
+    const looked = vi.spyOn(db().admissionInvitation, 'findFirst');
+    const response = await submit(undefined, raw);
+    expect(looked).not.toHaveBeenCalled();
+    expect(await refused(response, 422, token)).toBe(
+      'The account was not created, because the request could not be read. Reload the page and try again.',
+    );
+  });
+});
+
+describe('an account whose session cannot be started (FR-AU-90)', () => {
+  it('stands, and the answer says that the person is not signed in', async () => {
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { id, token } = await invite('private.person@example.com');
+    const context = await auth().$context;
+    vi.spyOn(context.internalAdapter, 'createSession').mockRejectedValue(
+      Object.assign(new Error('no session for private.person@example.com'), { code: 'P1001' }),
+    );
+    const response = await submit({ token, name: 'A Person', password: PASSWORD });
+    // Created, so 201; and nothing that signs the browser in.
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ signedIn: false });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(await counts()).toEqual({ users: 1, accounts: 1, workspaces: 1, sessions: 0 });
+    expect((await db().admissionInvitation.findUniqueOrThrow({ where: { id } })).state).toBe('ACCEPTED');
+    // NFR-SE-19: the class and the code of the fault, and nothing it said.
+    expect(printed.mock.calls).toEqual([['sign-up: account created, session not started (Error P1001)']]);
+    // The person signs in on the sign-in page.
+    vi.restoreAllMocks();
+    expect((await signIn(auth, 'private.person@example.com', PASSWORD)).status).toBe(200);
   });
 });
 
@@ -417,6 +497,32 @@ describe('a password as it is stored (FR-AU-81, FR-AU-82)', () => {
     expect((await submit({ token, name: 'A Person', password })).status).toBe(201);
     expect((await signIn(auth, 'emoji@example.com', password)).status).toBe(200);
     expect((await signIn(auth, 'emoji@example.com', '😀'.repeat(31))).status).toBe(401);
+  });
+
+  // What the rules rest on: were the library to hash what it is given as it is
+  // given, a rule judged on the compatibility form would judge another password.
+  it('is hashed by the identity library in its compatibility form', async () => {
+    const context = await auth().$context;
+    const hash = await context.password.hash('ｆｕｌｌ-ｗｉｄｔｈ ｐｈｒａｓｅ');
+    expect(await context.password.verify({ hash, password: 'full-width phrase' })).toBe(true);
+    expect(await context.password.verify({ hash, password: 'full-width phrasf' })).toBe(false);
+  });
+
+  it('signs up and signs in with 32 composed characters typed decomposed', async () => {
+    // 64 code points as typed, a letter and its accent 32 times; 32 as stored.
+    const decomposed = 'é'.repeat(32);
+    const composed = 'é'.repeat(32);
+    expect([...decomposed]).toHaveLength(64);
+    expect(decomposed.normalize('NFKC')).toBe(composed);
+    const { token } = await invite('accents@example.com');
+    expect((await submit({ token, name: 'A Person', password: decomposed })).status).toBe(201);
+    expect((await signIn(auth, 'accents@example.com', decomposed)).status).toBe(200);
+    expect((await signIn(auth, 'accents@example.com', composed)).status).toBe(200);
+    // And 33 of them are one too many, typed either way.
+    const longer = await invite('accents-long@example.com');
+    expect((await submit({ token: longer.token, name: 'A Person', password: `${decomposed}é` })).status).toBe(
+      422,
+    );
   });
 
   it('refuses a password one character longer, however it is counted', async () => {

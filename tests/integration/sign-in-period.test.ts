@@ -33,13 +33,18 @@ afterAll(async () => {
 describe('the period of a limit on failed sign-ins (NFR-SE-07; the owner’s answer to Q10)', () => {
   it('ends 3 seconds after the failures from one network address, whatever was refused meanwhile', async () => {
     await createAccount(auth, 'one@example.com');
+    // The period is open from the first failure, which leaves the count 3
+    // seconds after it was made: so the time is taken before it, and "still
+    // refused" is asked only while that failure cannot have left, with a
+    // second to spare for a slow machine.
+    const began = Date.now();
     expect(await signIn('one@example.com', WRONG, 1)).toBe(401);
     expect(await signIn('one@example.com', WRONG, 1)).toBe(401);
     const reached = Date.now();
 
     // Refused attempts, right and wrong, for most of the period: none is
     // counted, and none makes the period longer.
-    while (Date.now() < reached + 2500) {
+    while (Date.now() < began + 2000) {
       expect(await signIn('one@example.com', PASSWORD, 1)).toBe(401);
       expect(await signIn('one@example.com', WRONG, 1)).toBe(401);
       await pause(100);
@@ -50,10 +55,11 @@ describe('the period of a limit on failed sign-ins (NFR-SE-07; the owner’s ans
 
   it('ends 4 seconds after the failures from all network addresses, whatever was refused meanwhile', async () => {
     await createAccount(auth, 'all@example.com');
+    const began = Date.now();
     for (const n of [1, 2, 3, 4]) expect(await signIn('all@example.com', WRONG, n)).toBe(401);
     const reached = Date.now();
 
-    while (Date.now() < reached + 3500) {
+    while (Date.now() < began + 3000) {
       expect(await signIn('all@example.com', PASSWORD, 5)).toBe(401);
       expect(await signIn('all@example.com', WRONG, 6)).toBe(401);
       await pause(100);

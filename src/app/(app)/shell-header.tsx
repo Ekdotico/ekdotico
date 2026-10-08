@@ -17,7 +17,9 @@ export function ShellHeader() {
       </header>
       {fault ? (
         <div className={styles.fault}>
-          <FormFault title={fault.message} />
+          {/* Announced, and focus stays on the button that was pressed, which
+              is the way to try again. */}
+          <FormFault title={fault.message} autoFocus={false} />
         </div>
       ) : null}
     </>

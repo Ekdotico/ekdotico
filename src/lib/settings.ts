@@ -76,7 +76,7 @@ export interface Settings {
   admissionInvitationDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
   securityLogRetentionDays: number;
-  /** Where the local sink writes each message (register A52, A72: no real email yet). */
+  /** Where the local sink writes each message (register D70 (the three checks stand), D92: no real email yet). */
   emailSinkDirectory: string;
   /** The address messages are sent from. */
   emailFrom: string;
@@ -91,10 +91,15 @@ function required(env: Env, name: string, hint: string): string {
   return value;
 }
 
-function wholeNumber(env: Env, name: string, initial: number): number {
+// The least a value may be is 1 wherever 0 would switch a rule off without a
+// word: a session that has ended before it began, a log that keeps nothing, a
+// password of no length, an invitation that is never open.
+function wholeNumber(env: Env, name: string, initial: number, least: 0 | 1): number {
   const value = env[name];
   if (value === undefined || value === '') return initial;
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${name} must be a whole number.`);
+  if (!/^(0|[1-9][0-9]*)$/.test(value) || Number(value) < least) {
+    throw new Error(`${name} must be a whole number, ${least} or more.`);
+  }
   return Number(value);
 }
 
@@ -122,6 +127,26 @@ function admissionSecret(env: Env): string | undefined {
 const DAY = 24 * 60 * 60;
 
 export function loadSettings(env: Env = process.env): Settings {
+  // NFR-SE-17 (b), (c): the identity library also reads variables of its own,
+  // which can switch its telemetry on and add trusted origins whatever the
+  // application configures. Refused here, so that both processes refuse. The
+  // message holds the names and never a value.
+  const ofTheLibrary = Object.keys(env).filter((name) => name.startsWith('BETTER_AUTH_'));
+  if (ofTheLibrary.length > 0) {
+    throw new Error(
+      `Unset ${ofTheLibrary.join(', ')}: the identity library is configured by the application alone.`,
+    );
+  }
+  // NFR-SE-07: a limit written under a name that is none of the limits would
+  // change nothing, and the deployment would believe it had.
+  const noLimit = Object.keys(env).filter(
+    (name) => name.startsWith('RATE_LIMIT_') && !Object.hasOwn(LIMITS, name.slice('RATE_LIMIT_'.length)),
+  );
+  if (noLimit.length > 0) {
+    throw new Error(
+      `Unset ${noLimit.join(', ')}: no limit has that name. The names are in src/lib/settings.ts.`,
+    );
+  }
   const list = env.FOUNDING_TEAM_EMAILS;
   // A102: a process refuses to start where the setting is absent, so that a
   // deployment cannot lose the two-factor requirement by losing the setting.
@@ -144,15 +169,44 @@ export function loadSettings(env: Env = process.env): Settings {
     throw new Error('APP_ORIGIN must use https, except on localhost.');
   }
   // The only sender yet is the local sink, which writes each message to a file
-  // and sends nothing (register A52, A72). Anywhere but a development machine it
-  // has to be chosen in so many words, so that no deployment loses its email
-  // unnoticed: sign-in and reset answer the same whether or not a message went.
+  // and sends nothing (register D70 (the three checks stand), D92). Anywhere but
+  // a development machine it has to be chosen in so many words, so that no
+  // deployment loses its email unnoticed: sign-in and reset answer the same
+  // whether or not a message went.
   const local = ['localhost', '127.0.0.1'].includes(hostname);
   if (env.EMAIL_TRANSPORT ? env.EMAIL_TRANSPORT !== 'sink' : !local) {
     throw new Error('EMAIL_TRANSPORT must be set to sink: no other sender of email is built yet.');
   }
+  // NFR-SE-19: each file of the sink holds an address and may hold a single-use
+  // link. A deployment says where they go; it does not get a directory under
+  // the working directory by leaving the setting out.
+  if (!local && !env.EMAIL_SINK_DIRECTORY) {
+    throw new Error('EMAIL_SINK_DIRECTORY is not set. Set it to the directory the email sink writes to.');
+  }
   const authSecret = required(env, 'AUTH_SECRET', 'Set it to a random value of at least 32 characters.');
   if (authSecret.length < 32) throw new Error('AUTH_SECRET must be at least 32 characters.');
+  // NFR-SE-17 (e): the secrets differ from one another, so that one that
+  // leaks opens one door. The message holds neither.
+  const admission = admissionSecret(env);
+  if (admission === authSecret) throw new Error('ADMISSION_SECRET must differ from AUTH_SECRET.');
+
+  const sessionIdleSeconds = wholeNumber(env, 'SESSION_IDLE_SECONDS', 7 * DAY, 1);
+  const sessionRenewSeconds = wholeNumber(env, 'SESSION_RENEW_SECONDS', DAY, 1);
+  const sessionMaxSeconds = wholeNumber(env, 'SESSION_MAX_SECONDS', 30 * DAY, 1);
+  // FR-AU-84: a renewal comes within the period it renews, and that period
+  // within the life of a session. Written otherwise, one of the three would
+  // never be reached.
+  if (sessionRenewSeconds > sessionIdleSeconds || sessionIdleSeconds > sessionMaxSeconds) {
+    throw new Error(
+      'SESSION_RENEW_SECONDS must be no more than SESSION_IDLE_SECONDS, and SESSION_IDLE_SECONDS no more than SESSION_MAX_SECONDS.',
+    );
+  }
+  const passwordMinLength = wholeNumber(env, 'PASSWORD_MIN_LENGTH', 8, 1);
+  const passwordMaxLength = wholeNumber(env, 'PASSWORD_MAX_LENGTH', 32, 1);
+  // FR-AU-82: otherwise no password could be chosen at all.
+  if (passwordMinLength > passwordMaxLength) {
+    throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
+  }
 
   return {
     foundingTeamEmails: list
@@ -163,17 +217,18 @@ export function loadSettings(env: Env = process.env): Settings {
     databaseUrl: required(env, 'DATABASE_URL', 'Set it to the connection string of the role ekdotico_app.'),
     valkeyUrl: required(env, 'VALKEY_URL', 'Set it to the address of Valkey.'),
     authSecret,
-    trustedProxyCount: wholeNumber(env, 'TRUSTED_PROXY_COUNT', 0),
-    sessionIdleSeconds: wholeNumber(env, 'SESSION_IDLE_SECONDS', 7 * DAY),
-    sessionRenewSeconds: wholeNumber(env, 'SESSION_RENEW_SECONDS', DAY),
-    sessionMaxSeconds: wholeNumber(env, 'SESSION_MAX_SECONDS', 30 * DAY),
-    cookieCacheSeconds: wholeNumber(env, 'COOKIE_CACHE_SECONDS', 60),
-    passwordMinLength: wholeNumber(env, 'PASSWORD_MIN_LENGTH', 8),
-    passwordMaxLength: wholeNumber(env, 'PASSWORD_MAX_LENGTH', 32),
+    trustedProxyCount: wholeNumber(env, 'TRUSTED_PROXY_COUNT', 0, 0),
+    sessionIdleSeconds,
+    sessionRenewSeconds,
+    sessionMaxSeconds,
+    cookieCacheSeconds: wholeNumber(env, 'COOKIE_CACHE_SECONDS', 60, 0),
+    passwordMinLength,
+    passwordMaxLength,
     passwordListFile: env.PASSWORD_LIST_FILE || 'data/common-passwords.txt',
-    admissionSecret: admissionSecret(env),
-    admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30),
-    securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30),
+    admissionSecret: admission,
+    // At least 1: an invitation of 0 days has expired before its email is read.
+    admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
+    securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     limits: Object.fromEntries(

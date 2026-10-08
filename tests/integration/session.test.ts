@@ -1,6 +1,6 @@
 // Session validation (NFR-SE-02, FR-AU-07, FR-AU-84), against a provisioned
 // database, connected as the runtime role.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cookiesOf, createAccount, DAY, load, prepare, signIn } from './identity.ts';
 
 const database = prepare('session');
@@ -60,6 +60,32 @@ describe('a validated session', () => {
       expect((await validateSessionRow(cookie)).session).toBeNull();
       expect((await validateSession('GET', cookie)).session).toBeNull();
     }
+  });
+
+  // Handed an undefined `id`, the deletion of an ended session would delete
+  // every session there is.
+  it('is not an answer of the library that lacks an identifier, and such an answer deletes nothing', async () => {
+    const { headers } = await begin();
+    const before = await db().session.count();
+    expect(before).toBeGreaterThan(0);
+    const answer = vi.spyOn(auth().api, 'getSession');
+    try {
+      for (const session of [
+        { userId, createdAt: new Date(0) }, // no id, and long ended
+        { userId, createdAt: new Date() }, // no id
+        { id: 'a-session', createdAt: new Date() }, // no user
+        { id: 7, userId: {}, createdAt: new Date() },
+      ]) {
+        answer.mockResolvedValueOnce({
+          response: { session, user: {} },
+          headers: new Headers({ 'set-cookie': 'renewed=1' }),
+        } as never);
+        expect(await validateSessionRow(headers)).toEqual({ session: null, setCookie: [] });
+      }
+    } finally {
+      answer.mockRestore();
+    }
+    expect(await db().session.count()).toBe(before);
   });
 });
 

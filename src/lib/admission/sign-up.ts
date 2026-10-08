@@ -11,12 +11,14 @@
 import type { BetterAuthPlugin } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { setSessionCookie } from 'better-auth/cookies';
-import { readJson } from '../http.ts';
+import { faultOf } from '../fault.ts';
+import { readBytes } from '../http.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
 
 export type SignUpResult =
-  | { outcome: 'created' }
+  /** `signedIn` is false where the account stands and its session could not be started. */
+  | { outcome: 'created'; signedIn: boolean }
   /** No token, or the token of an invitation that is accepted, revoked, or expired: never said which. */
   | { outcome: 'not_open' }
   | { outcome: 'invalid'; fields: { name?: string; password?: string } };
@@ -25,15 +27,27 @@ export type SignUpResult =
 const NAME_REFUSAL = 'A name has 1 to 100 characters. Enter a name of that length.';
 
 // More than any honest request holds: a token of 43 characters, a name of 100
-// and a password of 128, each character at most 4 bytes, and the JSON around them.
+// and a password of the greatest length (32, as the limit is first set), each
+// character at most 4 bytes, and the JSON around them.
 const MAX_BODY_BYTES = 4096;
 
+/** The JSON object of a request, or why there is none: the invitation is not looked at for either. */
+export type SignUpBody = { json: object } | { refused: 'too_long' | 'not_json' };
+
 /**
- * The JSON of a request to `POST /api/sign-up`, or null where the body is too
- * long or is not JSON. Bounded, because the path carries no session.
+ * The body of a request to `POST /api/sign-up`. Bounded, because the path
+ * carries no session.
  */
-export function readSignUpBody(request: Request): Promise<unknown> {
-  return readJson(request, MAX_BODY_BYTES);
+export async function readSignUpBody(request: Request): Promise<SignUpBody> {
+  const bytes = await readBytes(request, MAX_BODY_BYTES);
+  if (!bytes) return { refused: 'too_long' };
+  try {
+    const json: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    if (typeof json === 'object' && json !== null && !Array.isArray(json)) return { json };
+  } catch {
+    // Not JSON: answered below, as what is JSON and no object is.
+  }
+  return { refused: 'not_json' };
 }
 
 // The library takes the shape of a body from a schema. This one admits
@@ -83,18 +97,18 @@ export const admissionSignUp = {
         // "It then signs the person in": an ordinary session, with the periods
         // of FR-AU-84. The account stands whether or not this succeeds, so a
         // fault here is not answered as a failure to create it: the person signs
-        // in on the sign-in page. NFR-SE-19: the class of the fault alone.
+        // in on the sign-in page, where the form sends them. NFR-SE-19: the
+        // class of the fault and its code, and nothing else.
         try {
           const user = await ctx.context.internalAdapter.findUserById(account.userId);
           if (!user) throw new Error('The new account was not found.');
           const session = await ctx.context.internalAdapter.createSession(user.id);
           await setSessionCookie(ctx, { session, user });
         } catch (error) {
-          console.error(
-            `sign-up: account created, session not started (${error instanceof Error ? error.name : 'unknown'})`,
-          );
+          console.error(`sign-up: account created, session not started (${faultOf(error)})`);
+          return { outcome: 'created', signedIn: false };
         }
-        return { outcome: 'created' };
+        return { outcome: 'created', signedIn: true };
       },
     ),
   },

@@ -129,10 +129,35 @@ describe('the provisioning script (contract IC-51)', () => {
     expect(memberships.out).toBe('0');
   });
 
+  // The row itself is counted: `pg_has_role` answers true of a superuser
+  // whatever the script did. Other runs on this server add rows for
+  // administrators of their own, so only this session's is looked for.
   it('leaves the administrator outside the migration role', () => {
-    const member = sql(`SELECT pg_has_role(session_user, 'ekdotico_migrate', 'MEMBER') AND NOT rolsuper
-                          FROM pg_roles WHERE rolname = session_user`);
-    expect(member.out).toBe('f');
+    const rows = sql(`SELECT count(*) FROM pg_auth_members
+                       WHERE roleid = 'ekdotico_migrate'::regrole AND member = session_user::regrole`);
+    expect(rows.out).toBe('0');
+  });
+
+  // Lines 69 to 76 of the script. The attribute is given and the script run in
+  // one transaction, which ends unfinished when psql stops: the roles belong to
+  // the server, and no other session ever sees the attribute.
+  it('refuses a role that holds more than a login, before it changes anything', () => {
+    const variables = Object.entries(PASSWORDS).flatMap(([role, password]) => [
+      '-v',
+      `${role}_password=${password}`,
+    ]);
+    const result = psql(testUrl, [
+      '-c',
+      'BEGIN',
+      '-c',
+      'ALTER ROLE ekdotico_backup CREATEDB',
+      ...variables,
+      '-f',
+      'scripts/provision.sql',
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.err).toContain('an application role holds more than a login');
+    expect(sql(`SELECT rolcreatedb FROM pg_roles WHERE rolname = 'ekdotico_backup'`).out).toBe('f');
   });
 
   it.each(Object.entries(PASSWORDS))('lets ekdotico_%s log in to the database', (role, password) => {
@@ -262,5 +287,54 @@ describe('privileges on what the migration role creates later (NFR-IC-17)', () =
       expect(result.ok).toBe(false);
       expect(result.err).toMatch(REFUSED);
     });
+  });
+});
+
+// The other half of the script: its grants on what is in the schema already,
+// which the default privileges do not reach. The objects are left as a restore
+// without privileges leaves them: no role may touch the table, and everyone may
+// execute the function, which is PostgreSQL's own default.
+describe('privileges on what exists when the script runs (NFR-IC-17)', () => {
+  beforeAll(() => {
+    const created = as(
+      'ekdotico_migrate',
+      `CREATE TABLE ekdotico.early (id serial PRIMARY KEY, body text);
+       CREATE FUNCTION ekdotico.early_wipe() RETURNS void LANGUAGE sql SECURITY DEFINER
+         AS 'DELETE FROM ekdotico.early';
+       REVOKE ALL ON ekdotico.early, ekdotico.early_id_seq FROM ekdotico_app, ekdotico_backup;
+       REVOKE ALL ON FUNCTION ekdotico.early_wipe() FROM ekdotico_app;
+       GRANT EXECUTE ON FUNCTION ekdotico.early_wipe() TO PUBLIC;`,
+    );
+    expect(created.err).toBe('');
+    // As they stand, the runtime role is shut out and the backup role can delete.
+    expect(as('ekdotico_app', 'SELECT count(*) FROM ekdotico.early').err).toMatch(REFUSED);
+    expect(as('ekdotico_backup', 'SELECT ekdotico.early_wipe()').ok).toBe(true);
+    expect(provision().ok).toBe(true);
+  });
+
+  it('lets ekdotico_app read and write the rows, use the sequence, and execute the function', () => {
+    expect(as('ekdotico_app', `INSERT INTO ekdotico.early (body) VALUES ('a')`).err).toBe('');
+    expect(as('ekdotico_app', `UPDATE ekdotico.early SET body = 'b'`).ok).toBe(true);
+    expect(as('ekdotico_app', 'SELECT body FROM ekdotico.early').out).toContain('b');
+    expect(as('ekdotico_app', 'DELETE FROM ekdotico.early').ok).toBe(true);
+    expect(as('ekdotico_app', 'SELECT ekdotico.early_wipe()').ok).toBe(true);
+  });
+
+  it('lets ekdotico_backup select', () => {
+    expect(as('ekdotico_backup', 'SELECT count(*) FROM ekdotico.early').err).toBe('');
+    expect(as('ekdotico_backup', 'SELECT last_value FROM ekdotico.early_id_seq').ok).toBe(true);
+  });
+
+  it.each([
+    `INSERT INTO ekdotico.early (body) VALUES ('a')`,
+    `UPDATE ekdotico.early SET body = 'c'`,
+    'DELETE FROM ekdotico.early',
+    'TRUNCATE ekdotico.early',
+    'SELECT ekdotico.early_wipe()',
+    `SELECT nextval('ekdotico.early_id_seq')`,
+  ])('lets ekdotico_backup neither write nor execute: %s', (statement) => {
+    const result = as('ekdotico_backup', statement);
+    expect(result.ok).toBe(false);
+    expect(result.err).toMatch(REFUSED);
   });
 });

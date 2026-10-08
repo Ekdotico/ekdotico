@@ -8,6 +8,7 @@ beforeAll(async () => {
     FOUNDING_TEAM_EMAILS: '',
     APP_ORIGIN: OWN,
     EMAIL_TRANSPORT: 'sink',
+    EMAIL_SINK_DIRECTORY: '/unused',
     AUTH_SECRET: 'a-test-secret-of-at-least-thirty-two-characters',
     DATABASE_URL: 'postgresql://unused',
     VALKEY_URL: 'redis://unused',

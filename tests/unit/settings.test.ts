@@ -5,6 +5,7 @@ const env = {
   FOUNDING_TEAM_EMAILS: '',
   APP_ORIGIN: 'https://app.example.test',
   EMAIL_TRANSPORT: 'sink',
+  EMAIL_SINK_DIRECTORY: '/var/lib/ekdotico/mail',
   DATABASE_URL: 'postgresql://ekdotico_app:x@localhost:5432/ekdotico',
   VALKEY_URL: 'redis://localhost:6379',
   AUTH_SECRET: 'a-test-secret-of-at-least-thirty-two-characters',
@@ -58,8 +59,8 @@ describe('loadSettings: what a process cannot start without', () => {
     expect(loadSettings({ ...env, APP_ORIGIN: origin }).appOrigin).toBe(origin);
   });
 
-  // Register A52, A72: the only sender writes to a file. A deployment must not
-  // lose its email by leaving a setting out.
+  // Register D70 (the three checks stand), D92: the only sender writes to a
+  // file. A deployment must not lose its email by leaving a setting out.
   it('refuses to start away from a development machine unless the local sink is chosen', () => {
     expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: undefined })).toThrow(/EMAIL_TRANSPORT/);
     expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: 'scaleway' })).toThrow(/EMAIL_TRANSPORT/);
@@ -71,10 +72,42 @@ describe('loadSettings: what a process cannot start without', () => {
     ).not.toThrow();
   });
 
+  // NFR-SE-19: the files of the sink hold addresses and links. A deployment
+  // names their directory; only a development machine is given one.
+  it('refuses to start away from a development machine without the directory of the sink', () => {
+    expect(() => loadSettings({ ...env, EMAIL_SINK_DIRECTORY: undefined })).toThrow(/EMAIL_SINK_DIRECTORY/);
+    expect(() => loadSettings({ ...env, EMAIL_SINK_DIRECTORY: '' })).toThrow(/EMAIL_SINK_DIRECTORY/);
+    expect(loadSettings(env).emailSinkDirectory).toBe('/var/lib/ekdotico/mail');
+    const local = { ...env, APP_ORIGIN: 'http://localhost:3000', EMAIL_SINK_DIRECTORY: undefined };
+    expect(loadSettings(local).emailSinkDirectory).toBe('.local/mail');
+  });
+
   it('holds the two limits of a password as settings (FR-AU-82)', () => {
     expect(loadSettings(env)).toMatchObject({ passwordMinLength: 8, passwordMaxLength: 32 });
     expect(loadSettings({ ...env, PASSWORD_MIN_LENGTH: '20' }).passwordMinLength).toBe(20);
   });
+
+  // NFR-SE-17 (b), (c): the identity library reads these whatever the
+  // application configures. The web application and the collaboration server
+  // both start through here.
+  it.each(['BETTER_AUTH_TELEMETRY', 'BETTER_AUTH_TRUSTED_ORIGINS', 'BETTER_AUTH_SECRET', 'BETTER_AUTH_'])(
+    'refuses to start where %s is set, and names it without its value',
+    (name) => {
+      const load = () => loadSettings({ ...env, [name]: 'https://elsewhere.example' });
+      expect(load).toThrow(name);
+      expect(load).not.toThrow(/elsewhere/);
+    },
+  );
+
+  // NFR-SE-07: a limit under a misspelt name would change nothing, in silence.
+  it.each(['RATE_LIMIT_API_PER_USR', 'RATE_LIMIT_', 'RATE_LIMIT_api_per_user', 'RATE_LIMIT_toString'])(
+    'refuses to start where %s is set, which names no limit, and does not repeat its value',
+    (name) => {
+      const load = () => loadSettings({ ...env, [name]: '1000000/1' });
+      expect(load).toThrow(name);
+      expect(load).not.toThrow(/1000000/);
+    },
+  );
 });
 
 describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-SE-19)', () => {
@@ -113,9 +146,13 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
   });
 
   it('changes a limit and a period without a code change', () => {
-    const changed = loadSettings({ ...env, RATE_LIMIT_API_PER_USER: '10/5', SESSION_MAX_SECONDS: '3600' });
+    const changed = loadSettings({
+      ...env,
+      RATE_LIMIT_API_PER_USER: '10/5',
+      SESSION_MAX_SECONDS: String(40 * 86400),
+    });
     expect(changed.limits.API_PER_USER).toEqual({ max: 10, windowSeconds: 5 });
-    expect(changed.sessionMaxSeconds).toBe(3600);
+    expect(changed.sessionMaxSeconds).toBe(40 * 86400);
   });
 
   it.each(['10', '0/60', '10/0', '-1/60', '1e3/60', '10/60/1'])('refuses the limit %s', (value) => {
@@ -124,5 +161,111 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
 
   it.each(['-1', '1.5', 'seven', '1e3'])('refuses %s as a whole number', (value) => {
     expect(() => loadSettings({ ...env, TRUSTED_PROXY_COUNT: value })).toThrow(/TRUSTED_PROXY_COUNT/);
+  });
+
+  // A 0 here would switch a rule off without a word: a session that ends as it
+  // begins, a log that keeps nothing, a password of no length, an invitation
+  // that has expired before its email is read (FR-AU-89 (a)).
+  it.each([
+    'SESSION_IDLE_SECONDS',
+    'SESSION_RENEW_SECONDS',
+    'SESSION_MAX_SECONDS',
+    'SECURITY_LOG_RETENTION_DAYS',
+    'PASSWORD_MIN_LENGTH',
+    'PASSWORD_MAX_LENGTH',
+    'ADMISSION_INVITATION_DAYS',
+  ])('refuses 0 as %s', (name) => {
+    expect(() => loadSettings({ ...env, [name]: '0' })).toThrow(`${name} must be a whole number, 1 or more.`);
+  });
+
+  it('admits 1 for each of them, and 0 proxies and a signed copy that lives 0 seconds', () => {
+    const least = loadSettings({
+      ...env,
+      SESSION_IDLE_SECONDS: '1',
+      SESSION_RENEW_SECONDS: '1',
+      SESSION_MAX_SECONDS: '1',
+      SECURITY_LOG_RETENTION_DAYS: '1',
+      PASSWORD_MIN_LENGTH: '1',
+      PASSWORD_MAX_LENGTH: '1',
+      ADMISSION_INVITATION_DAYS: '1',
+      TRUSTED_PROXY_COUNT: '0',
+      COOKIE_CACHE_SECONDS: '0',
+    });
+    expect(least).toMatchObject({ sessionMaxSeconds: 1, trustedProxyCount: 0, cookieCacheSeconds: 0 });
+    expect(least.admissionInvitationDays).toBe(1);
+    expect(loadSettings(env).admissionInvitationDays).toBe(30);
+  });
+
+  // docs/contracts/admission-signature.md, "The setting"; NFR-SE-17 (e).
+  describe('ADMISSION_SECRET (FR-AU-89)', () => {
+    const SECRET = 'A-secret_of-43-characters-for-the-tests-012';
+    const failure = (value: string) => {
+      try {
+        loadSettings({ ...env, ADMISSION_SECRET: value });
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return undefined;
+    };
+
+    it('is the value exactly as set, where it is 43 characters or more of the URL-safe alphabet', () => {
+      expect(SECRET).toHaveLength(43);
+      expect(loadSettings({ ...env, ADMISSION_SECRET: SECRET }).admissionSecret).toBe(SECRET);
+      expect(loadSettings({ ...env, ADMISSION_SECRET: `${SECRET}x` }).admissionSecret).toBe(`${SECRET}x`);
+    });
+
+    it('is none where it is unset or empty, so that every admission request is refused', () => {
+      expect(loadSettings(env).admissionSecret).toBeUndefined();
+      expect(loadSettings({ ...env, ADMISSION_SECRET: '' }).admissionSecret).toBeUndefined();
+    });
+
+    it.each([
+      ['of 42 characters', SECRET.slice(1)],
+      ['with a character outside the alphabet', `${SECRET.slice(1)}+`],
+      ['with a space', `${SECRET.slice(1)} `],
+    ])('stops the process for one %s, and never repeats it', (_, value) => {
+      const message = failure(value);
+      expect(message).toMatch(/^ADMISSION_SECRET must be at least 43 characters/);
+      expect(message).not.toContain(value);
+      expect(message).not.toContain(value.slice(0, 12));
+    });
+
+    it('stops the process where it is the identity secret, and repeats neither', () => {
+      const message = (() => {
+        try {
+          loadSettings({ ...env, AUTH_SECRET: SECRET, ADMISSION_SECRET: SECRET });
+        } catch (error) {
+          return (error as Error).message;
+        }
+        return undefined;
+      })();
+      expect(message).toBe('ADMISSION_SECRET must differ from AUTH_SECRET.');
+      // Two secrets that differ start it.
+      expect(
+        loadSettings({ ...env, AUTH_SECRET: `${SECRET}x`, ADMISSION_SECRET: SECRET }).admissionSecret,
+      ).toBe(SECRET);
+    });
+  });
+
+  it('refuses a least length of a password above the greatest (FR-AU-82)', () => {
+    const load = (min: string, max: string) =>
+      loadSettings({ ...env, PASSWORD_MIN_LENGTH: min, PASSWORD_MAX_LENGTH: max });
+    expect(() => load('33', '32')).toThrow(/PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH/);
+    expect(load('32', '32')).toMatchObject({ passwordMinLength: 32, passwordMaxLength: 32 });
+  });
+
+  it('refuses periods of a session that are out of order (FR-AU-84)', () => {
+    const load = (renew: number, idle: number, max: number) =>
+      loadSettings({
+        ...env,
+        SESSION_RENEW_SECONDS: String(renew),
+        SESSION_IDLE_SECONDS: String(idle),
+        SESSION_MAX_SECONDS: String(max),
+      });
+    expect(() => load(601, 600, 3600)).toThrow(/SESSION_RENEW_SECONDS must be no more than/);
+    expect(() => load(60, 3601, 3600)).toThrow(/SESSION_IDLE_SECONDS no more than SESSION_MAX_SECONDS/);
+    // The initial period of 7 days, with a life cut to an hour.
+    expect(() => loadSettings({ ...env, SESSION_MAX_SECONDS: '3600' })).toThrow(/SESSION_MAX_SECONDS/);
+    expect(load(600, 600, 600)).toMatchObject({ sessionRenewSeconds: 600, sessionMaxSeconds: 600 });
   });
 });
