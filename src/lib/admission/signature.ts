@@ -7,10 +7,24 @@
 // follows that page line for line. When Praktico's specification states a
 // format, that statement replaces the page and this module changes to match.
 //
-// Everything that depends on the format is here, with its tests in
+// What this module holds, with its tests in
 // tests/unit/admission-signature.test.ts: the names of the two headers, the
-// signed message, the limits on the form of each part, and the order of
-// verification. Nothing else in the application may know any of them.
+// signed message, the limits on the form of each part (the form of an
+// invitation's identifier among them), and steps 1 to 3 of "Verification, in
+// order". Nothing else in the application may know any of those.
+//
+// The rest of the page is built elsewhere, and a change of the format reaches
+// these files too:
+// - src/lib/admission/gate.ts: steps 4 and 5 (the limit, and only then the
+//   body), the `401` of a rejected request with its entry in the security
+//   log, and the `429`;
+// - src/app/api/admission/invitations/route.ts: the status codes and the JSON
+//   of create and of list;
+// - src/app/api/admission/invitations/[id]/route.ts: those of revoke;
+// - src/lib/admission/invitations.ts: the JSON of an invitation, and the
+//   forms of `email` and `requestId`;
+// - src/lib/settings.ts: the name of the setting and the form of the secret;
+// - src/proxy.ts: the two paths, on the list of paths without a session.
 //
 // The command (scripts/admission.ts) signs with this module under plain Node,
 // so it imports nothing but the platform: no settings, no database.
@@ -31,8 +45,15 @@ const TIMESTAMP = /^[1-9][0-9]{9}$/;
 // Upper-case hexadecimal is rejected, not folded.
 const SIGNATURE = /^[0-9a-f]{64}$/;
 const METHODS = ['POST', 'GET', 'DELETE'];
+// "`<id>` as the application returned it, 1 to 64 characters of `[A-Za-z0-9_-]`".
+const ID = '[A-Za-z0-9_-]{1,64}';
 // The request target, whole: no query string, no trailing slash, no percent-encoding.
-const TARGET = /^\/api\/admission\/invitations(\/[A-Za-z0-9_-]{1,64})?$/;
+const TARGET = new RegExp(`^/api/admission/invitations(/${ID})?$`);
+
+/** Whether `id` has the form of an invitation's identifier: the only form a signed path may end in. */
+export function isInvitationId(id: string): boolean {
+  return new RegExp(`^${ID}$`).test(id);
+}
 
 /**
  * HMAC-SHA-256 over `<timestamp>\n<METHOD>\n<path>\n` and then the bytes of the

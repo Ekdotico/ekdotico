@@ -3,15 +3,18 @@
 // instrumentation hook, stay up, and answer every request with a 500.
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
-    const { loadSettings } = await import('./lib/settings.ts');
-    const { assertContractVersion } = await import('./lib/istorico/index.ts');
-    const { startTimers } = await import('./lib/timers.ts');
-    const { auth } = await import('./lib/auth/auth.ts');
     try {
+      // Inside the `try`: a module that fails to load stops the process as well.
+      const { loadSettings } = await import('./lib/settings.ts');
+      const { assertContractVersion } = await import('./lib/istorico/index.ts');
+      const { startTimers } = await import('./lib/timers.ts');
+      const { auth } = await import('./lib/auth/auth.ts');
       loadSettings();
       assertContractVersion();
-      // NFR-SE-17: a configuration the library would not take as written stops the process here.
-      auth();
+      // NFR-SE-17: a configuration the library would not take as written stops
+      // the process here. The library builds it in the background, and refuses
+      // it by rejecting this promise; it opens no connection to do so.
+      await auth().$context;
       // NFR-RE-15: the scheduled work of the application runs on timers in this process.
       startTimers();
     } catch (error) {

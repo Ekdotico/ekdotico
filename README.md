@@ -56,7 +56,7 @@ A PostgreSQL 17 server that is already running on the machine serves as well. Cr
 psql postgres -c "CREATE DATABASE ekdotico ENCODING 'UTF8' LOCALE 'en_US.UTF-8' LOCALE_PROVIDER libc TEMPLATE template0"
 ```
 
-Copy the settings of the web application. Only `pnpm dev` and `pnpm start` read `.env.local`; everything else takes its settings from the command line, as shown below:
+Copy the settings of the two processes. `pnpm dev`, `pnpm start` and `pnpm dev:collab` read `.env.local`; everything else, `pnpm start:collab` included, takes its settings from the environment or the command line, as shown below:
 
 ```bash
 cp .env.example .env.local
@@ -91,7 +91,7 @@ The collaboration server, on port 1234:
 pnpm dev:collab
 ```
 
-Each refuses to start where one of the five settings of `.env.example` is absent; for `FOUNDING_TEAM_EMAILS` an empty value is a list with no address. The collaboration server reads no file by itself, so its script hands it `.env.local`, the same file `pnpm dev` reads; `COLLAB_PORT` names another port. Their health checks are `GET /api/health` and `GET /collab/health`, which answer 200 with an empty body.
+Each refuses to start where one of the five settings of `.env.example` is absent; for `FOUNDING_TEAM_EMAILS` an empty value is a list with no address. The collaboration server reads no file by itself, so `pnpm dev:collab` hands it the same one (`node --env-file=.env.local`) and fails where the file is missing; `COLLAB_PORT` names another port. Their health checks are `GET /api/health` and `GET /collab/health`, which answer 200 with an empty body.
 
 The collaboration server accepts a WebSocket at `/collab` only from a request whose `Origin` header is `APP_ORIGIN` and whose cookie is a session of the application. A browser sends that cookie only to the application's own origin, so a page reaches the collaboration server through a reverse proxy that serves both processes on one origin ([`docs/operations/deployment.md`](docs/operations/deployment.md)). None is set up for development yet: it arrives with the editor. On `SIGTERM` or `SIGINT` the server stores every open document and then exits; a second signal exits at once.
 

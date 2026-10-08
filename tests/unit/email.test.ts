@@ -50,11 +50,18 @@ afterEach(() => {
 describe('sendEmail, local sink', () => {
   it('writes the message with its headers and text, readable by its owner alone', async () => {
     const { sendEmail } = await load();
-    await sendEmail({
-      to: 'reader@example.com',
-      subject: 'Reset your password',
-      text: 'Line one.\nLine two.',
-    });
+    // With no mask, the modes below are the ones the sink asks for: a strict
+    // mask on the machine that runs this would hide a sink that asked for more.
+    const mask = process.umask(0);
+    try {
+      await sendEmail({
+        to: 'reader@example.com',
+        subject: 'Reset your password',
+        text: 'Line one.\nLine two.',
+      });
+    } finally {
+      process.umask(mask);
+    }
 
     const [name] = files();
     expect(files()).toHaveLength(1);
@@ -67,6 +74,8 @@ describe('sendEmail, local sink', () => {
     expect(lines.slice(4)).toEqual(['', 'Line one.', 'Line two.']);
     // NFR-SE-19 and FR-AU-87: the file holds an address and may hold a single-use link.
     expect(statSync(path).mode & 0o777).toBe(0o600);
+    // And so does the directory that lists them.
+    expect(statSync(sink).mode & 0o777).toBe(0o700);
   });
 
   it('writes two messages as two files', async () => {
@@ -74,6 +83,27 @@ describe('sendEmail, local sink', () => {
     await sendEmail({ to: 'a@example.com', subject: 'One', text: 'First.' });
     await sendEmail({ to: 'b@example.com', subject: 'Two', text: 'Second.' });
     expect(files()).toHaveLength(2);
+  });
+
+  it('never writes over a message: a second file of the same name is refused', async () => {
+    // The same millisecond and the same random part give the same name.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-08T12:00:00.000Z') });
+    vi.doMock('node:crypto', async (original) => ({
+      ...(await original<typeof import('node:crypto')>()),
+      randomUUID: () => '00000000-0000-4000-8000-000000000000',
+    }));
+    try {
+      const { sendEmail } = await load();
+      await sendEmail({ to: 'a@example.com', subject: 'One', text: 'First.' });
+      await expect(sendEmail({ to: 'b@example.com', subject: 'Two', text: 'Second.' })).rejects.toThrow(
+        'The email sink could not store the message.',
+      );
+      expect(files()).toEqual(['2026-10-08T12-00-00-000Z-00000000-0000-4000-8000-000000000000.eml']);
+      expect(readFileSync(join(sink, files()[0]!), 'utf8')).toContain('First.');
+    } finally {
+      vi.doUnmock('node:crypto');
+      vi.useRealTimers();
+    }
   });
 
   it('names a file by neither the address nor the subject', async () => {
@@ -88,6 +118,7 @@ describe('sendEmail, local sink', () => {
   it.each([
     ['to', { to: 'a@example.com\nBcc: x@example.com', subject: 'S', text: 'T' }],
     ['to', { to: 'a@example.com\r\nBcc: x@example.com', subject: 'S', text: 'T' }],
+    ['to', { to: 'a@example.com\rBcc: x@example.com', subject: 'S', text: 'T' }],
     ['subject', { to: 'a@example.com', subject: 'S\r\nBcc: x@example.com', text: 'T' }],
     ['subject', { to: 'a@example.com', subject: 'S\nBcc: x@example.com', text: 'T' }],
     ['subject', { to: 'a@example.com', subject: 'S\rBcc: x@example.com', text: 'T' }],

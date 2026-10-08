@@ -125,13 +125,23 @@ describe('signing out (FR-AU-84)', () => {
   it('never answers success where the row could not be deleted', async () => {
     const { cookie, sessionId } = await person();
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const context = await auth().$context;
-    vi.spyOn(context.internalAdapter, 'deleteSession').mockRejectedValue(new Error('the database is away'));
-    const response = await signOut({ cookie });
+    // A fault of the database itself, and not of a function made to reject:
+    // the identity library's own deletion reads the row first, takes a fault
+    // of that read for an absent row, deletes nothing, and resolves.
+    database.sql('ALTER TABLE "Session" RENAME TO "SessionAway"');
+    let response: Response;
+    try {
+      response = await signOut({ cookie });
+    } finally {
+      database.sql('ALTER TABLE "SessionAway" RENAME TO "Session"');
+    }
     expect(response.status).toBe(500);
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await rows(sessionId)).toBe(1);
-    expect(errors.mock.calls).toEqual([['identity: request failed (Error)']]);
+    expect(errors.mock.calls).toEqual([['identity: request failed (PrismaClientKnownRequestError P2021)']]);
+    // The session stands, and the browser still holds it: it can sign out again.
+    expect((await signOut({ cookie })).status).toBe(200);
+    expect(await rows(sessionId)).toBe(0);
   });
 });
 

@@ -5,27 +5,13 @@
 // request that carries the build's own revalidation identifier
 // (docs/operations/deployment.md), so a route does not rest on the proxy: each
 // validates the session itself. A route added without it fails here.
-import { globSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/lib/documents/permissions.ts';
 import { documentRoute, permissionOf } from '../../src/lib/documents/route.ts';
-
-// The routes of NFR-SE-05, each with what authenticates it instead.
-const SESSIONLESS: Record<string, string> = {
-  'src/app/api/health/route.ts': 'NFR-SE-05 (c): reports that the service is up and nothing else',
-  'src/app/api/auth/[...all]/route.ts':
-    'NFR-SE-05 (a): the identity library checks the session of its own endpoints',
-  'src/app/api/sign-up/route.ts':
-    'NFR-SE-05 (a), FR-AU-90: authorised by the token of a pending admission invitation',
-  'src/app/api/admission/invitations/route.ts':
-    'NFR-SE-05 (b), FR-AU-89 (a), (b): the signature of each request is verified before any processing',
-  'src/app/api/admission/invitations/[id]/route.ts':
-    'NFR-SE-05 (b), FR-AU-89 (c): the signature of each request is verified before any processing',
-};
-
-const routes = globSync('src/app/**/route.ts');
+import { routes, SESSIONLESS, withSession } from '../routes.ts';
 
 // NFR-SE-04, FR-ED-39: every access control decision for a document is made
 // against the caller's role and the document's permission set, "at the API
@@ -84,7 +70,7 @@ describe('the route handlers', () => {
 
   // A route with a document validates through `documentRoute`, which the
   // tests below require of every one of its handlers.
-  it.each(routes.filter((route) => !(route in SESSIONLESS) && !withADocument.includes(route)))(
+  it.each(withSession.filter((route) => !withADocument.includes(route)))(
     '%s validates the session',
     (route) => {
       expect(readFileSync(route, 'utf8')).toMatch(/\bvalidateSession(Row)?\(/);

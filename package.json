@@ -27,14 +27,13 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@ekdotico/domico": "0.25.0",
+    "@ekdotico/domico": "0.26.0",
     "@hocuspocus/server": "4.7.0",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "better-auth": "1.7.7",
     "ioredis": "6.0.0",
     "next": "16.4.0",
-    "pg": "8.23.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "y-protocols": "1.0.7",
@@ -44,7 +43,6 @@
     "@hocuspocus/provider": "4.7.0",
     "@playwright/test": "1.63.0",
     "@types/node": "26.6.4",
-    "@types/pg": "8.23.1",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "eslint": "9.39.5",

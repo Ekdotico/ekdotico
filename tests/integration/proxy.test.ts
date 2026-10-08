@@ -150,6 +150,29 @@ describe('the pages and endpoints of a person without a session (NFR-SE-05 (a))'
     expect(entries.every((entry) => entry.userId === null)).toBe(true);
   });
 
+  // NFR-SE-07: one IPv6 subscriber holds a whole /64, and is one count.
+  it('are limited for each /64 of IPv6 addresses, not for each address in it', async () => {
+    const from = (address: string) => ({ 'x-forwarded-for': address });
+    for (let n = 1; n <= 5; n++) {
+      expect(passed(await call('GET', '/sign-in', from(`2001:db8:1:2::${n}`)))).toBe(true);
+    }
+    expect((await call('GET', '/sign-in', from('2001:db8:1:2:ffff::9'))).status).toBe(429);
+    // The next /64 is another subscriber.
+    expect(passed(await call('GET', '/sign-in', from('2001:db8:1:3::1')))).toBe(true);
+  });
+
+  // "Counted before anything else": the refusals for the origin are bounded
+  // too, and so are the entries they write to the security log.
+  it('count a request before they look at its origin, so that the 403s are limited as well', async () => {
+    const from = address();
+    for (let n = 0; n < 5; n++) {
+      await expectError(await call('POST', '/api/auth/sign-in/email', from), 403, 'forbidden');
+    }
+    await expectError(await call('POST', '/api/auth/sign-in/email', from), 429, 'rate_limited');
+    await expectError(await call('POST', '/api/sign-up', from), 429, 'rate_limited');
+    expect(await logged('forbidden')).toHaveLength(5);
+  });
+
   it('do not read the session, so a signed-in person reaches them too', async () => {
     expect(passed(await call('GET', '/sign-in', { ...address(), ...(await person()).cookie }))).toBe(true);
   });
@@ -353,16 +376,42 @@ describe('every other path, with a session', () => {
   });
 });
 
+describe('the mark of a limit that was logged (NFR-SE-19, FR-AU-05)', () => {
+  // The mark lives in Valkey, where no identity data is held: its name is a
+  // keyed digest of the limit and of what was limited, and nothing in clear.
+  it('holds neither the address nor the user identifier', async () => {
+    const before = new Set(await valkey().keys('limit-logged:*'));
+    const from = address();
+    const { cookie, id } = await person();
+    for (let n = 0; n < 5; n++) await call('GET', '/sign-in', from);
+    expect((await call('GET', '/sign-in', from)).status).toBe(429);
+    for (let n = 0; n < 4; n++) await call('GET', '/api/documents', cookie);
+    expect((await call('GET', '/api/documents', cookie)).status).toBe(429);
+
+    const all = await valkey().keys('limit-logged:*');
+    // One for the address and one for the user; another run may add its own meanwhile.
+    const added = all.filter((name) => !before.has(name));
+    expect(added.length).toBeGreaterThanOrEqual(2);
+    for (const name of all) {
+      expect(name).toMatch(/^limit-logged:[0-9a-f]{64}$/);
+      expect(name).not.toContain(from['x-forwarded-for']);
+      expect(name).not.toContain(id);
+    }
+    for (const name of added) expect(await valkey().get(name)).toBe('1');
+  });
+});
+
 describe('where something it depends on fails (NFR-SE-06, A10)', () => {
   const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
 
-  async function expectClosed(response: Response, errors: ReturnType<typeof quiet>) {
+  // NFR-SE-19: the line names the stage and the class and code of the fault,
+  // which tell one fault from another, and nothing the fault carried.
+  async function expectClosed(response: Response, errors: ReturnType<typeof quiet>, ...lines: string[]) {
     const message = await expectError(response, 500, 'internal');
     expect(message).toBe(
       'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
     );
-    // NFR-SE-19: the class of the fault, and nothing it carried.
-    expect(errors.mock.calls.flat().join(' ')).toMatch(/^proxy: request refused \(\w+\)$/);
+    expect(errors.mock.calls).toEqual(lines.map((line) => [line]));
   }
 
   it('refuses with a 500 that says nothing of the fault, where the database cannot answer', async () => {
@@ -370,20 +419,49 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     const errors = quiet();
     database.sql('ALTER TABLE "Session" RENAME TO "SessionAway"');
     try {
-      await expectClosed(await call('POST', '/api/documents', { ...cookie, origin: ORIGIN }), errors);
+      await expectClosed(
+        await call('POST', '/api/documents', { ...cookie, origin: ORIGIN }),
+        errors,
+        // The library logs the fault of the database and throws one of its
+        // own in its place, so the code of the first reaches neither line.
+        'identity: library reported (error)',
+        'proxy: request refused at session (APIError)',
+      );
     } finally {
       database.sql('ALTER TABLE "SessionAway" RENAME TO "Session"');
     }
     expect(passed(await call('POST', '/api/documents', { ...cookie, origin: ORIGIN }))).toBe(true);
   });
 
+  // NFR-SE-06 (A10): a database that does not answer fails the request within
+  // seconds. The server itself holds the 5 seconds db.ts asks for.
+  it('gives a statement 5 seconds, which the database server keeps', async () => {
+    expect(await db().$queryRaw`SHOW statement_timeout`).toEqual([{ statement_timeout: '5s' }]);
+  });
+
   it('refuses where the limiter cannot answer, with a session and without one', async () => {
     const { cookie } = await person();
     const errors = quiet();
-    vi.spyOn(valkey(), 'eval').mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
-    await expectClosed(await call('GET', '/sign-in', address()), errors);
+    const fault = Object.assign(new Error('connect ECONNREFUSED redis://secret@host'), {
+      code: 'ECONNREFUSED',
+    });
+    vi.spyOn(valkey(), 'eval').mockRejectedValue(fault);
+    const line = 'proxy: request refused at limit (Error ECONNREFUSED)';
+    await expectClosed(await call('GET', '/sign-in', address()), errors, line);
     errors.mockClear();
-    await expectClosed(await call('GET', '/api/documents', cookie), errors);
+    await expectClosed(await call('GET', '/api/documents', cookie), errors, line);
+  });
+
+  it('refuses where the mark of a logged limit cannot be written', async () => {
+    const from = address();
+    for (let n = 0; n < 5; n++) expect(passed(await call('GET', '/sign-in', from))).toBe(true);
+    const errors = quiet();
+    vi.spyOn(valkey(), 'set').mockRejectedValue(new Error(`no room for ${from['x-forwarded-for']}`));
+    await expectClosed(
+      await call('GET', '/sign-in', from),
+      errors,
+      'proxy: request refused at log mark (Error)',
+    );
   });
 
   it('refuses where the validation throws anything at all', async () => {
@@ -392,6 +470,6 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     const response = await call('GET', '/documents/1', (await person()).cookie);
     expect(response.status).toBe(500);
     expect(passed(response)).toBe(false);
-    expect(errors.mock.calls.flat().join(' ')).toBe('proxy: request refused (unknown)');
+    expect(errors.mock.calls.flat().join(' ')).toBe('proxy: request refused at session (unknown)');
   });
 });

@@ -82,16 +82,29 @@ export function checkLimit(name: LimitName, key: string): Promise<LimitResult> {
   return limitWith(valkey(), settings().limits[name], name, key, false);
 }
 
+/** The Valkey key of a mark (see `oncePer`). Exported for the tests, which clear one. */
+export function markKey(mark: string): string {
+  return `limit-logged:${createHmac('sha256', settings().authSecret).update(mark).digest('hex')}`;
+}
+
 /**
- * NFR-SE-19: the entry for a limit that was reached, with the user where
- * there is one and never the address. One entry for each period of a limit and
- * not one for each request refused in it, or a flood over the limit would
- * write to the database at the rate the limit exists to keep from it. The mark
- * is in Valkey, under a keyed digest, so that it holds across instances and
- * holds no address. `seconds` is what is left of the period.
- *
- * Here and not in the proxy, so that the collaboration server, which cannot
- * load anything of Next.js, marks the same way.
+ * Whether this is the first call for `mark` in `seconds`, across instances:
+ * the one mark behind every "one entry for each period". It is in Valkey,
+ * under a keyed digest, so that two environments on one Valkey do not share a
+ * mark and Valkey holds nothing a mark names, an address among them.
+ */
+export async function oncePer(mark: string, seconds: number): Promise<boolean> {
+  return (await valkey().set(markKey(mark), '1', 'EX', seconds, 'NX')) === 'OK';
+}
+
+/**
+ * NFR-SE-19: an entry when a limit is reached, with the user where there is
+ * one and never the key, which may be an address. One entry for each period of
+ * a limit and not one for each request refused in it, or a flood over the
+ * limit would write to the database at the rate the limit exists to keep from
+ * it. The proxy, a route with a limit of its own, and the sign-in all log
+ * here, and so does the collaboration server, which cannot load anything of
+ * Next.js. `seconds` is what is left of the period.
  */
 export async function logLimitReached(
   name: LimitName,
@@ -99,10 +112,7 @@ export async function logLimitReached(
   seconds: number,
   userId?: string,
 ): Promise<void> {
-  const digest = createHmac('sha256', settings().authSecret).update(`${name}:${key}`).digest('hex');
-  if ((await valkey().set(`limit-logged:${digest}`, '1', 'EX', seconds, 'NX')) === 'OK') {
-    await securityLog({ kind: 'rate_limit_reached', userId });
-  }
+  if (await oncePer(`${name}:${key}`, seconds)) await securityLog({ kind: 'rate_limit_reached', userId });
 }
 
 /** Forgets the events counted for this key (a completed password reset clears the failed sign-ins). */

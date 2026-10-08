@@ -333,8 +333,15 @@ describe('the time a refusal takes (FR-AU-81)', () => {
     expect(await work(() => signIn(known.email, WRONG))).toEqual(failed);
     expect(await work(() => signIn(address(), WRONG))).toEqual(failed);
     expect(await work(() => signIn(unverified.email))).toEqual(failed);
-    // Refused by a limit: nothing is counted, for an address with an account or without.
+    // Refused by a limit: nothing is counted, for an address with an account or
+    // without. The first such refusal of a period also writes the entry of a
+    // limit reached (NFR-SE-19), so two entries, and each later one writes the
+    // one; the same for both addresses, so the numbers tell them apart no more
+    // than before.
+    const firstRefused = [1, 1, 2, 3];
     const refused = [1, 1, 1, 3];
+    expect(await work(() => signIn(limited.email, PASSWORD, from(7)))).toEqual(firstRefused);
+    expect(await work(() => signIn(unknownLimited, PASSWORD, from(7)))).toEqual(firstRefused);
     expect(await work(() => signIn(limited.email, PASSWORD, from(7)))).toEqual(refused);
     expect(await work(() => signIn(unknownLimited, PASSWORD, from(7)))).toEqual(refused);
   });
@@ -460,8 +467,90 @@ describe('the limits on failed sign-ins (NFR-SE-07; the owner’s answers to Q1 
     expect(verify).not.toHaveBeenCalled();
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
     // NFR-SE-19: the class of the fault, and nothing it carried. The library's
-    // router would print the error whole.
-    expect(errors.mock.calls).toEqual([['identity: request failed (Error)']]);
+    // router would print the error whole. The turn could not be given back
+    // either, which is said and does not take the place of the fault.
+    expect(errors.mock.calls).toEqual([['sign-in: turn not released'], ['identity: request failed (Error)']]);
+  });
+
+  it('keeps the outcome of a sign-in where its turn cannot be given back', async () => {
+    const { email, id } = await person();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const evaluate = valkey().eval.bind(valkey()) as (...args: unknown[]) => Promise<unknown>;
+    // The script that gives the turn back, and no other, cannot reach Valkey.
+    vi.spyOn(valkey(), 'eval').mockImplementation(((...args: unknown[]) =>
+      String(args[0]).includes("redis.call('DEL'")
+        ? Promise.reject(new Error('ECONNRESET redis://secret@host'))
+        : evaluate(...args)) as never);
+    await expectSignedIn(await signIn(email), id);
+    expect(errors.mock.calls).toEqual([['sign-in: turn not released']]);
+  });
+
+  it('refuses an attempt that gets no turn in time as any other, and neither verifies nor counts (FR-AU-81)', async () => {
+    const { email } = await person();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const context = await auth().$context;
+    const verify = vi.spyOn(context.password, 'verify');
+    const hash = vi.spyOn(context.password, 'hash');
+    const asked = vi.spyOn(valkey(), 'eval');
+    // Another attempt for the address holds the turn, and the 10 seconds an
+    // attempt waits for it pass at the first look.
+    const now = Date.now.bind(Date);
+    let passed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now() + passed);
+    vi.spyOn(valkey(), 'set').mockImplementation((async () => {
+      passed = 11_000;
+      return null;
+    }) as never);
+
+    await expectRefused(await signIn(email));
+    expect(verify).not.toHaveBeenCalled();
+    expect(hash).not.toHaveBeenCalled();
+    // No limit was asked, and none counted.
+    expect(asked).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    // One entry, and no user: nothing was read of the address.
+    expect((await db().securityLogEntry.findMany()).map(({ kind, userId }) => ({ kind, userId }))).toEqual([
+      { kind: 'sign_in_refused', userId: null },
+    ]);
+    // The right password signs in once the turn is free.
+    expect((await signIn(email)).status).toBe(200);
+  });
+
+  // NFR-SE-19 lists "a rate limit reached" as an event of its own.
+  it('writes one entry for each period of a limit that refuses a sign-in, with the user where there is one', async () => {
+    const known = await person();
+    const unknown = address();
+    const reached = () =>
+      db().securityLogEntry.findMany({ where: { kind: 'rate_limit_reached' }, select: { userId: true } });
+
+    for (let n = 0; n < 5; n++) await signIn(known.email, WRONG, from(90));
+    for (let n = 0; n < 5; n++) await signIn(unknown, WRONG, from(90));
+    // Reaching a limit is not being refused by it: nothing yet.
+    expect(await reached()).toEqual([]);
+
+    await expectRefused(await signIn(known.email, PASSWORD, from(90)));
+    expect(await reached()).toEqual([{ userId: known.id }]);
+    await expectRefused(await signIn(unknown, PASSWORD, from(90)));
+    expect((await reached()).map((entry) => entry.userId).sort()).toEqual([known.id, null].sort());
+    // Once for the period, however many are refused in it.
+    for (let n = 0; n < 4; n++) await expectRefused(await signIn(known.email, WRONG, from(90)));
+    await expectRefused(await signIn(unknown, WRONG, from(90)));
+    expect(await reached()).toHaveLength(2);
+    // Each refusal still has its own entry, and the response is as it was.
+    expect(await refusals()).toHaveLength(17);
+
+    // The mark is kept under a keyed digest: Valkey holds no address (NFR-SE-01).
+    const keys = (await valkey().keys('limit-logged:*')).join(' ');
+    expect(keys).not.toContain('example.com');
+    expect(keys).not.toContain('198.51.100');
+  });
+
+  it('writes no such entry for a sign-in refused for any other reason', async () => {
+    const { email } = await person();
+    await signIn(email, WRONG, from(91));
+    await signIn(address(), PASSWORD, from(91));
+    expect(await db().securityLogEntry.count({ where: { kind: 'rate_limit_reached' } })).toBe(0);
   });
 
   it('refuses the request where the database cannot answer, and prints nothing of the fault', async () => {
@@ -476,7 +565,7 @@ describe('the limits on failed sign-ins (NFR-SE-07; the owner’s answers to Q1 
       database.sql('ALTER TABLE "UserAway" RENAME TO "User"');
     }
     expect(errors.mock.calls).toHaveLength(1);
-    expect(String(errors.mock.calls[0])).toMatch(/^identity: request failed \(\w+\)$/);
+    expect(errors.mock.calls[0]).toEqual(['identity: request failed (PrismaClientKnownRequestError P2021)']);
     // The turn was given back: the next attempt does not wait for it.
     expect((await signIn(email)).status).toBe(200);
   });

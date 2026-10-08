@@ -8,6 +8,15 @@ export function onlyReads(method: string): boolean {
 }
 
 /**
+ * NFR-SE-06, A10: the one statement of a fault on the server, which says
+ * nothing of the fault. The proxy answers a 500 with it, and the page of a
+ * fault shows it (src/app/error.tsx). Text for a person (the owner's answer to
+ * Q6 of the plan).
+ */
+export const INTERNAL_FAULT =
+  'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.';
+
+/**
  * The one body of an error, `{ "error": { "code", "message" } }` (the owner's
  * answer to Q8 of the plan). The message is text for a person. NFR-SE-06, A10:
  * neither field ever carries a stack trace, an internal identifier, or a secret.
@@ -25,11 +34,11 @@ export function errorResponse(
 }
 
 /**
- * The JSON of a request's body, or null where the body is longer than
- * `maxBytes`, is not UTF-8, or is not JSON. Bounded, so that no request makes
- * a process hold more than its route expects; the reading stops at the bound.
+ * The bytes of a request's body, or null where it is longer than `maxBytes`.
+ * Bounded, so that no request makes a process hold more than its route
+ * expects; the reading stops at the bound.
  */
-export async function readJson(request: Request, maxBytes: number): Promise<unknown> {
+export async function readBytes(request: Request, maxBytes: number): Promise<Buffer | null> {
   const chunks: Uint8Array[] = [];
   let length = 0;
   if (request.body) {
@@ -45,8 +54,18 @@ export async function readJson(request: Request, maxBytes: number): Promise<unkn
       chunks.push(value);
     }
   }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * The JSON of a request's body, or null where the body is longer than
+ * `maxBytes`, is not UTF-8, or is not JSON.
+ */
+export async function readJson(request: Request, maxBytes: number): Promise<unknown> {
+  const bytes = await readBytes(request, maxBytes);
+  if (!bytes) return null;
   try {
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   } catch {
     return null;
   }

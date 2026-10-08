@@ -14,15 +14,22 @@ export interface EmailMessage {
   text: string;
 }
 
+/** A fault of the message itself: it will be refused however often it is sent, so it is not tried again. */
+export class MessageRefused extends Error {
+  name = 'MessageRefused';
+}
+
 /** Sends one message. Rejects if it could not be handed over. */
 export async function sendEmail(message: EmailMessage): Promise<void> {
   // A carriage return or a line feed in a header value would add a header.
   // The error does not repeat the value (NFR-SE-19).
-  if (/[\r\n]/.test(message.to)) throw new Error('The recipient address must not contain a line break.');
-  if (/[\r\n]/.test(message.subject)) throw new Error('The subject must not contain a line break.');
+  if (/[\r\n]/.test(message.to)) {
+    throw new MessageRefused('The recipient address must not contain a line break.');
+  }
+  if (/[\r\n]/.test(message.subject)) throw new MessageRefused('The subject must not contain a line break.');
 
-  // The Scaleway sender (A52, A72) is selected here, once the owner has confirmed
-  // the three checks of A52: the agreement, the retention, and the standing of its API.
+  // The Scaleway sender (register D70, D92) is selected here, once the owner has confirmed
+  // the three checks that stand with D70: the agreement, the retention, and the standing of its API.
   const { emailSinkDirectory, emailFrom } = settings();
   const now = new Date();
   // The name holds neither the address nor the subject. The time sorts the files;

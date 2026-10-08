@@ -21,7 +21,7 @@
 // - Deletion (slices 12 and 15). The deletion of a document must close its
 //   connections here. Today they stay open, and what they change is received
 //   and never stored (FR-ED-36, in src/lib/collab/state.ts).
-import { createHmac, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { STATUS_CODES, type IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -36,10 +36,9 @@ import { db } from '../lib/db.ts';
 import { authorise } from '../lib/documents/access.ts';
 import { assertContractVersion } from '../lib/istorico/index.ts';
 import { isOwnOrigin } from '../lib/origin.ts';
-import { logLimitReached, takeLimit } from '../lib/rate-limit.ts';
+import { logLimitReached, markKey, oncePer, takeLimit } from '../lib/rate-limit.ts';
 import { securityLog } from '../lib/security-log.ts';
 import { settings, type Settings } from '../lib/settings.ts';
-import { valkey } from '../lib/valkey.ts';
 
 export const HEALTH_PATH = '/collab/health';
 
@@ -53,13 +52,15 @@ const STORE_WRITE_MARGIN_MS = 500;
 const STORE_RETRY_MS = 1000;
 const STORE_RETRY_MAX_MS = 60_000;
 const STORE_ATTEMPTS_WHEN_STOPPING = 3;
-// What the orderly stop may take. A write that hangs has no deadline of its
-// own on this branch (the database client gains its timeouts on a lower one),
+// What the orderly stop may take. The database client bounds each write
+// (src/lib/db.ts), but every open document is stored, each up to three times,
 // and a platform kills a process that does not stop: better to say so first.
 const STOP_DEADLINE_MS = 30_000;
 // One entry, and one line, for each of these periods and not for each request
 // (see `logRefusedOrigin`).
 const LOG_PERIOD_SECONDS = 60;
+// The mark of that period for a refused origin, kept as every such mark is (src/lib/rate-limit.ts).
+const ORIGIN_REFUSED = 'collab:origin-refused';
 
 /** How long after the `failures`-th failure in a row a store is tried again: 1 s, 2 s, 4 s … 60 s. */
 export function storeRetryDelay(failures: number): number {
@@ -68,14 +69,11 @@ export function storeRetryDelay(failures: number): number {
 
 /** The Valkey key that marks the period in which a refused origin was logged (see `logRefusedOrigin`). */
 export function originRefusalMark(): string {
-  // Keyed as the marks of the limits are (src/lib/rate-limit.ts), so that two
-  // environments on one Valkey do not share it.
-  const digest = createHmac('sha256', settings().authSecret).update('collab:origin-refused').digest('hex');
-  return `limit-logged:${digest}`;
+  return markKey(ORIGIN_REFUSED);
 }
 
 /** True once for each period, by this process's own clock. */
-function oncePer(seconds: number): () => boolean {
+function oncePerHere(seconds: number): () => boolean {
   let last = -Infinity;
   return () => {
     const now = Date.now();
@@ -136,8 +134,8 @@ export function createCollabServer(store: StoreSettings) {
   const retrying = new Map<string, { skipped: boolean }>();
   // Aborted when the stop begins: it wakes every retry that is waiting.
   const halt = new AbortController();
-  const socketFaultDue = oncePer(LOG_PERIOD_SECONDS);
-  const originLogDueHere = oncePer(LOG_PERIOD_SECONDS);
+  const socketFaultDue = oncePerHere(LOG_PERIOD_SECONDS);
+  const originLogDueHere = oncePerHere(LOG_PERIOD_SECONDS);
   let stopping = false;
   let unstored = false;
   let stopped: Promise<boolean> | undefined;
@@ -159,7 +157,7 @@ export function createCollabServer(store: StoreSettings) {
   async function logRefusedOrigin(): Promise<void> {
     let first: boolean;
     try {
-      first = (await valkey().set(originRefusalMark(), '1', 'EX', LOG_PERIOD_SECONDS, 'NX')) === 'OK';
+      first = await oncePer(ORIGIN_REFUSED, LOG_PERIOD_SECONDS);
     } catch {
       first = originLogDueHere();
     }
