@@ -136,6 +136,18 @@ async function countKeys(email: string, headers: Headers | undefined) {
 }
 
 /**
+ * Whether the 20 failed sign-ins in an hour are reached for the address, from
+ * everywhere, under the key a sign-in counts them by. The second step asks
+ * before it looks at a code: NFR-SE-07, "no more than 100 codes can be tried
+ * for one account in any hour", and a step that was opened before the limit
+ * was reached would otherwise still take its five.
+ */
+export async function failedSignInsReached(enteredEmail: string): Promise<boolean> {
+  const { everywhere } = await countKeys(normalised(enteredEmail), undefined);
+  return !(await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere)).ok;
+}
+
+/**
  * NFR-SE-07: "An abandoned second step counts as a failed sign-in for that
  * email address under the row above". One failure, under the two counts of a
  * wrong password and from the network address of the request that abandoned
@@ -146,6 +158,39 @@ export async function countFailedSignIn(headers: Headers | undefined, enteredEma
   const { pair, everywhere } = await countKeys(normalised(enteredEmail), headers);
   await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
   await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+}
+
+/**
+ * One check of a code at a prompt under a session, counted as `checkCredentials`
+ * counts a password there (the owner's answer G2 of the pull request: "a wrong
+ * code at any prompt counts as a failed sign-in, as Q10 does for passwords").
+ * The two limits are checked, `check` looks at the code, and a wrong one is
+ * counted, as one step for the address, so codes sent together cannot each be
+ * the fifth. Where a limit is reached the code is not looked at and nothing is
+ * counted. False whatever the cause: the caller answers as to a wrong code.
+ * The one place for it: the prompts of later slices call here.
+ */
+export async function checkCodeAtPrompt(
+  headers: Headers | undefined,
+  enteredEmail: string,
+  check: () => Promise<boolean>,
+): Promise<boolean> {
+  const email = normalised(enteredEmail);
+  return inTurn(email, async () => {
+    const { pair, everywhere } = await countKeys(email, headers);
+    const [byPair, byEmail] = await Promise.all([
+      checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair),
+      checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere),
+    ]);
+    if (!byPair.ok || !byEmail.ok) return false;
+    if (await check()) return true;
+    await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
+    await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+    return false;
+  }).catch((error: unknown) => {
+    if (error instanceof NoTurn) return false;
+    throw error;
+  });
 }
 
 /**
@@ -313,12 +358,17 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   // A session the browser already holds is ended, whoever it belongs to: its
   // cookie is replaced below, and no browser could sign out of it afterwards.
   // No requirement asks this of a sign-in (FR-AU-81 asks it of the link of a
-  // lock email alone): it is the application's choice, raised with the owner
-  // in the register questions of the pull request. The row is deleted by the
+  // lock email alone): the owner's decision S5 of the pull request, "a
+  // sign-in ends the session the browser held". The row is deleted by the
   // application's own client, which rejects on a fault and is quiet where the
   // row is absent; the library's deletion can skip the row without a word.
   const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
   if (held) await db().session.deleteMany({ where: { token: held } });
+  // The cookie of a second step that this browser left open, for this account
+  // before its second factor was turned off or for another, opens nothing
+  // under the session that begins here.
+  const step = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
+  if (ctx.getCookie(step.name)) expireCookie(ctx, step);
 
   // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
   await setSessionCookie(ctx, { session, user }, false);

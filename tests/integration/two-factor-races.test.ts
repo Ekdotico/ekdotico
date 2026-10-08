@@ -361,6 +361,32 @@ describe('a sign-in with the old password on its way (FR-AU-81, FR-AU-83, FR-AU-
     expect(answers.map((answer) => answer.status).sort()).toEqual([200, 401]);
     expect(await db().session.count({ where: { userId: id } })).toBe(1);
   });
+
+  // The time of a step is asked twice: where the step is read
+  // (two-factor.test.ts), and here, where it is claimed.
+  it('signs no one in where the step reached its 10 minutes while the code was being accepted', async () => {
+    const { email, id, recoveryCodes } = await enrolled();
+    await db().session.deleteMany({ where: { userId: id } });
+    const step = await passwordStep(auth, email, fresh());
+    const stored = (await rowOf(id))!.backupCodes;
+    const held = await holdSession();
+
+    const late = secondStep(auth, step, recoveryCodes[0], 'backup-code', fresh());
+    await held.reached;
+    await db().verification.updateMany({
+      where: { value: id },
+      data: { expiresAt: new Date(Date.now() - 1) },
+    });
+    held.open();
+    const signed = await late;
+
+    expect(signed.status).toBe(401);
+    expect(((await signed.json()) as { error: { code: string } }).error.code).toBe('sign_in_again');
+    expect(signed.headers.getSetCookie().filter((cookie) => /session_token=[^;]/.test(cookie))).toEqual([]);
+    expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    // The recovery code is not spent by a sign-in that did not complete.
+    expect((await rowOf(id))!.backupCodes).toBe(stored);
+  });
 });
 
 describe('an endpoint that leaves a notice for after its answer, called where none can be left (FR-AU-87)', () => {

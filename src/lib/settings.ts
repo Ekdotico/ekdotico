@@ -68,12 +68,14 @@ export interface Settings {
   passwordListFile: string;
   /**
    * FR-AU-83: "The second step is completed within 10 minutes of the password
-   * (an initial value), or the sign-in begins again."
+   * (an initial value), or the sign-in begins again." The secret of an
+   * enrolment waits as long for its first code (two-factor.ts).
    */
   secondStepSeconds: number;
   /**
    * NFR-SE-07, "Wrong second-factor codes, for each sign-in": 5, an initial
-   * value. The wrong code that reaches the number abandons the sign-in.
+   * value. The wrong code that reaches the number abandons the sign-in, and
+   * at the first code of an enrolment, the enrolment.
    */
   secondStepWrongCodes: number;
   /**

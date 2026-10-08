@@ -398,6 +398,19 @@ describe('the gate at the pages, with the proxy skipped (FR-AU-83, FR-AU-90)', (
     }
   });
 
+  it('writes nothing for an account that it stops: the workspace is made once the gate has opened', async () => {
+    const { id, cookie } = await founder();
+    await db().workspace.deleteMany({ where: { ownerId: id } });
+    browser.headers = new Headers({ cookie });
+    expect(await currentAccount()).toMatchObject({ enrolmentDue: true });
+    await AppLayout({ children: null });
+    expect(await db().workspace.count({ where: { ownerId: id } })).toBe(0);
+    // FR-AU-09: the backstop, at the first request of the account that is let through.
+    browser.headers = new Headers({ cookie: (await enrol(auth, cookie, fresh())).cookie });
+    expect(await currentAccount()).toMatchObject({ enrolmentDue: false });
+    expect(await db().workspace.count({ where: { ownerId: id } })).toBe(1);
+  });
+
   it('shows the notice once it is on, and the page once the notice is acknowledged', async () => {
     const { id, cookie } = await founder();
     const enrolled = await enrol(auth, cookie, fresh());

@@ -155,12 +155,17 @@ describe('a change of password on its way (FR-AU-84, FR-AU-85, FR-AU-86)', () =>
     await held.reached;
     // The same browser, sent twice: the second request completes first.
     expect((await change(cookie, PASSWORD, OWNERS)).response.status).toBe(200);
+    // A reset link asked for after the change that completed.
+    const token = await linkFor(email);
     held.open();
     const outrun = await first;
 
     expect(outrun.response.status).toBe(403);
     expect(await outrun.response.text()).toBe(PASSWORD_REFUSED);
     expect(outrun.left).toBe(0);
+    // A change that changes nothing makes no reset link void (FR-AU-86: a
+    // link "stays valid until it is used or its hour has passed").
+    expect(await findOpenReset(token)).not.toBeNull();
     // The session stays, and the 403 has its entry (NFR-SE-19).
     expect(await stands(cookie)).toBe(true);
     expect(await entries()).toEqual([['forbidden', id]]);

@@ -243,6 +243,37 @@ test('a sign-in whose second step is abandoned begins again with the password', 
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
 });
 
+test('an enrolment whose first code is wrong five times begins again with the password', async ({ page }) => {
+  test.setTimeout(120_000);
+  const person = newPerson();
+  await signUp(page, person);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', firstScreen)).toBeVisible();
+  await page.goto('/settings');
+  const within = part(page);
+  await within.getByLabel('Current password', { exact: true }).fill(person.password);
+  await within.getByRole('button', { name: 'Continue' }).click();
+  const secret = await within.getByLabel('Secret').inputValue();
+  // NFR-SE-07, as at a sign-in: five wrong codes, and the secret is gone.
+  for (let n = 0; n < 5; n++) {
+    await within.getByLabel('Six-digit code').fill(wrongCode(secret));
+    await within.getByRole('button', { name: ENROLMENT_TITLE }).click();
+    await expect(alertOn(page)).toBeFocused();
+    if (n < 4) await expect(alertOn(page)).toContainText(CODE_REFUSED);
+  }
+  // The statement, announced, with the field it asks for and no field for a code.
+  await expect(alertOn(page)).toContainText(
+    'No secret is waiting for its first code. Enter the password to begin again.',
+  );
+  await expect(alertOn(page)).toBeFocused();
+  await expect(within.getByLabel('Six-digit code')).toHaveCount(0);
+  await expect(within.getByLabel('Current password', { exact: true })).toBeVisible();
+  await expectNoSidewaysScroll(page);
+  // With the password it begins again, with another secret.
+  const again = await enrol(page, person, within);
+  expect(again.secret).not.toBe(secret);
+});
+
 test('an account of the founding team meets the enrolment first, then the notice, and cannot turn it off', async ({
   page,
 }) => {

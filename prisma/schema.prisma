@@ -103,6 +103,8 @@ model Verification {
 // lock of the library's own, which nothing here reaches: the codes are checked
 // by the application's endpoints (src/lib/auth/two-factor.ts), and the only
 // count is that of NFR-SE-07. They stay 0 and null, and a test asserts it.
+// `verified` is false unless a writer says otherwise (the library's default is
+// true): a row written without it is no second factor.
 model TwoFactor {
   id                      String    @id
   // One row for an account (Data models): an enrolment begun again replaces it.
@@ -110,9 +112,13 @@ model TwoFactor {
   user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   secret                  String
   backupCodes             String
-  verified                Boolean   @default(true)
+  verified                Boolean   @default(false)
   failedVerificationCount Int       @default(0)
   lockedUntil             DateTime?
+  // When the password began the enrolment, and again each time it is begun
+  // again: a secret waits for its first code no longer than a second step
+  // waits for its code (two-factor.ts). Not on the Data models page.
+  createdAt               DateTime  @default(now())
 
   @@index([secret])
 }

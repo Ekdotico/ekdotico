@@ -87,6 +87,52 @@ describe('a validated session', () => {
     }
     expect(await db().session.count()).toBe(before);
   });
+
+  // FR-AU-83, NFR-SE-06 A10: the founding-team gate reads three fields of the
+  // account. An answer of the library in which one is absent, or is not of
+  // its type, is stopped as an account of the team is, and never let through.
+  it('is stopped where the answer lacks a field the founding-team gate reads, or holds one of another type', async () => {
+    const { headers, sessionId } = await begin();
+    const session = { id: sessionId, userId, createdAt: new Date() };
+    const whole = { email: 'person@example.com', emailVerified: true, twoFactorEnabled: false };
+    const answer = vi.spyOn(auth().api, 'getSession');
+    const validated = async (user: Record<string, unknown>) => {
+      answer.mockResolvedValueOnce({ response: { session, user }, headers: new Headers() } as never);
+      return validateSessionRow(headers);
+    };
+    try {
+      // The three fields as they are, of an account that is not on the list: a session.
+      expect(await validated(whole)).toEqual({
+        session: { userId, sessionId },
+        stopped: null,
+        setCookie: [],
+      });
+      expect(await validated({ ...whole, twoFactorEnabled: true })).toMatchObject({ stopped: null });
+      for (const [name, value] of [
+        ['email', undefined],
+        ['email', null],
+        ['email', 7],
+        ['emailVerified', undefined],
+        ['emailVerified', null],
+        ['emailVerified', 'true'],
+        ['emailVerified', 1],
+        ['twoFactorEnabled', undefined],
+        ['twoFactorEnabled', null],
+        ['twoFactorEnabled', 'true'],
+        ['twoFactorEnabled', 1],
+      ] as const) {
+        const user: Record<string, unknown> = { ...whole, [name]: value };
+        if (value === undefined) delete user[name];
+        expect(await validated(user), `${name}: ${String(value)}`).toEqual({
+          session: null,
+          stopped: { userId, sessionId },
+          setCookie: [],
+        });
+      }
+    } finally {
+      answer.mockRestore();
+    }
+  });
 });
 
 describe('which requests read the row (NFR-SE-02, NFR-SE-17 (c))', () => {

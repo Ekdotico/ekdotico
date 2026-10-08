@@ -124,6 +124,10 @@ export function TwoFactorEnrolment({
     if ('fault' in sent) {
       setFault(sent.fault);
       setAttempt((count) => count + 1);
+      // The secret no longer waits for its first code: too many codes were not
+      // correct, or its time has passed. The statement says to enter the
+      // password, so the password is what is shown with it.
+      if (sent.fault.code === 'two_factor_not_begun') setStage({ name: 'password' });
       return null;
     }
     setFault(null);

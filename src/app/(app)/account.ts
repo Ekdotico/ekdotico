@@ -50,13 +50,14 @@ export const currentAccount = cache(async (): Promise<CurrentAccount> => {
   // cannot, since a layout is not told the address it is rendered for.
   if (!session) redirect(SIGN_IN_PATH);
 
-  // FR-AU-09: the backstop, at the account's first authenticated request.
-  await reading(() => ensurePersonalWorkspace(session.userId));
-
   // FR-AU-83: the founding-team gate, decided on the server and before the
   // notice (FR-AU-90: "the screen that turns two-factor authentication on,
-  // with the notice after it"). Whether the notice is due is not read.
+  // with the notice after it"). Whether the notice is due is not read, and
+  // nothing is written for the account: it "cannot use the application".
   if (stopped) return { ...session, enrolmentDue: true, noticeDue: true };
+
+  // FR-AU-09: the backstop, at the account's first authenticated request.
+  await reading(() => ensurePersonalWorkspace(session.userId));
 
   // FR-AU-55, FR-AU-56: decided on the server, from the recorded acknowledgement.
   return {

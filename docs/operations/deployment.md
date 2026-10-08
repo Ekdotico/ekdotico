@@ -20,6 +20,8 @@ A process refuses to start without `FOUNDING_TEAM_EMAILS`, `APP_ORIGIN`, `DATABA
 
 `EMAIL_SINK_DIRECTORY` names the directory the email sink writes to. Each file in it holds an address and may hold a single-use link, so a deployment says where they go: only on a development machine is a directory under the working directory used where the setting is absent.
 
+`TWO_FACTOR_STEP_SECONDS` is how long the second step of a sign-in stays open after the password, and how long the secret of an enrolment waits for its first code: 600, the 10 minutes of FR-AU-83, where the setting is absent. `TWO_FACTOR_WRONG_CODES` is the number of wrong codes at which either is over and begins again with the password: 5 where the setting is absent (NFR-SE-07). Each is a whole number, 1 or more, and anything else stops a process.
+
 The database client gives up on a connection after 5 seconds, the server ends a statement after 5 seconds, and the client stops waiting for an answer after 5 seconds (`src/lib/db.ts`; NFR-SE-06). A connection to Valkey and a command sent to it are given 5 seconds each (`src/lib/valkey.ts`). A request that meets either fault is refused and never passed on.
 
 Changing `AUTH_SECRET` ends every session and forgets every count of NFR-SE-07, since the counters are stored under digests keyed by it. The procedure for rotating each secret is recorded before the first test user is admitted (NFR-SE-17 (e)); it is not yet written.

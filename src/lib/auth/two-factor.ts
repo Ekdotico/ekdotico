@@ -36,6 +36,7 @@ import { afterResponse, assertCollecting } from '../after-response.ts';
 import { db } from '../db.ts';
 import { handOver } from '../email/hand-over.ts';
 import type { EmailMessage } from '../email/index.ts';
+import { faultOf } from '../fault.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { oncePer } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
@@ -46,7 +47,14 @@ import { stoppedByFoundingGate, type GatedAccount } from './founding-gate.ts';
 import { notAdmitted, unauthenticated } from './route-answers.ts';
 import { SECOND_STEP, SECOND_STEP_COOKIE } from './second-step.ts';
 import { holdSession, validateSessionRow, type ValidSession } from './session.ts';
-import { checkCredentials, countFailedSignIn, SIGN_IN_REFUSED, stillVerified } from './sign-in.ts';
+import {
+  checkCodeAtPrompt,
+  checkCredentials,
+  countFailedSignIn,
+  failedSignInsReached,
+  SIGN_IN_REFUSED,
+  stillVerified,
+} from './sign-in.ts';
 
 /**
  * The name an authenticator application shows beside the account. No
@@ -168,24 +176,6 @@ function without(codes: string[], entered: string): string[] | null {
   return left.length === codes.length ? null : left;
 }
 
-type Factor = { id: string; secret: string; backupCodes: string; verified: boolean };
-
-/**
- * FR-AU-83: "a recovery code is accepted in its place and is then spent". The
- * row is written only over the codes that were read, so of two requests with
- * one code the second finds it gone, and codes replaced meanwhile stay as
- * they were set.
- */
-async function spendRecoveryCode(ctx: GenericEndpointContext, factor: Factor, entered: string) {
-  const left = without(await recoveryCodes(ctx, factor.backupCodes), entered);
-  if (!left) return false;
-  const { count } = await db().twoFactor.updateMany({
-    where: { id: factor.id, backupCodes: factor.backupCodes },
-    data: { backupCodes: await seal(ctx, JSON.stringify(left)) },
-  });
-  return count === 1;
-}
-
 // ── The email of the account (FR-AU-87) ─────────────────────────────────────
 
 // FR-AU-87 (f), verbatim: the subject, and "the subject as a sentence,
@@ -262,9 +252,29 @@ async function standing(
  */
 async function freshCopy(ctx: GenericEndpointContext): Promise<void> {
   const { authCookies, secret, internalAdapter } = ctx.context;
-  const token = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
-  const held = token ? await internalAdapter.findSession(token) : null;
-  if (held) await setCookieCache(ctx, held, false);
+  try {
+    const token = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
+    const held = token ? await internalAdapter.findSession(token) : null;
+    if (held) await setCookieCache(ctx, held, false);
+  } catch (error) {
+    // The change has committed, so a fault here is no reason to answer that
+    // nothing was changed, and at an enrolment that answer would lose the
+    // recovery codes. The browser's copy is then at most a minute behind.
+    // NFR-SE-19: the class of the fault, and nothing of its message.
+    console.error(`two-factor: changed, signed copy not written again (${faultOf(error)})`);
+  }
+}
+
+/**
+ * NFR-SE-07: one more request with a code under this key, and its number. The
+ * count is made before the code is looked at, so requests that arrive together
+ * cannot each be the fifth. The expiry is set before anything is counted, so
+ * no count outlives what it counts for. A fault of Valkey rejects, and the
+ * request is refused (NFR-SE-06 A10).
+ */
+async function countCode(key: string): Promise<number> {
+  await valkey().set(key, 0, 'EX', settings().secondStepSeconds, 'NX');
+  return valkey().incr(key);
 }
 
 // ── Turning it on ───────────────────────────────────────────────────────────
@@ -297,7 +307,13 @@ export const enableTwoFactor = createAuthEndpoint(
 
     // 32 characters of the library's alphabet: more than the 160 bits RFC 4226 asks for.
     const secret = generateRandomString(32);
-    const data = { secret: await seal(ctx, secret), backupCodes: await seal(ctx, '[]'), verified: false };
+    const data = {
+      secret: await seal(ctx, secret),
+      backupCodes: await seal(ctx, '[]'),
+      verified: false,
+      // The time the first code is waited for runs from this password.
+      createdAt: new Date(),
+    };
     const outcome = await db().$transaction(async (tx) => {
       const stands = await standing(tx, verified, own);
       if (stands !== 'held') return stands;
@@ -333,6 +349,15 @@ export const enableTwoFactor = createAuthEndpoint(
  * is it on. When it is turned on the application shows the user ten single-use
  * recovery codes, once" (FR-AU-83). The answer holds the codes, which are
  * made here and held nowhere else in clear. The notice of FR-AU-87 (f) follows.
+ *
+ * The request holds a session and no password, so a session in another's
+ * hands could guess at the code until one was right, and be shown the recovery
+ * codes of a second factor that is then its own. So the first code is asked
+ * for under the two bounds of the second step of a sign-in, with its two
+ * settings (NFR-SE-07, the row of wrong codes; FR-AU-83, the 10 minutes): the
+ * wrong code that reaches the number, and a secret that has waited longer than
+ * a second step may, end the enrolment. The row is deleted, and the password
+ * is asked for again. It is no sign-in, so no failed sign-in is counted.
  */
 async function confirmEnrolment(ctx: GenericEndpointContext, own: ValidSession): Promise<unknown> {
   assertCollecting();
@@ -341,9 +366,28 @@ async function confirmEnrolment(ctx: GenericEndpointContext, own: ValidSession):
   const account = await accountOf(own.userId);
   const factor = await db().twoFactor.findUnique({ where: { userId: own.userId } });
   if (!account?.email) return unauthenticated();
-  if (!factor || factor.verified) return errorResponse(409, 'two_factor_not_begun', MESSAGES.notBegun);
+  const notBegun = () => errorResponse(409, 'two_factor_not_begun', MESSAGES.notBegun);
+  if (!factor || factor.verified) return notBegun();
+  // Only a row that is not verified, whatever happened meanwhile: a second
+  // factor that is on is never deleted here.
+  const end = () => db().twoFactor.deleteMany({ where: { id: factor.id, verified: false } });
+  if (!(Date.now() < factor.createdAt.getTime() + settings().secondStepSeconds * 1000)) {
+    await end();
+    return notBegun();
+  }
+  // The identifier of the row is random and names no one, so it is the key as it is.
+  const most = settings().secondStepWrongCodes;
+  const attempt = await countCode(`enrolment-codes:${factor.id}`);
+  if (attempt > most) {
+    await end();
+    return notBegun();
+  }
 
   if (!(await acceptCode(await unseal(ctx, factor.secret), entered.code))) {
+    if (attempt >= most) {
+      await end();
+      return notBegun();
+    }
     return Response.json(
       { error: { code: 'invalid', message: MESSAGES.code, fields: { code: MESSAGES.code } } },
       { status: 422, headers: { 'Cache-Control': 'no-store' } },
@@ -363,7 +407,7 @@ async function confirmEnrolment(ctx: GenericEndpointContext, own: ValidSession):
     return 'on';
   });
   if (outcome === 'ended') return unauthenticated();
-  if (outcome === 'replaced') return errorResponse(409, 'two_factor_not_begun', MESSAGES.notBegun);
+  if (outcome === 'replaced') return notBegun();
 
   const { email } = account;
   afterResponse('two-factor notice', () => handOver(turnedEmail(email, 'on')));
@@ -377,6 +421,9 @@ async function confirmEnrolment(ctx: GenericEndpointContext, own: ValidSession):
 class NoSession extends Error {
   name = 'SecondStepNoSession';
 }
+// Thrown inside the transaction that completes a second step, to undo it.
+const STEP_GONE = new Error('second step: the step is over');
+const CODE_GONE = new Error('second step: the recovery code is spent');
 
 /**
  * FR-AU-81, FR-AU-83: the code after the password, by which the session
@@ -399,7 +446,9 @@ class NoSession extends Error {
 async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'): Promise<unknown> {
   const { internalAdapter, secret } = ctx.context;
   const cookie = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
-  // Authorisation before validation (the owner's answer to Q8).
+  // Authorisation before validation (the owner's answer to Q8). The time of
+  // the step is asked here, so that no code is looked at, and none counted,
+  // for a step that is over; and again where the step is claimed, below.
   const token = await ctx.getSignedCookie(cookie.name, secret);
   const step =
     typeof token === 'string' && TOKEN.test(token)
@@ -432,31 +481,55 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
     return refused('sign_in_again', MESSAGES.again);
   }
 
+  // NFR-SE-07: "no more than 100 codes can be tried for one account in any
+  // hour". Where the failed sign-ins of the address have reached their number,
+  // a step that was opened before then is over too, before a code is looked
+  // at. As a refused attempt, it is counted toward nothing (Q10).
+  if (await failedSignInsReached(user.email)) {
+    await end();
+    return refused('sign_in_again', MESSAGES.again);
+  }
+
   // The identifier of the row is random and names no one, so it is the key as it is.
-  const counted = `second-step-codes:${step.id}`;
   const most = settings().secondStepWrongCodes;
-  // The expiry is set before anything is counted, so no count outlives its step.
-  await valkey().set(counted, 0, 'EX', settings().secondStepSeconds, 'NX');
-  const attempt = await valkey().incr(counted);
+  const attempt = await countCode(`second-step-codes:${step.id}`);
   if (attempt > most) {
     await end();
     return refused('sign_in_again', MESSAGES.again);
   }
 
-  const right =
-    kind === 'totp'
-      ? await acceptCode(await unseal(ctx, factor.secret), entered.code)
-      : await spendRecoveryCode(ctx, factor, entered.code);
-  if (!right) {
+  const wrong = async () => {
+    // The owner's answer G1 of the pull request: "a second step that had at
+    // least one wrong code and did not complete counts as one failed sign-in,
+    // counted at its first wrong code." Once for the step, whichever of its
+    // requests is first to be wrong; the fifth counts no second one. A step
+    // that completes after it keeps the count: a sign-in clears none
+    // (sign-in.ts). The slice that builds the lock (FR-AU-81) counts nothing
+    // here where the step began from the link of a lock email.
+    if (await oncePer(`second-step-failed:${step.id}`, settings().secondStepSeconds)) {
+      await countFailedSignIn(ctx.headers, user.email);
+    }
     if (attempt < most) {
       return refused('code_refused', kind === 'totp' ? MESSAGES.code : MESSAGES.recoveryCode);
     }
-    // Abandoned. The slice that builds the lock (FR-AU-81) spends the sign-in
-    // link here where the step began from one, and then counts nothing.
+    // Abandoned. The slice that builds the lock spends the sign-in link here
+    // where the step began from one.
     await end();
-    await countFailedSignIn(ctx.headers, user.email);
+    // NFR-SE-19, "a rate limit reached": the number of wrong codes for one
+    // sign-in (the owner's answer of the pull request), with the user and
+    // nothing of a code, beside the sign-in refused.
+    await securityLog({ kind: 'rate_limit_reached', userId: user.id });
     return refused('sign_in_again', MESSAGES.again);
-  }
+  };
+  // FR-AU-83: "a recovery code is accepted in its place and is then spent".
+  // Here it is only looked for among the codes as they were read; it is spent
+  // below, with the claim of the step, so that a request which fails between
+  // the two has not cost the person a code.
+  const left =
+    kind === 'recovery' ? without(await recoveryCodes(ctx, factor.backupCodes), entered.code) : null;
+  const right =
+    kind === 'totp' ? await acceptCode(await unseal(ctx, factor.secret), entered.code) : left !== null;
+  if (!right) return wrong();
 
   // The session is made first and the step claimed after, as a sign-in makes
   // its session before it asks the password again (sign-in.ts): a reset or a
@@ -465,18 +538,49 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   // step gone or the session made here is among those ended.
   const session = await internalAdapter.createSession(user.id);
   if (!session) throw new NoSession('second step: no session');
-  const claimed = await db().verification.deleteMany({
-    where: { id: step.id, expiresAt: { gt: new Date() } },
-  });
-  if (claimed.count !== 1) {
+  // The owner's decision S5: "a sign-in ends the session the browser held".
+  // The password step ended the one it held then (sign-in.ts), but the browser
+  // may have been given another since, and a recovery code is taken here under
+  // a session too (`verifyBackupCode`).
+  const held = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, secret);
+  const fewer = left ? await seal(ctx, JSON.stringify(left)) : null;
+  // One transaction, so that none of the three happens without the others; a
+  // fault of any is a fault of the request, and nothing is swallowed. The
+  // session the browser held first, as a change of the password holds its own
+  // before it deletes the steps: the two then never wait for each other in a
+  // circle.
+  const outcome = await db()
+    .$transaction(async (tx) => {
+      if (held) await tx.session.deleteMany({ where: { token: held } });
+      // The step is claimed once, and only while it is open: it may have
+      // reached its 10 minutes since it was read above.
+      const claimed = await tx.verification.deleteMany({
+        where: { id: step.id, expiresAt: { gt: new Date() } },
+      });
+      if (claimed.count !== 1) throw STEP_GONE;
+      if (fewer !== null) {
+        // Written only over the codes that were read, so of two requests with
+        // one code the second finds it gone, and codes replaced meanwhile stay
+        // as they were set.
+        const spent = await tx.twoFactor.updateMany({
+          where: { id: factor.id, backupCodes: factor.backupCodes },
+          data: { backupCodes: fewer },
+        });
+        if (spent.count !== 1) throw CODE_GONE;
+      }
+      return 'claimed' as const;
+    })
+    .catch((error: unknown) => {
+      if (error === STEP_GONE || error === CODE_GONE) return error;
+      throw error;
+    });
+  if (outcome !== 'claimed') {
     await db().session.deleteMany({ where: { token: session.token } });
-    return refused('sign_in_again', MESSAGES.again);
+    return outcome === CODE_GONE ? wrong() : refused('sign_in_again', MESSAGES.again);
   }
   // The slice that builds the lock lifts it here, and clears the counts of
   // failed sign-ins, where the step began from the link of a lock email.
 
-  // The browser holds no session to end: the password step ended the one it
-  // held (sign-in.ts), and a request under a session does not come here.
   // `false`: the cookie lasts as long as the session.
   await setSessionCookie(ctx, { session, user }, false);
   expireCookie(ctx, cookie);
@@ -544,10 +648,15 @@ export const disableTwoFactor = createAuthEndpoint(
       return errorResponse(409, 'two_factor_not_on', MESSAGES.notOn);
     }
     // Six digits are a code of the authenticator application, and anything
-    // else is looked for among the recovery codes. NFR-SE-19: a 403.
-    const right = isCode(entered.code)
-      ? await acceptCode(await unseal(ctx, factor.secret), entered.code)
-      : without(await recoveryCodes(ctx, factor.backupCodes), entered.code) !== null;
+    // else is looked for among the recovery codes. A wrong one counts as a
+    // failed sign-in, as a wrong password at this prompt does, and where a
+    // limit is reached the code is refused as a wrong one is (the owner's
+    // answer G2 of the pull request; Q10). NFR-SE-19: a 403.
+    const right = await checkCodeAtPrompt(ctx.headers, account.email, async () =>
+      isCode(entered.code)
+        ? acceptCode(await unseal(ctx, factor.secret), entered.code)
+        : without(await recoveryCodes(ctx, factor.backupCodes), entered.code) !== null,
+    );
     if (!right) {
       await securityLog({ kind: 'forbidden', userId: own.userId });
       return errorResponse(403, 'code_refused', MESSAGES.eitherCode);

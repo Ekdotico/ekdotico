@@ -253,6 +253,7 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
 
 // Thrown inside the transaction of a change of password, to undo it.
 const SESSION_ENDED = new Error('password change: session ended');
+const OUTRUN = new Error('password change: the password was set meanwhile');
 
 /**
  * FR-AU-85: `POST /api/auth/change-password`, with `{ "currentPassword",
@@ -300,7 +301,18 @@ export const changePassword = createAuthEndpoint(
     const own = { id: session.sessionId, userId: session.userId };
     const outcome = await db()
       .$transaction(async (tx) => {
-        // The password first, as the completion of a reset takes it, so that
+        // The owner's decision S6 of the pull request: "Void them at a change
+        // of password too." Every reset link of the account that is
+        // outstanding is made void, as the completion of a reset makes void
+        // the others (FR-AU-86). First of all, as the completion of a reset
+        // claims its link before it takes the password: taken after it, the
+        // two would wait for each other in a circle. Whatever below finds that
+        // nothing is to change throws, so that no link is void without a
+        // change.
+        await tx.verification.deleteMany({
+          where: { value: session.userId, identifier: { startsWith: RESET } },
+        });
+        // The password next, as the completion of a reset takes it, so that
         // neither waits for the other in a circle. Written only over the hash
         // that was verified: one set since then is not overwritten (FR-AU-86).
         const changed = await tx.account.updateMany({
@@ -315,7 +327,7 @@ export const changePassword = createAuthEndpoint(
         if (changed.count !== 1) {
           // Whatever set the other password ended this session too, unless it
           // was a change made under this very session.
-          return (await tx.session.count({ where: own })) === 0 ? 'ended' : 'outrun';
+          throw (await tx.session.count({ where: own })) === 0 ? SESSION_ENDED : OUTRUN;
         }
         // FR-AU-84: a session that has ended changes nothing. Prisma has no
         // read that locks a row, so the row is written with its own value:
@@ -346,6 +358,7 @@ export const changePassword = createAuthEndpoint(
       })
       .catch((error: unknown) => {
         if (error === SESSION_ENDED) return 'ended';
+        if (error === OUTRUN) return 'outrun';
         throw error;
       });
     if (outcome === 'ended') return unauthenticated();

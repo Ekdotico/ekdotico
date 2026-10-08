@@ -583,26 +583,43 @@ describe('wrong codes, for each sign-in (NFR-SE-07; FR-AU-83; the owner’s answ
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
   });
 
-  it('counts an abandoned second step as one failed sign-in for the address, and wrong codes short of five as none', async () => {
+  // The owner's answer G1 of the pull request: "a second step that had at
+  // least one wrong code and did not complete counts as one failed sign-in,
+  // counted at its first wrong code."
+  it('counts one failed sign-in for a second step at its first wrong code, and none for one that completes at once', async () => {
     const { email, secret } = await enrolled();
     const net = fresh();
-    // Four wrong codes and then the right one: a sign-in that completed.
-    const completed = await passwordStep(auth, email, net);
-    for (let n = 0; n < 4; n++) await secondStep(auth, completed, wrongCode(secret), 'totp', net);
-    expect((await secondStep(auth, completed, nextCode(secret), 'totp', net)).status).toBe(200);
-    // Five wrong codes: abandoned.
-    const abandoned = await passwordStep(auth, email, net);
-    for (let n = 0; n < 5; n++) await secondStep(auth, abandoned, wrongCode(secret), 'totp', net);
-
-    // One failure is counted under the 5 in 15 minutes of this address and
-    // this network address, and no more: three wrong passwords make four…
-    for (let n = 0; n < 3; n++) await wrongPassword(email, net);
-    expect(await passwordAccepted(email, net)).toBe(true);
-    // …and the fourth makes five, at which the right password is refused.
-    await wrongPassword(email, net);
+    // A second step that completes at once counts nothing.
+    expect(
+      (await secondStep(auth, await passwordStep(auth, email, net), nextCode(secret), 'totp', net)).status,
+    ).toBe(200);
+    // One wrong code, and the step left open: one failure already, under the
+    // 5 in 15 minutes of this address and this network address. Four wrong
+    // passwords make five, at which the right password is refused.
+    const left = await passwordStep(auth, email, net);
+    await secondStep(auth, left, wrongCode(secret), 'totp', net);
+    for (let n = 0; n < 4; n++) await wrongPassword(email, net);
     expect(await passwordAccepted(email, net)).toBe(false);
     // From another network address the password is still answered.
     expect(await passwordAccepted(email, fresh())).toBe(true);
+  });
+
+  it('counts one for a step of five wrong codes, and keeps the count of a step that then completed', async () => {
+    const { email, secret, recoveryCodes } = await enrolled();
+    const net = fresh();
+    // Five wrong codes of both kinds at one step: one failure.
+    const abandoned = await passwordStep(auth, email, net);
+    for (let n = 0; n < 3; n++) await secondStep(auth, abandoned, wrongCode(secret), 'totp', net);
+    for (let n = 0; n < 2; n++) await secondStep(auth, abandoned, 'aaaaa-bbbbb', 'backup-code', net);
+    // One wrong code and then the right one: a failure that happened, and stays.
+    const completed = await passwordStep(auth, email, net);
+    await secondStep(auth, completed, wrongCode(secret), 'totp', net);
+    expect((await secondStep(auth, completed, recoveryCodes[0], 'backup-code', net)).status).toBe(200);
+    // Two so far: two wrong passwords make four, and the third makes five.
+    for (let n = 0; n < 2; n++) await wrongPassword(email, net);
+    expect(await passwordAccepted(email, net)).toBe(true);
+    await wrongPassword(email, net);
+    expect(await passwordAccepted(email, net)).toBe(false);
   });
 
   it('counts it toward the 20 in an hour too, from whatever network address', async () => {
@@ -618,18 +635,31 @@ describe('wrong codes, for each sign-in (NFR-SE-07; FR-AU-83; the owner’s answ
     expect(await passwordAccepted(email, fresh())).toBe(false);
   });
 
-  it('sends no notice for it, and logs it as a sign-in refused (NFR-SE-19)', async () => {
+  it('sends no notice for it, and logs each refusal and, at the fifth, a rate limit reached (NFR-SE-19)', async () => {
     const { email, id, secret } = await enrolled();
     const before = (await sunk(sink)).filter((message) => message.to === email).length;
     const step = await passwordStep(auth, email, fresh());
     for (let n = 0; n < 6; n++) await secondStep(auth, step, wrongCode(secret));
     expect((await sunk(sink)).filter((message) => message.to === email)).toHaveLength(before);
-    const entries = await db().securityLogEntry.findMany();
-    expect(entries.map(({ kind, userId }) => [kind, userId])).toEqual([
-      ...Array(5).fill(['sign_in_refused', id]),
+    const entries = await db().securityLogEntry.findMany({ orderBy: { createdAt: 'asc' } });
+    const refusals = entries.filter(({ kind }) => kind === 'sign_in_refused');
+    expect(refusals.map(({ userId }) => userId)).toEqual([
+      ...Array(5).fill(id),
       // The sixth carries the cookie of a step that no longer exists: no user is known.
-      ['sign_in_refused', null],
+      null,
     ]);
+    // The owner's answer of the pull request: one entry of a rate limit
+    // reached where the step is abandoned, with the user, and nothing else.
+    const reached = entries.filter(({ kind }) => kind !== 'sign_in_refused');
+    expect(reached.map(({ kind, userId, documentId }) => [kind, userId, documentId])).toEqual([
+      ['rate_limit_reached', id, null],
+    ]);
+    // Four wrong codes and the right one reach no limit.
+    await db().securityLogEntry.deleteMany();
+    const next = await passwordStep(auth, email, fresh());
+    for (let n = 0; n < 4; n++) await secondStep(auth, next, wrongCode(secret));
+    expect((await secondStep(auth, next, nextCode(secret))).status).toBe(200);
+    expect(await db().securityLogEntry.count({ where: { kind: 'rate_limit_reached' } })).toBe(0);
   });
 
   it('takes the number from the settings', async () => {
@@ -692,10 +722,16 @@ describe('a second step that cannot be completed', () => {
       where: { value: id },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
+    const row = await db().verification.findFirstOrThrow({ where: { value: id } });
     const late = await secondStep(auth, step, nextCode(secret));
     expect(late.status).toBe(401);
     expect((await error(late)).code).toBe('sign_in_again');
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    // Refused where the step is read, before a code is looked at: nothing was
+    // counted for it, and the refusal knows no user (two-factor-races.test.ts
+    // has the step that reaches its time after it was read).
+    expect(await valkey().exists(`second-step-codes:${row.id}`)).toBe(0);
+    expect((await db().securityLogEntry.findMany()).map(({ userId }) => userId)).toEqual([null]);
   });
 
   it('is over once it has signed in: its cookie signs no one in a second time', async () => {
@@ -821,12 +857,18 @@ describe('a recovery code (FR-AU-83)', () => {
   it('is spent by one of two requests that arrive together', async () => {
     const { email, id, recoveryCodes } = await enrolled();
     await db().session.deleteMany({ where: { userId: id } });
-    const steps = [await passwordStep(auth, email, fresh()), await passwordStep(auth, email, fresh())];
+    // One step: an account has one open at a time.
+    const step = await passwordStep(auth, email, fresh());
     const answers = await Promise.all(
-      steps.map((step) => secondStep(auth, step, recoveryCodes[0], 'backup-code')),
+      [0, 1].map(() => secondStep(auth, step, recoveryCodes[0], 'backup-code')),
     );
     expect(answers.map((answer) => answer.status).sort()).toEqual([200, 401]);
     expect(await db().session.count({ where: { userId: id } })).toBe(1);
+    const { symmetricDecrypt } = await import('better-auth/crypto');
+    const left = JSON.parse(
+      await symmetricDecrypt({ key: settings().authSecret, data: (await rowOf(id))!.backupCodes }),
+    );
+    expect(left).toEqual(recoveryCodes.slice(1));
   });
 });
 
@@ -1002,6 +1044,51 @@ describe('turning two-factor authentication off (FR-AU-83)', () => {
     expect(await passwordAccepted(email, net)).toBe(false);
   });
 
+  // The owner's answer G2 of the pull request: "a wrong code at any prompt
+  // counts as a failed sign-in, as Q10 does for passwords."
+  it('counts each wrong code as a failed sign-in, and is then refused like one, the right code included', async () => {
+    const { email, id, cookie, secret, recoveryCodes } = await enrolled();
+    const net = fresh();
+    for (const code of [wrongCode(secret), 'aaaaa-bbbbb', '', wrongCode(secret)]) {
+      const refused = await turnOff(cookie, { password: PASSWORD, code }, net);
+      expect(refused.response.status).toBe(403);
+      expect((await error(refused.response)).code).toBe('code_refused');
+    }
+    // Four are not five: a sign-in from there is still answered.
+    expect(await passwordAccepted(email, net)).toBe(true);
+    expect(
+      (await turnOff(cookie, { password: PASSWORD, code: wrongCode(secret) }, net)).response.status,
+    ).toBe(403);
+    // Five: the prompt now refuses the right password with a right code, in
+    // the words of a wrong password and with no 429, and so does a sign-in.
+    for (const code of [nextCode(secret), recoveryCodes[0]]) {
+      const held = await turnOff(cookie, { password: PASSWORD, code }, net);
+      expect(held.response.status).toBe(403);
+      expect(await held.response.text()).toBe(PASSWORD_REFUSED);
+      expect(held.response.headers.get('retry-after')).toBeNull();
+    }
+    expect(await passwordAccepted(email, net)).toBe(false);
+    expect(await isOn(id)).toBe(true);
+    // NFR-SE-19: each 403 has its entry, with the user, as a wrong password's has.
+    const entries = await db().securityLogEntry.findMany({ where: { kind: 'forbidden' } });
+    expect(entries.map((entry) => entry.userId)).toEqual(Array(7).fill(id));
+    // From another network address the prompt still answers, and a right code is not counted.
+    expect((await turnOff(cookie, { password: PASSWORD, code: recoveryCodes[1] })).response.status).toBe(200);
+  });
+
+  it('counts a wrong code toward the 20 in an hour for the address, from wherever it came', async () => {
+    const { email, id, cookie, secret } = await enrolled();
+    for (let n = 0; n < 20; n++) {
+      expect((await turnOff(cookie, { password: PASSWORD, code: wrongCode(secret) })).response.status).toBe(
+        403,
+      );
+    }
+    const held = await turnOff(cookie, { password: PASSWORD, code: nextCode(secret) });
+    expect(await held.response.text()).toBe(PASSWORD_REFUSED);
+    expect(await isOn(id)).toBe(true);
+    expect(await passwordAccepted(email, fresh())).toBe(false);
+  });
+
   it('is refused where it is not on', async () => {
     const { cookie } = await person();
     const refused = await turnOff(cookie, { password: PASSWORD, code: '123456' });
@@ -1111,5 +1198,284 @@ describe('a code by email or by telephone (FR-AU-83; NFR-SE-17 (d))', () => {
     expect((await sunk(sink)).filter((message) => /code/i.test(message.subject ?? ''))).toEqual(
       (await sunk(sink)).filter((message) => message.subject === CODES_SUBJECT),
     );
+  });
+});
+
+// The request holds a session and no password: a session in another's hands
+// must not be able to guess at the first code until one is right.
+describe('the first code of an enrolment, under its two bounds (FR-AU-83; NFR-SE-07, the row of wrong codes)', () => {
+  const NOT_BEGUN = {
+    error: {
+      code: 'two_factor_not_begun',
+      message: 'No secret is waiting for its first code. Enter the password to begin again.',
+    },
+  };
+  const begin = async (cookie: string) =>
+    unbase32(((await (await enable(cookie)).response.json()) as { secret: string }).secret);
+
+  it('ends the enrolment at the fifth wrong code: the secret is gone, and the password is asked for again', async () => {
+    const { id, email, cookie } = await person();
+    const secret = await begin(cookie);
+    for (let n = 0; n < 4; n++) expect((await confirm(cookie, wrongCode(secret))).response.status).toBe(422);
+    expect(await rowOf(id)).not.toBeNull();
+    const fifth = await confirm(cookie, wrongCode(secret));
+    expect(fifth.response.status).toBe(409);
+    expect(await fifth.response.json()).toEqual(NOT_BEGUN);
+    expect(await rowOf(id)).toBeNull();
+
+    // The right code of that secret now confirms nothing.
+    const late = await confirm(cookie, nextCode(secret));
+    expect(late.response.status).toBe(409);
+    expect(await late.response.json()).toEqual(NOT_BEGUN);
+    expect(late.left).toBe(0);
+    expect(await isOn(id)).toBe(false);
+    // It is no sign-in: nothing is logged as one refused, and none is counted as failed.
+    expect(await db().securityLogEntry.count()).toBe(0);
+    expect(await (await signIn(auth, email, PASSWORD, fresh())).text()).toBe('{}');
+
+    // With the password it begins again, and five more codes may be tried.
+    const again = await begin(cookie);
+    expect((await confirm(cookie, wrongCode(again))).response.status).toBe(422);
+    expect((await confirm(cookie, nextCode(again))).response.status).toBe(200);
+    expect(await isOn(id)).toBe(true);
+  });
+
+  it('accepts the right code as the fifth, and counts requests that arrive together one by one', async () => {
+    const one = await person();
+    const secret = await begin(one.cookie);
+    for (let n = 0; n < 4; n++) await confirm(one.cookie, wrongCode(secret));
+    expect((await confirm(one.cookie, nextCode(secret))).response.status).toBe(200);
+
+    const two = await person();
+    const other = await begin(two.cookie);
+    const answers = await Promise.all(
+      Array.from({ length: 12 }, () => confirm(two.cookie, wrongCode(other))),
+    );
+    // No more than four are answered as a wrong code: the rest met the end.
+    expect(answers.filter((answer) => answer.response.status === 422).length).toBeLessThanOrEqual(4);
+    expect(await rowOf(two.id)).toBeNull();
+    expect((await confirm(two.cookie, nextCode(other))).response.status).toBe(409);
+  });
+
+  it('holds the count where every instance reads it, under the row and for no longer than the secret waits', async () => {
+    const { id, cookie } = await person();
+    const secret = await begin(cookie);
+    await confirm(cookie, wrongCode(secret));
+    const key = `enrolment-codes:${(await rowOf(id))!.id}`;
+    expect(await valkey().get(key)).toBe('1');
+    const seconds = await valkey().ttl(key);
+    expect(seconds).toBeGreaterThan(590);
+    expect(seconds).toBeLessThanOrEqual(600);
+  });
+
+  it('refuses the right code where the count cannot be made, and turns nothing on (NFR-SE-06 A10)', async () => {
+    const { id, cookie } = await person();
+    const secret = await begin(cookie);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(valkey(), 'incr').mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
+    const refused = await confirm(cookie, nextCode(secret));
+    expect(refused.response.status).toBe(500);
+    expect(await refused.response.text()).not.toContain('recoveryCodes');
+    expect(await isOn(id)).toBe(false);
+    expect(await rowOf(id)).toMatchObject({ verified: false });
+  });
+
+  it('is asked for within 10 minutes of the password: a secret that waited longer is deleted', async () => {
+    const { id, cookie } = await person();
+    const secret = await begin(cookie);
+    const waited = (await rowOf(id))!.createdAt.getTime();
+    expect(Date.now() - waited).toBeLessThan(5_000);
+    // One second short of the time is still within it.
+    await db().twoFactor.update({
+      where: { userId: id },
+      data: { createdAt: new Date(Date.now() - (settings().secondStepSeconds - 1) * 1000) },
+    });
+    expect((await confirm(cookie, wrongCode(secret))).response.status).toBe(422);
+    await db().twoFactor.update({
+      where: { userId: id },
+      data: { createdAt: new Date(Date.now() - settings().secondStepSeconds * 1000) },
+    });
+    const late = await confirm(cookie, nextCode(secret));
+    expect(late.response.status).toBe(409);
+    expect(await late.response.json()).toEqual(NOT_BEGUN);
+    expect(await rowOf(id)).toBeNull();
+    expect(await isOn(id)).toBe(false);
+  });
+
+  it('counts the 10 minutes from the password that began it again, not from the first', async () => {
+    const { id, cookie } = await person();
+    await begin(cookie);
+    await db().twoFactor.update({
+      where: { userId: id },
+      data: { createdAt: new Date(Date.now() - settings().secondStepSeconds * 1000) },
+    });
+    // Begun again over the same row: its time is that of this password.
+    const secret = await begin(cookie);
+    expect(Date.now() - (await rowOf(id))!.createdAt.getTime()).toBeLessThan(5_000);
+    expect((await confirm(cookie, nextCode(secret))).response.status).toBe(200);
+  });
+
+  it('never deletes a second factor that is on, however long ago it was begun', async () => {
+    const { id, cookie, secret } = await enrolled();
+    await db().twoFactor.update({ where: { userId: id }, data: { createdAt: new Date(0) } });
+    for (let n = 0; n < 6; n++) expect((await confirm(cookie, wrongCode(secret))).response.status).toBe(409);
+    expect(await rowOf(id)).toMatchObject({ verified: true });
+    expect(await isOn(id)).toBe(true);
+  });
+
+  it('is false in a row that does not say: a row written without it is no second factor', async () => {
+    const { id } = await person();
+    await db().twoFactor.create({ data: { id: `row-of-${id}`, userId: id, secret: 'x', backupCodes: 'x' } });
+    expect(await rowOf(id)).toMatchObject({ verified: false });
+  });
+
+  it('still shows the recovery codes where the signed copy could not be written again after the commit', async () => {
+    const { id, cookie } = await person();
+    const secret = await begin(cookie);
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A fault of every read of a session once the change has committed.
+    const { internalAdapter } = await auth().$context;
+    let committed = false;
+    const transaction = db().$transaction.bind(db()) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(db() as unknown as { $transaction: typeof transaction }, '$transaction').mockImplementation(
+      async (...args) => {
+        const result = await transaction(...args);
+        committed = true;
+        return result;
+      },
+    );
+    const find = internalAdapter.findSession.bind(internalAdapter);
+    vi.spyOn(internalAdapter, 'findSession').mockImplementation(async (...args) => {
+      if (committed) throw new Error('quoting person@example.com and a row');
+      return find(...args);
+    });
+
+    const confirmed = await confirm(cookie, nextCode(secret));
+    expect(confirmed.response.status).toBe(200);
+    const body = (await confirmed.response.json()) as { recoveryCodes: string[] };
+    expect(body.recoveryCodes).toHaveLength(10);
+    expect(await isOn(id)).toBe(true);
+    // The notice is still left for after the answer.
+    expect(confirmed.left).toBe(1);
+    // NFR-SE-19: the class of the fault, and nothing of its message.
+    expect(printed.mock.calls).toEqual([['two-factor: changed, signed copy not written again (Error)']]);
+  });
+});
+
+describe('one step for an account, and no code past the failed sign-ins of an hour (NFR-SE-07: "no more than 100 codes")', () => {
+  it('ends the steps opened earlier when another is opened', async () => {
+    const { email, id, secret } = await enrolled();
+    await db().session.deleteMany({ where: { userId: id } });
+    const first = await passwordStep(auth, email, fresh());
+    const second = await passwordStep(auth, email, fresh());
+    const third = await passwordStep(auth, email, fresh());
+    expect(await db().verification.count({ where: { value: id } })).toBe(1);
+    for (const earlier of [first, second]) {
+      // A right code, which is not looked at: it is not used up by this.
+      const refused = await secondStep(auth, earlier, codeAt(secret, 1));
+      expect(refused.status).toBe(401);
+      expect((await error(refused)).code).toBe('sign_in_again');
+    }
+    expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    expect((await secondStep(auth, third, nextCode(secret))).status).toBe(200);
+  });
+
+  it('leaves the step of another account as it is', async () => {
+    const one = await enrolled();
+    const two = await enrolled();
+    const step = await passwordStep(auth, one.email, fresh());
+    await passwordStep(auth, two.email, fresh());
+    expect((await secondStep(auth, step, nextCode(one.secret))).status).toBe(200);
+  });
+
+  it('refuses a right code at a step that is still open once the 20 failed sign-ins of the hour are reached', async () => {
+    const { email, id, secret, recoveryCodes } = await enrolled();
+    await db().session.deleteMany({ where: { userId: id } });
+    const step = await passwordStep(auth, email, fresh());
+    // Twenty wrong passwords, each from a network address of its own: the
+    // step stays open, since a wrong password opens none.
+    for (let n = 0; n < 20; n++) await wrongPassword(email, fresh());
+    expect(await passwordAccepted(email, fresh())).toBe(false);
+    const row = await db().verification.findFirstOrThrow({ where: { value: id } });
+
+    const refused = await secondStep(auth, step, nextCode(secret), 'totp', fresh());
+    expect(refused.status).toBe(401);
+    expect(refused.headers.get('retry-after')).toBeNull();
+    expect((await error(refused)).code).toBe('sign_in_again');
+    // The step is over, as an abandoned one is, and no code was looked at.
+    expect(await db().verification.count({ where: { value: id } })).toBe(0);
+    expect(refused.headers.getSetCookie().join()).toMatch(/two_factor=;.*Max-Age=0/i);
+    expect(await valkey().exists(`second-step-codes:${row.id}`)).toBe(0);
+    expect((await secondStep(auth, step, recoveryCodes[0], 'backup-code', fresh())).status).toBe(401);
+    expect(await db().session.count({ where: { userId: id } })).toBe(0);
+  });
+});
+
+describe('the session the browser held (the owner’s decision S5: "a sign-in ends the session the browser held")', () => {
+  it('is ended by a second step completed under it, whoever it belonged to', async () => {
+    const { email, id, recoveryCodes } = await enrolled();
+    const other = await person();
+    const step = await passwordStep(auth, email, fresh());
+    // A recovery code is taken under a session too: the session of another
+    // account, which this browser was given after the password.
+    const browser = `${step}; ${other.cookie}`;
+    expect(await stands(other.cookie)).toBe(true);
+    const done = await secondStep(auth, browser, recoveryCodes[0], 'backup-code', fresh());
+    expect(done.status).toBe(200);
+    expect(await stands(other.cookie)).toBe(false);
+    expect(await db().session.count({ where: { userId: other.id } })).toBe(0);
+    expect(
+      (await validateSessionRow(new Headers({ cookie: withCookies(browser, done) }))).session?.userId,
+    ).toBe(id);
+  });
+
+  it('stands where the second step is refused', async () => {
+    const { email, recoveryCodes } = await enrolled();
+    const other = await person();
+    const step = await passwordStep(auth, email, fresh());
+    const refused = await secondStep(auth, `${step}; ${other.cookie}`, 'aaaaa-bbbbb', 'backup-code');
+    expect(refused.status).toBe(401);
+    expect(await stands(other.cookie)).toBe(true);
+    // And where the step was over before the code was right.
+    await db().verification.deleteMany({ where: { identifier: { startsWith: 'second-step:' } } });
+    expect((await secondStep(auth, `${step}; ${other.cookie}`, recoveryCodes[0], 'backup-code')).status).toBe(
+      401,
+    );
+    expect(await stands(other.cookie)).toBe(true);
+  });
+
+  it('leaves no cookie of a second step behind a sign-in that needs none', async () => {
+    const { email } = await person();
+    const stale = '__Secure-better-auth.two_factor=left-by-an-earlier-sign-in';
+    const signed = await signIn(auth, email, PASSWORD, { ...fresh(), cookie: stale });
+    expect(await signed.text()).toBe('{}');
+    expect(signed.headers.getSetCookie().join('\n')).toMatch(/two_factor=;.*Max-Age=0/i);
+    expect(withCookies(stale, signed)).not.toContain('two_factor');
+    // A browser that holds none is sent nothing about one.
+    const plain = await signIn(auth, email, PASSWORD, fresh());
+    expect(plain.headers.getSetCookie().join('\n')).not.toContain('two_factor');
+  });
+});
+
+describe('a fault while a second step is completed (FR-AU-83: "accepted in its place and is then spent")', () => {
+  it('spends no recovery code, ends no session and leaves the step open: the same code then signs in', async () => {
+    const { email, id, recoveryCodes } = await enrolled();
+    const other = await person();
+    await db().session.deleteMany({ where: { userId: id } });
+    const step = await passwordStep(auth, email, fresh());
+    const stored = (await rowOf(id))!.backupCodes;
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(db(), '$transaction').mockRejectedValueOnce(new Error('the connection was lost'));
+
+    const browser = `${step}; ${other.cookie}`;
+    const failed = await secondStep(auth, browser, recoveryCodes[0], 'backup-code', fresh());
+    expect(failed.status).toBe(500);
+    expect(failed.headers.getSetCookie().filter((cookie) => /session_token=[^;]/.test(cookie))).toEqual([]);
+    expect((await rowOf(id))!.backupCodes).toBe(stored);
+    expect(await stands(other.cookie)).toBe(true);
+    expect(await db().verification.count({ where: { value: id } })).toBe(1);
+
+    expect((await secondStep(auth, browser, recoveryCodes[0], 'backup-code', fresh())).status).toBe(200);
+    expect((await rowOf(id))!.backupCodes).not.toBe(stored);
   });
 });

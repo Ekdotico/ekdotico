@@ -43,6 +43,16 @@ export async function beginSecondStep(ctx: GenericEndpointContext, userId: strin
     },
     select: { id: true },
   });
+  // One step is open for an account: every other is over once this one is
+  // written, so a right password cannot be used to keep opening steps of five
+  // codes each beside one another (NFR-SE-07: "no more than 100 codes … in any
+  // hour"). Two statements and no transaction, the row first: a transaction
+  // would not see a step that another is writing at the same moment, and both
+  // would stand. So of two sign-ins at one moment at most one step is left,
+  // and it may be neither: both then begin again.
+  await db().verification.deleteMany({
+    where: { value: userId, identifier: { startsWith: SECOND_STEP }, id: { not: id } },
+  });
   const cookie = ctx.context.createAuthCookie(SECOND_STEP_COOKIE, { maxAge: seconds });
   await ctx.setSignedCookie(cookie.name, token, ctx.context.secret, cookie.attributes);
   return id;

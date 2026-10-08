@@ -85,14 +85,17 @@ async function validate(headers: Headers, readRow: boolean): Promise<Validation>
   // copy, at most `cookieCacheSeconds` old (NFR-SE-17 (c)). An account of the
   // team cannot turn two-factor authentication off, so a copy never shows it
   // on where the row has it off; the browser that turns it on is given a
-  // fresh copy by that answer (two-factor.ts). An answer without the three
-  // fields is taken as one that the gate stops.
+  // fresh copy by that answer (two-factor.ts). An answer in which any of the
+  // three fields is absent or of another type is one that the gate stops,
+  // whoever the account is: the gate itself would take a missing address or a
+  // missing verification for an account that is not of the team, and let it
+  // through (NFR-SE-06 A10: never to a permissive default).
   const { email, emailVerified, twoFactorEnabled } = response.user as Record<string, unknown>;
-  const stops = stoppedByFoundingGate({
-    email: typeof email === 'string' ? email : null,
-    emailVerified: emailVerified === true,
-    twoFactorEnabled: twoFactorEnabled === true,
-  });
+  const stops =
+    typeof email !== 'string' ||
+    typeof emailVerified !== 'boolean' ||
+    typeof twoFactorEnabled !== 'boolean' ||
+    stoppedByFoundingGate({ email, emailVerified, twoFactorEnabled });
   return stops ? { session: null, stopped: own, setCookie } : { session: own, stopped: null, setCookie };
 }
 
