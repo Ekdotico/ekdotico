@@ -1,0 +1,8 @@
+// The application's schema. The schema `ekdotico`, its roles and its grants are
+// created by scripts/provision.sql and never by a migration (contract IC-51).
+// No `vector` extension is declared: α 0.1.0 stores none (contract IC-23).
+// Models arrive with the slice that first uses them.
+
+datasource db {
+  provider = "postgresql"
+}
