@@ -95,3 +95,31 @@
   margin: var(--sp-0);
   max-inline-size: var(--measure);
 }
+
+/* The list of documents: one row for each, separated by a hairline. */
+.list {
+  margin: var(--sp-0);
+  padding: var(--sp-0);
+  list-style: none;
+  border-block-start: 1px solid var(--rule-soft);
+}
+
+.row {
+  padding-block: var(--sp-4);
+  border-block-end: 1px solid var(--rule-soft);
+}
+
+/* A title is whatever was typed, 200 characters without a space among them
+   included: it breaks where it must and never widens the page (FR-ED-35). */
+.documentTitle {
+  min-inline-size: 0;
+  font-weight: var(--fw-semi);
+  color: var(--fg-1);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  margin: var(--sp-0);
+  font-size: var(--fs-sm);
+  color: var(--fg-3);
+}

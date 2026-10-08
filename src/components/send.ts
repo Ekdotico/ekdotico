@@ -18,21 +18,30 @@ const NOT_REACHED = 'The request did not reach Ekdotico. Check the connection an
 const NOT_READ = 'Ekdotico could not complete the request. Try again in a few minutes.';
 
 /**
- * A POST to a path of this origin. The browser adds the `Origin` header that
- * the proxy checks (NFR-SE-17 (c)). Nothing is logged: a body can hold a
- * password or the token of a link (NFR-SE-19).
+ * A request that changes state, to a path of this origin: a POST, or the
+ * method a route names. The browser adds the `Origin` header that the proxy
+ * checks (NFR-SE-17 (c)). Nothing is logged: a body can hold a password or the
+ * token of a link (NFR-SE-19).
  */
-export async function send(path: string, body?: unknown): Promise<Fault | null> {
-  const sent = await sendFor(path, body);
+export async function send(
+  path: string,
+  body?: unknown,
+  method: 'POST' | 'PATCH' = 'POST',
+): Promise<Fault | null> {
+  const sent = await sendFor(path, body, method);
   return 'fault' in sent ? sent.fault : null;
 }
 
 /** As `send`, for a page that reads the answer to success: its JSON, or null where it holds none. */
-export async function sendFor(path: string, body?: unknown): Promise<{ fault: Fault } | { answer: unknown }> {
+export async function sendFor(
+  path: string,
+  body?: unknown,
+  method: 'POST' | 'PATCH' = 'POST',
+): Promise<{ fault: Fault } | { answer: unknown }> {
   let response: Response;
   try {
     response = await fetch(path, {
-      method: 'POST',
+      method,
       credentials: 'same-origin',
       cache: 'no-store',
       // Every route answers in JSON and none redirects, so a redirect is an
