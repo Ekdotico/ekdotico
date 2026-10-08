@@ -32,7 +32,6 @@ import type { Duplex } from 'node:stream';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Server, type Document } from '@hocuspocus/server';
 import { messageYjsSyncStep1 } from 'y-protocols/sync';
-import { stoppedByFoundingGate } from '../lib/auth/founding-gate.ts';
 import { validateSessionRow, type ValidSession } from '../lib/auth/session.ts';
 import { isReadOnly, recordConnection, type CollabConnection } from '../lib/collab/connection.ts';
 import {
@@ -346,10 +345,16 @@ export function createCollabServer(store: StoreSettings) {
 
     // (c) The session, by its row and never by the copy in a cookie
     // (NFR-SE-03 (e), NFR-SE-17 (c), (f)). Nothing of the request but the
-    // cookie is handed on.
-    const { session } = await validateSessionRow(new Headers({ cookie: request.headers.cookie ?? '' }));
-    if (!session) return { status: 401 };
-    const { userId } = session;
+    // cookie is handed on. For an account that the founding-team gate stops
+    // the validation gives no session and says whose it would be (`stopped`):
+    // it is no 401. It goes on to its limit and is refused at (e), so that the
+    // order of the answers stays as it is written here.
+    const { session, stopped } = await validateSessionRow(
+      new Headers({ cookie: request.headers.cookie ?? '' }),
+    );
+    const held = session ?? stopped;
+    if (!held) return { status: 401 };
+    const { userId } = held;
 
     // (d) NFR-SE-07: handshakes, for each authenticated user. After the origin
     // check, so that a page on another origin cannot spend a user's limit.
@@ -360,14 +365,11 @@ export function createCollabServer(store: StoreSettings) {
     }
 
     // (e) FR-AU-83: an account of the founding team without two-factor
-    // authentication reaches no collaboration handshake. The row is read at
-    // each handshake; the list is the process's own setting.
-    const account = await db().user.findUnique({
-      where: { id: userId },
-      select: { email: true, emailVerified: true, twoFactorEnabled: true },
-    });
-    if (!account) return { status: 401 };
-    if (stoppedByFoundingGate(account)) {
+    // authentication reaches no collaboration handshake. The gate is the one
+    // of the session validation (src/lib/auth/session.ts), which read the
+    // account's row at (c) for this handshake; the list is the process's own
+    // setting. Nothing but a session that the gate let through is returned.
+    if (!session) {
       await securityLog({ kind: 'forbidden', userId });
       return { status: 403 };
     }
