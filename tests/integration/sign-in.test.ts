@@ -179,17 +179,30 @@ describe('what the request may say (FR-AU-84; API design: "any other field is re
 
   it('is refused by the library before the endpoint where it names another origin', async () => {
     const { email, id } = await person();
-    // The library's own answers, in the library's own shape: a place to go to
-    // on another origin, and a request with cookies from another origin.
+    // The library's own refusals: a place to go to on another origin, and a
+    // request with cookies from another origin. Each in the one shape of an
+    // error, in the words of the proxy's 403 (the owner's answer to Q8).
+    await db().securityLogEntry.deleteMany();
     const away = await post({ email, password: PASSWORD, callbackURL: 'https://evil.example/' }, from(1));
-    expect(away.status).toBe(403);
     const foreign = await signIn(email, PASSWORD, { origin: 'https://evil.example', cookie: 'a=b' });
-    expect(foreign.status).toBe(403);
     for (const response of [away, foreign]) {
+      expect(response.status).toBe(403);
+      expect(await response.text()).toBe(
+        '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}',
+      );
+      expect(response.headers.get('cache-control')).toBe('no-store');
       expect(response.headers.getSetCookie()).toEqual([]);
       expect(response.headers.get('location')).toBeNull();
     }
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    // NFR-SE-19: a 403 has its entry, with no user: none is known there. The
+    // library does not wait for the entry, so the test does.
+    await vi.waitFor(async () =>
+      expect((await db().securityLogEntry.findMany()).map(({ kind, userId }) => [kind, userId])).toEqual([
+        ['forbidden', null],
+        ['forbidden', null],
+      ]),
+    );
   });
 
   it('serves no session to a body that is not JSON', async () => {
@@ -199,8 +212,17 @@ describe('what the request may say (FR-AU-84; API design: "any other field is re
       'content-type': 'application/x-www-form-urlencoded',
     });
     expect(form.status).toBe(415);
-    expect((await post('{"email":', from(1))).status).toBe(400);
+    const cut = await post('{"email":', from(1));
+    expect(cut.status).toBe(400);
+    // The library's router refuses both, and each is answered in the one shape of an error.
+    for (const response of [form, cut]) {
+      expect(await response.text()).toBe(
+        '{"error":{"code":"invalid_request","message":"The request could not be read, and nothing was changed. A request to this address holds JSON, sent with the content type application/json."}}',
+      );
+    }
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    // Neither is a 403 or a refused sign-in: no entry (NFR-SE-19).
+    expect(await refusals()).toEqual([]);
   });
 });
 

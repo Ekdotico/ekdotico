@@ -53,13 +53,16 @@ describe('what is configured (NFR-SE-17)', () => {
   });
 
   it('has only two-factor authentication of the plugins, and no social provider (d)', () => {
-    // The other three are the application's own: the gate, tested below; its
-    // sign-in and sign-out (sign-in.test.ts, sign-out.test.ts); and the
-    // acceptance of an admission invitation, which has no path.
+    // The other four are the application's own: the gate, tested below; its
+    // sign-in and sign-out (sign-in.test.ts, sign-out.test.ts); its reset and
+    // change of a password and its ending of sessions (password-reset.test.ts,
+    // change-password.test.ts, session-list.test.ts); and the acceptance of an
+    // admission invitation, which has no path.
     expect(auth().options.plugins.map((plugin) => plugin.id)).toEqual([
       'two-factor',
       'ekdotico-surface',
       'ekdotico-sign-in',
+      'ekdotico-credentials',
       'ekdotico-admission-sign-up',
     ]);
     expect(auth().options).not.toHaveProperty('socialProviders');
@@ -151,7 +154,7 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
   // The functions the library has at its pinned version, with this
   // configuration. An update that adds one fails here, and a person then
   // decides whether it is served. A name in this list is not an endpoint that
-  // answers: only the two of IDENTITY_ENDPOINTS do.
+  // answers: only those of IDENTITY_ENDPOINTS do.
   it('are the ones the pinned version is known to have', () => {
     expect(Object.keys(auth().api).sort()).toEqual(
       [
@@ -202,10 +205,15 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     );
   });
 
-  it('serves these two and no other', () => {
+  it('serves these seven and no other', () => {
     expect([...IDENTITY_ENDPOINTS]).toEqual([
       'POST /sign-in/email', // FR-AU-81
       'POST /sign-out', // FR-AU-84
+      'POST /request-password-reset', // FR-AU-86
+      'POST /reset-password', // FR-AU-86
+      'POST /change-password', // FR-AU-85
+      'POST /revoke-session', // FR-AU-85
+      'POST /revoke-other-sessions', // FR-AU-85
     ]);
   });
 
@@ -229,7 +237,8 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
         }
       }
     }
-    // Signed out, the sign-in answers twice (with and without the cookie) and so does the sign-out.
+    // Each endpoint that is served answers, signed in or not, with a refusal
+    // of this empty request where it is no sign-out.
     expect([...new Set(answered)].sort()).toEqual([...IDENTITY_ENDPOINTS].sort());
   });
 
@@ -258,9 +267,12 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
       ['POST', '/change-email'], // FR-AU-03 is the application's own, later
       ['GET', '/verify-email'],
       ['POST', '/send-verification-email'],
-      ['POST', '/request-password-reset'], // FR-AU-86, later
-      ['POST', '/reset-password'],
-      ['GET', '/reset-password/x'],
+      ['GET', '/reset-password/x'], // the library's page of a reset link; FR-AU-86 is the application's own
+      ['GET', '/list-sessions'], // returns every session's token; the settings page reads the rows (FR-AU-85)
+      ['POST', '/revoke-sessions'], // every session, the one in use included; FR-AU-85 has no such action
+      ['POST', '/set-password'],
+      ['POST', '/verify-password'],
+      ['POST', '/update-user'], // FR-AU-03, the name: later
       ['GET', '/get-session'],
       ['GET', '/ok'],
       ['GET', '/error'],
@@ -310,10 +322,10 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     await expect(auth().api.sendTwoFactorOTP({ headers })).rejects.toMatchObject({
       body: { code: 'OTP_NOT_CONFIGURED' },
     });
-    // A password reset: no function sends its email yet, and none is sent.
-    await expect(
-      auth().api.requestPasswordReset({ body: { email: 'person@example.com' } }),
-    ).rejects.toMatchObject({ body: { code: 'RESET_PASSWORD_DISABLED' } });
+    // The library's own reset of a password is replaced (password.ts): it is
+    // given no function to send an email with, and no setting to end sessions by.
+    expect(auth().options.emailAndPassword).not.toHaveProperty('sendResetPassword');
+    expect(auth().options.emailAndPassword).not.toHaveProperty('revokeSessionsOnPasswordReset');
     expect(await db().verification.count()).toBe(0);
   });
 });

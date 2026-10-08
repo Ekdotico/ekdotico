@@ -54,6 +54,9 @@ export default defineConfig({
       // of 20 a minute (docs/operations/deployment.md), which one run of the
       // tests would use up.
       RATE_LIMIT_SESSIONLESS_PER_ADDRESS: '100000/60',
+      // The same for the requests for a password reset, 10 an hour, which
+      // the runs of an afternoon would use up between them.
+      RATE_LIMIT_RESET_PER_ADDRESS: '100000/3600',
     },
     reuseExistingServer: false,
     timeout: 180_000,

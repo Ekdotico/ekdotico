@@ -5,11 +5,12 @@
 // NFR-SE-19: the one line printed here names no invitation and no person, and
 // no error made here holds an address or a token. The token leaves this
 // module once, inside the email of FR-AU-87 (a).
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { AdmissionInvitation } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
 import type { EmailMessage } from '../email/index.ts';
 import { settings } from '../settings.ts';
+import { hashToken, newToken, TOKEN } from '../token.ts';
 import { createPersonalWorkspace } from '../workspace.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -45,18 +46,6 @@ function view(row: Row, now: Date): InvitationView {
     expiresAt: row.expiresAt.toISOString(),
   };
 }
-
-// 256 bits from the platform's cryptographic source (FR-AU-89 asks for 128 or
-// more), written in the URL-safe alphabet: 43 characters, which is what the
-// allow-list of proxy.ts takes a `[token]` to be made of.
-const TOKEN = /^[A-Za-z0-9_-]{43}$/;
-const newToken = () => randomBytes(32).toString('base64url');
-
-// Stored only as this hash. A plain SHA-256 is sound here, where it would not
-// be for a password: the token is 256 random bits, so there is nothing to
-// guess and nothing a salt or a slow function would add. The row is found by
-// the hash, through its unique index; no comparison of secrets is made in code.
-const hashToken = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
 
 // What the address of an invitation must look like. FR-AU-89 says "an email
 // address" and no more; this refuses what could not be one, and anything that
