@@ -39,9 +39,9 @@ model User {
   closedAlphaNoticeAcknowledgedAt DateTime?
   closedAlphaNoticeVersion        Int?
 
-  sessions   Session[]
-  accounts   Account[]
-  twoFactors TwoFactor[]
+  sessions  Session[]
+  accounts  Account[]
+  twoFactor TwoFactor?
   // FR-AU-09: at most one, by the unique `Workspace.ownerId`.
   personalWorkspace Workspace? @relation("PersonalWorkspace")
 }
@@ -97,10 +97,16 @@ model Verification {
 
 // The secret and the recovery codes are stored encrypted under a key held in
 // the environment (NFR-SE-17 (a)). The last three columns are the library's own
-// at 1.7.7 and are not on the Data models page.
+// at 1.7.7 and are not on the Data models page. `verified` is false from the
+// password of an enrolment to its first code, and only a verified row is a
+// second factor (FR-AU-83: "only then is it on"). The other two belong to a
+// lock of the library's own, which nothing here reaches: the codes are checked
+// by the application's endpoints (src/lib/auth/two-factor.ts), and the only
+// count is that of NFR-SE-07. They stay 0 and null, and a test asserts it.
 model TwoFactor {
   id                      String    @id
-  userId                  String
+  // One row for an account (Data models): an enrolment begun again replaces it.
+  userId                  String    @unique
   user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   secret                  String
   backupCodes             String
@@ -108,7 +114,6 @@ model TwoFactor {
   failedVerificationCount Int       @default(0)
   lockedUntil             DateTime?
 
-  @@index([userId])
   @@index([secret])
 }
 

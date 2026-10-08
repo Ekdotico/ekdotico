@@ -17,6 +17,13 @@ import { changePassword, requestPasswordReset, resetPassword } from './password.
 import { FORBIDDEN } from './route-answers.ts';
 import { revokeOtherSessions, revokeSession } from './session-list.ts';
 import { signInEmail, signOut } from './sign-in.ts';
+import {
+  disableTwoFactor,
+  enableTwoFactor,
+  generateBackupCodes,
+  verifyBackupCode,
+  verifyTOTP,
+} from './two-factor.ts';
 
 // Text for a person, for the owner's approval: the statement of the router's
 // 400 and 415, which the library words in its own way.
@@ -59,6 +66,20 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // endpoint: the library's returns every session's token.
   'POST /revoke-session',
   'POST /revoke-other-sessions',
+  // FR-AU-83: two-factor authentication by authenticator application, with
+  // recovery codes. All five are the application's own (two-factor.ts), under
+  // the plugin's names and paths: the beginning of an enrolment; a code of the
+  // authenticator, which confirms an enrolment under a session and is the
+  // second step of a sign-in without one (FR-AU-81); the second step by a
+  // recovery code; turning it off; and replacing the recovery codes. The
+  // plugin's code by email (`/two-factor/send-otp`, `/two-factor/verify-otp`)
+  // and its `/two-factor/get-totp-uri`, which shows a secret again, are not
+  // in the handler at all (`secondFactor`, below).
+  'POST /two-factor/enable',
+  'POST /two-factor/verify-totp',
+  'POST /two-factor/verify-backup-code',
+  'POST /two-factor/disable',
+  'POST /two-factor/generate-backup-codes',
 ]);
 
 // FR-AU-81, FR-AU-84: the application's sign-in and sign-out. A plugin's
@@ -75,6 +96,22 @@ const ownSignIn = {
 const ownCredentials = {
   id: 'ekdotico-credentials',
   endpoints: { requestPasswordReset, resetPassword, changePassword, revokeSession, revokeOtherSessions },
+} satisfies BetterAuthPlugin;
+
+// FR-AU-83, NFR-SE-17 (d): two-factor authentication by authenticator
+// application, with recovery codes. The library's plugin, as it is given no
+// option, with the application's five endpoints in place of all of its own
+// (two-factor.ts) and without its step after a sign-in. What is kept of it is
+// its schema, which puts `twoFactorEnabled` on the account the library answers
+// with a session. What is left out with the rest: its code by email, its
+// endpoint that shows a secret again, its function that reads the recovery
+// codes of any account, its remembering of a device, and its own count and
+// lock of wrong codes. Two plugins that name one path make the library report
+// an error at each start, so the five are not mounted from a plugin of their own.
+const secondFactor = {
+  ...twoFactor(),
+  endpoints: { enableTwoFactor, verifyTOTP, verifyBackupCode, disableTwoFactor, generateBackupCodes },
+  hooks: undefined,
 } satisfies BetterAuthPlugin;
 
 // The application's own gate, and no feature of the library.
@@ -128,11 +165,11 @@ function create() {
       maxPasswordLength: passwordMaxLength,
     },
     // No `socialProviders`, and of the plugins only two-factor authentication by
-    // authenticator application with recovery codes (FR-AU-83). Its code by
-    // email exists only where a function to send one is configured; none is.
+    // authenticator application with recovery codes (FR-AU-83), whose
+    // endpoints are the application's own (`secondFactor`, above).
     // `admissionSignUp` (FR-AU-90) has one endpoint, without a path: the
     // handler cannot reach it, and only `POST /api/sign-up` calls it.
-    plugins: [twoFactor(), surface, ownSignIn, ownCredentials, admissionSignUp],
+    plugins: [secondFactor, surface, ownSignIn, ownCredentials, admissionSignUp],
     // NFR-SE-17 (d): each is off in the library by default but the linking of
     // accounts; all three are written so that a changed default changes nothing.
     account: { accountLinking: { enabled: false } },

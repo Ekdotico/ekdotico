@@ -124,6 +124,13 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(settings.securityLogRetentionDays).toBe(30);
   });
 
+  // FR-AU-83: "within 10 minutes of the password (an initial value)"; NFR-SE-07: 5 wrong codes.
+  it('gives the second step of a sign-in 10 minutes and 5 wrong codes, and takes another of each', () => {
+    expect(settings).toMatchObject({ secondStepSeconds: 600, secondStepWrongCodes: 5 });
+    const changed = loadSettings({ ...env, TWO_FACTOR_STEP_SECONDS: '120', TWO_FACTOR_WRONG_CODES: '3' });
+    expect(changed).toMatchObject({ secondStepSeconds: 120, secondStepWrongCodes: 3 });
+  });
+
   it('trusts no proxy unless told how many there are', () => {
     expect(settings.trustedProxyCount).toBe(0);
   });
@@ -174,6 +181,8 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'PASSWORD_MIN_LENGTH',
     'PASSWORD_MAX_LENGTH',
     'ADMISSION_INVITATION_DAYS',
+    'TWO_FACTOR_STEP_SECONDS',
+    'TWO_FACTOR_WRONG_CODES',
   ])('refuses 0 as %s', (name) => {
     expect(() => loadSettings({ ...env, [name]: '0' })).toThrow(`${name} must be a whole number, 1 or more.`);
   });

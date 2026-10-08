@@ -11,7 +11,7 @@ import { db } from '../db.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { settings } from '../settings.ts';
 import { describeUserAgent } from '../user-agent.ts';
-import { unauthenticated } from './route-answers.ts';
+import { notAdmitted } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 
 // Text for a person (the owner's answer to Q6 of the plan: approved with the pull request).
@@ -75,8 +75,9 @@ export const revokeSession = createAuthEndpoint(
   { method: 'POST', requireHeaders: true },
   async (ctx) => {
     // NFR-SE-17 (c): ending a session reads the row of the session that asks.
-    const { session } = await validateSessionRow(ctx.headers);
-    if (!session) return unauthenticated();
+    const validation = await validateSessionRow(ctx.headers);
+    const { session } = validation;
+    if (!session) return notAdmitted(validation);
     const entered = textFields(ctx.body, 'id');
     if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.shape);
 
@@ -104,8 +105,9 @@ export const revokeOtherSessions = createAuthEndpoint(
   '/revoke-other-sessions',
   { method: 'POST', requireHeaders: true, disableBody: true },
   async (ctx) => {
-    const { session } = await validateSessionRow(ctx.headers);
-    if (!session) return unauthenticated();
+    const validation = await validateSessionRow(ctx.headers);
+    const { session } = validation;
+    if (!session) return notAdmitted(validation);
     await db().session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
     // FR-ED-40 (d): the slice that builds the collaboration server publishes
     // the end of these sessions here.

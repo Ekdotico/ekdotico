@@ -15,12 +15,15 @@ describe('the list of paths without a session', () => {
   it('is these paths and no other', () => {
     expect(SESSIONLESS.map(({ group, methods, path }) => `${group} ${methods.join(',')} ${path}`)).toEqual([
       'a GET /sign-in',
+      'a GET /sign-in/two-factor',
       'a GET,POST /sign-in/link/[token]',
       'a GET /sign-up/[token]',
       'a GET /reset-password',
       'a GET /reset-password/[token]',
       'a GET /confirm-address/[token]',
       'a POST /api/auth/sign-in/email',
+      'a POST /api/auth/two-factor/verify-totp',
+      'a POST /api/auth/two-factor/verify-backup-code',
       'a POST /api/auth/request-password-reset',
       'a POST /api/auth/reset-password',
       'a POST /api/sign-up',
@@ -29,6 +32,18 @@ describe('the list of paths without a session', () => {
       'c GET /api/health',
     ]);
     expect(STATIC_PREFIX).toBe('/_next/static/');
+  });
+
+  // FR-AU-83: "other than those of the enrolment itself", and "the means to
+  // sign out". Written out a second time, as the list above is.
+  it('lets these requests past the founding-team gate, and no other', () => {
+    expect([...proxyModule.PAST_THE_GATE]).toEqual([
+      'POST /api/auth/two-factor/enable',
+      'POST /api/auth/sign-out',
+    ]);
+    for (const request of proxyModule.PAST_THE_GATE) {
+      expect(IDENTITY_ENDPOINTS.has(request.replace(IDENTITY_BASE_PATH, ''))).toBe(true);
+    }
   });
 
   it('names, under /api/auth, only endpoints that the identity handler serves', () => {
@@ -60,6 +75,9 @@ describe('classify', () => {
     ['GET', '/reset-password/tok', 'a'],
     ['GET', '/confirm-address/tok', 'a'],
     ['POST', '/api/auth/sign-in/email', 'a'],
+    ['GET', '/sign-in/two-factor', 'a'],
+    ['POST', '/api/auth/two-factor/verify-totp', 'a'],
+    ['POST', '/api/auth/two-factor/verify-backup-code', 'a'],
     ['POST', '/api/auth/request-password-reset', 'a'],
     ['POST', '/api/auth/reset-password', 'a'],
     ['POST', '/api/sign-up', 'a'],
@@ -88,6 +106,13 @@ describe('classify', () => {
     ['GET', '/api/auth/get-session'],
     ['POST', '/api/auth/sign-out'],
     ['POST', '/api/auth/two-factor/enable'],
+    ['POST', '/api/auth/two-factor/disable'],
+    ['POST', '/api/auth/two-factor/generate-backup-codes'],
+    ['POST', '/api/auth/two-factor/send-otp'],
+    ['POST', '/api/auth/two-factor/verify-otp'],
+    ['GET', '/api/auth/two-factor/verify-totp'],
+    ['POST', '/sign-in/two-factor'],
+    ['GET', '/sign-in/two-factor/x'],
     ['POST', '/api/auth/change-password'],
     ['POST', '/api/auth/revoke-session'],
     ['POST', '/api/auth/revoke-other-sessions'],

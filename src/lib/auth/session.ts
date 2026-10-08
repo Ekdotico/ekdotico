@@ -8,6 +8,7 @@
 import { db } from '../db.ts';
 import { onlyReads } from '../http.ts';
 import { settings } from '../settings.ts';
+import { stoppedByFoundingGate } from './founding-gate.ts';
 
 /** What a validated session yields, and nothing a caller does not need. */
 export interface ValidSession {
@@ -16,7 +17,22 @@ export interface ValidSession {
 }
 
 export interface Validation {
+  /**
+   * The session, where the request may use the application under it. Null for
+   * no session, and null for the session of an account that the
+   * founding-team gate stops (FR-AU-83): a caller that reads this field alone
+   * refuses such an account, which is what every caller but three is to do.
+   */
   session: ValidSession | null;
+  /**
+   * FR-AU-83: the valid session of an account of the founding team that has
+   * not turned two-factor authentication on, which "cannot use the
+   * application". Read by the proxy, by the signed-in layout, which shows the
+   * enrolment in place of every page, and by the endpoints of the enrolment
+   * itself; by nothing else. A route answers it 403 through `notAdmitted`
+   * (route-answers.ts).
+   */
+  stopped: ValidSession | null;
   /**
    * The `Set-Cookie` headers the library asks for: a renewed expiry, a fresh
    * signed copy, or the clearing of the cookies of a session that has ended.
@@ -40,7 +56,7 @@ async function validate(headers: Headers, readRow: boolean): Promise<Validation>
     query: readRow ? { disableCookieCache: true } : undefined,
     returnHeaders: true,
   });
-  if (!response) return { session: null, setCookie: answer.getSetCookie() };
+  if (!response) return { session: null, stopped: null, setCookie: answer.getSetCookie() };
 
   // FR-AU-84: whatever its use, a session ends 30 days after it began. The
   // signed copy carries the time it began, so the check is made on both paths,
@@ -49,15 +65,58 @@ async function validate(headers: Headers, readRow: boolean): Promise<Validation>
   // An answer without its two identifiers is no session (NFR-SE-02). It is
   // refused before the deletion below, which would otherwise be handed an
   // undefined `id`, and that deletes every session there is.
-  if (typeof id !== 'string' || typeof userId !== 'string') return { session: null, setCookie: [] };
+  if (typeof id !== 'string' || typeof userId !== 'string') {
+    return { session: null, stopped: null, setCookie: [] };
+  }
   const ends = new Date(createdAt).getTime() + settings().sessionMaxSeconds * 1000;
   if (!(Date.now() < ends)) {
     // Ended at once for every other reader too: the row is deleted, and the
     // library's renewed cookies are not handed on.
     await db().session.deleteMany({ where: { id } });
-    return { session: null, setCookie: [] };
+    return { session: null, stopped: null, setCookie: [] };
   }
-  return { session: { userId, sessionId: id }, setCookie: answer.getSetCookie() };
+  const own = { userId, sessionId: id };
+  const setCookie = answer.getSetCookie();
+  // FR-AU-83: the list "is evaluated at each sign-in and at each request", so
+  // here, where every request is validated: the proxy, each route, each page,
+  // and the collaboration server. The gate reads the account as the library
+  // answered it with the session, which costs no read of its own: the row
+  // for a request that changes state, and for one that only reads the signed
+  // copy, at most `cookieCacheSeconds` old (NFR-SE-17 (c)). An account of the
+  // team cannot turn two-factor authentication off, so a copy never shows it
+  // on where the row has it off; the browser that turns it on is given a
+  // fresh copy by that answer (two-factor.ts). An answer without the three
+  // fields is taken as one that the gate stops.
+  const { email, emailVerified, twoFactorEnabled } = response.user as Record<string, unknown>;
+  const stops = stoppedByFoundingGate({
+    email: typeof email === 'string' ? email : null,
+    emailVerified: emailVerified === true,
+    twoFactorEnabled: twoFactorEnabled === true,
+  });
+  return stops ? { session: null, stopped: own, setCookie } : { session: own, stopped: null, setCookie };
+}
+
+/**
+ * Inside a transaction, holds the row of the session to the commit: from here
+ * no other request can end it, and one that already has is found (FR-AU-84:
+ * a session that has ended changes nothing). False where it has ended. Prisma
+ * has no read that locks a row, so the row is written with its own value.
+ */
+export async function holdSession(
+  tx: Pick<ReturnType<typeof db>, 'session'>,
+  own: ValidSession,
+): Promise<boolean> {
+  const where = { id: own.sessionId, userId: own.userId };
+  const held = await tx.session.findFirst({ where, select: { updatedAt: true } });
+  if (!held) return false;
+  const locked = await tx.session.updateMany({
+    where: { ...where, updatedAt: held.updatedAt },
+    data: { updatedAt: held.updatedAt },
+  });
+  if (locked.count === 1) return true;
+  // A row that is there but was renewed between the two statements is a fault, not an end.
+  if ((await tx.session.count({ where })) === 0) return false;
+  throw new Error('session: renewed meanwhile');
 }
 
 /**

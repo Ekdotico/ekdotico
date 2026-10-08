@@ -598,9 +598,9 @@ describe('an account with two-factor authentication on (FR-AU-81, FR-AU-83)', ()
     const { email, id } = await person();
     await db().user.update({ where: { id }, data: { twoFactorEnabled: true } });
     const response = await signIn(email);
-    // The library's own signal for the second step, which a later slice builds.
+    // The signal for the second step, and nothing else (two-factor.test.ts).
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ twoFactorRedirect: true, twoFactorMethods: [] });
+    expect(await response.text()).toBe('{"twoFactorRedirect":true}');
 
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
     const cookies = response.headers.getSetCookie();

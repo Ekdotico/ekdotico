@@ -30,9 +30,10 @@ import { logLimitReached, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
-import { tooManyRequests, unauthenticated } from './route-answers.ts';
+import { notAdmitted, tooManyRequests, unauthenticated } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
+import { SECOND_STEP } from './second-step.ts';
 
 /** FR-AU-86: the one answer to every request for a reset, verbatim. */
 export const RESET_REQUESTED =
@@ -211,6 +212,12 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
     if (changed.count !== 1) throw new Error('password reset: no credential');
     // "The completion of a reset makes void every other reset link of the account."
     await tx.verification.deleteMany({ where: { value: reset.userId, identifier: { startsWith: RESET } } });
+    // FR-AU-83: a second step that the old password began does not complete.
+    // Before the sessions: the second step makes its session first and claims
+    // its row after, so one of the two statements here finds what it made.
+    await tx.verification.deleteMany({
+      where: { value: reset.userId, identifier: { startsWith: SECOND_STEP } },
+    });
     // "Setting it ends every session of the account" (FR-AU-85).
     await tx.session.deleteMany({ where: { userId: reset.userId } });
     // FR-AU-81, FR-AU-86: the slice that builds the lock lifts it here, in
@@ -258,8 +265,9 @@ export const changePassword = createAuthEndpoint(
   async (ctx) => {
     assertCollecting();
     // NFR-SE-17 (c): a change of the password reads the session's row.
-    const { session } = await validateSessionRow(ctx.headers);
-    if (!session) return unauthenticated();
+    const validation = await validateSessionRow(ctx.headers);
+    const { session } = validation;
+    if (!session) return notAdmitted(validation);
     const entered = textFields(ctx.body, 'currentPassword', 'newPassword');
     if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.changeShape);
 
@@ -326,6 +334,11 @@ export const changePassword = createAuthEndpoint(
           if ((await tx.session.count({ where: own })) === 0) throw SESSION_ENDED;
           throw new Error('password change: session renewed meanwhile');
         }
+        // FR-AU-83: a second step that the old password began does not
+        // complete, as in the completion of a reset, and in the same order.
+        await tx.verification.deleteMany({
+          where: { value: session.userId, identifier: { startsWith: SECOND_STEP } },
+        });
         await tx.session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
         // FR-AU-81: the slice that builds the lock makes void the sign-in link
         // of a lock email here ("when the password … of the account is changed").

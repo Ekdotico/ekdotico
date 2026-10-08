@@ -80,7 +80,7 @@ describe('a validated session', () => {
           response: { session, user: {} },
           headers: new Headers({ 'set-cookie': 'renewed=1' }),
         } as never);
-        expect(await validateSessionRow(headers)).toEqual({ session: null, setCookie: [] });
+        expect(await validateSessionRow(headers)).toEqual({ session: null, stopped: null, setCookie: [] });
       }
     } finally {
       answer.mockRestore();

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
-import { send, type Fault } from '../../../components/send.ts';
+import { sendFor, type Fault } from '../../../components/send.ts';
 
 /**
  * FR-AU-81, FR-AU-88. The refusal is the server's statement, word for word, at
@@ -19,17 +19,22 @@ export function SignInForm({ returnTo }: { returnTo: string }) {
     if (pending) return;
     const form = new FormData(event.currentTarget);
     setPending(true);
-    const refused = await send('/api/auth/sign-in/email', {
+    const sent = await sendFor('/api/auth/sign-in/email', {
       email: form.get('email'),
       password: form.get('password'),
     });
-    if (!refused) {
+    if (!('fault' in sent)) {
+      // FR-AU-83: where the account has two-factor authentication on, the
+      // answer says that a code is asked for, and there is no session yet.
+      const secondStep = (sent.answer as { twoFactorRedirect?: unknown } | null)?.twoFactorRedirect === true;
       // A full navigation: the next page is rendered by the server under the
       // new session, and nothing of this one is kept.
-      window.location.assign(returnTo);
+      window.location.assign(
+        secondStep ? `/sign-in/two-factor?return=${encodeURIComponent(returnTo)}` : returnTo,
+      );
       return;
     }
-    setFault(refused);
+    setFault(sent.fault);
     setAttempt((count) => count + 1);
     setPending(false);
   }

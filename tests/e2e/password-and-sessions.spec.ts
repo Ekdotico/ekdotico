@@ -217,7 +217,11 @@ test.describe('the account settings', () => {
     await expect(page).toHaveURL('/settings');
     await expect(page).toHaveTitle('Account settings – Ekdotico');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Account settings');
-    await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Password', 'Sessions']);
+    await expect(page.getByRole('heading', { level: 2 })).toHaveText([
+      'Password',
+      'Two-factor authentication',
+      'Sessions',
+    ]);
     const sessions = page.getByRole('main').getByRole('listitem');
     await expect(sessions).toHaveCount(2);
     // Which one is in use, in words; the browser and the system; no network address.
@@ -263,7 +267,10 @@ test.describe('the account settings', () => {
     await expect(sessions).toHaveCount(2);
 
     // FR-AU-85: the change of the password requires the current one.
-    const current = page.getByLabel('Current password', { exact: true });
+    // In its own part of the page: the part for two-factor authentication asks for the password too.
+    const current = page
+      .getByRole('region', { name: 'Password' })
+      .getByLabel('Current password', { exact: true });
     const next = page.getByLabel('New password', { exact: true });
     await expect(current).toHaveAttribute('autocomplete', 'current-password');
     await expect(next).toHaveAttribute('autocomplete', 'new-password');
