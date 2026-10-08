@@ -81,16 +81,22 @@ export async function createDocument(userId: string): Promise<DocumentSummary> {
   // Contract IC-50, the extension point "Document creation": after the commit,
   // behind the capability. Not reached in α 0.1.0. Creation "never fails or
   // waits because Istorico is unavailable" (FR-ED-35), so the call is not
-  // awaited, and the port does not throw (IC-10). The outbox that repeats it
-  // arrives with the release that links Istorico (IC-27, IC-18).
+  // awaited. The port does not throw (IC-10), and the creation does not rest
+  // on that: an adapter that throws or rejects all the same fails nothing
+  // here. Nothing is logged of it (NFR-SE-19: an error could quote its input).
+  // The outbox that repeats the call arrives with the release that links
+  // Istorico (IC-27, IC-18).
   if (recording) {
-    void port.registerDocument({
+    const input = {
       documentId: document.id,
       ownerUserId: userId,
-      workspaceKind: 'personal',
+      workspaceKind: 'personal' as const,
       workspaceId: personal,
       createdAt: document.createdAt.toISOString(),
-    });
+    };
+    void Promise.resolve()
+      .then(() => port.registerDocument(input))
+      .catch(() => {});
   }
   return summary(document);
 }

@@ -28,7 +28,7 @@ const row = (kind: PermissionKind, owner: Cell, editor: Cell, reviewer: Cell, vi
 /**
  * The table of FR-ED-44, row for row and in its order. A test holds a copy of
  * the table as the requirement prints it and fails where the two differ
- * (tests/unit/document-permissions.test.ts).
+ * (tests/unit/documents.test.ts).
  */
 export const PERMISSIONS = {
   'document.view': row('fixed_by_role', 'yes', 'yes', 'yes', 'yes'),
@@ -81,7 +81,9 @@ export function defaultPermissionSet(): PermissionSet {
  * that cannot be read included.
  */
 export function holds(stored: unknown, role: DocumentRole, permission: Permission): boolean {
-  // The types are erased at run time: a name outside the table holds nothing.
+  // The types are erased at run time: a name outside the table holds nothing,
+  // and nor does a value that is only read as a name (`['document.rename']`).
+  if (typeof permission !== 'string' || typeof role !== 'string') return false;
   if (!Object.hasOwn(PERMISSIONS, permission) || !ROLES.includes(role)) return false;
   const cell: Cell = PERMISSIONS[permission][role];
   if (cell !== 'on' && cell !== 'off') return cell === 'yes';

@@ -13,6 +13,7 @@ const { istorico } = await import('../../src/lib/istorico/index.ts');
 const { ensurePersonalWorkspace } = await import('../../src/lib/workspace.ts');
 const { authorise, refusal } = await import('../../src/lib/documents/access.ts');
 const { defaultPermissionSet } = await import('../../src/lib/documents/permissions.ts');
+const { documentRoute } = await import('../../src/lib/documents/route.ts');
 const collection = await import('../../src/app/api/documents/route.ts');
 const one = await import('../../src/app/api/documents/[id]/route.ts');
 
@@ -285,6 +286,42 @@ describe('the mark of a document (FR-ED-43; contract IC-16, IC-49, IC-50)', () =
     expect(register).toHaveBeenCalledTimes(2);
   });
 
+  it('never fails because the port throws or rejects, although it must not (FR-ED-35, IC-10)', async () => {
+    const owner = await person();
+    const port = istorico();
+    vi.spyOn(port, 'capabilities').mockReturnValue({ ...port.capabilities(), recording: true });
+    // An error of an adapter could quote what it was given.
+    const failure = new Error('registerDocument failed');
+    const register = vi
+      .spyOn(port, 'registerDocument')
+      .mockImplementationOnce(() => {
+        throw failure;
+      })
+      .mockImplementationOnce(() => Promise.reject(failure));
+    const consoles = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation(() => {}),
+    );
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      for (const call of [1, 2]) {
+        const response = await create(owner.cookie);
+        expect(response.status).toBe(201);
+        const answer = await response.json();
+        expect(answer.recording).toBe('RECORDED');
+        expect((await row(answer.id)).ownerId).toBe(owner.id);
+        expect(register).toHaveBeenCalledTimes(call);
+      }
+      // A rejection that nothing handles is reported after the turn it was made in.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+    expect(await db().document.count({ where: { ownerId: owner.id } })).toBe(2);
+    for (const spy of consoles) expect(spy).not.toHaveBeenCalled();
+  });
+
   it('is permanent: no request changes it', async () => {
     const owner = await person();
     const id = await documentOf(owner.cookie);
@@ -537,6 +574,91 @@ describe('the authorisation of a request about a document (NFR-SE-04, FR-ED-39, 
     expect((await logged()).filter((entry) => entry.userId === owner.id)).toEqual([
       { kind: 'forbidden', userId: owner.id, documentId: id },
     ]);
+  });
+});
+
+describe('a handler made by documentRoute (NFR-SE-04, NFR-SE-02, NFR-SE-17 (c))', () => {
+  const path = (id: string) => `/api/documents/${id}`;
+
+  it('is given the request, the session, and the document that was authorised, and nothing else', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const mine = await documentOf(owner.cookie);
+    const handler = vi.fn((call: object) => Response.json({ keys: Object.keys(call) }));
+    const viewing = documentRoute('document.view', handler);
+
+    // The identifier is the path's: one in the address or the body is not read.
+    const asked = request('POST', `${path(id)}?id=${mine}`, owner.cookie, { id: mine, documentId: mine });
+    expect((await viewing(asked, context(id))).status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]).toHaveLength(1);
+    const call = handler.mock.calls[0]![0] as Record<string, unknown>;
+    expect(Object.keys(call).sort()).toEqual(['document', 'request', 'role', 'session']);
+    expect(call.request).toBe(asked);
+    expect(Object.keys(call.session as object).sort()).toEqual(['sessionId', 'userId']);
+    expect((call.session as { userId: string }).userId).toBe(owner.id);
+    expect(call.document).toEqual(await row(id));
+    expect(call.role).toBe('owner');
+  });
+
+  it('answers 401, 404 and 403 itself, in that order, and does not call the handler', async () => {
+    const owner = await person();
+    const other = await person();
+    const id = await documentOf(owner.cookie);
+    const handler = vi.fn(() => Response.json({}));
+    const viewing = documentRoute('document.view', handler);
+    // The one permission the Owner does not hold (FR-ED-44).
+    const leaving = documentRoute('document.leave', handler);
+
+    await expectError(await viewing(request('GET', path(id)), context(id)), 401, 'unauthenticated');
+    await expectError(await leaving(request('POST', path(id)), context(id)), 401, 'unauthenticated');
+    await expectError(await viewing(request('GET', path(id), other.cookie), context(id)), 404, 'not_found');
+    // No role comes before no permission: a 404, so that nothing shows the document exists.
+    await expectError(await leaving(request('POST', path(id), other.cookie), context(id)), 404, 'not_found');
+    expect((await logged()).filter((entry) => entry.documentId === id)).toEqual([]);
+
+    await expectError(
+      await leaving(request('POST', path(id), owner.cookie, {}), context(id)),
+      403,
+      'forbidden',
+    );
+    expect((await logged()).filter((entry) => entry.documentId === id)).toEqual([
+      { kind: 'forbidden', userId: owner.id, documentId: id },
+    ]);
+    expect(handler).not.toHaveBeenCalled();
+
+    // A request that changes state reads the row of the session; one that reads may use the copy.
+    await db().session.deleteMany({ where: { userId: owner.id } });
+    await expectError(
+      await leaving(request('POST', path(id), owner.cookie, {}), context(id)),
+      401,
+      'unauthenticated',
+    );
+    await expectError(
+      await viewing(request('PATCH', path(id), owner.cookie, {}), context(id)),
+      401,
+      'unauthenticated',
+    );
+    expect(handler).not.toHaveBeenCalled();
+    expect((await viewing(request('GET', path(id), owner.cookie), context(id))).status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers a fault of the handler without a word of it', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const quoting = new Error(`Failing row contains (${owner.email}).`);
+    for (const handler of [
+      () => {
+        throw quoting;
+      },
+      () => Promise.reject(quoting),
+    ]) {
+      const failing = documentRoute('document.view', handler);
+      await expectError(await failing(request('GET', path(id), owner.cookie), context(id)), 500, 'internal');
+    }
+    expect(errors.mock.calls).toEqual(Array(2).fill(['documents: request failed (Error)']));
   });
 });
 

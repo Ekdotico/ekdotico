@@ -1,6 +1,7 @@
 // The authorisation of every request about one document (NFR-SE-04, FR-ED-39):
-// one function, which every route under /api/documents/[id] calls
-// (tests/unit/routes.test.ts) and which the collaboration handshake will call.
+// one function, which every route under /api/documents/[id] calls through
+// ./route.ts (tests/unit/routes.test.ts) and which the collaboration handshake
+// will call.
 // It reads the caller's role and the document's permission set from current
 // state each time, and keeps nothing between two calls.
 //

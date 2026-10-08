@@ -213,6 +213,26 @@ describe('whether a role holds a permission (FR-ED-44, FR-ED-39)', () => {
         expect(holds(everything, role as DocumentRole, permission)).toBe(false);
     }
   });
+
+  it('holds nothing for a permission or a role that is not text, though it would be read as a name', () => {
+    const everything = allSet(true);
+    // Each of these is a key of the table once it is made into text.
+    for (const permission of [
+      ['document.rename'],
+      ['document.view'],
+      { toString: () => 'document.view' },
+      new String('document.rename'),
+    ]) {
+      expect(Object.hasOwn(PERMISSIONS, permission as never)).toBe(true);
+      for (const role of ROLES) expect(holds(everything, role, permission as never)).toBe(false);
+    }
+    for (const role of [['owner'], { toString: () => 'owner' }, new String('owner'), 0, null, undefined]) {
+      for (const permission of permissions) expect(holds(everything, role as never, permission)).toBe(false);
+    }
+    for (const permission of [7, null, undefined, true]) {
+      for (const role of ROLES) expect(holds(everything, role, permission as never)).toBe(false);
+    }
+  });
 });
 
 describe('the rule of a title (FR-ED-35, NFR-SE-08, NFR-I18-03)', () => {
