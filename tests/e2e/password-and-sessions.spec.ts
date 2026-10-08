@@ -140,6 +140,7 @@ test('a link that was used while its page was open is answered with the statemen
 }) => {
   const person = await ready(page);
   await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page).toHaveURL('/sign-in');
   await page.goto('/reset-password');
   await page.getByLabel('Email address').fill(person.email);
   await page.getByRole('button', { name: 'Send link' }).click();
