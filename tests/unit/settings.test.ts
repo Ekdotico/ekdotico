@@ -233,6 +233,38 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(loadSettings(env).admissionInvitationDays).toBe(30);
   });
 
+  // FR-AU-81, NFR-SE-07: a lock that ended while its failures were still
+  // counted would begin again, with its email, at each single failure.
+  describe('SIGN_IN_LOCK_SECONDS and the period of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL', () => {
+    const refusal =
+      'SIGN_IN_LOCK_SECONDS must be no less than the seconds of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL.';
+
+    it.each([
+      [{ SIGN_IN_LOCK_SECONDS: '3599' }],
+      [{ SIGN_IN_LOCK_SECONDS: '1' }],
+      [{ RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/3601' }],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/601' }],
+    ])('refuses a lock shorter than the period its failures are counted in: %o', (changed) => {
+      expect(() => loadSettings({ ...env, ...changed })).toThrow(new Error(refusal));
+    });
+
+    it.each([
+      [{}, 3600],
+      [{ SIGN_IN_LOCK_SECONDS: '3600' }, 3600],
+      [{ SIGN_IN_LOCK_SECONDS: '7200' }, 7200],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/600' }, 600],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '5/60' }, 600],
+    ])('admits one as long as the period, or longer: %o', (changed, seconds) => {
+      expect(loadSettings({ ...env, ...changed }).signInLockSeconds).toBe(seconds);
+    });
+
+    it('still refuses 0', () => {
+      expect(() => loadSettings({ ...env, SIGN_IN_LOCK_SECONDS: '0' })).toThrow(
+        'SIGN_IN_LOCK_SECONDS must be a whole number, 1 or more.',
+      );
+    });
+  });
+
   // docs/contracts/admission-signature.md, "The setting"; NFR-SE-17 (e).
   describe('ADMISSION_SECRET (FR-AU-89)', () => {
     const SECRET = 'A-secret_of-43-characters-for-the-tests-012';

@@ -363,6 +363,16 @@ describe('the time a refusal takes (FR-AU-81)', () => {
     expect(await work(() => signIn(known.email, WRONG))).toEqual(failed);
     expect(await work(() => signIn(address(), WRONG))).toEqual(failed);
     expect(await work(() => signIn(unverified.email))).toEqual(failed);
+    // Refused by the lock alone, with both limits open (FR-AU-81): Valkey is
+    // asked as often as for a failure, by checks that count nothing
+    // (sign-in-lock.test.ts, "counts no attempt that it refuses").
+    const locked = await person();
+    await db().user.update({
+      where: { id: locked.id },
+      data: { lockedUntil: new Date(Date.now() + 60 * 60 * 1000) },
+    });
+    expect(await work(() => signIn(locked.email, PASSWORD, from(8)))).toEqual(failed);
+    expect(await work(() => signIn(locked.email, WRONG, from(8)))).toEqual(failed);
     // Refused by a limit: nothing is counted, for an address with an account or
     // without. The first such refusal of a period also writes the entry of a
     // limit reached (NFR-SE-19), so two entries, and each later one writes the

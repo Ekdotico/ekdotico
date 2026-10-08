@@ -62,9 +62,15 @@ export default defineConfig({
       // The same for the requests for a password reset, 10 an hour, which
       // the runs of an afternoon would use up between them.
       RATE_LIMIT_RESET_PER_ADDRESS: '100000/3600',
-      // And for the lock of FR-AU-81: one network address is allowed five
-      // failed sign-ins for an email address, so it never reaches a
-      // twentieth. Here the fifth is the one that locks.
+      // And for the lock of FR-AU-81. Every request of a run comes from one
+      // network address, which is allowed five failed sign-ins for an email
+      // address in 15 minutes: left so, that limit would refuse by itself at
+      // the failure that locks, and a test could not tell the two apart. It
+      // is put out of the way, and the fifth failure for an address is the
+      // one that locks (tests/e2e/lock-and-link.spec.ts). No other test
+      // counts on the five: the abandoned second steps of two-factor.spec.ts
+      // count one failure each.
+      RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS: '50/900',
       RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '5/3600',
     },
     reuseExistingServer: false,

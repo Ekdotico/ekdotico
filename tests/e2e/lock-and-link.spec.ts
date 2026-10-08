@@ -1,8 +1,12 @@
 // The lock of an account after failed sign-ins, and the page that the sign-in
 // link of its email opens (FR-AU-81, FR-AU-87 (h), FR-AU-88; register D115;
-// A104, assumed). The server of the tests locks at the fifth failure
-// (playwright.config.ts), since every request of a run comes from one network
-// address, which is allowed five.
+// A104, assumed). The server of the tests locks at the fifth failure for an
+// email address, and the limit for one network address is out of the way
+// (playwright.config.ts). The limit that was reached refuses a sign-in as the
+// lock does, so the refusal alone shows no lock: the email of the lock and
+// the sign-in by its link are what only a lock produces, and the first test
+// reads both. That the lock alone refuses, with the counts cleared, is shown
+// in tests/integration/sign-in-lock.test.ts.
 import { expect, test, type Page } from '@playwright/test';
 import {
   NOTICE_TITLE,
@@ -52,6 +56,7 @@ async function lock(page: Page, person: Person) {
     });
     expect(refused.status()).toBe(401);
   }
+  // Only a lock sends this email: the limits send none.
   return mailFor(person.email, LINK);
 }
 

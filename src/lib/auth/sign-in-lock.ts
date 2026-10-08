@@ -10,12 +10,20 @@
 // A row that cannot be read rejects, and the sign-in that asked is refused
 // (NFR-SE-06 A10).
 //
+// ponytail: the lock runs on the clock of the application's instance, and the
+// counts that cause it on Valkey's (rate-limit.ts). With more than one
+// instance and clocks that differ, a lock ends on one instance that much
+// before it does on another. The upgrade path: the database's `now()` in the
+// three conditional statements below that compare a time, in `beginLock` and
+// the two of `claimSignInLink`.
+//
 // NFR-SE-19: nothing here logs an address, a token or a link. The token
 // leaves this module once, inside the email of FR-AU-87 (h).
 import { randomUUID } from 'node:crypto';
 import { db } from '../db.ts';
 import { handOver } from '../email/hand-over.ts';
 import type { EmailMessage } from '../email/index.ts';
+import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
 
@@ -77,6 +85,10 @@ export async function beginLock(email: string, now: Date = new Date()): Promise<
       data: { lockedUntil: until },
     });
     if (locked.count !== 1) return false;
+    // NFR-SE-19; the owner's decision of 9 October 2026: one entry for each
+    // lock, as there is one link and one email, in the transaction that
+    // begins it. The user, and never the address, the token or the link.
+    await securityLogIn(tx, { kind: 'sign_in_locked', userId: account.id });
     // The link of a lock that has ended is void, and is not left to the timer.
     await voidSignInLinks(tx, account.id);
     await tx.verification.create({
@@ -214,14 +226,20 @@ export async function openSignInLinkOf(
  *
  * The row of the account first, here and wherever a lock begins or is lifted,
  * so that the statements wait for one another in one order.
+ *
+ * FR-AU-81, FR-AU-83: the claim holds only for an account whose two-factor
+ * authentication is as the caller says, asked in the statement that lifts the
+ * lock: a claim that makes a session says off, and finds nothing where an
+ * enrolment was confirmed since the caller read the account; that statement
+ * waits for a confirmation that has not yet committed.
  */
 export async function claimSignInLink(
   tx: Rows,
-  link: Pick<OpenSignInLink, 'id' | 'userId'>,
+  link: Pick<OpenSignInLink, 'id' | 'userId' | 'twoFactorEnabled'>,
   now: Date = new Date(),
 ): Promise<boolean> {
   const lifted = await tx.user.updateMany({
-    where: { id: link.userId, lockedUntil: { gt: now } },
+    where: { id: link.userId, twoFactorEnabled: link.twoFactorEnabled, lockedUntil: { gt: now } },
     data: { lockedUntil: null },
   });
   if (lifted.count !== 1) return false;

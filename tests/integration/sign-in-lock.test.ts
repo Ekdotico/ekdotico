@@ -96,6 +96,31 @@ const hashOf = (token: string) => createHash('sha256').update(token).digest('hex
 const logged = () =>
   db().securityLogEntry.findMany({ orderBy: { createdAt: 'asc' }, select: { kind: true, userId: true } });
 
+/** How many entries of a kind the security log holds for a user. */
+const entries = (kind: 'sign_in_locked' | 'sign_in_by_link', userId: string) =>
+  db().securityLogEntry.count({ where: { kind, userId } });
+const entriesOf = (kind: string) => db().securityLogEntry.count({ where: { kind } });
+
+/**
+ * Makes the next transaction that is opened fail where it creates a row of
+ * `table`, with everything before it done: what the transaction wrote until
+ * then must be undone with it.
+ */
+function failCreateIn(table: 'verification' | 'securityLogEntry', message: string) {
+  type Work = (tx: Record<string, unknown>) => Promise<unknown>;
+  const client = db() as unknown as { $transaction: (work: Work) => Promise<unknown> };
+  const original = client.$transaction.bind(client);
+  vi.spyOn(client, '$transaction').mockImplementationOnce((work) =>
+    original((tx) => {
+      const rows = new Proxy(tx[table] as object, {
+        get: (target, key) =>
+          key === 'create' ? () => Promise.reject(new Error(message)) : Reflect.get(target, key),
+      });
+      return work(new Proxy(tx, { get: (target, key) => (key === table ? rows : Reflect.get(target, key)) }));
+    }),
+  );
+}
+
 /** An account with two-factor authentication on, and no session left. */
 async function enrolled(email = address()) {
   const id = await createAccount(auth, email);
@@ -180,11 +205,51 @@ describe('the twentieth failed sign-in for an email address in any hour (FR-AU-8
     await Promise.all(Array.from({ length: 6 }, () => beginLock(email)));
     expect(await links(id)).toHaveLength(1);
     expect(await mailTo(email)).toHaveLength(1);
+    // NFR-SE-19: and one entry, as there is one link and one email.
+    expect(await entries('sign_in_locked', id)).toBe(1);
     // A lock in force is not begun again.
     const { lockedUntil } = await account(id);
     await beginLock(email);
     expect((await account(id)).lockedUntil).toEqual(lockedUntil);
     expect(await mailTo(email)).toHaveLength(1);
+    expect(await entries('sign_in_locked', id)).toBe(1);
+  });
+
+  it('writes one entry for the lock where the twentieth failures arrive together, with the user and nothing else', async () => {
+    const { email, id } = await person();
+    await fail(email, MOST - 1);
+    // Six attempts at once, each from a network address of its own: one of them is the twentieth.
+    const together = await Promise.all(Array.from({ length: 6 }, () => attempt(email, WRONG)));
+    for (const each of together) await each.after();
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    const written = await db().securityLogEntry.findMany({ where: { kind: 'sign_in_locked' } });
+    expect(written).toHaveLength(1);
+    expect(written[0]).toEqual({
+      id: expect.any(String),
+      createdAt: expect.any(Date),
+      kind: 'sign_in_locked',
+      userId: id,
+      documentId: null,
+    });
+    // Refused attempts in the lock, and its end by the link, write no second one.
+    await (await attempt(email, WRONG)).after();
+    expect(await entries('sign_in_locked', id)).toBe(1);
+  });
+
+  it('writes the entry in the transaction that begins the lock: no lock, no entry, and no entry without the lock', async () => {
+    const { email, id } = await person();
+    // The lock is begun and its entry written, and then the link cannot be: all three are undone.
+    failCreateIn('verification', 'the link was not written');
+    await expect(beginLock(email)).rejects.toThrow('the link was not written');
+    expect((await account(id)).lockedUntil).toBeNull();
+    expect(await entriesOf('sign_in_locked')).toBe(0);
+    expect(await mailTo(email)).toHaveLength(0);
+    // And where the entry cannot be written, no lock begins without it.
+    failCreateIn('securityLogEntry', 'the entry was not written');
+    await expect(beginLock(email)).rejects.toThrow('the entry was not written');
+    expect((await account(id)).lockedUntil).toBeNull();
+    expect(await links(id)).toEqual([]);
+    expect(await mailTo(email)).toHaveLength(0);
   });
 
   it('begins the lock after the answer, so that the answer is the same for an address without an account', async () => {
@@ -223,6 +288,38 @@ describe('the twentieth failed sign-in for an email address in any hour (FR-AU-8
     expect((await account(id)).lockedUntil).toBeNull();
     expect((await sunk(sink)).filter((message) => message.to === email)).toEqual([]);
     expect(await links(id)).toEqual([]);
+    // NFR-SE-19: where the conditional statement begins no lock, no entry says
+    // one began; nor for an address that belongs to no account.
+    await fail(address(), MOST);
+    expect(await entriesOf('sign_in_locked')).toBe(0);
+  });
+
+  it('prints the class and code of the fault where the lock cannot be begun, and the limit still refuses', async () => {
+    const { email, id } = await person();
+    await fail(email, MOST - 1);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The transaction of `beginLock`, the next one that is opened.
+    vi.spyOn(db(), '$transaction').mockRejectedValueOnce(
+      Object.assign(new Error(`cannot reach the row of ${email}`), {
+        name: 'PrismaClientKnownRequestError',
+        code: 'P1001',
+      }),
+    );
+    const twentieth = await attempt(email, WRONG);
+    expect(await twentieth.response.text()).toBe(REFUSED);
+    expect(twentieth.left).toBe(1);
+    await twentieth.after();
+    // NFR-SE-19: the work, the class and the code, and nothing of the message.
+    expect(errors.mock.calls).toEqual([
+      ['after response: sign-in lock failed (PrismaClientKnownRequestError P1001)'],
+    ]);
+    expect((await account(id)).lockedUntil).toBeNull();
+    expect(await mailTo(email)).toHaveLength(0);
+    // The limit that was reached refuses as the lock would have, the right password included.
+    const next = await attempt(email);
+    expect(next.response.status).toBe(401);
+    expect(await next.response.text()).toBe(REFUSED);
+    expect(await sessions(id)).toEqual([]);
   });
 
   it('leaves no work behind before the twentieth, and throws where none can be left', async () => {
@@ -436,6 +533,35 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     expect((await db().account.findFirstOrThrow({ where: { userId: id } })).password).toBe(password);
     // The counts are cleared: the next sign-in by password is not refused by them.
     expect((await attempt(email)).response.status).toBe(200);
+    // NFR-SE-19: one entry for the sign-in by the link, with the user and
+    // nothing else; a sign-in by password writes none of that kind.
+    const written = await db().securityLogEntry.findMany({ where: { kind: 'sign_in_by_link' } });
+    expect(written).toEqual([
+      {
+        id: expect.any(String),
+        createdAt: expect.any(Date),
+        kind: 'sign_in_by_link',
+        userId: id,
+        documentId: null,
+      },
+    ]);
+  });
+
+  it('writes the entry of the sign-in with the claim: where it cannot be written, no one is signed in and the link stands', async () => {
+    const { email, id } = await person();
+    const token = await lock(email);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    failCreateIn('securityLogEntry', 'the entry was not written');
+    const failed = await confirm(token);
+    expect(failed.response.status).toBe(500);
+    expect(failed.response.headers.getSetCookie()).toEqual([]);
+    expect(errors.mock.calls).toEqual([['identity: request failed (Error)']]);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    expect(await entries('sign_in_by_link', id)).toBe(0);
+    // The link was not spent by the fault.
+    expect((await confirm(token)).response.status).toBe(200);
+    expect(await entries('sign_in_by_link', id)).toBe(1);
   });
 
   it('works once: a second confirmation is answered with the fixed statement and signs no one in', async () => {
@@ -447,6 +573,9 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     expect(await again.response.text()).toBe(NOT_VALID);
     expect(again.response.headers.getSetCookie()).toEqual([]);
     expect(await sessions(id)).toHaveLength(1);
+    // NFR-SE-19: the refused one is a sign-in refused, and no second sign-in by the link.
+    expect(await entries('sign_in_by_link', id)).toBe(1);
+    expect(await logged()).toContainEqual({ kind: 'sign_in_refused', userId: id });
   });
 
   it('begins one session where requests with one link arrive together', async () => {
@@ -456,6 +585,7 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     const statuses = answers.map(({ response }) => response.status).sort();
     expect(statuses).toEqual([200, 409, 409, 409, 409, 409]);
     expect(await sessions(id)).toHaveLength(1);
+    expect(await entries('sign_in_by_link', id)).toBe(1);
     for (const { response } of answers) {
       if (response.status === 409) expect(response.headers.getSetCookie()).toEqual([]);
     }
@@ -477,20 +607,27 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     // The claim asks both again, by itself: a link that ended, or whose lock
     // ended, between the read and the claim signs no one in.
     const [row] = await db().verification.findMany({ where: { value: id } });
-    expect(await claimSignInLink(db(), { id: row!.id, userId: id })).toBe(false);
+    expect(await claimSignInLink(db(), { id: row!.id, userId: id, twoFactorEnabled: false })).toBe(false);
     await db().verification.updateMany({
       where: { id: row!.id },
       data: { expiresAt: new Date(Date.now() + HOUR) },
     });
     await db().user.update({ where: { id }, data: { lockedUntil: new Date(Date.now() - 1000) } });
-    expect(await claimSignInLink(db(), { id: row!.id, userId: id })).toBe(false);
+    expect(await claimSignInLink(db(), { id: row!.id, userId: id, twoFactorEnabled: false })).toBe(false);
     await db().user.update({ where: { id }, data: { lockedUntil: new Date(Date.now() + HOUR) } });
+    // FR-AU-83: nor does a claim that makes a session take the link of an
+    // account whose two-factor authentication is on, and it lifts nothing.
+    await db().user.update({ where: { id }, data: { twoFactorEnabled: true } });
+    expect(await claimSignInLink(db(), { id: row!.id, userId: id, twoFactorEnabled: false })).toBe(false);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    await db().user.update({ where: { id }, data: { twoFactorEnabled: false } });
     // Nor does it take a row that is no sign-in link, a reset link among them.
     await db().verification.updateMany({
       where: { id: row!.id },
       data: { identifier: `reset-password:${hashOf(token)}` },
     });
-    expect(await claimSignInLink(db(), { id: row!.id, userId: id })).toBe(false);
+    expect(await claimSignInLink(db(), { id: row!.id, userId: id, twoFactorEnabled: false })).toBe(false);
     await db().verification.updateMany({ where: { id: row!.id }, data: { expiresAt: new Date(0) } });
     // NFR-RE-15: the timer removes the row.
     await deleteExpiredTokens();
@@ -503,6 +640,8 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     await db().user.update({ where: { id }, data: { lockedUntil: null } });
     expect((await confirm(token)).response.status).toBe(409);
     expect(await sessions(id)).toEqual([]);
+    // NFR-SE-19: a link that is void signs no one in, and no entry says it did.
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 
   it('answers a token that is not known as one that is spent, and a request with anything else 422', async () => {
@@ -616,6 +755,8 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect(await links(id)).toHaveLength(1);
     const [step] = await steps(id);
     expect(step!.identifier).toMatch(/^second-step:link:[0-9a-f]{64}$/);
+    // NFR-SE-19: no one is signed in where the step merely opens.
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
 
     const cookie = withCookies('', confirmed.response);
     const done = await secondStep(auth, cookie, nextCode(secret), 'totp', fresh());
@@ -628,6 +769,16 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect((await account(id)).lockedUntil).toBeNull();
     expect(await links(id)).toEqual([]);
     expect(await steps(id)).toEqual([]);
+    // NFR-SE-19: one entry, where the second step completed the sign-in.
+    expect(await db().securityLogEntry.findMany({ where: { kind: 'sign_in_by_link' } })).toEqual([
+      {
+        id: expect.any(String),
+        createdAt: expect.any(Date),
+        kind: 'sign_in_by_link',
+        userId: id,
+        documentId: null,
+      },
+    ]);
     // The link is spent, and the counts are cleared.
     expect((await confirm(token)).response.status).toBe(409);
     expect(await passwordStep(auth, email, fresh())).toContain('two_factor');
@@ -659,6 +810,8 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect((await secondStep(auth, cookie, nextCode(secret), 'totp', fresh())).status).toBe(401);
     expect((await confirm(token)).response.status).toBe(409);
     expect(await sessions(id)).toEqual([]);
+    // NFR-SE-19: an abandoned step signed no one in.
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 
   it('gives a link five codes in all, however often it is opened again', async () => {
@@ -691,6 +844,7 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect(await refused.text()).toBe(NOT_VALID);
     expect(await sessions(id)).toEqual([]);
     expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 
   it('completes no step once the lock has ended, the link being void with it', async () => {
@@ -754,6 +908,10 @@ describe('what is logged (NFR-SE-19)', () => {
     // The security log: the time, the kind, the user, and nothing else.
     const entries = await db().securityLogEntry.findMany();
     expect(entries.length).toBeGreaterThan(0);
+    // The lock, the sign-in by its link, and the refusals, each once or more.
+    expect(new Set(entries.map((entry) => entry.kind))).toEqual(
+      new Set(['sign_in_locked', 'sign_in_by_link', 'sign_in_refused', 'rate_limit_reached']),
+    );
     for (const entry of entries) {
       expect(Object.keys(entry).sort()).toEqual(['createdAt', 'documentId', 'id', 'kind', 'userId']);
       expect([null, id]).toContain(entry.userId);

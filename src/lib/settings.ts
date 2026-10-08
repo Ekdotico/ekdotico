@@ -237,6 +237,19 @@ export function loadSettings(env: Env = process.env): Settings {
   if (passwordMinLength > passwordMaxLength) {
     throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
   }
+  const limits = Object.fromEntries(
+    (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
+  ) as Record<LimitName, Limit>;
+  // At least 1: a lock of 0 seconds would be no lock, without a word.
+  const signInLockSeconds = wholeNumber(env, 'SIGN_IN_LOCK_SECONDS', 3600, 1);
+  // FR-AU-81, NFR-SE-07: the failures that caused a lock are still counted when
+  // a shorter lock ends, so the next single failure would be "the twentieth"
+  // again: a lock and an email for each failure, for the rest of the period.
+  if (signInLockSeconds < limits.FAILED_SIGN_IN_PER_EMAIL.windowSeconds) {
+    throw new Error(
+      'SIGN_IN_LOCK_SECONDS must be no less than the seconds of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL.',
+    );
+  }
 
   return {
     foundingTeamEmails: list
@@ -259,17 +272,14 @@ export function loadSettings(env: Env = process.env): Settings {
     // and with 0 wrong codes no count would ever reach the number.
     secondStepSeconds: wholeNumber(env, 'TWO_FACTOR_STEP_SECONDS', 600, 1),
     secondStepWrongCodes: wholeNumber(env, 'TWO_FACTOR_WRONG_CODES', 5, 1),
-    // At least 1: a lock of 0 seconds would be no lock, without a word.
-    signInLockSeconds: wholeNumber(env, 'SIGN_IN_LOCK_SECONDS', 3600, 1),
+    signInLockSeconds,
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
-    limits: Object.fromEntries(
-      (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
-    ) as Record<LimitName, Limit>,
+    limits,
   };
 }
 

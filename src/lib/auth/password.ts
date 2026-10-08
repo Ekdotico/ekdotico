@@ -30,7 +30,7 @@ import { logLimitReached, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
-import { notAdmitted, tooManyRequests, unauthenticated } from './route-answers.ts';
+import { notAdmitted, refusedOrigin, tooManyRequests, unauthenticated } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
 import { SECOND_STEP } from './second-step.ts';
@@ -118,6 +118,9 @@ export const requestPasswordReset = createAuthEndpoint(
   '/request-password-reset',
   { method: 'POST' },
   async (ctx) => {
+    // NFR-SE-17 (c): before anything of the request is read.
+    const foreign = await refusedOrigin(ctx.headers);
+    if (foreign) return foreign;
     assertCollecting();
     const entered = textFields(ctx.body, 'email');
     if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.requestShape);
@@ -179,6 +182,9 @@ const passwordRefused = (refusal: string) =>
  * no cookie of a session.
  */
 export const resetPassword = createAuthEndpoint('/reset-password', { method: 'POST' }, async (ctx) => {
+  // NFR-SE-17 (c): before anything of the request is read.
+  const foreign = await refusedOrigin(ctx.headers);
+  if (foreign) return foreign;
   // The notice is left for after the answer, which only a request that
   // collects can take: asked now, before anything is written.
   assertCollecting();

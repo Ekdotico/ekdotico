@@ -39,12 +39,12 @@ import type { EmailMessage } from '../email/index.ts';
 import { faultOf } from '../fault.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { oncePer } from '../rate-limit.ts';
-import { securityLog } from '../security-log.ts';
+import { securityLog, securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, TOKEN } from '../token.ts';
 import { valkey } from '../valkey.ts';
 import { stoppedByFoundingGate, type GatedAccount } from './founding-gate.ts';
-import { notAdmitted, unauthenticated } from './route-answers.ts';
+import { notAdmitted, refusedOrigin, unauthenticated } from './route-answers.ts';
 import { LINK_STEP, SECOND_STEP, SECOND_STEP_COOKIE } from './second-step.ts';
 import { holdSession, validateSessionRow, type ValidSession } from './session.ts';
 import {
@@ -526,6 +526,8 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   // would give five codes as often as it was opened again, where the row of
   // NFR-SE-07 gives a link five in all ("the link is spent and nothing begins
   // again").
+  // An accepted ceiling: that count is in Valkey alone. Were Valkey to lose it
+  // within the hour of the lock, the link would have five codes more.
   const most = settings().secondStepWrongCodes;
   const attempt = link
     ? await countCode(`sign-in-link-codes:${link.id}`, settings().signInLockSeconds)
@@ -618,7 +620,12 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
       // FR-AU-81: "the lock is lifted … when that sign-in completes", and the
       // link is spent. A link made void since it was read completes nothing.
       // Last, as a completed reset takes the account's row after the steps.
-      if (link && !(await claimSignInLink(tx, link))) throw STEP_GONE;
+      if (link) {
+        if (!(await claimSignInLink(tx, link))) throw STEP_GONE;
+        // NFR-SE-19; the owner's decision of 9 October 2026: the entry of a
+        // sign-in by the link, where it completes and not where its step opens.
+        await securityLogIn(tx, { kind: 'sign_in_by_link', userId: user.id });
+      }
       return 'claimed' as const;
     })
     .catch((error: unknown) => {
@@ -631,7 +638,8 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   }
   // FR-AU-81: "the counters of failed sign-ins for the address are cleared
   // when that sign-in completes". The sign-in stands whether or not this
-  // succeeds, as a reset does (password.ts).
+  // succeeds, as a reset does (password.ts), with the ceiling stated where
+  // the link signs in without a second step (sign-in.ts).
   if (link) {
     await clearFailedSignIns(user.email).catch(() =>
       console.error('second step: signed in by a link, counts of failed sign-ins not cleared'),
@@ -655,6 +663,10 @@ export const verifyTOTP = createAuthEndpoint(
   '/two-factor/verify-totp',
   { method: 'POST', requireHeaders: true },
   async (ctx) => {
+    // NFR-SE-17 (c): the second step carries no session, so the endpoint
+    // checks the origin itself, before anything of the request is read.
+    const foreign = await refusedOrigin(ctx.headers);
+    if (foreign) return foreign;
     const validation = await validateSessionRow(ctx.headers);
     // The enrolment itself: the founding-team gate lets it through (FR-AU-83).
     const own = validation.session ?? validation.stopped;
@@ -666,7 +678,8 @@ export const verifyTOTP = createAuthEndpoint(
 export const verifyBackupCode = createAuthEndpoint(
   '/two-factor/verify-backup-code',
   { method: 'POST', requireHeaders: true },
-  (ctx) => secondStep(ctx, 'recovery'),
+  // NFR-SE-17 (c): as above.
+  async (ctx) => (await refusedOrigin(ctx.headers)) ?? secondStep(ctx, 'recovery'),
 );
 
 // ── Turning it off, and replacing the recovery codes ────────────────────────

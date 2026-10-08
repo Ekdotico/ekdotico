@@ -1,7 +1,7 @@
 // The acceptance of an admission invitation, `POST /api/sign-up` (FR-AU-90,
 // FR-AU-09, FR-AU-82, FR-AU-02), through its route handler, against a
-// provisioned database. The origin check and the limit for each network
-// address are the proxy's, and are tested with it.
+// provisioned database. The limit for each network address is the proxy's,
+// and is tested with it; the origin check is the proxy's and the route's own.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -558,6 +558,45 @@ describe('the endpoint inside the identity library', () => {
   it('has no path for the library’s router to match', () => {
     const endpoint = auth().api.acceptAdmissionInvitation as unknown as { path?: string };
     expect(endpoint.path).toBeUndefined();
+  });
+});
+
+// NFR-SE-17 (c): the route checks the origin itself, since the proxy can be
+// skipped (docs/operations/deployment.md).
+describe('a request from another origin (NFR-SE-17 (c))', () => {
+  const FORBIDDEN =
+    '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}';
+  const forbidden = () => db().securityLogEntry.count({ where: { kind: 'forbidden', userId: null } });
+
+  it('is refused as the proxy refuses it, before the invitation is looked at, with one entry for the period', async () => {
+    const { token } = await invite('person@example.com');
+    const before = await forbidden();
+    const from = { 'x-forwarded-for': '203.0.113.50' };
+    for (const origin of ['https://evil.example', 'null', `${ORIGIN}.evil.example`, '']) {
+      const response = await submit({ token, name: 'A Person', password: PASSWORD }, undefined, {
+        origin,
+        ...from,
+      });
+      expect(response.status, origin).toBe(403);
+      expect(await response.text(), origin).toBe(FORBIDDEN);
+      expect(response.headers.getSetCookie(), origin).toEqual([]);
+    }
+    // Without the header at all.
+    const bare = await POST(
+      new Request(`${ORIGIN}/api/sign-up`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...from },
+        body: JSON.stringify({ token, name: 'A Person', password: PASSWORD }),
+      }),
+    );
+    expect(bare.status).toBe(403);
+    expect(await counts()).toEqual(NOTHING);
+    expect(await findOpenInvitation(token)).not.toBeNull();
+    // NFR-SE-19: a 403 has its entry, one for the period and the network
+    // address, however many requests were refused in it.
+    expect((await forbidden()) - before).toBe(1);
+    // And the invitation is accepted from the application's own origin.
+    expect((await submit({ token, name: 'A Person', password: PASSWORD })).status).toBe(201);
   });
 });
 

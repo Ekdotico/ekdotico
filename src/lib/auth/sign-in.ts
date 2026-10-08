@@ -25,10 +25,11 @@ import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { checkLimit, logLimitReached, takeLimit, type LimitResult } from '../rate-limit.ts';
-import { securityLog } from '../security-log.ts';
+import { securityLog, securityLogIn } from '../security-log.ts';
 import { passwordLength } from '../password-rules.ts';
 import { settings, type LimitName } from '../settings.ts';
 import { valkey } from '../valkey.ts';
+import { refusedOrigin } from './route-answers.ts';
 import { beginSecondStep, SECOND_STEP_COOKIE } from './second-step.ts';
 import {
   beginLock,
@@ -289,6 +290,15 @@ export async function checkCredentials(
     // table names a completed password reset and the link of a lock email, and
     // nothing else.
     if (open && !passed) await countFailure(pair, everywhere, email);
+    // Refused by the lock alone, with both limits open: the three calls that
+    // the count of a failure makes are made here as checks that count nothing,
+    // so that Valkey is asked as often as for a wrong password, or for an
+    // address without an account (FR-AU-81).
+    else if (locked && byPair.ok && byEmail.ok) {
+      await checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
+      await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+      await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+    }
     // The row whose hash was verified, for the caller that acts on the check
     // later: by then the password may be another (FR-AU-85, FR-AU-86).
     const verified =
@@ -325,6 +335,9 @@ export async function stillVerified(
 
 /** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
 export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST' }, async (ctx) => {
+  // NFR-SE-17 (c): before anything of the request is read.
+  const foreign = await refusedOrigin(ctx.headers);
+  if (foreign) return foreign;
   const entered = credentials(ctx.body);
   if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
   const { internalAdapter, authCookies, secret } = ctx.context;
@@ -434,6 +447,10 @@ const LINK_GONE = new Error('sign-in link: the link is void');
  * nowhere.
  */
 export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }, async (ctx) => {
+  // NFR-SE-17 (c): the request carries no session, so the library checks no
+  // origin for it. Before anything of the request is read.
+  const foreign = await refusedOrigin(ctx.headers);
+  if (foreign) return foreign;
   const entered = textFields(ctx.body, 'token');
   if (!entered) return errorResponse(422, 'invalid_request', INVALID_LINK_REQUEST);
   const { internalAdapter, authCookies, secret } = ctx.context;
@@ -450,26 +467,56 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
   const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
   ctx.setHeader('Cache-Control', 'no-store');
 
-  if (link.twoFactorEnabled) {
-    await beginSecondStep(ctx, link.userId, link.until);
+  const toSecondStep = async (until: Date) => {
+    await beginSecondStep(ctx, link.userId, until);
     if (held) {
       await db().session.deleteMany({ where: { token: held } });
       deleteSessionCookie(ctx);
     }
     return ctx.json({ twoFactorRedirect: true });
-  }
-
+  };
+  // Whether two-factor authentication is on is asked of the account as it is
+  // now, read after the link, and once more by the claim below.
   const user = await internalAdapter.findUserById(link.userId);
   if (!user) return notValid();
+  if ((user as { twoFactorEnabled?: unknown }).twoFactorEnabled === true) return toSecondStep(link.until);
+
+  // The password of the account as it is before the session is made, to be
+  // asked again by the claim. No account is without one (FR-AU-90); were one
+  // found, the link signs no one in.
+  const credential = await db().account.findFirst({
+    where: { userId: user.id, providerId: 'credential' },
+    select: { id: true, password: true, updatedAt: true },
+  });
+  if (!credential?.password) return notValid();
+  const password = { id: credential.id, hash: credential.password, updatedAt: credential.updatedAt };
   // The session first and the claim after, as a sign-in by password makes its
-  // session before it asks the password again: whatever makes the link void
-  // either finds this session among those it ends, or leaves the claim nothing.
+  // session before it asks the password again. A reset and a change of the
+  // password end the sessions they can see some statements before they make
+  // the link void, and a claim made between the two would find the link whole
+  // and leave a session they never saw. So the claim begins by asking, as a
+  // write, whether the password is still the one read above. That waits for a
+  // reset or a change that has taken the password and not yet committed, and
+  // then finds another hash; one that took it later waits for this claim, and
+  // finds this session among those it ends.
   const session = await internalAdapter.createSession(user.id);
   if (!session) throw new NoSession('sign-in link: no session');
   const claimed = await db()
     .$transaction(async (tx) => {
+      // First of all: the row of the credentials, then the session, then the
+      // row of the account, as a reset takes them (password.ts), so that none
+      // waits for another in a circle.
+      if (!(await stillVerified(password, tx))) throw LINK_GONE;
       if (held) await tx.session.deleteMany({ where: { token: held } });
-      if (!(await claimSignInLink(tx, link))) throw LINK_GONE;
+      // FR-AU-83: only for an account whose two-factor authentication is still
+      // off. An enrolment confirmed since the read above leaves the claim nothing.
+      if (!(await claimSignInLink(tx, { id: link.id, userId: link.userId, twoFactorEnabled: false }))) {
+        throw LINK_GONE;
+      }
+      // NFR-SE-19; the owner's decision of 9 October 2026: the sign-in by
+      // the link has its entry, with the user and nothing else, written with
+      // the claim so that neither stands without the other.
+      await securityLogIn(tx, { kind: 'sign_in_by_link', userId: link.userId });
       return true;
     })
     .catch((error: unknown) => {
@@ -478,12 +525,21 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
     });
   if (!claimed) {
     await db().session.deleteMany({ where: { token: session.token } });
+    // Where two-factor authentication was turned on meanwhile the link still
+    // stands, and its sign-in goes on to the second step: "after the second
+    // step of FR-AU-83 where two-factor authentication is on". No session is
+    // made on this path without it.
+    const standing = await findOpenSignInLink(entered.token);
+    if (standing?.twoFactorEnabled) return toSecondStep(standing.until);
     return notValid();
   }
   // "The counters of failed sign-ins for the address are cleared when that
   // sign-in completes." The sign-in stands whether or not this succeeds, as a
   // reset does (password.ts): uncleared, the counts refuse for the rest of
   // their hour and no longer.
+  // An accepted ceiling: after a fault of Valkey here the count for the
+  // address is still at its number while the lock is lifted, so until those
+  // failures leave their hour, the next lock costs one failure and not twenty.
   await clearFailedSignIns(link.email).catch(() =>
     console.error('sign-in link: signed in, counts of failed sign-ins not cleared'),
   );
