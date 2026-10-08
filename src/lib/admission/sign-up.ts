@@ -11,6 +11,7 @@
 import type { BetterAuthPlugin } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { setSessionCookie } from 'better-auth/cookies';
+import { readJson } from '../http.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
 
@@ -31,27 +32,8 @@ const MAX_BODY_BYTES = 4096;
  * The JSON of a request to `POST /api/sign-up`, or null where the body is too
  * long or is not JSON. Bounded, because the path carries no session.
  */
-export async function readSignUpBody(request: Request): Promise<unknown> {
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  if (request.body) {
-    const reader = request.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      length += value.byteLength;
-      if (length > MAX_BODY_BYTES) {
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-  }
-  try {
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
-  } catch {
-    return null;
-  }
+export function readSignUpBody(request: Request): Promise<unknown> {
+  return readJson(request, MAX_BODY_BYTES);
 }
 
 // The library takes the shape of a body from a schema. This one admits

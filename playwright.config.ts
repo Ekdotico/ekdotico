@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
-import { APP_ORIGIN } from './tests/e2e/origin.ts';
+import { APP_ORIGIN, APP_PORT } from './tests/e2e/origin.ts';
 
 // The end-to-end tests run on Chromium. The other three browsers of NFR-IC-05
 // join when the suite covers the release.
@@ -41,6 +41,8 @@ export default defineConfig({
     // The process environment wins over .env.local, which a development
     // machine has and CI has not. The secrets are for this run and nothing else.
     env: {
+      // `next start` listens where PORT says: 3000, or E2E_PORT (tests/e2e/origin.ts).
+      PORT: APP_PORT,
       FOUNDING_TEAM_EMAILS: '',
       APP_ORIGIN,
       DATABASE_URL: process.env.E2E_DATABASE_URL,

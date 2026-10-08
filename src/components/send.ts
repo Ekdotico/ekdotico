@@ -18,15 +18,20 @@ const NOT_REACHED = 'The request did not reach Ekdotico. Check the connection an
 const NOT_READ = 'Ekdotico could not complete the request. Try again in a few minutes.';
 
 /**
- * A POST to a path of this origin. The browser adds the `Origin` header that
- * the proxy checks (NFR-SE-17 (c)). Nothing is logged: a body can hold a
- * password or the token of a link (NFR-SE-19).
+ * A request that changes state, to a path of this origin: a POST, or the
+ * method a route names. The browser adds the `Origin` header that the proxy
+ * checks (NFR-SE-17 (c)). Nothing is logged: a body can hold a password or the
+ * token of a link (NFR-SE-19).
  */
-export async function send(path: string, body?: unknown): Promise<Fault | null> {
+export async function send(
+  path: string,
+  body?: unknown,
+  method: 'POST' | 'PATCH' = 'POST',
+): Promise<Fault | null> {
   let response: Response;
   try {
     response = await fetch(path, {
-      method: 'POST',
+      method,
       credentials: 'same-origin',
       cache: 'no-store',
       ...(body === undefined

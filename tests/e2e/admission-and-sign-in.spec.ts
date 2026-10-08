@@ -18,7 +18,8 @@ import {
 } from './account.ts';
 
 const noticeTitle = { level: 1, name: NOTICE_TITLE } as const;
-const firstScreen = { level: 1, name: 'Signed in' } as const;
+// The list of documents (FR-ED-35), whose own tests are in documents.spec.ts.
+const firstScreen = { level: 1, name: 'Documents' } as const;
 
 test('from an invitation to the first screen, out, and in again', async ({ page }) => {
   test.slow();
@@ -84,7 +85,8 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   // In place of the page's content: the content is not in the response at all.
   const underneath = await (await page.request.get('/')).text();
   expect(underneath).toContain('Continue');
-  expect(underneath).not.toContain('documents are planned');
+  expect(underneath).not.toContain('New document');
+  expect(underneath).not.toContain('No documents yet');
 
   // "Reloading a page or opening another address does not pass it."
   await page.reload();
@@ -103,8 +105,12 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   // "After the acknowledgement the user continues to the address they had asked for."
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
   await expect(page).toHaveURL('/');
-  await expect(page).toHaveTitle('Signed in – Ekdotico');
+  await expect(page).toHaveTitle('Documents – Ekdotico');
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  // The content the notice stood in place of is in the response now.
+  const acknowledged = await (await page.request.get('/')).text();
+  expect(acknowledged).toContain('New document');
+  expect(acknowledged).toContain('No documents yet');
   await expect(page.getByText(NOTICE_BODY)).toHaveCount(0);
   await expectNoSidewaysScroll(page);
   await screens(page, 'first-screen');
