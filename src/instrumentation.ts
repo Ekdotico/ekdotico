@@ -4,8 +4,10 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const { loadSettings } = await import('./lib/settings.ts');
+    const { assertContractVersion } = await import('./lib/istorico/index.ts');
     try {
       loadSettings();
+      assertContractVersion();
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);

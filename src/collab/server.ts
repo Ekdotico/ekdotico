@@ -1,6 +1,7 @@
 // The collaboration server process. In the walking skeleton it only answers its
 // health check; Hocuspocus is mounted here when the editor is built.
 import { createServer } from 'node:http';
+import { assertContractVersion } from '../lib/istorico/index.ts';
 import { loadSettings } from '../lib/settings.ts';
 
 export const HEALTH_PATH = '/collab/health';
@@ -18,6 +19,7 @@ export function createCollabServer() {
 
 if (import.meta.main) {
   loadSettings();
+  assertContractVersion();
   const port = Number(process.env.COLLAB_PORT ?? 1234);
   const server = createCollabServer().listen(port, () => {
     console.log(`collaboration server listening on ${port}`);
