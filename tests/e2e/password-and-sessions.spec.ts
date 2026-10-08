@@ -35,7 +35,7 @@ const CHANGED = 'The password is changed. Every other session of this account ha
 const UNAUTHENTICATED = 'This request needs a signed-in session. Sign in and try again.';
 
 const noticeTitle = { level: 1, name: NOTICE_TITLE } as const;
-const firstScreen = { level: 1, name: 'Signed in' } as const;
+const firstScreen = { level: 1, name: 'Documents' } as const;
 
 /** An account that has acknowledged the notice, signed in on this page. */
 async function ready(page: Page, person = newPerson()) {
