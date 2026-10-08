@@ -54,6 +54,8 @@ export async function sendFor(
   } catch {
     return { fault: { code: 'not_reached', message: NOT_REACHED } };
   }
+  // Read to its end whatever it holds: a body that is left unread keeps its
+  // request open in the browser for as long as the page stays.
   if (response.ok) return { answer: await response.json().catch(() => null) };
   try {
     const { error } = (await response.json()) as { error?: Partial<Fault> };

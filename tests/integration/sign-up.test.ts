@@ -40,7 +40,7 @@ async function invite(email: string, now?: Date) {
   return { id: result.invitation.id, token: /\/sign-up\/([A-Za-z0-9_-]+)/.exec(result.message.text)![1]! };
 }
 
-function submit(body: unknown, raw?: string) {
+function submit(body: unknown, raw?: string, headers: Record<string, string> = {}) {
   return POST(
     new Request(`${ORIGIN}/api/sign-up`, {
       method: 'POST',
@@ -49,6 +49,7 @@ function submit(body: unknown, raw?: string) {
         origin: ORIGIN,
         'user-agent': BROWSER,
         'x-forwarded-for': '198.51.100.7',
+        ...headers,
       },
       body: raw ?? JSON.stringify(body),
     }),
@@ -351,6 +352,80 @@ describe('an account whose session cannot be started (FR-AU-90)', () => {
     // The person signs in on the sign-in page.
     vi.restoreAllMocks();
     expect((await signIn(auth, 'private.person@example.com', PASSWORD)).status).toBe(200);
+  });
+});
+
+// The owner's decision of 8 October 2026: a sign-up ends the session the
+// browser already held, as a sign-in does (sign-in.test.ts).
+describe('a browser that already holds a session', () => {
+  /** Another account, signed in: its cookies, and the row of its session. */
+  async function holder() {
+    const userId = await createAccount(auth, 'holder@example.com');
+    const cookie = cookiesOf(await signIn(auth, 'holder@example.com'));
+    const { id } = await db().session.findFirstOrThrow({ where: { userId } });
+    return { userId, cookie, sessionId: id };
+  }
+
+  it('loses that session at a sign-up, and gets the cookies of the new one alone', async () => {
+    const held = await holder();
+    const { token } = await invite('person@example.com');
+    const response = await submit({ token, name: 'A Person', password: PASSWORD }, undefined, {
+      cookie: held.cookie,
+    });
+    expect(await response.json()).toEqual({ signedIn: true });
+
+    expect(await db().session.count({ where: { id: held.sessionId } })).toBe(0);
+    expect(await db().session.count({ where: { userId: held.userId } })).toBe(0);
+    const user = await db().user.findUniqueOrThrow({ where: { email: 'person@example.com' } });
+    const cookies = response.headers.getSetCookie();
+    expect(cookies.map((cookie) => cookie.split('=')[0]).sort()).toEqual([
+      '__Secure-better-auth.session_data',
+      '__Secure-better-auth.session_token',
+    ]);
+    const { session } = await validateSessionRow(new Headers({ cookie: cookiesOf(response) }));
+    expect(session?.userId).toBe(user.id);
+    // The cookies it held open nothing any more.
+    expect((await validateSessionRow(new Headers({ cookie: held.cookie }))).session).toBeNull();
+  });
+
+  it('keeps that session where the sign-up creates nothing', async () => {
+    const held = await holder();
+    const { token } = await invite('person@example.com');
+    const sent = { cookie: held.cookie };
+    expect(
+      (await submit({ token: 'A'.repeat(43), name: 'A Person', password: PASSWORD }, undefined, sent)).status,
+    ).toBe(409);
+    expect((await submit({ token, name: '', password: 'short' }, undefined, sent)).status).toBe(422);
+    expect((await submit(undefined, 'not JSON', sent)).status).toBe(422);
+    expect(await db().session.count({ where: { id: held.sessionId } })).toBe(1);
+    expect((await validateSessionRow(new Headers({ cookie: held.cookie }))).session?.userId).toBe(
+      held.userId,
+    );
+  });
+
+  it('is told of nothing in silence where that session cannot be ended: the fault is printed, and the cookies are cleared', async () => {
+    const held = await holder();
+    const { token } = await invite('person@example.com');
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A fault of the database itself, as in sign-out.test.ts.
+    database.sql('ALTER TABLE "Session" RENAME TO "SessionAway"');
+    let response: Response;
+    try {
+      response = await submit({ token, name: 'A Person', password: PASSWORD }, undefined, {
+        cookie: held.cookie,
+      });
+    } finally {
+      database.sql('ALTER TABLE "SessionAway" RENAME TO "Session"');
+    }
+    // The account stands (FR-AU-90), and the browser is signed in as no one.
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ signedIn: false });
+    expect(printed.mock.calls).toEqual([
+      ['sign-up: account created, session not started (PrismaClientKnownRequestError P2021)'],
+    ]);
+    const cookies = response.headers.getSetCookie();
+    expect(cookies.some((each) => each.includes('session_token=;'))).toBe(true);
+    expect(cookies.some((each) => /session_token=[^;]/.test(each))).toBe(false);
   });
 });
 

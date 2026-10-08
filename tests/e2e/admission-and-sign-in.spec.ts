@@ -206,6 +206,51 @@ test('an invitation that is not open shows the fixed statement and nothing to fi
   expect(elsewhere).toEqual([]);
 });
 
+// The owner's decision of 8 October 2026: the address without a token is a
+// page without a session, which shows the statement (FR-AU-90), and not the
+// sign-in page.
+test('the sign-up address without a token shows the fixed statement, and not the sign-in page', async ({
+  page,
+}) => {
+  const elsewhere = watchOrigins(page);
+  const answer = await page.goto('/sign-up');
+  expect(answer?.status()).toBe(200);
+  expect(new URL(page.url()).pathname).toBe('/sign-up');
+  await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_OPEN);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('textbox')).toHaveCount(0);
+  await expect(page.getByRole('button')).toHaveCount(0);
+  await expect(page.getByRole('main').getByRole('link')).toHaveCount(0);
+  await expectNoSidewaysScroll(page);
+  expect(elsewhere).toEqual([]);
+});
+
+// NFR-SE-19; the owner's decision of 8 October 2026: the address of the page
+// holds a token, so the answer itself says that it is sent on to no one, and
+// that nothing may keep the page. As a header, whatever the page holds.
+test('a page whose address holds a token is answered with no-referrer and no-store, open or not', async ({
+  page,
+}) => {
+  const elsewhere = watchOrigins(page);
+  for (const link of [await invite(newPerson().email), `/sign-up/${'x'.repeat(43)}`]) {
+    const answer = await page.goto(link);
+    const headers = answer!.headers();
+    expect(headers['referrer-policy']).toBe('no-referrer');
+    expect(headers['cache-control']).toContain('no-store');
+    await expect(page.locator('meta[name="referrer"]')).toHaveAttribute('content', 'no-referrer');
+    // Nothing on the page leads anywhere but to this origin.
+    const targets = await page
+      .locator('a[href], link[href], script[src], img[src], form[action]')
+      .evaluateAll((all) =>
+        all.map((each) => (each as HTMLAnchorElement).href || (each as HTMLImageElement).src || ''),
+      );
+    const own = new URL(page.url()).origin;
+    const away = targets.filter((target) => target !== '' && new URL(target).origin !== own);
+    expect(away).toEqual([]);
+  }
+  expect(elsewhere).toEqual([]);
+});
+
 test('an invitation that was accepted is not open, to its own link or to a second submission', async ({
   page,
   browser,
@@ -271,8 +316,10 @@ test('the sign-in page offers sign-up to no one, and asks no other origin for an
   await page.goto('/sign-in');
   await expect(page).toHaveTitle('Sign in – Ekdotico');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sign in');
-  // FR-AU-57. No link at all: the reset page is a later slice.
-  await expect(page.getByRole('link')).toHaveCount(0);
+  // FR-AU-57. One link, to the page that asks for a password reset (FR-AU-86).
+  await expect(page.getByRole('link')).toHaveCount(1);
+  await expect(page.getByRole('link')).toHaveText('Set a new password');
+  await expect(page.getByRole('link')).toHaveAttribute('href', '/reset-password');
   await expect(page.getByRole('main')).not.toContainText(/sign up|create account|invitation/i);
   // FR-AU-88: each field has a visible label and the attribute a password manager fills by.
   await expect(page.getByLabel('Email address')).toHaveAttribute('autocomplete', 'username');

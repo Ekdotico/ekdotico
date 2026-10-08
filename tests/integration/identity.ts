@@ -20,6 +20,8 @@ export function prepare(label: string, env: Record<string, string> = {}) {
     EMAIL_TRANSPORT: 'sink',
     EMAIL_SINK_DIRECTORY: join(tmpdir(), 'ekdotico-test-mail'),
     DATABASE_URL: database.appUrl,
+    // The origin is not a local one, so a process does not start with 0.
+    TRUSTED_PROXY_COUNT: '1',
     // The limiter keys its counters by this secret, so a secret of its own
     // gives each run counters of its own in the shared Valkey.
     AUTH_SECRET: `test-${randomBytes(24).toString('hex')}`,
@@ -67,6 +69,49 @@ export function signIn(auth: Auth, email: string, password = PASSWORD, headers: 
       body: JSON.stringify({ email, password }),
     }),
   );
+}
+
+/**
+ * A POST through the handler as the route makes it (src/app/api/auth/[...all]):
+ * the response, and `after`, which runs what the endpoint left for after its
+ * response. Until `after` is called none of that has started.
+ */
+export async function post(auth: Auth, path: string, body?: unknown, headers: Record<string, string> = {}) {
+  const { collecting } = await import('../../src/lib/after-response.ts');
+  const { result, tasks } = await collecting(() =>
+    auth().handler(
+      new Request(`${ORIGIN}/api/auth${path}`, {
+        method: 'POST',
+        headers: {
+          origin: ORIGIN,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          ...headers,
+        },
+        body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+      }),
+    ),
+  );
+  return {
+    response: result,
+    left: tasks.length,
+    after: async () => {
+      for (const task of tasks.splice(0)) await task();
+    },
+  };
+}
+
+/** The messages the local sink holds, oldest first, each as its headers and its text. */
+export async function sunk(directory: string) {
+  const { readdirSync, readFileSync, existsSync } = await import('node:fs');
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory)
+    .sort()
+    .map((name) => {
+      const file = readFileSync(`${directory}/${name}`, 'utf8');
+      const [head, ...text] = file.split('\n\n');
+      const header = (label: string) => new RegExp(`^${label}: (.*)$`, 'm').exec(head!)?.[1];
+      return { to: header('To'), subject: header('Subject'), text: text.join('\n\n') };
+    });
 }
 
 /** The Cookie header a browser would send back after this response. */

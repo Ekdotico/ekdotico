@@ -17,6 +17,7 @@
 // anything of the address was read, so its time shows nothing of the address.
 import { createHmac, randomUUID } from 'node:crypto';
 import { setTimeout as pause } from 'node:timers/promises';
+import type { AuthContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { addressBucket } from '../client-address.ts';
@@ -93,35 +94,80 @@ class NoSession extends Error {
   name = 'SignInNoSession';
 }
 
-/** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
-export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST' }, async (ctx) => {
-  const entered = credentials(ctx.body);
-  if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
-  // FR-AU-02: an address is stored, and so compared, in lower case.
-  // No address is longer than 254 characters; what is looked up and counted
-  // is bounded, whatever was sent.
-  const email = entered.email.slice(0, 255).toLowerCase();
-  const { internalAdapter, password: hasher, authCookies, secret } = ctx.context;
-  // NFR-SE-07: 5 in 15 minutes "for one email address from one network
-  // address", and 20 in an hour for the address entered, from everywhere. A
-  // bucket holds no space, so the first key cannot be read in two ways.
-  const pair = `${addressBucket(ctx.headers ?? new Headers())} ${email}`;
+// NFR-SE-07: "a completed password reset … clears the counters of this row for
+// that email address". The count for one address from one network address is
+// kept under a key for each network address, and those cannot be listed to be
+// deleted. So every key of both counts holds a number kept for the address,
+// and clearing raises the number: the counts made under the earlier one are
+// never read again, and leave Valkey when their periods have passed.
+// ponytail: the number has no expiry, one small key for each address that ever
+// reset; were Valkey to evict it, the counts made since the reset are lost with it.
+const generationKey = (email: string) =>
+  `sign-in-generation:${createHmac('sha256', settings().authSecret).update(`sign-in-generation:${email}`).digest('hex')}`;
 
-  const attempt = await inTurn(email, async () => {
+/**
+ * Clears both counts of failed sign-ins for an email address, from every
+ * network address (NFR-SE-07, FR-AU-86). The link of a lock email calls it
+ * too (FR-AU-81).
+ */
+export async function clearFailedSignIns(email: string): Promise<void> {
+  await valkey().incr(generationKey(email.toLowerCase()));
+}
+
+/** A limit on failed sign-ins as a check found it, with the key it is counted under. */
+type Reached = [name: LimitName, key: string, limit: LimitResult];
+
+/** The address as it is stored and compared (FR-AU-02), and bounded: no address is longer than 254 characters. */
+const normalised = (email: string) => email.slice(0, 255).toLowerCase();
+
+/**
+ * One check of a password for an email address, as a sign-in makes it and as
+ * every prompt for the current password does: "every wrong password at any
+ * prompt counts" as a failed sign-in, "a refused attempt counts toward
+ * nothing" (the owner's answer to Q10). It checks the two limits of
+ * NFR-SE-07, verifies, and counts a failure, as one step for the address.
+ *
+ * `passed` is false whatever the cause, and the caller answers with the one
+ * statement of FR-AU-81. `user` is the account of the address, where there is
+ * one. `limits` are the two limits as they stood, each with the key it is
+ * counted under, for the caller that logs one reached (NFR-SE-19).
+ *
+ * An attempt that got no turn in time is a refusal and no fault: it verified
+ * nothing and counts nothing, nothing was read of the address, and it is
+ * answered as every other refusal is.
+ */
+export async function checkCredentials(
+  context: Pick<AuthContext, 'internalAdapter' | 'password'>,
+  headers: Headers | undefined,
+  enteredEmail: string,
+  enteredPassword: string,
+) {
+  const email = normalised(enteredEmail);
+  const { internalAdapter, password: hasher } = context;
+
+  return inTurn(email, async () => {
+    // NFR-SE-07: 5 in 15 minutes "for one email address from one network
+    // address", and 20 in an hour for the address entered, from everywhere.
+    // Neither the number nor a bucket holds a space, so the first key cannot
+    // be read in two ways.
+    const generation = (await valkey().get(generationKey(email))) ?? '0';
+    const pair = `${generation} ${addressBucket(headers ?? new Headers())} ${email}`;
+    const everywhere = `${generation} ${email}`;
     // Both are asked, and the account is read, on every path: the same work
     // whether a limit is reached, the address is known, or the password is right.
     const [byPair, byEmail] = await Promise.all([
       checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair),
-      checkLimit('FAILED_SIGN_IN_PER_EMAIL', email),
+      checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere),
     ]);
     const open = byPair.ok && byEmail.ok;
     // Two reads on every path. Asked for the user with its credentials in one
     // call, the library reads the credentials only where it found a user: one
     // read fewer for an address that belongs to no account.
     const user = (await internalAdapter.findUserByEmail(email))?.user;
-    const hash = (await internalAdapter.findAccounts(user?.id ?? '')).find(
+    const credential = (await internalAdapter.findAccounts(user?.id ?? '')).find(
       (account) => account.providerId === 'credential' && account.accountId === user?.id,
-    )?.password;
+    );
+    const hash = credential?.password;
     // Verified only where the attempt could succeed: no limit is reached (a
     // refused attempt is not verified; the owner's answer to Q10), the address
     // belongs to an account with a password, the address is verified
@@ -129,8 +175,8 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // Every other attempt hashes once instead, as the library does for an
     // unknown address, so each path runs scrypt exactly once.
     const passed =
-      open && user?.emailVerified && hash && passwordLength(entered.password) <= settings().passwordMaxLength
-        ? await hasher.verify({ hash, password: entered.password })
+      open && user?.emailVerified && hash && passwordLength(enteredPassword) <= settings().passwordMaxLength
+        ? await hasher.verify({ hash, password: enteredPassword })
         : (await hasher.hash(''), false);
     // Counted on each failure, for an address that belongs to no account as
     // for one that does. An attempt refused by a limit is not counted and
@@ -139,47 +185,89 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // nothing else.
     if (open && !passed) {
       await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
-      await takeLimit('FAILED_SIGN_IN_PER_EMAIL', email);
+      await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
     }
-    return { user, passed, byPair, byEmail };
+    // The row whose hash was verified, for the caller that acts on the check
+    // later: by then the password may be another (FR-AU-85, FR-AU-86).
+    const verified =
+      passed && credential && hash ? { id: credential.id, hash, updatedAt: credential.updatedAt } : null;
+    const limits: Reached[] = [
+      ['FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair, byPair],
+      ['FAILED_SIGN_IN_PER_EMAIL', everywhere, byEmail],
+    ];
+    return { user, passed, verified, limits };
   }).catch((error: unknown) => {
-    // An attempt that got no turn in time is a refusal and no fault: it
-    // verified nothing and counts nothing, and is answered below as every
-    // other refusal is.
-    if (error instanceof NoTurn) return null;
+    if (error instanceof NoTurn) return { user: undefined, passed: false, verified: null, limits: [] };
     throw error;
   });
-  const user = attempt?.user;
+}
 
-  if (!user || !attempt?.passed) {
+/**
+ * Whether the password of the account is still the one that was verified,
+ * asked as a write that changes nothing: the statement waits for a reset or a
+ * change of password that has not yet committed, and then finds its hash. A
+ * plain read would not wait, and would see the old hash beside a transaction
+ * that has already deleted the sessions it could see.
+ */
+async function stillVerified(verified: { id: string; hash: string; updatedAt: Date }) {
+  const { count } = await db().account.updateMany({
+    where: { id: verified.id, password: verified.hash },
+    // Its own value: without it Prisma would write the time of this statement.
+    data: { updatedAt: verified.updatedAt },
+  });
+  return count === 1;
+}
+
+/** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
+export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST' }, async (ctx) => {
+  const entered = credentials(ctx.body);
+  if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
+  const { internalAdapter, authCookies, secret } = ctx.context;
+  const { user, verified, limits } = await checkCredentials(
+    ctx.context,
+    ctx.headers,
+    entered.email,
+    entered.password,
+  );
+  const refused = async () => {
     // NFR-SE-19: the user where the address belongs to an account, and never the address.
     await securityLog({ kind: 'sign_in_refused', userId: user?.id });
     // NFR-SE-19: a sign-in refused because a limit was already reached is that
-    // event too, once for each period of the limit (rate-limit.ts). The same
-    // work for an address with an account as for one without.
-    const limits: [LimitName, string, LimitResult | undefined][] = [
-      ['FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair, attempt?.byPair],
-      ['FAILED_SIGN_IN_PER_EMAIL', email, attempt?.byEmail],
-    ];
+    // event too, once for each period of the limit. The same work for an
+    // address with an account as for one without.
     for (const [name, key, limit] of limits) {
-      if (limit && !limit.ok) await logLimitReached(name, key, limit.retryAfterSeconds, user?.id);
+      if (!limit.ok) await logLimitReached(name, key, limit.retryAfterSeconds, user?.id);
     }
     // The owner's answer to Q1: no 429 for these limits, which would show that an address is limited.
     return errorResponse(401, 'sign_in_refused', SIGN_IN_REFUSED);
+  };
+  if (!user || !verified) return refused();
+
+  const session = await internalAdapter.createSession(user.id);
+  if (!session) throw new NoSession('sign-in: no session');
+  // FR-AU-85, FR-AU-86: "setting it ends every session of the account". A
+  // password set since the check has ended the sessions it could see, and this
+  // one may not have been among them, so it is ended here: the session is
+  // made first and the password asked after, which leaves no order in which
+  // one made by the old password stands. Not counted as a failed sign-in: the
+  // password was the right one when it was checked.
+  if (!(await stillVerified(verified))) {
+    // By the application's own client, which rejects on a fault: the
+    // library's deletion can skip the row without a word.
+    await db().session.deleteMany({ where: { token: session.token } });
+    return refused();
   }
 
   // A session the browser already holds is ended, whoever it belongs to: its
   // cookie is replaced below, and no browser could sign out of it afterwards.
-  // No requirement asks this of a sign-in (FR-AU-81 asks it of the link of a
-  // lock email alone): it is the application's choice, raised with the owner
-  // in the register questions of the pull request. The row is deleted by the
+  // The owner's decision of 8 October 2026, for a sign-in and for a sign-up
+  // (src/lib/admission/sign-up.ts); FR-AU-81 itself asks it of the link of a
+  // lock email alone. A sign-in that fails ends nothing. The row is deleted by the
   // application's own client, which rejects on a fault and is quiet where the
   // row is absent; the library's deletion can skip the row without a word.
   const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
   if (held) await db().session.deleteMany({ where: { token: held } });
 
-  const session = await internalAdapter.createSession(user.id);
-  if (!session) throw new NoSession('sign-in: no session');
   // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
   await setSessionCookie(ctx, { session, user }, false);
   // Where two-factor authentication is on, the library's plugin ends this

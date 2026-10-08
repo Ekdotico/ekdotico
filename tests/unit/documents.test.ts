@@ -3,6 +3,7 @@
 // the routes are tested against one in tests/integration/documents.test.ts.
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TITLE, readTitle } from '../../src/lib/documents/documents.ts';
+import { fieldText } from '../../src/lib/field-text.ts';
 import {
   defaultPermissionSet,
   holds,
@@ -242,24 +243,41 @@ describe('the rule of a title (FR-ED-35, NFR-SE-08, NFR-I18-03)', () => {
       `"double" 'single' \`back\` & <b>bold</b>`,
       '‮right to left‬ ‏ mark',
       'Ελληνικά, 中文, العربية, 😀 👩‍👩‍👧‍👦',
-      '  spaces kept at both ends  ',
+      'spaces   kept\tbetween\nthe ends',
       'a\tb\nc',
     ]) {
       expect(readTitle(title)).toEqual({ ok: true, title });
     }
   });
 
-  it('admits 200 characters and refuses 201, counting a character as one code point', () => {
+  // The owner's decision of 8 October 2026, which amends NFR-SE-08.
+  it('takes the white space from both ends, as of a name, and from nowhere else', () => {
+    expect(readTitle('  spaces at both ends  ')).toEqual({ ok: true, title: 'spaces at both ends' });
+    expect(readTitle('\t\n a  b  　\r\n')).toEqual({ ok: true, title: 'a  b' });
+    expect(readTitle(' left')).toEqual({ ok: true, title: 'left' });
+    expect(readTitle('right ')).toEqual({ ok: true, title: 'right' });
+    // The one function of the name and of the title.
+    expect(fieldText('  Ada Lovelace  ')).toEqual({ text: 'Ada Lovelace', characters: 12 });
+    expect(fieldText(' 😀😀 ')).toEqual({ text: '😀😀', characters: 2 });
+    expect(fieldText(' \t\n')).toEqual({ text: '', characters: 0 });
+  });
+
+  it('admits 200 characters and refuses 201, counting a character as one code point, after the ends are taken', () => {
     expect(readTitle('a'.repeat(200))).toEqual({ ok: true, title: 'a'.repeat(200) });
     expect(readTitle('a'.repeat(201))).toEqual({ ok: false, reason: 'too_long' });
     // An emoji outside the Basic Multilingual Plane is two UTF-16 units and one character.
     expect('😀'.length).toBe(2);
     expect(readTitle('😀'.repeat(200))).toEqual({ ok: true, title: '😀'.repeat(200) });
     expect(readTitle('😀'.repeat(201))).toEqual({ ok: false, reason: 'too_long' });
-    expect(readTitle(' '.repeat(201))).toEqual({ ok: false, reason: 'too_long' });
+    // The white space at the ends is not counted: 200 characters between spaces are a title.
+    expect(readTitle(`  ${'a'.repeat(200)}\n`)).toEqual({ ok: true, title: 'a'.repeat(200) });
+    expect(readTitle(` ${'a'.repeat(201)} `)).toEqual({ ok: false, reason: 'too_long' });
+    // White space inside is counted.
+    expect(readTitle(`a${' '.repeat(200)}b`)).toEqual({ ok: false, reason: 'too_long' });
   });
 
-  it('stores an empty title as the default, and a title of white space alone', () => {
+  it('stores an empty title as the default, and a title of white space alone, however long', () => {
+    expect(readTitle(' '.repeat(201))).toEqual({ ok: true, title: 'Untitled document' });
     expect(DEFAULT_TITLE).toBe('Untitled document');
     for (const title of ['', ' ', '   ', '\t\n', ' ']) {
       expect(readTitle(title)).toEqual({ ok: true, title: 'Untitled document' });

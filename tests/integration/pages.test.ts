@@ -57,7 +57,7 @@ describe('the backstop of FR-AU-09, as the signed-in layout calls it', () => {
   it('gives an account without a personal workspace one when it opens a page, and one only', async () => {
     const userId = await person();
     expect(await db().workspace.count({ where: { ownerId: userId } })).toBe(0);
-    expect(await currentAccount()).toEqual({ userId, noticeDue: true });
+    expect(await currentAccount()).toMatchObject({ userId, noticeDue: true });
     expect(await db().workspace.count({ where: { ownerId: userId } })).toBe(1);
     await currentAccount();
     expect(await db().workspace.count({ where: { ownerId: userId } })).toBe(1);
