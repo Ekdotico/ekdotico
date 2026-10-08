@@ -40,23 +40,32 @@ export function createDatabase(label: string) {
     '-c',
     `CREATE DATABASE ${name} ENCODING 'UTF8' LOCALE 'en_US.UTF-8' LOCALE_PROVIDER libc TEMPLATE template0`,
   ]);
-  const variables = Object.entries(PASSWORDS).flatMap(([role, password]) => [
-    '-v',
-    `${role}_password=${password}`,
-  ]);
-  psql(urlFor(name), [...variables, '-f', 'scripts/provision.sql']);
-  const migrate = new URL(urlFor(name, 'migrate'));
-  migrate.searchParams.set('schema', 'ekdotico');
-  const deployed = spawnSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
-    encoding: 'utf8',
-    env: { ...process.env, MIGRATE_DATABASE_URL: migrate.toString() },
-  });
-  if (deployed.status !== 0) throw new Error(deployed.stdout + deployed.stderr);
+  const drop = () => psql(adminUrl!, ['-c', `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`]);
+  try {
+    const variables = Object.entries(PASSWORDS).flatMap(([role, password]) => [
+      '-v',
+      `${role}_password=${password}`,
+    ]);
+    psql(urlFor(name), [...variables, '-f', 'scripts/provision.sql']);
+    const migrate = new URL(urlFor(name, 'migrate'));
+    migrate.searchParams.set('schema', 'ekdotico');
+    const deployed = spawnSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
+      encoding: 'utf8',
+      env: { ...process.env, MIGRATE_DATABASE_URL: migrate.toString() },
+    });
+    // A command that could not be started has no status and no output to show.
+    if (deployed.error) throw deployed.error;
+    if (deployed.status !== 0) throw new Error(deployed.stdout + deployed.stderr);
+  } catch (error) {
+    // The caller never receives the database, so nobody else would drop it.
+    drop();
+    throw error;
+  }
   return {
     /** The connection of the runtime role, ekdotico_app. */
     appUrl: urlFor(name, 'app'),
     /** Runs a statement as the administrator, for a test to look at a row directly. */
     sql: (statement: string) => psql(urlFor(name), ['-c', `SET search_path = ekdotico; ${statement}`]),
-    drop: () => psql(adminUrl!, ['-c', `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`]),
+    drop,
   };
 }

@@ -476,7 +476,7 @@ describe('the limits on failed sign-ins (NFR-SE-07; the owner’s answers to Q1 
       database.sql('ALTER TABLE "UserAway" RENAME TO "User"');
     }
     expect(errors.mock.calls).toHaveLength(1);
-    expect(String(errors.mock.calls[0])).toMatch(/^identity: request failed \(\w+\)$/);
+    expect(errors.mock.calls[0]).toEqual(['identity: request failed (PrismaClientKnownRequestError P2021)']);
     // The turn was given back: the next attempt does not wait for it.
     expect((await signIn(email)).status).toBe(200);
   });

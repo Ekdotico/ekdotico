@@ -21,8 +21,8 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
   if (/[\r\n]/.test(message.to)) throw new Error('The recipient address must not contain a line break.');
   if (/[\r\n]/.test(message.subject)) throw new Error('The subject must not contain a line break.');
 
-  // The Scaleway sender (A52, A72) is selected here, once the owner has confirmed
-  // the three checks of A52: the agreement, the retention, and the standing of its API.
+  // The Scaleway sender (register D70, D92) is selected here, once the owner has confirmed
+  // the three checks that stand with D70: the agreement, the retention, and the standing of its API.
   const { emailSinkDirectory, emailFrom } = settings();
   const now = new Date();
   // The name holds neither the address nor the subject. The time sorts the files;
