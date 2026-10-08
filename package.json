@@ -11,7 +11,7 @@
   "packageManager": "pnpm@10.34.6",
   "scripts": {
     "dev": "next dev",
-    "dev:collab": "node --watch src/collab/server.ts",
+    "dev:collab": "node --env-file=.env.local --watch src/collab/server.ts",
     "build": "next build",
     "start": "next start",
     "start:collab": "node src/collab/server.ts",
@@ -22,10 +22,16 @@
     "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test",
     "check:deps": "node scripts/check-deps.mjs",
-    "db:migrate": "prisma migrate deploy"
+    "db:migrate": "prisma migrate deploy",
+    "admission": "node scripts/admission.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@ekdotico/domico": "0.25.0",
+    "@ekdotico/domico": "0.26.0",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "better-auth": "1.7.7",
+    "ioredis": "6.0.0",
     "next": "16.4.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
@@ -47,6 +53,18 @@
     "onlyBuiltDependencies": [
       "@prisma/engines",
       "prisma"
-    ]
+    ],
+    "overrides": {
+      "deepmerge-ts": "8.0.2",
+      "mysql2": "3.24.5"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ]
+    },
+    "patchedDependencies": {
+      "@better-auth/core@1.7.7": "patches/@better-auth__core@1.7.7.patch"
+    }
   }
 }

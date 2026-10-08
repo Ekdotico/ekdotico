@@ -56,11 +56,14 @@ A PostgreSQL 17 server that is already running on the machine serves as well. Cr
 psql postgres -c "CREATE DATABASE ekdotico ENCODING 'UTF8' LOCALE 'en_US.UTF-8' LOCALE_PROVIDER libc TEMPLATE template0"
 ```
 
-Copy the settings of the web application. Only `pnpm dev` and `pnpm start` read `.env.local`; everything else takes its settings from the command line, as shown below:
+Copy the settings of the two processes. `pnpm dev`, `pnpm start` and `pnpm dev:collab` read `.env.local`; everything else, `pnpm start:collab` included, takes its settings from the environment or the command line, as shown below:
 
 ```bash
 cp .env.example .env.local
+node scripts/dev-secret.mjs .env.local
 ```
+
+The second line fills `AUTH_SECRET` with a fresh random value, which it does not print.
 
 Create the `ekdotico` schema and its three roles. The script is run by an administrator and is not a migration (contract IC-51). The passwords here are for a development machine only:
 
@@ -79,29 +82,29 @@ MIGRATE_DATABASE_URL="postgresql://ekdotico_migrate:local-migrate@localhost:5432
 The web application, on port 3000:
 
 ```bash
-FOUNDING_TEAM_EMAILS= pnpm dev
+pnpm dev
 ```
 
 The collaboration server, on port 1234:
 
 ```bash
-FOUNDING_TEAM_EMAILS= pnpm dev:collab
+pnpm dev:collab
 ```
 
-Each refuses to start where `FOUNDING_TEAM_EMAILS` is absent; an empty value is a list with no address. Their health checks are `GET /api/health` and `GET /collab/health`, which answer 200 with an empty body.
+Each refuses to start where one of the five settings of `.env.example` is absent; for `FOUNDING_TEAM_EMAILS` an empty value is a list with no address. The collaboration server reads no file by itself, so `pnpm dev:collab` hands it the same one (`node --env-file=.env.local`) and fails where the file is missing. Their health checks are `GET /api/health` and `GET /collab/health`, which answer 200 with an empty body.
 
 ## Checks
 
-| Command                 | What it checks                                                                                                                   |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm check:deps`       | Every dependency pinned exactly, every licence admitted (NFR-IC-08, NFR-IC-12)                                                   |
-| `pnpm format`           | Formatting                                                                                                                       |
-| `pnpm lint`             | Lint                                                                                                                             |
-| `pnpm typecheck`        | Types                                                                                                                            |
-| `pnpm test`             | Unit tests                                                                                                                       |
-| `pnpm test:integration` | The provisioning script and the migrations, against a real PostgreSQL server. Needs `ADMIN_DATABASE_URL`, a superuser connection |
-| `pnpm build`            | The production build                                                                                                             |
-| `pnpm test:e2e`         | The end-to-end tests, on a production build                                                                                      |
+| Command                 | What it checks                                                                                                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm check:deps`       | Every dependency pinned exactly, every licence admitted (NFR-IC-08, NFR-IC-12)                                                                                                                                     |
+| `pnpm format`           | Formatting                                                                                                                                                                                                         |
+| `pnpm lint`             | Lint                                                                                                                                                                                                               |
+| `pnpm typecheck`        | Types                                                                                                                                                                                                              |
+| `pnpm test`             | Unit tests                                                                                                                                                                                                         |
+| `pnpm test:integration` | Provisioning, migrations, identity, sessions, the proxy, the limits and the security log, against a real PostgreSQL server and a real Valkey. Needs `ADMIN_DATABASE_URL`, a superuser connection, and `VALKEY_URL` |
+| `pnpm build`            | The production build                                                                                                                                                                                               |
+| `pnpm test:e2e`         | The end-to-end tests, on a production build                                                                                                                                                                        |
 
 The integration test runs only against a local server. It creates databases of its own and drops them. The three roles belong to the server, so they stay, with the development passwords above.
 
