@@ -12,9 +12,12 @@ import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { holds, type DocumentRole, type Permission } from './permissions.ts';
 
+/** A document's row as every query but one reads it: without its content (src/lib/db.ts). */
+export type DocumentRow = Omit<Document, 'yjsState'>;
+
 export type Access =
   /** The caller holds a role on the document, and the role holds the permission. */
-  | { outcome: 'allowed'; role: DocumentRole; document: Document }
+  | { outcome: 'allowed'; role: DocumentRole; document: DocumentRow }
   /** The caller holds a role on the document, and the role does not hold the permission: a 403 (FR-ED-39). */
   | { outcome: 'forbidden' }
   /**
@@ -37,7 +40,7 @@ const NO_DOCUMENT = '00000000-0000-0000-0000-000000000000';
  * `Document.ownerId`. The other roles are held through an accepted invitation
  * (FR-ED-21) and join here with the slice that builds sharing.
  */
-function roleOf(document: Document, userId: string): DocumentRole | null {
+function roleOf(document: DocumentRow, userId: string): DocumentRole | null {
   return document.ownerId === userId ? 'owner' : null;
 }
 

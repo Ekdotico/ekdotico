@@ -80,6 +80,14 @@ export interface Settings {
   emailSinkDirectory: string;
   /** The address messages are sent from. */
   emailFrom: string;
+  /**
+   * NFR-RE-07 (register P14): the collaboration server stores a document's
+   * state no later than the first after the last change it received, and at
+   * least as often as the second while changes continue. Milliseconds; the
+   * initial values are 2 and 10 seconds.
+   */
+  collabStoreDelayMs: number;
+  collabStoreMaxMs: number;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -196,6 +204,15 @@ export function loadSettings(env: Env = process.env): Settings {
   }
   const authSecret = required(env, 'AUTH_SECRET', 'Set it to a random value of at least 32 characters.');
   if (authSecret.length < 32) throw new Error('AUTH_SECRET must be at least 32 characters.');
+  // NFR-RE-07: the collaboration server takes the time of the write itself off
+  // the first period, and the first period twice off the second
+  // (src/collab/server.ts, `storeTimers`), so each has a least value.
+  const collabStoreDelayMs = wholeNumber(env, 'COLLAB_STORE_DELAY_MS', 2000, 1);
+  const collabStoreMaxMs = wholeNumber(env, 'COLLAB_STORE_MAX_MS', 10000, 1);
+  if (collabStoreDelayMs < 1000) throw new Error('COLLAB_STORE_DELAY_MS must be at least 1000.');
+  if (collabStoreMaxMs < 2 * collabStoreDelayMs + 1000) {
+    throw new Error('COLLAB_STORE_MAX_MS must be at least twice COLLAB_STORE_DELAY_MS and 1000 more.');
+  }
   // NFR-SE-17 (e): the secrets differ from one another, so that one that
   // leaks opens one door. The message holds neither.
   const admission = admissionSecret(env);
@@ -242,6 +259,8 @@ export function loadSettings(env: Env = process.env): Settings {
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
+    collabStoreDelayMs,
+    collabStoreMaxMs,
     limits: Object.fromEntries(
       (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
     ) as Record<LimitName, Limit>,

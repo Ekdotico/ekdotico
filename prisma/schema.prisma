@@ -197,9 +197,9 @@ enum WorkspaceType {
 
 // ── Documents ───────────────────────────────────────────────────────────────
 // The columns of the slice that creates, lists and renames a document (Data
-// models, "What α 0.1.0 migrates"). `yjsState` arrives with the editor,
-// `deletedById` with deletion, and `clearingAt` with the clearing of an
-// account's documents.
+// models, "What α 0.1.0 migrates"), and `yjsState`, of the collaboration
+// server. `deletedById` arrives with deletion, and `clearingAt` with the
+// clearing of an account's documents.
 //
 // Neither relation deletes a document: a document goes by its own deletion
 // (FR-ED-36) and never because its Owner's row or its workspace's row went
@@ -225,6 +225,10 @@ model Document {
   // src/lib/documents/permissions.ts, which is also the only reader: a cell the
   // table fixes is decided from the table, whatever is stored here.
   permissionSet Json
+  // NFR-RE-07: the document's live state, written by the collaboration server
+  // and by nothing else. Null until the document is first stored. The encoding
+  // is in src/lib/collab/state.ts, and only there.
+  yjsState      Bytes?
   // FR-ED-43, contract IC-16: fixed at creation from the capability the
   // Istorico port reports, and never changed. No default, so that no row is
   // written without the capability having been read.
