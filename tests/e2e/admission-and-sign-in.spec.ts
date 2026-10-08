@@ -7,6 +7,7 @@ import {
   NOTICE_TITLE,
   NOT_OPEN,
   SIGN_IN_REFUSED,
+  admission,
   alertOn,
   expectNoSidewaysScroll,
   invite,
@@ -19,6 +20,14 @@ import {
 
 const noticeTitle = { level: 1, name: NOTICE_TITLE } as const;
 const firstScreen = { level: 1, name: 'Signed in' } as const;
+// A page of a signed-in account and an address that is no page, each with words
+// of its content that the Closed α notice does not hold (FR-AU-55).
+const CONTENT = [
+  ['/', 'documents are planned'],
+  ['/anything', 'No page of Ekdotico has this address'],
+] as const;
+// Asked for as a page, and as the data Next.js sends to a page it already holds.
+const WAYS: Record<string, string>[] = [{}, { RSC: '1' }];
 
 test('from an invitation to the first screen, out, and in again', async ({ page }) => {
   test.slow();
@@ -27,7 +36,7 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
 
   // FR-AU-90: the invitation's link opens the sign-up page, which shows the
   // invited address and does not let it be changed.
-  await page.goto(invite(person.email));
+  await page.goto(await invite(person.email));
   await expect(page).toHaveTitle('Create account – Ekdotico');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Create account');
   const address = page.getByLabel('Email address');
@@ -63,6 +72,25 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   await expect(page.locator(`[id="${stated!.split(' ').at(-1)}"]`)).not.toBeEmpty();
   await screens(page, 'sign-up-fault');
 
+  // A request too long to be read is a fault of the request and not of the
+  // invitation: it is stated at the head of the form, and the form stays,
+  // with what was typed. (The statement names the name, so the field is found
+  // by its role.)
+  const name = page.getByRole('textbox', { name: 'Name', exact: true });
+  const long = 'n'.repeat(5000);
+  await password.fill(person.password);
+  await name.fill(long);
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(fault).toHaveText(
+    'The account was not created, because the request is longer than a name and a password can make it. Shorten the name or the password and try again.',
+  );
+  await expect(fault).toBeFocused();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Create account');
+  await expect(name).toHaveValue(long);
+  await expect(address).toHaveValue(person.email);
+  await expect(page.getByText(NOT_OPEN)).toHaveCount(0);
+  await name.fill(person.name);
+
   // FR-AU-90: the account is created and the person is signed in. FR-AU-55:
   // the first screen is the Closed α notice, with its fixed text.
   await password.fill(person.password);
@@ -81,10 +109,16 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   await expectNoSidewaysScroll(page);
   await screens(page, 'notice');
 
-  // In place of the page's content: the content is not in the response at all.
+  // In place of the page's content: the content is not in the response at all,
+  // as a page or as the data Next.js sends a page it already holds (`RSC: 1`).
+  // The same four requests find the content after the acknowledgement, below.
   const underneath = await (await page.request.get('/')).text();
   expect(underneath).toContain('Continue');
-  expect(underneath).not.toContain('documents are planned');
+  for (const [path, content] of CONTENT) {
+    for (const headers of WAYS) {
+      expect(await (await page.request.get(path, { headers })).text()).not.toContain(content);
+    }
+  }
 
   // "Reloading a page or opening another address does not pass it."
   await page.reload();
@@ -108,6 +142,13 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   await expect(page.getByText(NOTICE_BODY)).toHaveCount(0);
   await expectNoSidewaysScroll(page);
   await screens(page, 'first-screen');
+  // The control of the check made while the notice was due: the content is
+  // what those requests return now.
+  for (const [path, content] of CONTENT) {
+    for (const headers of WAYS) {
+      expect(await (await page.request.get(path, { headers })).text()).toContain(content);
+    }
+  }
 
   // An address that is no page says so, under the same header.
   const nowhere = await page.goto('/anything');
@@ -165,7 +206,7 @@ test('an invitation that was accepted is not open, to its own link or to a secon
   browser,
 }) => {
   const person = newPerson();
-  const link = invite(person.email);
+  const link = await invite(person.email);
 
   // A second browser has the page open while the first accepts.
   const other = await (await browser.newContext()).newPage();
@@ -184,6 +225,40 @@ test('an invitation that was accepted is not open, to its own link or to a secon
   await other.reload();
   await expect(other.getByRole('main').getByRole('paragraph')).toHaveText(NOT_OPEN);
   await other.context().close();
+});
+
+// FR-AU-89 (b), (c), through the server as it runs: the command lists and
+// revokes, and the link of a revoked invitation creates nothing.
+test('the team lists the invitations and revokes one, whose link is then not open', async ({ page }) => {
+  const person = newPerson();
+  const link = await invite(person.email);
+  await page.goto(link);
+  await expect(page.getByLabel('Name')).toBeVisible();
+
+  const listed = admission('list');
+  expect(listed.status).toBe(200);
+  const { invitations } = listed.answer as { invitations: { id: string; email?: string; state: string }[] };
+  const mine = invitations.filter((invitation) => invitation.email === person.email);
+  expect(mine.map((invitation) => invitation.state)).toEqual(['pending']);
+  // Neither the token nor the link is returned.
+  expect(JSON.stringify(listed.answer)).not.toContain(link.split('/').at(-1));
+
+  const revoked = admission('revoke', mine[0]!.id);
+  expect(revoked.status).toBe(200);
+  expect(revoked.answer).toMatchObject({ id: mine[0]!.id, state: 'revoked' });
+  expect(admission('list').answer).toMatchObject({
+    invitations: expect.arrayContaining([expect.objectContaining({ id: mine[0]!.id, state: 'revoked' })]),
+  });
+
+  // The page that was open: its form gives way to the statement.
+  await page.getByLabel('Name').fill(person.name);
+  await page.getByLabel('Password', { exact: true }).fill(person.password);
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(alertOn(page)).toHaveText(NOT_OPEN);
+  // And the link, opened again.
+  await page.goto(link);
+  await expect(page.getByRole('main').getByRole('paragraph')).toHaveText(NOT_OPEN);
+  await expect(page.getByRole('textbox')).toHaveCount(0);
 });
 
 test('the sign-in page offers sign-up to no one, and asks no other origin for anything', async ({ page }) => {
@@ -214,6 +289,22 @@ test('an address that belongs to no account is answered as a wrong password is',
   await signIn(page, newPerson());
   await expect(alertOn(page)).toHaveText(SIGN_IN_REFUSED);
   await expect(page).toHaveURL('/sign-in');
+});
+
+// Every route answers in JSON and none redirects (src/components/send.ts). A
+// redirect is an intermediary's, to a page of its own that answers 200: followed,
+// that page would be read as a sign-in that succeeded.
+test('a redirect in place of the answer is a fault, and never a sign-in', async ({ page }) => {
+  await page.route('**/api/auth/sign-in/email', (route) =>
+    route.fulfill({ status: 302, headers: { location: '/sign-in?from=an-intermediary' } }),
+  );
+  await page.goto('/sign-in?return=%2Fdocuments');
+  await signIn(page, newPerson());
+  await expect(alertOn(page)).toHaveText(
+    'The request did not reach Ekdotico. Check the connection and try again.',
+  );
+  await expect(page).toHaveURL('/sign-in?return=%2Fdocuments');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
 });
 
 test.describe('with an account', () => {
@@ -262,6 +353,14 @@ test.describe('with an account', () => {
     await expect(page.getByRole('heading', noticeTitle)).toBeVisible();
     await page.goto('/sign-in?return=%2Fanything');
     await expect(page).toHaveURL('/anything');
+    // FR-AU-07: and only ever to a path of this origin, whatever the address says.
+    for (const target of ['//example.com/', 'https://example.com/', '/\\example.com']) {
+      const sent = await page.request.get(`/sign-in?return=${encodeURIComponent(target)}`, {
+        maxRedirects: 0,
+      });
+      expect(sent.status(), target).toBe(307);
+      expect(sent.headers().location, target).toBe('/');
+    }
   });
 
   test('the notice gives way to sign-out, and is shown again at the next sign-in', async ({ page }) => {

@@ -26,7 +26,7 @@ Changing `AUTH_SECRET` ends every session and forgets every count of NFR-SE-07, 
 
 ## The password list
 
-`PASSWORD_LIST_FILE` names the list of commonly used and known-compromised passwords (FR-AU-82), by default `data/common-passwords.txt` under the directory the process is started in. The file ships with the deployment. Where it cannot be read, every request that sets a password fails, so that none is set unchecked. **The file in the repository is a placeholder of a few dozen entries** and is replaced before a test user is admitted; which list replaces it is the owner's decision (register A66, D86).
+`PASSWORD_LIST_FILE` names the list of commonly used and known-compromised passwords (FR-AU-82), by default `data/common-passwords.txt` under the directory the process is started in. The file ships with the deployment. Where it cannot be read, or holds no entry, every request that sets a password fails, so that none is set unchecked. **The file in the repository is a placeholder of a few dozen entries** and is replaced before a test user is admitted; which list replaces it is the owner's decision (register A66, D86).
 
 ## Email
 

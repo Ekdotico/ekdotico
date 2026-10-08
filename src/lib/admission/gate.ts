@@ -6,6 +6,7 @@
 // The proxy passes these paths untouched (src/proxy.ts, group (b)), so this is
 // the whole of their authentication and of their limit.
 import { createHmac } from 'node:crypto';
+import { faultOf } from '../fault.ts';
 import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { takeLimit } from '../rate-limit.ts';
@@ -31,6 +32,9 @@ const MESSAGES = {
 // request was rejected. An entry holds no detail, so nothing is lost but the count.
 const LOG_PERIOD_SECONDS = 60;
 
+// When this process last wrote the entry of a mark without Valkey's word.
+const loggedWithoutValkey = new Map<string, number>();
+
 async function once(mark: string, seconds: number): Promise<boolean> {
   try {
     // Keyed as the counters of the limits are, so that two environments on one
@@ -38,7 +42,12 @@ async function once(mark: string, seconds: number): Promise<boolean> {
     const digest = createHmac('sha256', settings().authSecret).update(`admission:${mark}`).digest('hex');
     return (await valkey().set(`limit-logged:${digest}`, '1', 'EX', seconds, 'NX')) === 'OK';
   } catch {
-    // Without Valkey the entry is written: a log too full, never one too empty.
+    // Without Valkey the entry is still written, a log too full and never one
+    // too empty, but the bound holds: one entry for each period from each
+    // process, by this process's own clock, and not one for each request.
+    const now = Date.now();
+    if (now - (loggedWithoutValkey.get(mark) ?? -Infinity) < seconds * 1000) return false;
+    loggedWithoutValkey.set(mark, now);
     return true;
   }
 }
@@ -72,8 +81,8 @@ export async function admission(
     return await handle(body);
   } catch (error) {
     // NFR-SE-06, A10: refused, with nothing of the fault. NFR-SE-19: its class
-    // alone, since a database error can quote the row, which holds an address.
-    console.error(`admission: request failed (${error instanceof Error ? error.name : 'unknown'})`);
+    // and its code, since a database error can quote the row, which holds an address.
+    console.error(`admission: request failed (${faultOf(error)})`);
     return errorResponse(500, 'internal', MESSAGES.internal);
   }
 }

@@ -18,6 +18,19 @@ vi.mock('next/server', async (original) => ({
   after: (task: () => unknown) => void later.tasks.push(task),
 }));
 
+// The hand-over itself is tested in tests/unit/email-hand-over.test.ts: here it
+// runs as it is, and what the route gave it is kept.
+const handedOver = vi.hoisted(() => ({ calls: [] as unknown[][] }));
+vi.mock('../../src/lib/email/hand-over.ts', async (original) => {
+  const actual = await original<typeof import('../../src/lib/email/hand-over.ts')>();
+  return {
+    handOver: (...args: Parameters<typeof actual.handOver>) => {
+      handedOver.calls.push(args);
+      return actual.handOver(...args);
+    },
+  };
+});
+
 const SECRET = 'an-admission-secret-for-the-tests-0123456789_-';
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-admission-'));
 const database = prepare('admission', { ADMISSION_SECRET: SECRET, EMAIL_SINK_DIRECTORY: sink });
@@ -86,6 +99,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   later.tasks.length = 0;
+  handedOver.calls.length = 0;
   for (const name of readdirSync(sink)) rmSync(join(sink, name));
   await db().securityLogEntry.deleteMany();
   await db().admissionInvitation.deleteMany();
@@ -181,6 +195,25 @@ describe('a request whose signature does not verify (NFR-SE-05 (b))', () => {
     expect((await logged('signature_invalid')).length).toBe(2);
   });
 
+  it('writes one entry a minute from this process where Valkey cannot keep the mark', async () => {
+    vi.spyOn(valkey(), 'set').mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
+    const now = Date.now.bind(Date);
+    let passed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now() + passed);
+    for (let n = 0; n < 8; n++) {
+      await expectError(await send(signed('GET', PATH, undefined, {})), 401, 'unauthorised');
+    }
+    // A log too full, never one too empty: the entry is written, and once.
+    expect((await logged('signature_invalid')).length).toBe(1);
+    passed = 59_000;
+    await send(signed('GET', PATH, undefined, {}));
+    expect((await logged('signature_invalid')).length).toBe(1);
+    // The next minute has its own.
+    passed = 61_000;
+    for (let n = 0; n < 3; n++) await send(signed('GET', PATH, undefined, {}));
+    expect((await logged('signature_invalid')).length).toBe(2);
+  });
+
   it('is every request, where no admission secret is configured', async () => {
     const live = settings() as { admissionSecret: string | undefined };
     live.admissionSecret = undefined;
@@ -256,6 +289,13 @@ describe('create (FR-AU-89 (a))', () => {
     expect(await findOpenInvitation(token)).toEqual({ email: 'person@example.com' });
   });
 
+  it('names the invitation, and nothing of a person, to the hand-over for its log line (NFR-SE-19)', async () => {
+    const { id } = await (await create('person@example.com')).json();
+    await afterResponse();
+    expect(handedOver.calls).toHaveLength(1);
+    expect(handedOver.calls[0]![1]).toBe(`invitation ${id}`);
+  });
+
   it('stores the address in lower case (FR-AU-02)', async () => {
     const invitation = await (await create('Person@Example.COM')).json();
     expect(invitation.email).toBe('person@example.com');
@@ -287,6 +327,22 @@ describe('create (FR-AU-89 (a))', () => {
     await afterResponse();
     expect(await db().admissionInvitation.count()).toBe(1);
     expect(mail().length).toBe(1);
+  });
+
+  // The order of the lookups: the request identifier first, the account after.
+  it('answers a repeat sent after its invitation was accepted as the first, and not as an existing account', async () => {
+    const first = await (await create('joined@example.com', 'the-same-request')).json();
+    await db().admissionInvitation.update({ where: { id: first.id }, data: { state: 'ACCEPTED' } });
+    await createAccount(auth, 'joined@example.com');
+
+    const again = await create('joined@example.com', 'the-same-request');
+    expect(again.status).toBe(201);
+    expect(await again.json()).toEqual({ ...first, state: 'accepted' });
+    await afterResponse();
+    expect(await db().admissionInvitation.count()).toBe(1);
+    expect(mail().length).toBe(1);
+    // A new request for that address is the one that is told of the account.
+    await expectError(await create('joined@example.com'), 409, 'account_exists');
   });
 
   it('answers a repeat as the invitation now stands', async () => {
@@ -532,6 +588,20 @@ describe('the limit of 60 requests in any minute, in all (NFR-SE-07)', () => {
     // Not a 429: nothing is told to a caller without the secret.
     await expectError(await send(signed('GET', PATH, undefined, {})), 401, 'unauthorised');
   });
+
+  it('fails closed: a verified request is refused, and nothing is created, where the limiter cannot answer (NFR-SE-06, A10)', async () => {
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(valkey(), 'eval').mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
+    await expectError(await create('person@example.com'), 500, 'internal');
+    await expectError(await send(signed('GET', PATH)), 500, 'internal');
+    await afterResponse();
+    expect(await db().admissionInvitation.count()).toBe(0);
+    expect(mail()).toEqual([]);
+    expect(printed.mock.calls).toEqual([
+      ['admission: request failed (Error)'],
+      ['admission: request failed (Error)'],
+    ]);
+  });
 });
 
 describe('the command (FR-AU-89; register D113)', () => {
@@ -610,6 +680,45 @@ describe('the command (FR-AU-89; register D113)', () => {
     expect(sent).not.toHaveBeenCalled();
   });
 
+  it('refuses to revoke an identifier that no invitation could have, before anything is signed', async () => {
+    const sent = vi.fn();
+    for (const id of ['', 'a/b', '../invitations', 'a?b', 'a b', 'ä', 'x'.repeat(65)]) {
+      const lines: string[] = [];
+      const code = await run(['revoke', id], ENV, sent as unknown as typeof fetch, (line) =>
+        lines.push(line),
+      );
+      expect(code, id).toBe(2);
+      expect(lines.join('\n')).toMatch(/^Usage:/);
+    }
+    expect(sent).not.toHaveBeenCalled();
+    // The longest an identifier can be is sent.
+    expect((await command(['revoke', 'x'.repeat(64)])).output).toMatch(/^404\n/);
+  });
+
+  it('prints one line and exits with 1 for an origin that cannot be read, and sends nothing', async () => {
+    const sent = vi.fn();
+    const lines: string[] = [];
+    const env = { ...ENV, APP_ORIGIN: 'app.example.test' };
+    expect(await run(['list'], env, sent as unknown as typeof fetch, (line) => lines.push(line))).toBe(1);
+    expect(lines).toEqual([
+      'APP_ORIGIN must be an origin: a scheme, a host and an optional port, with nothing after.',
+    ]);
+    expect(sent).not.toHaveBeenCalled();
+  });
+
+  it('prints one line and exits with 1 where the answer cannot be read', async () => {
+    const broken = (async () => ({
+      ok: true,
+      status: 200,
+      text: () => Promise.reject(new Error(`terminated: ${SECRET}`)),
+    })) as unknown as typeof fetch;
+    const lines: string[] = [];
+    expect(await run(['list'], ENV, broken, (line) => lines.push(line))).toBe(1);
+    expect(lines).toEqual([
+      'The answer of the application could not be read. List the invitations to see what was done.',
+    ]);
+  });
+
   it('is a client and nothing more: it imports the signature module and the platform alone', () => {
     const source = readFileSync('scripts/admission.ts', 'utf8');
     const imports = [...source.matchAll(/from '([^']+)'/g)].map((match) => match[1]);
@@ -649,11 +758,12 @@ describe('what no log holds (NFR-SE-19)', () => {
   it('answers a fault with a 500 that says nothing of it, and logs its class alone', async () => {
     const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(db().admissionInvitation, 'findMany').mockRejectedValue(
-      new Error('relation holds private.person@example.com'),
+      Object.assign(new Error('relation holds private.person@example.com'), { code: 'P1001' }),
     );
     const response = await send(signed('GET', PATH));
     const message = await expectError(response, 500, 'internal');
     expect(message).not.toContain('private.person');
-    expect(JSON.stringify(printed.mock.calls)).toBe('[["admission: request failed (Error)"]]');
+    // Its class and its code, which tells one fault from another, and nothing it said.
+    expect(JSON.stringify(printed.mock.calls)).toBe('[["admission: request failed (Error P1001)"]]');
   });
 });

@@ -1,7 +1,14 @@
 /* The placement of the pages, and nothing else. Every control is the package's
-   (FR-AU-88), and every value here is one of its tokens: no literal, no
-   fallback, no token declared (@ekdotico/domico AGENTS.md, rules 1 to 3). The
-   properties are logical ones (NFR-I18-07). */
+   (FR-AU-88), and every value here is one of its tokens, with no fallback and
+   no token declared (@ekdotico/domico AGENTS.md, rules 1 to 3), but for two
+   literals:
+   - `28rem`, the width of the form column. The catalogue of 0.25.0 has no
+     width for one: `--content-w` is the content column, and `--measure` caps
+     running prose. It is reported to the package's owner as a missing token,
+     and is replaced by the token when there is one.
+   - `1px`, the width of the header's rule. The catalogue gives a rule no
+     width token and says "Always `1px`" (design-tokens.md, "Rule").
+   The properties are logical ones (NFR-I18-07). */
 
 /* One narrow column for a form: it grows into scroll and is never cut off at
    320 CSS pixels or at 200% zoom (FR-AU-88). */

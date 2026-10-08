@@ -25,6 +25,11 @@ const REFUSALS = {
     'This password is on a list of commonly used and known-compromised passwords, so it cannot be used. Choose a different one.',
 };
 
+/** A list that cannot be used: a fault line tells it from any other by this name (NFR-SE-19). */
+class PasswordListError extends Error {
+  name = 'PasswordListError';
+}
+
 let list: ReadonlySet<string> | undefined;
 
 // One password to a line. Read once, at the first check; a file that cannot be
@@ -36,18 +41,23 @@ function listed(password: string): boolean {
     try {
       text = readFileSync(file, 'utf8');
     } catch (cause) {
-      throw new Error('The list of known passwords could not be read.', { cause });
+      throw new PasswordListError('The list of known passwords could not be read.', { cause });
     }
     // The file may open with lines that begin `#`, which say what the list is.
     // After the first other line every line is a password, `#` or not.
     const lines = text.split(/\r?\n/);
     const first = lines.findIndex((line) => !line.startsWith('#'));
-    list = new Set(
+    const read = new Set(
       lines
         .slice(first < 0 ? lines.length : first)
         .filter((line) => line !== '')
         .map((line) => line.toLowerCase()),
     );
+    // FR-AU-82: a file with no entry (empty, its heading alone, the wrong
+    // file) would pass every password. It throws as an unreadable one does,
+    // and is not kept, so the file is read again once it is put right.
+    if (read.size === 0) throw new PasswordListError('The list of known passwords is empty.');
+    list = read;
   }
   // Without regard to case: "Password" is as well known as "password".
   return list.has(password.toLowerCase());

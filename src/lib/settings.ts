@@ -93,7 +93,7 @@ function required(env: Env, name: string, hint: string): string {
 
 // The least a value may be is 1 wherever 0 would switch a rule off without a
 // word: a session that has ended before it began, a log that keeps nothing, a
-// password of no length.
+// password of no length, an invitation that is never open.
 function wholeNumber(env: Env, name: string, initial: number, least: 0 | 1): number {
   const value = env[name];
   if (value === undefined || value === '') return initial;
@@ -185,6 +185,10 @@ export function loadSettings(env: Env = process.env): Settings {
   }
   const authSecret = required(env, 'AUTH_SECRET', 'Set it to a random value of at least 32 characters.');
   if (authSecret.length < 32) throw new Error('AUTH_SECRET must be at least 32 characters.');
+  // NFR-SE-17 (e): the secrets differ from one another, so that one that
+  // leaks opens one door. The message holds neither.
+  const admission = admissionSecret(env);
+  if (admission === authSecret) throw new Error('ADMISSION_SECRET must differ from AUTH_SECRET.');
 
   const sessionIdleSeconds = wholeNumber(env, 'SESSION_IDLE_SECONDS', 7 * DAY, 1);
   const sessionRenewSeconds = wholeNumber(env, 'SESSION_RENEW_SECONDS', DAY, 1);
@@ -221,8 +225,9 @@ export function loadSettings(env: Env = process.env): Settings {
     passwordMinLength,
     passwordMaxLength,
     passwordListFile: env.PASSWORD_LIST_FILE || 'data/common-passwords.txt',
-    admissionSecret: admissionSecret(env),
-    admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 0),
+    admissionSecret: admission,
+    // At least 1: an invitation of 0 days has expired before its email is read.
+    admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',

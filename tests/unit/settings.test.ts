@@ -164,7 +164,8 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
   });
 
   // A 0 here would switch a rule off without a word: a session that ends as it
-  // begins, a log that keeps nothing, a password of no length.
+  // begins, a log that keeps nothing, a password of no length, an invitation
+  // that has expired before its email is read (FR-AU-89 (a)).
   it.each([
     'SESSION_IDLE_SECONDS',
     'SESSION_RENEW_SECONDS',
@@ -172,6 +173,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'SECURITY_LOG_RETENTION_DAYS',
     'PASSWORD_MIN_LENGTH',
     'PASSWORD_MAX_LENGTH',
+    'ADMISSION_INVITATION_DAYS',
   ])('refuses 0 as %s', (name) => {
     expect(() => loadSettings({ ...env, [name]: '0' })).toThrow(`${name} must be a whole number, 1 or more.`);
   });
@@ -185,10 +187,64 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
       SECURITY_LOG_RETENTION_DAYS: '1',
       PASSWORD_MIN_LENGTH: '1',
       PASSWORD_MAX_LENGTH: '1',
+      ADMISSION_INVITATION_DAYS: '1',
       TRUSTED_PROXY_COUNT: '0',
       COOKIE_CACHE_SECONDS: '0',
     });
     expect(least).toMatchObject({ sessionMaxSeconds: 1, trustedProxyCount: 0, cookieCacheSeconds: 0 });
+    expect(least.admissionInvitationDays).toBe(1);
+    expect(loadSettings(env).admissionInvitationDays).toBe(30);
+  });
+
+  // docs/contracts/admission-signature.md, "The setting"; NFR-SE-17 (e).
+  describe('ADMISSION_SECRET (FR-AU-89)', () => {
+    const SECRET = 'A-secret_of-43-characters-for-the-tests-012';
+    const failure = (value: string) => {
+      try {
+        loadSettings({ ...env, ADMISSION_SECRET: value });
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return undefined;
+    };
+
+    it('is the value exactly as set, where it is 43 characters or more of the URL-safe alphabet', () => {
+      expect(SECRET).toHaveLength(43);
+      expect(loadSettings({ ...env, ADMISSION_SECRET: SECRET }).admissionSecret).toBe(SECRET);
+      expect(loadSettings({ ...env, ADMISSION_SECRET: `${SECRET}x` }).admissionSecret).toBe(`${SECRET}x`);
+    });
+
+    it('is none where it is unset or empty, so that every admission request is refused', () => {
+      expect(loadSettings(env).admissionSecret).toBeUndefined();
+      expect(loadSettings({ ...env, ADMISSION_SECRET: '' }).admissionSecret).toBeUndefined();
+    });
+
+    it.each([
+      ['of 42 characters', SECRET.slice(1)],
+      ['with a character outside the alphabet', `${SECRET.slice(1)}+`],
+      ['with a space', `${SECRET.slice(1)} `],
+    ])('stops the process for one %s, and never repeats it', (_, value) => {
+      const message = failure(value);
+      expect(message).toMatch(/^ADMISSION_SECRET must be at least 43 characters/);
+      expect(message).not.toContain(value);
+      expect(message).not.toContain(value.slice(0, 12));
+    });
+
+    it('stops the process where it is the identity secret, and repeats neither', () => {
+      const message = (() => {
+        try {
+          loadSettings({ ...env, AUTH_SECRET: SECRET, ADMISSION_SECRET: SECRET });
+        } catch (error) {
+          return (error as Error).message;
+        }
+        return undefined;
+      })();
+      expect(message).toBe('ADMISSION_SECRET must differ from AUTH_SECRET.');
+      // Two secrets that differ start it.
+      expect(
+        loadSettings({ ...env, AUTH_SECRET: `${SECRET}x`, ADMISSION_SECRET: SECRET }).admissionSecret,
+      ).toBe(SECRET);
+    });
   });
 
   it('refuses a least length of a password above the greatest (FR-AU-82)', () => {

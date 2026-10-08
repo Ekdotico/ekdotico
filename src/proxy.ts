@@ -11,7 +11,7 @@ import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { faultOf } from './lib/fault.ts';
-import { errorResponse, onlyReads, returnPath } from './lib/http.ts';
+import { errorResponse, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
@@ -91,8 +91,7 @@ const MESSAGES = {
     'This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again.',
   rateLimited: (seconds: number) =>
     `Too many requests were made in a short time. Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
-  internal:
-    'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+  internal: INTERNAL_FAULT,
 };
 
 function withCookies<T extends Response>(response: T, setCookie: readonly string[]): T {

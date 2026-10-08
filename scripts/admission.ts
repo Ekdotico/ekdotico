@@ -12,7 +12,7 @@
 // It runs under plain Node and imports the signature module alone: no
 // settings, no database.
 import { randomUUID } from 'node:crypto';
-import { INVITATIONS_PATH, signedHeaders } from '../src/lib/admission/signature.ts';
+import { INVITATIONS_PATH, isInvitationId, signedHeaders } from '../src/lib/admission/signature.ts';
 
 const USAGE = `Usage:
   node --env-file=.env.local scripts/admission.ts create <email>
@@ -32,7 +32,9 @@ export async function run(
   const known =
     (action === 'list' && argument === undefined) ||
     ((action === 'create' || action === 'revoke') && argument !== undefined && rest.length === 0);
-  if (!known) {
+  // An identifier of any other form is no invitation's, and its path would
+  // not verify: refused here, before anything is signed.
+  if (!known || (action === 'revoke' && !isInvitationId(argument!))) {
     print(USAGE);
     return 2;
   }
@@ -41,6 +43,10 @@ export async function run(
   if (!secret || !origin) {
     print('ADMISSION_SECRET and APP_ORIGIN must be set, as they are for the application.');
     return 2;
+  }
+  if (!URL.canParse(origin)) {
+    print('APP_ORIGIN must be an origin: a scheme, a host and an optional port, with nothing after.');
+    return 1;
   }
   // "Over HTTPS": the request carries an address. Plain HTTP reaches a
   // development machine and nothing else, as for the application itself.
@@ -78,7 +84,13 @@ export async function run(
     print('The application did not answer. Check that it is running and that APP_ORIGIN is its origin.');
     return 1;
   }
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    print('The answer of the application could not be read. List the invitations to see what was done.');
+    return 1;
+  }
   let answer: string;
   try {
     answer = JSON.stringify(JSON.parse(text), null, 2);
