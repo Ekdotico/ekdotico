@@ -1059,12 +1059,16 @@ describe('the order of the handshake (FR-AU-08; API design, "Collaboration conne
       expect(limit).not.toHaveBeenCalled();
       expect(account).not.toHaveBeenCalled();
 
-      // Accepted: the session, then the limit, then the account's row for the gate.
+      // Accepted: the session, then the limit. The gate is the validation's own
+      // (src/lib/auth/session.ts), so the handshake reads no row of its own
+      // for it. That a gated account is refused with a 403 is asserted in "the
+      // founding-team gate at the handshake"; that its limit is taken first is
+      // not asserted by any test.
       expect((await handshake(local.port, { cookie })).status).toBe(101);
       expect(session).toHaveBeenCalledTimes(2);
       expect(limit).toHaveBeenCalledTimes(1);
       expect(session.mock.invocationCallOrder[1]!).toBeLessThan(limit.mock.invocationCallOrder[0]!);
-      expect(limit.mock.invocationCallOrder[0]!).toBeLessThan(account.mock.invocationCallOrder[0]!);
+      expect(account).not.toHaveBeenCalled();
     } finally {
       await local.stop();
     }

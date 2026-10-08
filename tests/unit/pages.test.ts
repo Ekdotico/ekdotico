@@ -15,6 +15,8 @@ const SIGNED_IN = 'src/app/(app)/';
 // that excepts it: a person without a session opens them, so no notice is due.
 const WITHOUT_NOTICE: Record<string, string> = {
   'src/app/(auth)/sign-in/page.tsx': 'FR-AU-81; NFR-SE-05 (a): the sign-in page, opened without a session',
+  'src/app/(auth)/sign-in/two-factor/page.tsx':
+    'FR-AU-81, FR-AU-83; NFR-SE-05 (a): the second step of a sign-in, opened before the session begins; it reads nothing of an account',
   'src/app/(auth)/sign-up/page.tsx':
     'FR-AU-90; NFR-SE-05 (a): the sign-up address without a token, which shows the fixed statement to anyone',
   'src/app/(auth)/sign-up/[token]/page.tsx':

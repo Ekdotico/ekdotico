@@ -7,7 +7,7 @@
 // show, and the list is what is reviewed on each deployment (NFR-SE-05).
 import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
-import { FORBIDDEN, tooManyRequests } from './lib/auth/route-answers.ts';
+import { FORBIDDEN, notAdmitted, tooManyRequests } from './lib/auth/route-answers.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { faultOf } from './lib/fault.ts';
@@ -38,6 +38,7 @@ type Group = 'a' | 'b' | 'c';
 export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; path: string }[] = [
   // (a) The pages a person without a session opens (FR-AU-88).
   { group: 'a', methods: ['GET'], path: '/sign-in' }, // FR-AU-81
+  { group: 'a', methods: ['GET'], path: '/sign-in/two-factor' }, // FR-AU-81, FR-AU-83, FR-AU-88: the page of the second step, between the password and the session; the path is this application's
   { group: 'a', methods: ['GET', 'POST'], path: '/sign-in/link/[token]' }, // FR-AU-81: the link of a lock email; the POST is its one control (register D115; A104, assumed)
   { group: 'a', methods: ['GET'], path: '/sign-up' }, // FR-AU-90: "without a token" it shows the fixed statement (the owner's decision of 8 October 2026)
   { group: 'a', methods: ['GET'], path: '/sign-up/[token]' }, // FR-AU-90: the link of an admission invitation
@@ -49,6 +50,8 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   // /api/auth is validated here like any route. Each is also on the list of
   // src/lib/auth/auth.ts, without which the handler does not serve it.
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/sign-in/email` }, // FR-AU-81
+  { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/two-factor/verify-totp` }, // FR-AU-81, FR-AU-83: the second step, authorised by the cookie of a step that is open; under a session, the first code of an enrolment, whose session the endpoint reads itself
+  { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/two-factor/verify-backup-code` }, // FR-AU-83: the second step, by a recovery code
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/request-password-reset` }, // FR-AU-86
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/reset-password` }, // FR-AU-86: authorised by the token of a reset link
   // (a) The application's own endpoint that accepts an admission invitation.
@@ -59,6 +62,19 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   // (c) The health check (NFR-RE-03).
   { group: 'c', methods: ['GET'], path: '/api/health' },
 ];
+
+/**
+ * FR-AU-83: what the founding-team gate lets through for an account that it
+ * stops: "every API route refuses the account's requests other than those of
+ * the enrolment itself", and the screen of the enrolment has "the means to
+ * sign out beside it". The first code of the enrolment is the third request,
+ * and is on the list above. Each endpoint lets such an account through itself
+ * as well (two-factor.ts; sign-in.ts), since the proxy can be skipped.
+ */
+export const PAST_THE_GATE: ReadonlySet<string> = new Set([
+  `POST ${IDENTITY_BASE_PATH}/two-factor/enable`,
+  `POST ${IDENTITY_BASE_PATH}/sign-out`,
+]);
 
 /**
  * (a) "The static assets they load": the files of the build, which Next.js
@@ -106,7 +122,7 @@ async function forbidden(userId?: string): Promise<Response> {
 
 /** What a request was waiting on, set before each wait, so that the line of a fault names it. */
 interface Progress {
-  stage: 'start' | 'limit' | 'session' | 'origin' | 'log mark';
+  stage: 'start' | 'limit' | 'session' | 'origin' | 'gate' | 'log mark';
 }
 
 async function decide(request: NextRequest, progress: Progress): Promise<Response> {
@@ -157,11 +173,15 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
   // comes after the origin check, so that a page on another origin cannot
   // spend a user's limit with requests that are refused anyway.
   progress.stage = 'session';
-  const { session, setCookie } = await validateSession(method, headers);
+  const { session: admitted, stopped, setCookie } = await validateSession(method, headers);
+  // The session of an account the founding-team gate stops is a session: the
+  // account is known, and is refused below, where the gate sits.
+  const session = admitted ?? stopped;
+  const api = pathname === '/api' || pathname.startsWith('/api/');
   if (!session) {
     // FR-AU-07: 401 for an API route, and for anything that changes state. A
     // page that is read sends its visitor to sign in, with the place to return to.
-    if (changesState || pathname === '/api' || pathname.startsWith('/api/')) {
+    if (changesState || api) {
       return withCookies(errorResponse(401, 'unauthenticated', MESSAGES.unauthenticated), setCookie);
     }
     const signIn = new URL(SIGN_IN_PATH, settings().appOrigin);
@@ -175,10 +195,6 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
     return await forbidden(session.userId);
   }
 
-  // The founding-team gate of FR-AU-83 sits here, in the slice that builds
-  // two-factor authentication: an account on the list without it reaches
-  // nothing but its enrolment (403, by the answer to Q8).
-
   // NFR-SE-07: requests to API routes, for each authenticated user. Signing
   // out is not held back by it: it "ends the session at once" (FR-AU-84), and
   // a session can be ended once.
@@ -190,6 +206,18 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
       progress.stage = 'log mark';
       return await tooManyRequests('API_PER_USER', session.userId, limit.retryAfterSeconds, session.userId);
     }
+  }
+
+  // The founding-team gate of FR-AU-83: "every API route refuses the
+  // account's requests other than those of the enrolment itself" (403, by the
+  // owner's answer to Q8), and so does anything else that changes state. It
+  // sits after the limit, so that the entries of its refusals are bounded as
+  // the requests are (NFR-SE-19). A page that is read passes: the signed-in
+  // layout shows the enrolment "in place of its content"
+  // (src/app/(app)/account.ts), which is decided on the server there.
+  if (stopped && (changesState || api) && !PAST_THE_GATE.has(`${method} ${pathname}`)) {
+    progress.stage = 'gate';
+    return withCookies(await notAdmitted({ stopped }), setCookie);
   }
 
   // The route validates again where it needs the user (session.ts): no header

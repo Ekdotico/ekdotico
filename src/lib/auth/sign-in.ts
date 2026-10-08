@@ -19,7 +19,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { setTimeout as pause } from 'node:timers/promises';
 import type { AuthContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
-import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
+import { deleteSessionCookie, expireCookie, setSessionCookie } from 'better-auth/cookies';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
@@ -28,6 +28,7 @@ import { securityLog } from '../security-log.ts';
 import { passwordLength } from '../password-rules.ts';
 import { settings, type LimitName } from '../settings.ts';
 import { valkey } from '../valkey.ts';
+import { beginSecondStep, SECOND_STEP_COOKIE } from './second-step.ts';
 
 /** FR-AU-81: the one fixed statement of a failed sign-in, verbatim. */
 export const SIGN_IN_REFUSED = 'The email address or the password is not correct.';
@@ -121,6 +122,78 @@ type Reached = [name: LimitName, key: string, limit: LimitResult];
 const normalised = (email: string) => email.slice(0, 255).toLowerCase();
 
 /**
+ * The keys of the two counts of NFR-SE-07 for an address as `normalised`
+ * gives it: 5 in 15 minutes "for one email address from one network address",
+ * and 20 in an hour for the address entered, from everywhere. Neither the
+ * number nor a bucket holds a space, so the first key cannot be read in two ways.
+ */
+async function countKeys(email: string, headers: Headers | undefined) {
+  const generation = (await valkey().get(generationKey(email))) ?? '0';
+  return {
+    pair: `${generation} ${addressBucket(headers ?? new Headers())} ${email}`,
+    everywhere: `${generation} ${email}`,
+  };
+}
+
+/**
+ * Whether the 20 failed sign-ins in an hour are reached for the address, from
+ * everywhere, under the key a sign-in counts them by. The second step asks
+ * before it looks at a code: NFR-SE-07, "no more than 100 codes can be tried
+ * for one account in any hour", and a step that was opened before the limit
+ * was reached would otherwise still take its five.
+ */
+export async function failedSignInsReached(enteredEmail: string): Promise<boolean> {
+  const { everywhere } = await countKeys(normalised(enteredEmail), undefined);
+  return !(await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere)).ok;
+}
+
+/**
+ * NFR-SE-07: "An abandoned second step counts as a failed sign-in for that
+ * email address under the row above". One failure, under the two counts of a
+ * wrong password and from the network address of the request that abandoned
+ * it. Where a limit is already reached nothing is counted, as for a refused
+ * attempt (the owner's answer to Q10).
+ */
+export async function countFailedSignIn(headers: Headers | undefined, enteredEmail: string): Promise<void> {
+  const { pair, everywhere } = await countKeys(normalised(enteredEmail), headers);
+  await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
+  await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+}
+
+/**
+ * One check of a code at a prompt under a session, counted as `checkCredentials`
+ * counts a password there (the owner's answer G2 of the pull request: "a wrong
+ * code at any prompt counts as a failed sign-in, as Q10 does for passwords").
+ * The two limits are checked, `check` looks at the code, and a wrong one is
+ * counted, as one step for the address, so codes sent together cannot each be
+ * the fifth. Where a limit is reached the code is not looked at and nothing is
+ * counted. False whatever the cause: the caller answers as to a wrong code.
+ * The one place for it: the prompts of later slices call here.
+ */
+export async function checkCodeAtPrompt(
+  headers: Headers | undefined,
+  enteredEmail: string,
+  check: () => Promise<boolean>,
+): Promise<boolean> {
+  const email = normalised(enteredEmail);
+  return inTurn(email, async () => {
+    const { pair, everywhere } = await countKeys(email, headers);
+    const [byPair, byEmail] = await Promise.all([
+      checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair),
+      checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere),
+    ]);
+    if (!byPair.ok || !byEmail.ok) return false;
+    if (await check()) return true;
+    await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
+    await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+    return false;
+  }).catch((error: unknown) => {
+    if (error instanceof NoTurn) return false;
+    throw error;
+  });
+}
+
+/**
  * One check of a password for an email address, as a sign-in makes it and as
  * every prompt for the current password does: "every wrong password at any
  * prompt counts" as a failed sign-in, "a refused attempt counts toward
@@ -146,13 +219,7 @@ export async function checkCredentials(
   const { internalAdapter, password: hasher } = context;
 
   return inTurn(email, async () => {
-    // NFR-SE-07: 5 in 15 minutes "for one email address from one network
-    // address", and 20 in an hour for the address entered, from everywhere.
-    // Neither the number nor a bucket holds a space, so the first key cannot
-    // be read in two ways.
-    const generation = (await valkey().get(generationKey(email))) ?? '0';
-    const pair = `${generation} ${addressBucket(headers ?? new Headers())} ${email}`;
-    const everywhere = `${generation} ${email}`;
+    const { pair, everywhere } = await countKeys(email, headers);
     // Both are asked, and the account is read, on every path: the same work
     // whether a limit is reached, the address is known, or the password is right.
     const [byPair, byEmail] = await Promise.all([
@@ -209,8 +276,11 @@ export async function checkCredentials(
  * plain read would not wait, and would see the old hash beside a transaction
  * that has already deleted the sessions it could see.
  */
-async function stillVerified(verified: { id: string; hash: string; updatedAt: Date }) {
-  const { count } = await db().account.updateMany({
+export async function stillVerified(
+  verified: { id: string; hash: string; updatedAt: Date },
+  client: Pick<ReturnType<typeof db>, 'account'> = db(),
+) {
+  const { count } = await client.account.updateMany({
     where: { id: verified.id, password: verified.hash },
     // Its own value: without it Prisma would write the time of this statement.
     data: { updatedAt: verified.updatedAt },
@@ -243,6 +313,33 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   };
   if (!user || !verified) return refused();
 
+  // FR-AU-81, FR-AU-83: "where the account has two-factor authentication on,
+  // the password is followed by the second step …, and the session begins
+  // only after it". No session is made here. The answer says that a code is
+  // asked for, and nothing else.
+  if ((user as { twoFactorEnabled?: unknown }).twoFactorEnabled === true) {
+    const step = await beginSecondStep(ctx, user.id);
+    // As below: the step is begun first and the password asked after, so that
+    // none begun by a password that was set meanwhile stands. A reset and a
+    // change of the password delete the steps they can see (password.ts).
+    if (!(await stillVerified(verified))) {
+      await db().verification.deleteMany({ where: { id: step } });
+      expireCookie(ctx, ctx.context.createAuthCookie(SECOND_STEP_COOKIE));
+      return refused();
+    }
+    // A session the browser already holds is ended here, as it is below, and
+    // its cookies cleared: the code that follows is then asked of a browser
+    // without a session, which is how its endpoint tells the second step of a
+    // sign-in from the first code of an enrolment (two-factor.ts).
+    const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
+    if (held) {
+      await db().session.deleteMany({ where: { token: held } });
+      deleteSessionCookie(ctx);
+    }
+    ctx.setHeader('Cache-Control', 'no-store');
+    return ctx.json({ twoFactorRedirect: true });
+  }
+
   const session = await internalAdapter.createSession(user.id);
   if (!session) throw new NoSession('sign-in: no session');
   // FR-AU-85, FR-AU-86: "setting it ends every session of the account". A
@@ -267,11 +364,14 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   // row is absent; the library's deletion can skip the row without a word.
   const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
   if (held) await db().session.deleteMany({ where: { token: held } });
+  // The cookie of a second step that this browser left open, for this account
+  // before its second factor was turned off or for another, opens nothing
+  // under the session that begins here.
+  const step = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
+  if (ctx.getCookie(step.name)) expireCookie(ctx, step);
 
   // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
   await setSessionCookie(ctx, { session, user }, false);
-  // Where two-factor authentication is on, the library's plugin ends this
-  // session here, before the answer, and asks for the second step (FR-AU-83).
   ctx.setHeader('Cache-Control', 'no-store');
   return ctx.json({});
 });

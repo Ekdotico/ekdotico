@@ -41,11 +41,11 @@ model User {
 
   sessions          Session[]
   accounts          Account[]
-  twoFactors        TwoFactor[]
+  twoFactor         TwoFactor?
   // FR-AU-09: at most one, by the unique `Workspace.ownerId`.
-  personalWorkspace Workspace?  @relation("PersonalWorkspace")
+  personalWorkspace Workspace? @relation("PersonalWorkspace")
   // FR-ED-19: the documents the account is the Owner of.
-  ownedDocuments    Document[]  @relation("DocumentOwner")
+  ownedDocuments    Document[] @relation("DocumentOwner")
 }
 
 model Session {
@@ -99,18 +99,29 @@ model Verification {
 
 // The secret and the recovery codes are stored encrypted under a key held in
 // the environment (NFR-SE-17 (a)). The last three columns are the library's own
-// at 1.7.7 and are not on the Data models page.
+// at 1.7.7 and are not on the Data models page. `verified` is false from the
+// password of an enrolment to its first code, and only a verified row is a
+// second factor (FR-AU-83: "only then is it on"). The other two belong to a
+// lock of the library's own, which nothing here reaches: the codes are checked
+// by the application's endpoints (src/lib/auth/two-factor.ts), and the only
+// count is that of NFR-SE-07. They stay 0 and null, and a test asserts it.
+// `verified` is false unless a writer says otherwise (the library's default is
+// true): a row written without it is no second factor.
 model TwoFactor {
   id                      String    @id
-  userId                  String
+  // One row for an account (Data models): an enrolment begun again replaces it.
+  userId                  String    @unique
   user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   secret                  String
   backupCodes             String
-  verified                Boolean   @default(true)
+  verified                Boolean   @default(false)
   failedVerificationCount Int       @default(0)
   lockedUntil             DateTime?
+  // When the password began the enrolment, and again each time it is begun
+  // again: a secret waits for its first code no longer than a second step
+  // waits for its code (two-factor.ts). Not on the Data models page.
+  createdAt               DateTime  @default(now())
 
-  @@index([userId])
   @@index([secret])
 }
 

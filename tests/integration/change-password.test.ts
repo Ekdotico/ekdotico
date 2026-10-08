@@ -44,6 +44,16 @@ const notices = async (email: string) =>
   (await sunk(sink)).filter((message) => message.to === email && message.subject === NOTICE_SUBJECT);
 const hashOf = async (userId: string) =>
   (await db().account.findFirstOrThrow({ where: { userId } })).password;
+/** The token of a reset link asked for now, from the email in the sink. */
+async function linkFor(email: string): Promise<string> {
+  const asked = await post(auth, '/request-password-reset', { email }, from(++linkAddresses));
+  await asked.after();
+  const message = (await sunk(sink))
+    .filter((m) => m.to === email && m.subject === 'Set a new password for Ekdotico')
+    .at(-1);
+  return /\/reset-password\/([A-Za-z0-9_-]+)/.exec(message!.text)![1]!;
+}
+let linkAddresses = 100;
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -108,6 +118,52 @@ describe('a change of the password (FR-AU-85)', () => {
     const sent = await notices(email);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.text).toBe(NOTICE_TEXT);
+  });
+
+  // The owner's decision S6 of the pull request: "Void them at a change of
+  // password too", as the completion of a reset makes void the other links.
+  it('makes void every reset link of the account that is outstanding, and no link of another account', async () => {
+    const { email, id, cookie } = await person();
+    const stranger = await person();
+    const links = [await linkFor(email), await linkFor(email)];
+    expect(links[0]).not.toBe(links[1]);
+    const expired = await linkFor(stranger.email);
+    const theirs = await linkFor(stranger.email);
+    expect(await db().verification.count({ where: { value: id } })).toBe(2);
+
+    // A change that is refused makes nothing void.
+    expect((await change(cookie, WRONG, NEW)).response.status).toBe(403);
+    expect(await db().verification.count({ where: { value: id } })).toBe(2);
+
+    expect((await change(cookie, PASSWORD, NEW)).response.status).toBe(200);
+    expect(await db().verification.count({ where: { value: id } })).toBe(0);
+
+    // The answer of a link whose hour has passed, to the character.
+    const { hashToken } = await import('../../src/lib/token.ts');
+    await db().verification.updateMany({
+      where: { identifier: `reset-password:${hashToken(expired)}` },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    const late = await post(auth, '/reset-password', {
+      token: expired,
+      newPassword: 'another password, long',
+    });
+    expect(late.response.status).toBe(409);
+    const answer = await late.response.text();
+    expect(answer).toContain('"code":"reset_link_not_valid"');
+    for (const token of links) {
+      const refused = await post(auth, '/reset-password', { token, newPassword: 'another password, long' });
+      expect(refused.response.status).toBe(409);
+      expect(await refused.response.text()).toBe(answer);
+    }
+    // The password is the one the change set, and the session in use stays.
+    expect(await signsIn(email, NEW)).toBe(true);
+    expect((await validateSessionRow(new Headers({ cookie }))).session).not.toBeNull();
+    // The link of another account still sets its password.
+    expect(
+      (await post(auth, '/reset-password', { token: theirs, newPassword: 'another password, long' })).response
+        .status,
+    ).toBe(200);
   });
 });
 

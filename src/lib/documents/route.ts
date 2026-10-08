@@ -6,7 +6,7 @@
 //
 // Nothing here is of Next.js: a handler is called with a Request, and with the
 // parameters of the path as Next.js 16 hands them, a promise.
-import { fault, unauthenticated } from '../auth/route-answers.ts';
+import { fault, notAdmitted } from '../auth/route-answers.ts';
 import { validateSession, type ValidSession } from '../auth/session.ts';
 import { authorise, authoriseDeleted, refusal, type DocumentRow } from './access.ts';
 import type { DocumentRole, Permission } from './permissions.ts';
@@ -46,8 +46,9 @@ type Handler = (call: DocumentCall) => Response | Promise<Response>;
 
 /**
  * The order every request about one document is answered in: the session (a
- * 401), then the document and the permission (a 404 or a 403), and only then
- * `handler`, which reads the body.
+ * 401, or the 403 of the founding-team gate, FR-AU-83), then the document and
+ * the permission (a 404 or a 403), and only then `handler`, which reads the
+ * body.
  *
  * NFR-SE-02, NFR-SE-17 (c): a request that only reads may be validated against
  * the signed copy of the session; every other reads the session's row.
@@ -55,8 +56,9 @@ type Handler = (call: DocumentCall) => Response | Promise<Response>;
 function make(state: DocumentState, permission: Permission, handler: Handler): DocumentRoute {
   const route: DocumentRoute = async (request, { params }) => {
     try {
-      const { session } = await validateSession(request.method, request.headers);
-      if (!session) return unauthenticated();
+      const validation = await validateSession(request.method, request.headers);
+      const { session } = validation;
+      if (!session) return await notAdmitted(validation);
 
       const { id } = await params;
       const access =

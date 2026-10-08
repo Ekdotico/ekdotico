@@ -1,10 +1,11 @@
-// The account settings (FR-AU-85, FR-AU-88): the change of the password, and
-// the list of the account's sessions with the means to end them. The name, the
-// address, two-factor authentication and the deletion join it with the slices
-// that build them. The path is this application's choice: no page of the
+// The account settings (FR-AU-83, FR-AU-85, FR-AU-88): the change of the
+// password, two-factor authentication, and the list of the account's sessions
+// with the means to end them. The name, the address and the deletion join it
+// with the slices that build them. The path is this application's choice: no page of the
 // specification names one.
 import { PageHeading, Stack } from '@ekdotico/domico/components';
 import { listSessions } from '../../../lib/auth/session-list.ts';
+import { ofFoundingTeam } from '../../../lib/auth/two-factor.ts';
 import { db } from '../../../lib/db.ts';
 import { settings } from '../../../lib/settings.ts';
 import { reading } from '../../page-fault.ts';
@@ -12,6 +13,7 @@ import styles from '../../pages.module.css';
 import { currentAccount, titled } from '../account.ts';
 import { ChangePasswordForm } from './change-password-form.tsx';
 import { SessionList } from './session-list.tsx';
+import { TwoFactorSettings } from './two-factor-settings.tsx';
 
 export const generateMetadata = () => titled('Account settings');
 
@@ -24,11 +26,18 @@ export default async function AccountSettings() {
   // A fault of either read is the page of a fault, and one line (page-fault.ts).
   const [user, sessions] = await reading(() =>
     Promise.all([
-      db().user.findUnique({ where: { id: userId }, select: { email: true } }),
+      db().user.findUnique({
+        where: { id: userId },
+        select: { email: true, emailVerified: true, twoFactorEnabled: true },
+      }),
       listSessions(userId, sessionId),
     ]),
   );
   const { passwordMinLength, passwordMaxLength } = settings();
+  // FR-AU-83: an account of the founding team "cannot turn two-factor
+  // authentication off", so the control is not offered to it. Decided here,
+  // from the row and the list of the process.
+  const foundingTeam = user ? ofFoundingTeam(user) : false;
 
   return (
     <Stack gap={8}>
@@ -42,6 +51,18 @@ export default async function AccountSettings() {
             email={user?.email ?? ''}
             passwordMinLength={passwordMinLength}
             passwordMaxLength={passwordMaxLength}
+          />
+        </Stack>
+      </section>
+      <section aria-labelledby="two-factor-heading" className={styles.narrow}>
+        <Stack gap={5}>
+          <h2 id="two-factor-heading" className={styles.heading}>
+            Two-factor authentication
+          </h2>
+          <TwoFactorSettings
+            email={user?.email ?? ''}
+            on={user?.twoFactorEnabled === true}
+            foundingTeam={foundingTeam}
           />
         </Stack>
       </section>

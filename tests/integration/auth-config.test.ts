@@ -65,6 +65,24 @@ describe('what is configured (NFR-SE-17)', () => {
       'ekdotico-credentials',
       'ekdotico-admission-sign-up',
     ]);
+    // FR-AU-83: the plugin is given no option. With one it could send a code
+    // by email (`otpOptions.sendOTP`), which NFR-SE-17 (d) switches off. Its
+    // endpoints are the application's five and no other (two-factor.test.ts),
+    // and its step after a sign-in, which can remember a device, is left out.
+    const plugin = auth().options.plugins[0]! as {
+      options?: unknown;
+      hooks?: unknown;
+      endpoints: Record<string, unknown>;
+    };
+    expect(plugin.options).toBeUndefined();
+    expect(plugin.hooks).toBeUndefined();
+    expect(Object.keys(plugin.endpoints).sort()).toEqual([
+      'disableTwoFactor',
+      'enableTwoFactor',
+      'generateBackupCodes',
+      'verifyBackupCode',
+      'verifyTOTP',
+    ]);
     expect(auth().options).not.toHaveProperty('socialProviders');
     expect(auth().options.account.accountLinking.enabled).toBe(false);
     expect(auth().options.user).toEqual({ changeEmail: { enabled: false }, deleteUser: { enabled: false } });
@@ -170,10 +188,8 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
         'enableTwoFactor',
         'error',
         'generateBackupCodes',
-        'generateTOTP',
         'getAccessToken',
         'getSession',
-        'getTOTPURI',
         'linkSocialAccount',
         'listSessions',
         'listUserAccounts',
@@ -185,7 +201,6 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
         'revokeOtherSessions',
         'revokeSession',
         'revokeSessions',
-        'sendTwoFactorOTP',
         'sendVerificationEmail',
         'setPassword',
         'signInEmail',
@@ -199,13 +214,11 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
         'verifyEmail',
         'verifyPassword',
         'verifyTOTP',
-        'verifyTwoFactorOTP',
-        'viewBackupCodes',
       ].sort(),
     );
   });
 
-  it('serves these seven and no other', () => {
+  it('serves these twelve and no other', () => {
     expect([...IDENTITY_ENDPOINTS]).toEqual([
       'POST /sign-in/email', // FR-AU-81
       'POST /sign-out', // FR-AU-84
@@ -214,7 +227,51 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
       'POST /change-password', // FR-AU-85
       'POST /revoke-session', // FR-AU-85
       'POST /revoke-other-sessions', // FR-AU-85
+      'POST /two-factor/enable', // FR-AU-83
+      'POST /two-factor/verify-totp', // FR-AU-83, FR-AU-81
+      'POST /two-factor/verify-backup-code', // FR-AU-83
+      'POST /two-factor/disable', // FR-AU-83
+      'POST /two-factor/generate-backup-codes', // FR-AU-83
     ]);
+  });
+
+  // FR-AU-83: each of the five is the application's own, and the plugin's
+  // endpoint of the same name is not in the handler nor in `auth().api`.
+  it('has the application’s own endpoints of two-factor authentication in place of the plugin’s', async () => {
+    const own = await import('../../src/lib/auth/two-factor.ts');
+    const api = auth().api as unknown as Record<string, unknown>;
+    for (const name of [
+      'enableTwoFactor',
+      'verifyTOTP',
+      'verifyBackupCode',
+      'disableTwoFactor',
+      'generateBackupCodes',
+    ] as const) {
+      expect((api[name] as { path: string }).path).toBe(own[name].path);
+      // The plugin's takes a schema for its body; the application's reads the body by hand.
+      expect((own[name] as { options: { body?: unknown } }).options.body).toBeUndefined();
+      expect((api[name] as { options: { body?: unknown } }).options.body).toBeUndefined();
+    }
+    // And of the plugin's other endpoints none is left, on the server either:
+    // its code by email, the secret shown again, a code computed for any
+    // secret, and the recovery codes of any account read back.
+    for (const name of [
+      'sendTwoFactorOTP',
+      'verifyTwoFactorOTP',
+      'getTOTPURI',
+      'generateTOTP',
+      'viewBackupCodes',
+    ]) {
+      expect(api[name], name).toBeUndefined();
+    }
+    // The schema of the plugin is what is kept: the account the library
+    // answers with a session says whether two-factor authentication is on,
+    // which the founding-team gate reads (session.ts).
+    const { response } = await auth().api.getSession({
+      headers: await sessionHeaders('person@example.com'),
+      returnHeaders: true,
+    });
+    expect(response?.user).toMatchObject({ twoFactorEnabled: false, emailVerified: true });
   });
 
   it('answers 404 on every other endpoint the library has, signed in or not', async () => {
@@ -318,10 +375,8 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     // Social sign-in and the linking of an account: there is no provider.
     await expect(auth().api.signInSocial({ body: { provider: 'github' } })).rejects.toThrow();
     await expect(auth().api.linkSocialAccount({ body: { provider: 'github' }, headers })).rejects.toThrow();
-    // The two-factor plugin's code by email: no function sends one.
-    await expect(auth().api.sendTwoFactorOTP({ headers })).rejects.toMatchObject({
-      body: { code: 'OTP_NOT_CONFIGURED' },
-    });
+    // The two-factor plugin's code by email: the endpoint is not there to call.
+    expect(auth().api).not.toHaveProperty('sendTwoFactorOTP');
     // The library's own reset of a password is replaced (password.ts): it is
     // given no function to send an email with, and no setting to end sessions by.
     expect(auth().options.emailAndPassword).not.toHaveProperty('sendResetPassword');

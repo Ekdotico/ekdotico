@@ -21,3 +21,13 @@ export const routes = globSync('src/app/**/route.{ts,tsx,js}');
 
 /** The routes that must validate a session themselves. */
 export const withSession = routes.filter((route) => !(route in SESSIONLESS));
+
+// FR-AU-83: the routes with a session that an account stopped by the
+// founding-team gate still reaches, each with why: "every API route refuses
+// the account's requests other than those of the enrolment itself". None: the
+// requests of the enrolment are endpoints of the identity library's handler,
+// which is on the list above (tests/integration/founding-gate.test.ts).
+export const PAST_THE_GATE: Record<string, string> = {};
+
+/** The routes that must answer such an account 403. */
+export const behindTheGate = withSession.filter((route) => !(route in PAST_THE_GATE));
