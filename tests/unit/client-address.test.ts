@@ -10,7 +10,8 @@ process.env.VALKEY_URL ??= 'redis://localhost:6379';
 process.env.AUTH_SECRET ??= 'a-test-secret-of-at-least-thirty-two-characters';
 process.env.TRUSTED_PROXY_COUNT = '2';
 
-const { UNKNOWN_ADDRESS, addressBehind, clientAddress } = await import('../../src/lib/client-address.ts');
+const { UNKNOWN_ADDRESS, addressBehind, clientAddress } =
+  await import('../../src/lib/client-address.ts');
 
 const forwarded = (...lines: string[]) => {
   const headers = new Headers();

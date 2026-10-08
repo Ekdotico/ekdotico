@@ -56,19 +56,17 @@ export async function limitWith(
   count: boolean,
 ): Promise<LimitResult> {
   // ponytail: EVAL sends the script on each call; defineCommand (EVALSHA) if that ever shows in a profile.
-  const wait = Number(
-    await client.eval(
-      SCRIPT,
-      1,
-      storageKey(name, key),
-      limit.max,
-      limit.windowSeconds * 1000,
-      count ? randomUUID() : '',
-    ),
+  const reply = await client.eval(
+    SCRIPT,
+    1,
+    storageKey(name, key),
+    limit.max,
+    limit.windowSeconds * 1000,
+    count ? randomUUID() : '',
   );
-  // Anything but a number of milliseconds is treated as a refusal, never as admission.
-  if (wait === 0) return { ok: true };
-  return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil(wait / 1000) || 1) };
+  // Nothing but the number 0 admits: an empty or absent reply is a refusal.
+  if (reply === 0) return { ok: true };
+  return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil(Number(reply) / 1000) || 1) };
 }
 
 /** Counts one event against the limit unless it is already reached. A refused event is not counted. */

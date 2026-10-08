@@ -4,7 +4,7 @@
 // of Next.js, and it reads no environment until `auth()` is first called.
 import { betterAuth, type BetterAuthPlugin } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { APIError } from 'better-auth/api';
+import { isAPIError } from 'better-auth/api';
 import { twoFactor } from 'better-auth/plugins';
 import { clientAddress, UNKNOWN_ADDRESS } from '../client-address.ts';
 import { db } from '../db.ts';
@@ -28,6 +28,10 @@ export const IDENTITY_BASE_PATH = '/api/auth';
  */
 export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // FR-AU-81: sign-in by email address and password, the only way to sign in.
+  // OWED before any account can exist on a deployment: the limits and the log
+  // entry of a failed sign-in (NFR-SE-07, NFR-SE-19), the fixed statement, and
+  // the refusal of `rememberMe`, which the sign-in slice builds. Until then
+  // this answers as the library ships it.
   'POST /sign-in/email',
   // FR-AU-84: signing out ends the session at once and clears the browser's cookies.
   'POST /sign-out',
@@ -139,7 +143,8 @@ function create() {
     logger: { disabled: true },
     onAPIError: {
       onError: (error) => {
-        if (error instanceof APIError && error.statusCode < 500) return;
+        // A refusal of the request itself, the library's or its router's, is no fault.
+        if (isAPIError(error) && error.statusCode < 500) return;
         console.error(`identity: request failed (${error instanceof Error ? error.name : 'unknown'})`);
       },
     },

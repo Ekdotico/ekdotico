@@ -27,7 +27,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 concurrency:
   group: advisories-${{ github.ref }}
@@ -37,10 +36,6 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      # Reads @ekdotico/domico from GitHub Packages. The package has to grant
-      # this repository access under "Manage Actions access".
-      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,8 +44,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          registry-url: https://npm.pkg.github.com
-          scope: '@ekdotico'
+      # The audit reads the lockfile and asks the public registry: it installs
+      # nothing, so it needs no token for GitHub Packages.
       # No --ignore-registry-errors: an audit endpoint that cannot be reached
       # fails the run, so that a missing check is never taken for a clean one.
       - run: pnpm audit --audit-level low

@@ -178,4 +178,13 @@ describe('where Valkey cannot be reached (NFR-SE-06 A10)', () => {
     await expect(limitWith(unreachable, limit, 'RESET_PER_EMAIL', address(), false)).rejects.toThrow();
     unreachable.disconnect();
   });
+
+  it.each([null, '', [], false, undefined, 'OK'])(
+    'refuses on the reply %j, which is not a number',
+    async (reply) => {
+      const odd = { eval: async () => reply } as unknown as Redis;
+      const result = await limitWith(odd, { max: 3, windowSeconds: 2 }, 'RESET_PER_EMAIL', address(), true);
+      expect(result).toEqual(refused(1));
+    },
+  );
 });

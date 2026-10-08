@@ -33,3 +33,25 @@ export function addressBehind(headers: Headers, trustedProxyCount: number): stri
 export function clientAddress(headers: Headers): string {
   return addressBehind(headers, settings().trustedProxyCount);
 }
+
+/**
+ * What a limit "for each address" counts by (NFR-SE-07). An IPv4 address is
+ * its own bucket. One IPv6 subscriber holds a whole /64 and can send each
+ * request from a new address in it, so an IPv6 address is counted by its
+ * first 64 bits.
+ */
+export function bucketOf(address: string): string {
+  if (isIP(address) !== 6) return address;
+  const [head, tail] = address.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill('0')];
+  return `${groups
+    .slice(0, 4)
+    .map((group) => parseInt(group, 16).toString(16))
+    .join(':')}::/64`;
+}
+
+export function addressBucket(headers: Headers): string {
+  return bucketOf(clientAddress(headers));
+}

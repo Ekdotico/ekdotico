@@ -9,7 +9,7 @@ import { createHmac } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { validateSession } from './lib/auth/session.ts';
-import { clientAddress } from './lib/client-address.ts';
+import { addressBucket } from './lib/client-address.ts';
 import { errorResponse, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
@@ -152,7 +152,7 @@ async function decide(request: NextRequest): Promise<Response> {
   // each network address (NFR-SE-07), and counted before anything else, so
   // that the refusals below are bounded too.
   if (group === 'a') {
-    const address = clientAddress(headers);
+    const address = addressBucket(headers);
     const limit = await takeLimit('SESSIONLESS_PER_ADDRESS', address);
     if (!limit.ok) return tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds);
     // NFR-SE-17 (c): "every request that changes state", a sign-in and the

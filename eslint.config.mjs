@@ -15,6 +15,20 @@ const config = [
   ...next,
   ...nextTypescript,
   {
+    // NFR-SE-02, NFR-SE-19: draft mode sends the build's revalidation
+    // identifier to the browser as a cookie, and a request that carries that
+    // identifier is not passed through proxy.ts (docs/operations/deployment.md).
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "ImportSpecifier[imported.name='draftMode']",
+          message: 'Draft mode is not used: it discloses the identifier that lets a request skip proxy.ts.',
+        },
+      ],
+    },
+  },
+  {
     // Contract IC-49: the application obtains the port from one module and from nowhere else.
     ignores: ['src/lib/istorico/index.ts'],
     rules: {
