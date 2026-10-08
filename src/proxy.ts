@@ -55,6 +55,7 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/two-factor/verify-backup-code` }, // FR-AU-83: the second step, by a recovery code
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/request-password-reset` }, // FR-AU-86
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/reset-password` }, // FR-AU-86: authorised by the token of a reset link
+  { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/verify-email` }, // FR-AU-03: the confirmation of a changed address, authorised by the token of its link, which the body holds (the owner's answer to Q3 of the plan); an endpoint of the identity handler for the reason the link of a lock email has one
   // (a) The application's own endpoint that accepts an admission invitation.
   { group: 'a', methods: ['POST'], path: '/api/sign-up' }, // FR-AU-90
   // (b) The admission endpoints, authenticated by signature in the route (FR-AU-89).

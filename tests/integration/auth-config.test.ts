@@ -64,16 +64,18 @@ describe('what is configured (NFR-SE-17)', () => {
   });
 
   it('has only two-factor authentication of the plugins, and no social provider (d)', () => {
-    // The other four are the application's own: the gate, tested below; its
+    // The other five are the application's own: the gate, tested below; its
     // sign-in and sign-out (sign-in.test.ts, sign-out.test.ts); its reset and
     // change of a password and its ending of sessions (password-reset.test.ts,
-    // change-password.test.ts, session-list.test.ts); and the acceptance of an
+    // change-password.test.ts, session-list.test.ts); its change of the name
+    // and of the address (name-and-address.test.ts); and the acceptance of an
     // admission invitation, which has no path.
     expect(auth().options.plugins.map((plugin) => plugin.id)).toEqual([
       'two-factor',
       'ekdotico-surface',
       'ekdotico-sign-in',
       'ekdotico-credentials',
+      'ekdotico-account',
       'ekdotico-admission-sign-up',
     ]);
     // FR-AU-83: the plugin is given no option. With one it could send a code
@@ -230,7 +232,7 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     );
   });
 
-  it('serves these thirteen and no other', () => {
+  it('serves these sixteen and no other', () => {
     expect([...IDENTITY_ENDPOINTS]).toEqual([
       'POST /sign-in/email', // FR-AU-81
       'POST /sign-in/link', // FR-AU-81: the link of a lock email (register D115; A104)
@@ -245,7 +247,24 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
       'POST /two-factor/verify-backup-code', // FR-AU-83
       'POST /two-factor/disable', // FR-AU-83
       'POST /two-factor/generate-backup-codes', // FR-AU-83
+      'POST /update-user', // FR-AU-90: the name
+      'POST /change-email', // FR-AU-03
+      'POST /verify-email', // FR-AU-03: the confirmation, a POST (the owner's answer to Q3)
     ]);
+  });
+
+  // FR-AU-03, FR-AU-90: each of the three is the application's own, and the
+  // library's endpoint of the same name is not in the handler nor in `auth().api`.
+  it('has the application’s own endpoints of the name and the address in place of the library’s', async () => {
+    const own = await import('../../src/lib/auth/name-and-address.ts');
+    const api = auth().api as unknown as Record<string, unknown>;
+    for (const name of ['updateUser', 'changeEmail', 'verifyEmail'] as const) {
+      expect((api[name] as { path: string }).path).toBe(own[name].path);
+      // The library's takes a schema for its body or its query; the application's reads the body by hand.
+      expect((api[name] as { options: { method: unknown } }).options.method).toBe('POST');
+      expect((api[name] as { options: { body?: unknown } }).options.body).toBeUndefined();
+      expect((api[name] as { options: { query?: unknown } }).options.query).toBeUndefined();
+    }
   });
 
   // FR-AU-83: each of the five is the application's own, and the plugin's
@@ -334,15 +353,16 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
       ['POST', '/sign-up/email'], // FR-AU-57
       ['POST', '/link-social'], // account linking
       ['POST', '/unlink-account'],
-      ['POST', '/change-email'], // FR-AU-03 is the application's own, later
-      ['GET', '/verify-email'],
+      ['GET', '/change-email'], // FR-AU-03 is the application's own, a POST
+      ['GET', '/verify-email'], // the library's confirmation by opening a link: the application's is a POST
+      ['GET', '/verify-email?token=x'],
       ['POST', '/send-verification-email'],
       ['GET', '/reset-password/x'], // the library's page of a reset link; FR-AU-86 is the application's own
       ['GET', '/list-sessions'], // returns every session's token; the settings page reads the rows (FR-AU-85)
       ['POST', '/revoke-sessions'], // every session, the one in use included; FR-AU-85 has no such action
       ['POST', '/set-password'],
       ['POST', '/verify-password'],
-      ['POST', '/update-user'], // FR-AU-03, the name: later
+      ['GET', '/update-user'], // FR-AU-90, the name, is the application's own, a POST
       ['GET', '/get-session'],
       ['GET', '/ok'],
       ['GET', '/error'],
@@ -380,10 +400,11 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     // FR-AU-58: the library's own deletion of a user.
     await expect(auth().api.deleteUser({ body: { password: PASSWORD }, headers })).rejects.toThrow();
     expect(await db().user.count({ where: { id: userId } })).toBe(1);
-    // The change of an address through the library.
-    await expect(
-      auth().api.changeEmail({ body: { newEmail: 'other@example.com' }, headers }),
-    ).rejects.toThrow();
+    // The change of an address through the library: its endpoint is replaced
+    // (name-and-address.ts), and its own stays switched off in the options.
+    // The application's asks for the password, and changes nothing by itself.
+    const changeEmail = auth().api.changeEmail as unknown as (input: unknown) => Promise<unknown>;
+    await expect(changeEmail({ body: { newEmail: 'other@example.com' }, headers })).rejects.toThrow();
     expect((await db().user.findUniqueOrThrow({ where: { id: userId } })).email).toBe('person@example.com');
     // Social sign-in and the linking of an account: there is no provider.
     await expect(auth().api.signInSocial({ body: { provider: 'github' } })).rejects.toThrow();

@@ -28,6 +28,7 @@ describe('the list of paths without a session', () => {
       'a POST /api/auth/two-factor/verify-backup-code',
       'a POST /api/auth/request-password-reset',
       'a POST /api/auth/reset-password',
+      'a POST /api/auth/verify-email',
       'a POST /api/sign-up',
       'b POST,GET /api/admission/invitations',
       'b DELETE /api/admission/invitations/[id]',
@@ -84,6 +85,7 @@ describe('classify', () => {
     ['POST', '/api/auth/two-factor/verify-backup-code', 'a'],
     ['POST', '/api/auth/request-password-reset', 'a'],
     ['POST', '/api/auth/reset-password', 'a'],
+    ['POST', '/api/auth/verify-email', 'a'],
     ['POST', '/api/sign-up', 'a'],
     ['POST', '/api/admission/invitations', 'b'],
     ['GET', '/api/admission/invitations', 'b'],
@@ -118,6 +120,15 @@ describe('classify', () => {
     ['POST', '/sign-in/two-factor'],
     ['GET', '/sign-in/two-factor/x'],
     ['POST', '/api/auth/change-password'],
+    // FR-AU-03, FR-AU-90: the name and the request for a change of the address
+    // need a session; the page of a confirmation link is read and never
+    // posted to, and its endpoint answers no GET.
+    ['POST', '/api/auth/update-user'],
+    ['POST', '/api/auth/change-email'],
+    ['GET', '/api/auth/verify-email'],
+    ['POST', '/confirm-address/tok'],
+    ['GET', '/confirm-address'],
+    ['GET', '/confirm-address/tok/more'],
     ['POST', '/api/auth/revoke-session'],
     ['POST', '/api/auth/revoke-other-sessions'],
     ['GET', '/api/auth/list-sessions'],

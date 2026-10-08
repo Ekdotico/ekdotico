@@ -27,6 +27,8 @@ const WITHOUT_NOTICE: Record<string, string> = {
     'FR-AU-86; NFR-SE-05 (a): the link of a password reset, opened without a session',
   'src/app/(auth)/sign-in/link/[token]/page.tsx':
     'FR-AU-81; NFR-SE-05 (a): the sign-in link of a lock email, opened without a session',
+  'src/app/(auth)/confirm-address/[token]/page.tsx':
+    'FR-AU-03; NFR-SE-05 (a): the link that confirms a changed address, opened without a session',
 };
 
 // A layout below the signed-in one renders beside the notice as a page does,

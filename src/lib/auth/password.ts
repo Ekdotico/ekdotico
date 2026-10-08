@@ -29,7 +29,8 @@ import { checkPassword } from '../password-rules.ts';
 import { logLimitReached, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
-import { hashToken, newToken, TOKEN } from '../token.ts';
+import { hashToken, newToken, RESET_LINK, TOKEN } from '../token.ts';
+import { voidAddressLinks } from './address-links.ts';
 import { notAdmitted, refusedOrigin, tooManyRequests, unauthenticated } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
@@ -57,9 +58,8 @@ const MESSAGES = {
 };
 
 // The reset links of the account are rows of the identity library's table of
-// single-use tokens (Data models, `Verification`): the identifier is this
-// prefix and the hash of the token, and the value is the user.
-const RESET = 'reset-password:';
+// single-use tokens (../token.ts).
+const RESET = RESET_LINK;
 
 // FR-AU-87 (c), verbatim. Plain text; nothing of a person but the address it is sent to.
 function resetEmail(to: string, token: string): EmailMessage {
@@ -219,6 +219,10 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
     if (changed.count !== 1) throw new Error('password reset: no credential');
     // "The completion of a reset makes void every other reset link of the account."
     await tx.verification.deleteMany({ where: { value: reset.userId, identifier: { startsWith: RESET } } });
+    // FR-AU-03: a change of address that the old password asked for is not
+    // confirmed after it (address-links.ts; its register row is pending).
+    // After the reset links, as the confirmation of an address takes them.
+    await voidAddressLinks(tx, reset.userId);
     // FR-AU-83: a second step that the old password began does not complete.
     // Before the sessions: the second step makes its session first and claims
     // its row after, so one of the two statements here finds what it made.
@@ -320,6 +324,9 @@ export const changePassword = createAuthEndpoint(
         await tx.verification.deleteMany({
           where: { value: session.userId, identifier: { startsWith: RESET } },
         });
+        // FR-AU-03: and a change of address that the old password asked for,
+        // as at a reset. Undone with the rest where nothing is to change.
+        await voidAddressLinks(tx, session.userId);
         // The password next, as the completion of a reset takes it, so that
         // neither waits for the other in a circle. Written only over the hash
         // that was verified: one set since then is not overwritten (FR-AU-86).
