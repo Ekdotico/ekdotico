@@ -7,7 +7,7 @@
 // Nothing here is of Next.js: a handler is called with a Request, and with the
 // parameters of the path as Next.js 16 hands them, a promise.
 import type { Document } from '../../generated/prisma/client.ts';
-import { fault, unauthenticated } from '../auth/route-answers.ts';
+import { fault, notAdmitted } from '../auth/route-answers.ts';
 import { validateSession, type ValidSession } from '../auth/session.ts';
 import { authorise, refusal } from './access.ts';
 import type { DocumentRole, Permission } from './permissions.ts';
@@ -36,7 +36,8 @@ export function permissionOf(handler: unknown): Permission | undefined {
 
 /**
  * A handler for a route under `[id]`, in the order every such request is
- * answered in: the session (a 401), then the document and the permission (a
+ * answered in: the session (a 401, or the 403 of the founding-team gate,
+ * FR-AU-83), then the document and the permission (a
  * 404 or a 403), and only then `handler`, which reads the body.
  *
  * NFR-SE-02, NFR-SE-17 (c): a request that only reads may be validated against
@@ -48,8 +49,9 @@ export function documentRoute(
 ): DocumentRoute {
   const route: DocumentRoute = async (request, { params }) => {
     try {
-      const { session } = await validateSession(request.method, request.headers);
-      if (!session) return unauthenticated();
+      const validation = await validateSession(request.method, request.headers);
+      const { session } = validation;
+      if (!session) return await notAdmitted(validation);
 
       const { id } = await params;
       const access = await authorise(session.userId, id, permission);

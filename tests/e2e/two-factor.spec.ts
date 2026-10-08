@@ -33,7 +33,7 @@ const RECOVERY_REFUSED =
   'The recovery code is not correct, or it has been used. Enter a recovery code that has not been used.';
 const ENROLMENT_TITLE = 'Turn on two-factor authentication';
 
-const firstScreen = { level: 1, name: 'Signed in' } as const;
+const firstScreen = { level: 1, name: 'Documents' } as const;
 const secondStep = { level: 1, name: 'Enter the code' } as const;
 
 /** The part of the account settings that holds two-factor authentication. */
