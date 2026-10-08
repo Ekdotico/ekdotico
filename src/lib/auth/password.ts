@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
-import { afterResponse } from '../after-response.ts';
+import { afterResponse, assertCollecting } from '../after-response.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { handOver } from '../email/hand-over.ts';
@@ -91,6 +91,10 @@ async function sendResetLink(email: string, now: Date = new Date()): Promise<voi
   const user = await db().user.findUnique({ where: { email }, select: { id: true, emailVerified: true } });
   if (!user?.emailVerified) return;
   const token = newToken();
+  // For the slice that builds the change of address (FR-AU-03): a link is
+  // bound to the user, not to the address it was mailed to, so that slice
+  // deletes the account's `reset-password:` rows in the transaction that
+  // changes the address.
   await db().verification.create({
     data: {
       id: randomUUID(),
@@ -112,6 +116,7 @@ export const requestPasswordReset = createAuthEndpoint(
   '/request-password-reset',
   { method: 'POST' },
   async (ctx) => {
+    assertCollecting();
     const entered = textFields(ctx.body, 'email');
     if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.requestShape);
     // FR-AU-02: lower case, as an address is stored. Bounded, whatever was sent.
@@ -172,6 +177,9 @@ const passwordRefused = (refusal: string) =>
  * no cookie of a session.
  */
 export const resetPassword = createAuthEndpoint('/reset-password', { method: 'POST' }, async (ctx) => {
+  // The notice is left for after the answer, which only a request that
+  // collects can take: asked now, before anything is written.
+  assertCollecting();
   const entered = textFields(ctx.body, 'token', 'newPassword');
   if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.resetShape);
 
@@ -236,6 +244,9 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
   return ctx.json({});
 });
 
+// Thrown inside the transaction of a change of password, to undo it.
+const SESSION_ENDED = new Error('password change: session ended');
+
 /**
  * FR-AU-85: `POST /api/auth/change-password`, with `{ "currentPassword",
  * "newPassword" }`. It "requires the current password", and "every other
@@ -245,6 +256,7 @@ export const changePassword = createAuthEndpoint(
   '/change-password',
   { method: 'POST', requireHeaders: true },
   async (ctx) => {
+    assertCollecting();
     // NFR-SE-17 (c): a change of the password reads the session's row.
     const { session } = await validateSessionRow(ctx.headers);
     if (!session) return unauthenticated();
@@ -258,25 +270,77 @@ export const changePassword = createAuthEndpoint(
     // failed sign-in, and a prompt refused by a limit is answered as a wrong
     // password is, with the statement of FR-AU-81, so that the answer does not
     // show that a limit was reached. The session stays. NFR-SE-19: a 403.
-    const { passed } = await checkCredentials(ctx.context, ctx.headers, user.email, entered.currentPassword);
-    if (!passed) {
+    const { verified } = await checkCredentials(
+      ctx.context,
+      ctx.headers,
+      user.email,
+      entered.currentPassword,
+    );
+    const refused = async () => {
       await securityLog({ kind: 'forbidden', userId: session.userId });
       return errorResponse(403, 'password_refused', SIGN_IN_REFUSED);
-    }
+    };
+    if (!verified) return refused();
     const refusal = checkPassword(entered.newPassword, user.email);
     if (refusal) return passwordRefused(refusal);
 
     const hash = await ctx.context.password.hash(entered.newPassword);
-    await db().$transaction(async (tx) => {
-      const changed = await tx.account.updateMany({
-        where: { userId: session.userId, providerId: 'credential' },
-        data: { password: hash },
+    // Two runs of scrypt have passed since the session was read and the
+    // password verified, and either may have ended meanwhile: the account's
+    // owner completed a reset, or ended this session. So the transaction asks
+    // both again, each as a write, which waits for whatever has not committed.
+    const own = { id: session.sessionId, userId: session.userId };
+    const outcome = await db()
+      .$transaction(async (tx) => {
+        // The password first, as the completion of a reset takes it, so that
+        // neither waits for the other in a circle. Written only over the hash
+        // that was verified: one set since then is not overwritten (FR-AU-86).
+        const changed = await tx.account.updateMany({
+          where: {
+            id: verified.id,
+            userId: session.userId,
+            providerId: 'credential',
+            password: verified.hash,
+          },
+          data: { password: hash },
+        });
+        if (changed.count !== 1) {
+          // Whatever set the other password ended this session too, unless it
+          // was a change made under this very session.
+          return (await tx.session.count({ where: own })) === 0 ? 'ended' : 'outrun';
+        }
+        // FR-AU-84: a session that has ended changes nothing. Prisma has no
+        // read that locks a row, so the row is written with its own value:
+        // from here to the commit no other request can end this session, and
+        // one that already has is found.
+        const held = await tx.session.findFirst({ where: own, select: { updatedAt: true } });
+        const locked = held
+          ? await tx.session.updateMany({
+              where: { ...own, updatedAt: held.updatedAt },
+              data: { updatedAt: held.updatedAt },
+            })
+          : { count: 0 };
+        if (locked.count !== 1) {
+          // Thrown, so that the new password is not kept. A row that is there
+          // but was renewed between the two statements is a fault, not an end.
+          if ((await tx.session.count({ where: own })) === 0) throw SESSION_ENDED;
+          throw new Error('password change: session renewed meanwhile');
+        }
+        await tx.session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
+        // FR-AU-81: the slice that builds the lock makes void the sign-in link
+        // of a lock email here ("when the password … of the account is changed").
+        return 'changed';
+      })
+      .catch((error: unknown) => {
+        if (error === SESSION_ENDED) return 'ended';
+        throw error;
       });
-      if (changed.count !== 1) throw new Error('password change: no credential');
-      await tx.session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
-      // FR-AU-81: the slice that builds the lock makes void the sign-in link
-      // of a lock email here ("when the password … of the account is changed").
-    });
+    if (outcome === 'ended') return unauthenticated();
+    // The password was changed under this session while this request was on
+    // its way, so the one it sent is no longer the current password: the
+    // answer to a wrong one, with its entry (NFR-SE-19: a 403). Not counted as
+    // a failed sign-in: it was the right password when it was checked.
+    if (outcome === 'outrun') return refused();
     // FR-ED-40 (d): the slice that builds the collaboration server publishes
     // the end of the other sessions here.
 

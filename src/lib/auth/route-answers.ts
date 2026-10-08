@@ -48,6 +48,14 @@ export async function tooManyRequests(
   );
 }
 
+/**
+ * The statement of a 403 for a request that did not come from the
+ * application's own origin (NFR-SE-17 (c)): the proxy's, and the identity
+ * library's own refusal in the same words (auth.ts).
+ */
+export const FORBIDDEN =
+  'This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again.';
+
 /** FR-AU-07: no valid session. */
 export function unauthenticated(): Response {
   return errorResponse(

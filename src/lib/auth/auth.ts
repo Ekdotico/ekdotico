@@ -9,10 +9,17 @@ import { twoFactor } from 'better-auth/plugins';
 import { admissionSignUp } from '../admission/sign-up.ts';
 import { clientAddress, UNKNOWN_ADDRESS } from '../client-address.ts';
 import { db } from '../db.ts';
+import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { changePassword, requestPasswordReset, resetPassword } from './password.ts';
+import { FORBIDDEN } from './route-answers.ts';
 import { revokeOtherSessions, revokeSession } from './session-list.ts';
 import { signInEmail, signOut } from './sign-in.ts';
+
+// Text for a person, for the owner's approval: the statement of the router's
+// 400 and 415, which the library words in its own way.
+const NOT_JSON =
+  'The request could not be read, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
 
 /** Where the library's handler is mounted (API design, "Sign-in and identity"). */
 export const IDENTITY_BASE_PATH = '/api/auth';
@@ -181,20 +188,34 @@ function create() {
     logger: { disabled: true },
     onAPIError: {
       onError: (error) => {
-        // A refusal of the request itself, the library's or its router's, is no fault.
-        if (isAPIError(error) && error.statusCode < 500) return;
+        // The router answers an API error thrown from this function: the one
+        // shape of an error (the owner's answer to Q8), in the words of proxy.ts.
+        const answer = (status: 400 | 403 | 415 | 500, code: string, message: string) =>
+          new APIError(status, { error: { code, message } }, { 'Cache-Control': 'no-store' });
+        if (isAPIError(error) && error.statusCode < 500) {
+          // The library's own refusal of a request from another origin, or of
+          // a place to go to on one. NFR-SE-19: a 403 has its entry; no user
+          // is known here. The library does not wait for this function, so
+          // the entry is not waited for; writing it never rejects.
+          if (error.statusCode === 403) {
+            void securityLog({ kind: 'forbidden' });
+            throw answer(403, 'forbidden', FORBIDDEN);
+          }
+          // Its router's refusal of a body that is not JSON, or not sent as JSON.
+          if (error.statusCode === 400 || error.statusCode === 415) {
+            throw answer(error.statusCode, 'invalid_request', NOT_JSON);
+          }
+          // Any other refusal of the request itself is no fault.
+          return;
+        }
         console.error(`identity: request failed (${error instanceof Error ? error.name : 'unknown'})`);
         // Left here, the library's router prints the fault whole, with whatever
-        // the database or Valkey put in it, and answers with no body. It
-        // answers an API error thrown from this function instead: the one
-        // shape of an error, in the words of proxy.ts (NFR-SE-06 A10).
-        throw new APIError('INTERNAL_SERVER_ERROR', {
-          error: {
-            code: 'internal',
-            message:
-              'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
-          },
-        });
+        // the database or Valkey put in it, and answers with no body (NFR-SE-06 A10).
+        throw answer(
+          500,
+          'internal',
+          'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+        );
       },
     },
   });

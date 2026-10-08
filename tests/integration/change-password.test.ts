@@ -157,6 +157,28 @@ describe('the current password (FR-AU-85; the owner’s answer to Q10)', () => {
     expect((await change(cookie, PASSWORD, NEW, from(6))).response.status).toBe(200);
   });
 
+  it('counts toward the 20 in an hour for the address, from wherever the wrong ones came', async () => {
+    const { email, id, cookie, sessionId } = await person();
+    const before = await hashOf(id);
+    // Two from each of ten network addresses: none of them reaches its 5.
+    for (let n = 0; n < 19; n++) {
+      expect((await change(cookie, WRONG, NEW, from(100 + (n >> 1)))).response.status).toBe(403);
+    }
+    // Nineteen are not twenty: from a network address not yet used, a sign-in is answered.
+    expect(await signsIn(email, PASSWORD, from(150))).toBe(true);
+    expect((await change(cookie, WRONG, NEW, from(109))).response.status).toBe(403);
+
+    // The limit of NFR-SE-07 is reached, for every network address: a sign-in
+    // is refused, and so is the prompt with the right password, with no 429.
+    expect(await signsIn(email, PASSWORD, from(151))).toBe(false);
+    const held = await change(cookie, PASSWORD, NEW, from(152));
+    expect(held.response.status).toBe(403);
+    expect(await held.response.text()).toBe(REFUSED);
+    expect(held.response.headers.get('retry-after')).toBeNull();
+    expect(await hashOf(id)).toBe(before);
+    expect((await validateSessionRow(new Headers({ cookie }))).session?.sessionId).toBe(sessionId);
+  });
+
   it('is verified before anything is said of the new password', async () => {
     const { cookie } = await person();
     const refused = await change(cookie, WRONG, 'short');
@@ -277,7 +299,18 @@ describe('the session of the request (NFR-SE-17 (c), FR-AU-07)', () => {
       { cookie, origin: 'https://evil.example' },
     );
     expect(refused.response.status).toBe(403);
+    // In the one shape of an error, and in the words of the proxy's 403 (the owner's answer to Q8).
+    expect(await refused.response.text()).toBe(
+      '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}',
+    );
     expect(await hashOf(id)).toBe(before);
+    // NFR-SE-19: a 403 has its entry. The library refused before the session
+    // was read, so no user is known. It does not wait for the entry.
+    await vi.waitFor(async () =>
+      expect((await db().securityLogEntry.findMany()).map(({ kind, userId }) => [kind, userId])).toEqual([
+        ['forbidden', null],
+      ]),
+    );
   });
 });
 

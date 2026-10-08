@@ -148,8 +148,18 @@ describe('a request for a reset (FR-AU-86)', () => {
       fresh(),
     );
     expect(asked.response.status).toBe(403);
+    // In the one shape of an error, and in the words of the proxy's 403 (the owner's answer to Q8).
+    expect(await asked.response.text()).toBe(
+      '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}',
+    );
     expect(asked.left).toBe(0);
     expect(await links(id)).toHaveLength(0);
+    // NFR-SE-19: a 403 has its entry, with no user. The library does not wait for it.
+    await vi.waitFor(async () =>
+      expect((await db().securityLogEntry.findMany()).map(({ kind, userId }) => [kind, userId])).toEqual([
+        ['forbidden', null],
+      ]),
+    );
   });
 });
 
@@ -250,6 +260,36 @@ describe('the answer does not show who is registered (FR-AU-86, FR-AU-81)', () =
     for (const task of scheduled.splice(0)) await task();
     expect(await mailTo(known.email, RESET_SUBJECT)).toHaveLength(1);
     expect(await links(known.id)).toHaveLength(1);
+  });
+
+  it('hands the notice of a completed reset and of a change of password to `after`, through the route (FR-AU-87 (d))', async () => {
+    const { email } = await person();
+    const token = await linkFor(email);
+    scheduled.length = 0;
+    const through = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+      route.POST(
+        new Request(`${ORIGIN}/api/auth${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: ORIGIN, ...fresh(), ...headers },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    expect((await through('/reset-password', { token, newPassword: NEW })).status).toBe(200);
+    const cookie = cookiesOf(await signIn(auth, email, NEW, fresh()));
+    const changed = await through(
+      '/change-password',
+      { currentPassword: NEW, newPassword: 'another password, long enough' },
+      { cookie },
+    );
+    expect(changed.status).toBe(200);
+    // One piece of work for each, and neither has run.
+    expect(scheduled).toHaveLength(2);
+    expect(await mailTo(email, NOTICE_SUBJECT)).toHaveLength(0);
+
+    for (const task of scheduled.splice(0)) await task();
+    const notices = await mailTo(email, NOTICE_SUBJECT);
+    expect(notices.map((notice) => notice.text)).toEqual([NOTICE_TEXT, NOTICE_TEXT]);
   });
 
   it('sends nothing, and writes no link, for an address that is not verified or belongs to no account', async () => {

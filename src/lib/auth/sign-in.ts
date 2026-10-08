@@ -16,6 +16,7 @@ import type { AuthContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { addressBucket } from '../client-address.ts';
+import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
 import { checkLimit, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
@@ -135,9 +136,10 @@ export async function checkCredentials(
     // call, the library reads the credentials only where it found a user: one
     // read fewer for an address that belongs to no account.
     const user = (await internalAdapter.findUserByEmail(email))?.user;
-    const hash = (await internalAdapter.findAccounts(user?.id ?? '')).find(
+    const credential = (await internalAdapter.findAccounts(user?.id ?? '')).find(
       (account) => account.providerId === 'credential' && account.accountId === user?.id,
-    )?.password;
+    );
+    const hash = credential?.password;
     // Verified only where the attempt could succeed: no limit is reached (a
     // refused attempt is not verified; the owner's answer to Q10), the address
     // belongs to an account with a password, the address is verified
@@ -157,8 +159,28 @@ export async function checkCredentials(
       await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
       await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
     }
-    return { user, passed };
+    // The row whose hash was verified, for the caller that acts on the check
+    // later: by then the password may be another (FR-AU-85, FR-AU-86).
+    const verified =
+      passed && credential && hash ? { id: credential.id, hash, updatedAt: credential.updatedAt } : null;
+    return { user, passed, verified };
   });
+}
+
+/**
+ * Whether the password of the account is still the one that was verified,
+ * asked as a write that changes nothing: the statement waits for a reset or a
+ * change of password that has not yet committed, and then finds its hash. A
+ * plain read would not wait, and would see the old hash beside a transaction
+ * that has already deleted the sessions it could see.
+ */
+async function stillVerified(verified: { id: string; hash: string; updatedAt: Date }) {
+  const { count } = await db().account.updateMany({
+    where: { id: verified.id, password: verified.hash },
+    // Its own value: without it Prisma would write the time of this statement.
+    data: { updatedAt: verified.updatedAt },
+  });
+  return count === 1;
 }
 
 /** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
@@ -166,13 +188,31 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   const entered = credentials(ctx.body);
   if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
   const { internalAdapter, authCookies, secret } = ctx.context;
-  const { user, passed } = await checkCredentials(ctx.context, ctx.headers, entered.email, entered.password);
-
-  if (!user || !passed) {
+  const { user, verified } = await checkCredentials(
+    ctx.context,
+    ctx.headers,
+    entered.email,
+    entered.password,
+  );
+  const refused = async () => {
     // NFR-SE-19: the user where the address belongs to an account, and never the address.
     await securityLog({ kind: 'sign_in_refused', userId: user?.id });
     // The owner's answer to Q1: no 429 for these limits, which would show that an address is limited.
     return errorResponse(401, 'sign_in_refused', SIGN_IN_REFUSED);
+  };
+  if (!user || !verified) return refused();
+
+  const session = await internalAdapter.createSession(user.id);
+  if (!session) throw new Error('sign-in: no session');
+  // FR-AU-85, FR-AU-86: "setting it ends every session of the account". A
+  // password set since the check has ended the sessions it could see, and this
+  // one may not have been among them, so it is ended here: the session is
+  // made first and the password asked after, which leaves no order in which
+  // one made by the old password stands. Not counted as a failed sign-in: the
+  // password was the right one when it was checked.
+  if (!(await stillVerified(verified))) {
+    await internalAdapter.deleteSession(session.token);
+    return refused();
   }
 
   // A session the browser already holds is ended, whoever it belongs to: its
@@ -181,8 +221,6 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
   if (held) await internalAdapter.deleteSession(held);
 
-  const session = await internalAdapter.createSession(user.id);
-  if (!session) throw new Error('sign-in: no session');
   // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
   await setSessionCookie(ctx, { session, user }, false);
   // Where two-factor authentication is on, the library's plugin ends this

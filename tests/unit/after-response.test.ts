@@ -1,7 +1,7 @@
 // Work left for after a response (FR-AU-86, FR-AU-87), and the reading of a
 // request's body as named fields.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { afterResponse, collecting } from '../../src/lib/after-response.ts';
+import { afterResponse, assertCollecting, collecting } from '../../src/lib/after-response.ts';
 import { textFields } from '../../src/lib/http.ts';
 
 afterEach(() => vi.restoreAllMocks());
@@ -31,6 +31,11 @@ describe('afterResponse', () => {
 
   it('throws where no request is collecting, so that no email is dropped in silence', () => {
     expect(() => afterResponse('lost', async () => {})).toThrow();
+  });
+
+  it('lets an endpoint ask first whether a request is collecting, before it writes anything', async () => {
+    expect(() => assertCollecting()).toThrow('afterResponse: called outside a request that collects.');
+    await collecting(async () => expect(() => assertCollecting()).not.toThrow());
   });
 
   it('never rejects, and prints the name of what failed and nothing of the fault (NFR-SE-19)', async () => {

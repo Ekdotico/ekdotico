@@ -23,9 +23,18 @@ const collected = new AsyncLocalStorage<Task[]>();
  * an email that is never sent, with the same answer as one that is.
  */
 export function afterResponse(name: string, task: Task): void {
+  assertCollecting().push(() => task().catch(() => console.error(`after response: ${name} failed`)));
+}
+
+/**
+ * Throws where no request is collecting. An endpoint that will leave work
+ * calls it first, before it writes anything: thrown after a commit, the fault
+ * would answer that nothing was changed when something was.
+ */
+export function assertCollecting(): Task[] {
   const tasks = collected.getStore();
   if (!tasks) throw new Error('afterResponse: called outside a request that collects.');
-  tasks.push(() => task().catch(() => console.error(`after response: ${name} failed`)));
+  return tasks;
 }
 
 /** Runs `work`, and returns with its result the tasks it left. None has started. */

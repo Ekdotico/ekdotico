@@ -7,7 +7,7 @@
 // show, and the list is what is reviewed on each deployment (NFR-SE-05).
 import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
-import { tooManyRequests } from './lib/auth/route-answers.ts';
+import { FORBIDDEN, tooManyRequests } from './lib/auth/route-answers.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { errorResponse, onlyReads, returnPath } from './lib/http.ts';
@@ -87,8 +87,7 @@ export function classify(method: string, pathname: string): Group | 'static' | '
 // Text for a person (the owner's answer to Q6 of the plan: approved with the pull request).
 const MESSAGES = {
   unauthenticated: 'This request needs a signed-in session. Sign in and try again.',
-  forbidden:
-    'This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again.',
+  forbidden: FORBIDDEN,
   internal:
     'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
 };
