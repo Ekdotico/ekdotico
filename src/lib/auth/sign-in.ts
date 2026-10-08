@@ -22,7 +22,7 @@ import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
-import { checkLimit, takeLimit, type LimitResult } from '../rate-limit.ts';
+import { checkLimit, logLimitReached, takeLimit, type LimitResult } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { passwordLength } from '../password-rules.ts';
 import { settings, type LimitName } from '../settings.ts';
@@ -93,20 +93,6 @@ class NoSession extends Error {
   name = 'SignInNoSession';
 }
 
-/**
- * NFR-SE-19, "a rate limit reached": one entry for each period of a limit that
- * refused a sign-in, and not one for each attempt refused in it, by the mark
- * the proxy keeps for its own limits (src/proxy.ts): in Valkey, under a keyed
- * digest, so that it holds across instances and holds no address.
- */
-async function logLimitReached(name: LimitName, key: string, limit: LimitResult, userId?: string) {
-  if (limit.ok) return;
-  const digest = createHmac('sha256', settings().authSecret).update(`${name}:${key}`).digest('hex');
-  if ((await valkey().set(`limit-logged:${digest}`, '1', 'EX', limit.retryAfterSeconds, 'NX')) === 'OK') {
-    await securityLog({ kind: 'rate_limit_reached', userId });
-  }
-}
-
 /** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
 export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST' }, async (ctx) => {
   const entered = credentials(ctx.body);
@@ -169,10 +155,14 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // NFR-SE-19: the user where the address belongs to an account, and never the address.
     await securityLog({ kind: 'sign_in_refused', userId: user?.id });
     // NFR-SE-19: a sign-in refused because a limit was already reached is that
-    // event too. The same work for an address with an account as for one without.
-    if (attempt) {
-      await logLimitReached('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair, attempt.byPair, user?.id);
-      await logLimitReached('FAILED_SIGN_IN_PER_EMAIL', email, attempt.byEmail, user?.id);
+    // event too, once for each period of the limit (rate-limit.ts). The same
+    // work for an address with an account as for one without.
+    const limits: [LimitName, string, LimitResult | undefined][] = [
+      ['FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair, attempt?.byPair],
+      ['FAILED_SIGN_IN_PER_EMAIL', email, attempt?.byEmail],
+    ];
+    for (const [name, key, limit] of limits) {
+      if (limit && !limit.ok) await logLimitReached(name, key, limit.retryAfterSeconds, user?.id);
     }
     // The owner's answer to Q1: no 429 for these limits, which would show that an address is limited.
     return errorResponse(401, 'sign_in_refused', SIGN_IN_REFUSED);

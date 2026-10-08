@@ -5,13 +5,11 @@
 //
 // The proxy passes these paths untouched (src/proxy.ts, group (b)), so this is
 // the whole of their authentication and of their limit.
-import { createHmac } from 'node:crypto';
 import { faultOf } from '../fault.ts';
 import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
-import { takeLimit } from '../rate-limit.ts';
+import { oncePer, takeLimit } from '../rate-limit.ts';
 import { settings } from '../settings.ts';
-import { valkey } from '../valkey.ts';
 import { verifyRequest } from './signature.ts';
 
 // Text for the person who runs the command (the owner's answer to Q6 of the
@@ -37,10 +35,7 @@ const loggedWithoutValkey = new Map<string, number>();
 
 async function once(mark: string, seconds: number): Promise<boolean> {
   try {
-    // Keyed as the counters of the limits are, so that two environments on one
-    // Valkey do not share a mark.
-    const digest = createHmac('sha256', settings().authSecret).update(`admission:${mark}`).digest('hex');
-    return (await valkey().set(`limit-logged:${digest}`, '1', 'EX', seconds, 'NX')) === 'OK';
+    return await oncePer(`admission:${mark}`, seconds);
   } catch {
     // Without Valkey the entry is still written, a log too full and never one
     // too empty, but the bound holds: one entry for each period from each

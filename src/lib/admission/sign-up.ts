@@ -13,6 +13,8 @@ import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
+import { fieldText } from '../field-text.ts';
+import { readBytes } from '../http.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
 
@@ -39,23 +41,10 @@ export type SignUpBody = { json: object } | { refused: 'too_long' | 'not_json' }
  * carries no session.
  */
 export async function readSignUpBody(request: Request): Promise<SignUpBody> {
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  if (request.body) {
-    const reader = request.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      length += value.byteLength;
-      if (length > MAX_BODY_BYTES) {
-        await reader.cancel();
-        return { refused: 'too_long' };
-      }
-      chunks.push(value);
-    }
-  }
+  const bytes = await readBytes(request, MAX_BODY_BYTES);
+  if (!bytes) return { refused: 'too_long' };
   try {
-    const json: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+    const json: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     if (typeof json === 'object' && json !== null && !Array.isArray(json)) return { json };
   } catch {
     // Not JSON: answered below, as what is JSON and no object is.
@@ -89,11 +78,11 @@ export const admissionSignUp = {
         if (!invitation) return { outcome: 'not_open' };
 
         // FR-AU-90: "a name, of 1 to 100 characters". Spaces around it are not
-        // part of it, and a character is one Unicode code point.
-        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        // part of it, and a character is one Unicode code point: the rule a
+        // document's title shares (../field-text.ts).
+        const { text: name, characters: length } = fieldText(typeof body.name === 'string' ? body.name : '');
         const password = typeof body.password === 'string' ? body.password : '';
         const fields: { name?: string; password?: string } = {};
-        const length = [...name].length;
         // A control character is no character of a name, and PostgreSQL cannot
         // store the first of them.
         if (length < 1 || length > 100 || /[\u0000-\u001f\u007f]/.test(name)) fields.name = NAME_REFUSAL;

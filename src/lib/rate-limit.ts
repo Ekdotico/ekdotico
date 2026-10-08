@@ -7,6 +7,7 @@
 // rejects, and the caller refuses the request (NFR-SE-06 A10: fail closed).
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
+import { securityLog } from './security-log.ts';
 import { settings, type Limit, type LimitName } from './settings.ts';
 import { valkey } from './valkey.ts';
 
@@ -77,6 +78,33 @@ export function takeLimit(name: LimitName, key: string): Promise<LimitResult> {
 /** Whether the limit is reached, without counting anything. */
 export function checkLimit(name: LimitName, key: string): Promise<LimitResult> {
   return limitWith(valkey(), settings().limits[name], name, key, false);
+}
+
+/**
+ * Whether this is the first call for `mark` in `seconds`, across instances:
+ * the one mark behind every "one entry for each period". It is in Valkey,
+ * under a keyed digest, so that two environments on one Valkey do not share a
+ * mark and Valkey holds nothing a mark names, an address among them.
+ */
+export async function oncePer(mark: string, seconds: number): Promise<boolean> {
+  const digest = createHmac('sha256', settings().authSecret).update(mark).digest('hex');
+  return (await valkey().set(`limit-logged:${digest}`, '1', 'EX', seconds, 'NX')) === 'OK';
+}
+
+/**
+ * NFR-SE-19: an entry when a limit is reached, with the user where there is
+ * one and never the key, which may be an address. One entry for each period of
+ * a limit and not one for each request refused in it, or a flood over the
+ * limit would write to the database at the rate the limit exists to keep from
+ * it. The proxy, a route with a limit of its own, and the sign-in all log here.
+ */
+export async function logLimitReached(
+  name: LimitName,
+  key: string,
+  seconds: number,
+  userId?: string,
+): Promise<void> {
+  if (await oncePer(`${name}:${key}`, seconds)) await securityLog({ kind: 'rate_limit_reached', userId });
 }
 
 /** Forgets the events counted for this key (a completed password reset clears the failed sign-ins). */
