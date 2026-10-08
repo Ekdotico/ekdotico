@@ -7,8 +7,7 @@
 // `securityLog` below never rejects, and that rule is for the refusals alone.
 // The entry of a change (the collaborators, the permission set, the Owner, a
 // deletion, each step of an account deletion) is written in the transaction of
-// the change, so that neither stands without the other, by a variant that a
-// later slice adds.
+// the change, so that neither stands without the other, by `securityLogIn`.
 import { db } from './db.ts';
 import { faultOf } from './fault.ts';
 import { settings } from './settings.ts';
@@ -69,6 +68,25 @@ export async function securityLog(entry: {
   } catch (error) {
     console.error(`security log: entry not written (${entry.kind}: ${faultOf(error)})`);
   }
+}
+
+/**
+ * Writes the entry of a change, in the transaction of the change. It REJECTS
+ * where the entry is not written, and the transaction with it: the change
+ * does not stand without its entry (NFR-SE-19), as the entry cannot stand
+ * without the change. The opposite of `securityLog`, on purpose.
+ *
+ * `transaction` is the client Prisma hands the callback of `$transaction`.
+ * What is thrown for a kind outside the list names no kind: see `securityLog`.
+ */
+export async function securityLogIn(
+  transaction: Pick<ReturnType<typeof db>, 'securityLogEntry'>,
+  entry: { kind: SecurityLogKind; userId?: string; documentId?: string },
+): Promise<void> {
+  if (!KINDS.includes(entry.kind)) throw new Error('security log: unknown kind');
+  await transaction.securityLogEntry.create({
+    data: { kind: entry.kind, userId: entry.userId, documentId: entry.documentId },
+  });
 }
 
 /** Deletes the entries older than the retention period; returns how many. */

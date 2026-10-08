@@ -13,7 +13,7 @@ describe('the health check of the web application', () => {
 });
 
 describe('the health check of the collaboration server', () => {
-  const server = createCollabServer();
+  const server = createCollabServer({ collabStoreDelayMs: 2000, collabStoreMaxMs: 10000 }).httpServer;
   let base = '';
   beforeAll(async () => {
     await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -21,9 +21,12 @@ describe('the health check of the collaboration server', () => {
   });
   afterAll(() => server.close());
 
-  it('answers 200 with an empty body, without a session', async () => {
+  // The owner's amendment to choice C20 (8 October 2026). Subscribed, lost,
+  // and subscribed again: tests/integration/collab-events-subscribe.test.ts.
+  it('answers 503 with an empty body while it is not subscribed to the channel of deletions', async () => {
     const response = await fetch(base + HEALTH_PATH);
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(503);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.text()).toBe('');
   });
 

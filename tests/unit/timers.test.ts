@@ -1,10 +1,13 @@
-// NFR-RE-15: the deletion of the security log runs at start and each hour, and
-// says what it did only where there is something to say. Against a database it
-// is tested in tests/integration/security-log.test.ts.
+// NFR-RE-15: the deletion of the security log and the permanent deletion of
+// deleted documents each run at start and each hour, and say what they did
+// only where there is something to say. Against a database they are tested in
+// tests/integration/security-log.test.ts and tests/integration/document-deletion.test.ts.
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const deleteExpiredSecurityLog = vi.hoisted(() => vi.fn<() => Promise<number>>());
+const deleteExpiredDocuments = vi.hoisted(() => vi.fn<() => Promise<{ deleted: number; kept: number }>>());
 vi.mock('../../src/lib/security-log.ts', () => ({ deleteExpiredSecurityLog }));
+vi.mock('../../src/lib/documents/deletion.ts', () => ({ deleteExpiredDocuments }));
 // The two other timers, which run beside it and here find nothing to delete
 // (tests/integration/session-list.test.ts runs them against a database).
 vi.mock('../../src/lib/auth/password.ts', () => ({ deleteExpiredTokens: async () => 0 }));
@@ -25,29 +28,50 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it('runs at start and each hour; prints a count above 0, nothing for 0, and the fault of a failure', async () => {
+it('each runs at start and each hour; prints a count above 0, nothing for 0, and the fault of a failure', async () => {
   const { startTimers } = await import('../../src/lib/timers.ts');
 
   deleteExpiredSecurityLog.mockResolvedValueOnce(0);
+  deleteExpiredDocuments.mockResolvedValueOnce({ deleted: 0, kept: 0 });
+  startTimers();
+  // A second start adds no second timer.
   startTimers();
   await vi.advanceTimersByTimeAsync(0);
   expect(deleteExpiredSecurityLog).toHaveBeenCalledTimes(1);
+  expect(deleteExpiredDocuments).toHaveBeenCalledTimes(1);
   expect(stdout).not.toHaveBeenCalled();
 
   // One minute short of the hour nothing has run again: a failed run does not wait a day.
   deleteExpiredSecurityLog.mockResolvedValueOnce(7);
+  deleteExpiredDocuments.mockResolvedValueOnce({ deleted: 2, kept: 1 });
   await vi.advanceTimersByTimeAsync(HOUR_MS - 60_000);
   expect(deleteExpiredSecurityLog).toHaveBeenCalledTimes(1);
+  expect(deleteExpiredDocuments).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(60_000);
   expect(deleteExpiredSecurityLog).toHaveBeenCalledTimes(2);
-  expect(stdout.mock.calls).toEqual([['timer ran: security-log-deletion (7 deleted)']]);
+  expect(deleteExpiredDocuments).toHaveBeenCalledTimes(2);
+  expect(stdout.mock.calls).toEqual([
+    ['timer ran: security-log-deletion (7 deleted)'],
+    ['timer ran: document-deletion (2 deleted, 1 kept)'],
+  ]);
 
-  // NFR-SE-19: the class and the code of the fault, never its message.
+  // NFR-SE-19: the class and the code of the fault, never its message. One
+  // timer that fails does not stop the other.
   const fault = Object.assign(new Error('connect ECONNREFUSED db.example.test:5432'), {
     code: 'ECONNREFUSED',
   });
   deleteExpiredSecurityLog.mockRejectedValueOnce(fault);
+  deleteExpiredDocuments.mockRejectedValueOnce(fault);
   await vi.advanceTimersByTimeAsync(HOUR_MS);
-  expect(stderr.mock.calls).toEqual([['timer failed: security-log-deletion (Error ECONNREFUSED)']]);
-  expect(stdout).toHaveBeenCalledTimes(1);
+  expect(stderr.mock.calls).toEqual([
+    ['timer failed: security-log-deletion (Error ECONNREFUSED)'],
+    ['timer failed: document-deletion (Error ECONNREFUSED)'],
+  ]);
+  expect(stdout).toHaveBeenCalledTimes(2);
+
+  // A run that deleted nothing and kept one still says so.
+  deleteExpiredSecurityLog.mockResolvedValueOnce(0);
+  deleteExpiredDocuments.mockResolvedValueOnce({ deleted: 0, kept: 1 });
+  await vi.advanceTimersByTimeAsync(HOUR_MS);
+  expect(stdout.mock.calls.at(-1)).toEqual(['timer ran: document-deletion (0 deleted, 1 kept)']);
 });
