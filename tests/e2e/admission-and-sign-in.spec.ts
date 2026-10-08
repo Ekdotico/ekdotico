@@ -19,15 +19,19 @@ import {
 } from './account.ts';
 
 const noticeTitle = { level: 1, name: NOTICE_TITLE } as const;
-const firstScreen = { level: 1, name: 'Signed in' } as const;
-// A page of a signed-in account and an address that is no page, each with words
-// of its content that the Closed α notice does not hold (FR-AU-55).
-const CONTENT = [
-  ['/', 'documents are planned'],
-  ['/anything', 'No page of Ekdotico has this address'],
-] as const;
-// Asked for as a page, and as the data Next.js sends to a page it already holds.
-const WAYS: Record<string, string>[] = [{}, { RSC: '1' }];
+// The list of documents (FR-ED-35), whose own tests are in documents.spec.ts.
+const firstScreen = { level: 1, name: 'Documents' } as const;
+// A page of a signed-in account and an address that is no page, each asked for
+// as a page and as the data Next.js sends to a page it already holds
+// (`RSC: 1`), with something of its content that the Closed α notice does not
+// hold (FR-AU-55). The list of documents is drawn in the browser, so its data
+// holds the list handed to it and not the words drawn from it.
+const CONTENT: [path: string, headers: Record<string, string>, content: string][] = [
+  ['/', {}, 'No documents yet'],
+  ['/', { RSC: '1' }, '"documents":[]'],
+  ['/anything', {}, 'No page of Ekdotico has this address'],
+  ['/anything', { RSC: '1' }, 'No page of Ekdotico has this address'],
+];
 
 test('from an invitation to the first screen, out, and in again', async ({ page }) => {
   test.slow();
@@ -114,10 +118,9 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   // The same four requests find the content after the acknowledgement, below.
   const underneath = await (await page.request.get('/')).text();
   expect(underneath).toContain('Continue');
-  for (const [path, content] of CONTENT) {
-    for (const headers of WAYS) {
-      expect(await (await page.request.get(path, { headers })).text()).not.toContain(content);
-    }
+  expect(underneath).not.toContain('New document');
+  for (const [path, headers, content] of CONTENT) {
+    expect(await (await page.request.get(path, { headers })).text()).not.toContain(content);
   }
 
   // "Reloading a page or opening another address does not pass it."
@@ -137,17 +140,19 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   // "After the acknowledgement the user continues to the address they had asked for."
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
   await expect(page).toHaveURL('/');
-  await expect(page).toHaveTitle('Signed in – Ekdotico');
+  await expect(page).toHaveTitle('Documents – Ekdotico');
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  // The content the notice stood in place of is in the response now.
+  const acknowledged = await (await page.request.get('/')).text();
+  expect(acknowledged).toContain('New document');
+  expect(acknowledged).toContain('No documents yet');
   await expect(page.getByText(NOTICE_BODY)).toHaveCount(0);
   await expectNoSidewaysScroll(page);
   await screens(page, 'first-screen');
   // The control of the check made while the notice was due: the content is
   // what those requests return now.
-  for (const [path, content] of CONTENT) {
-    for (const headers of WAYS) {
-      expect(await (await page.request.get(path, { headers })).text()).toContain(content);
-    }
+  for (const [path, headers, content] of CONTENT) {
+    expect(await (await page.request.get(path, { headers })).text()).toContain(content);
   }
 
   // An address that is no page says so, under the same header.
