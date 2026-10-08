@@ -180,9 +180,9 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
 
   // A session the browser already holds is ended, whoever it belongs to: its
   // cookie is replaced below, and no browser could sign out of it afterwards.
-  // No requirement asks this of a sign-in (FR-AU-81 asks it of the link of a
-  // lock email alone): it is the application's choice, raised with the owner
-  // in the register questions of the pull request. The row is deleted by the
+  // The owner's decision of 8 October 2026, for a sign-in and for a sign-up
+  // (src/lib/admission/sign-up.ts); FR-AU-81 itself asks it of the link of a
+  // lock email alone. A sign-in that fails ends nothing. The row is deleted by the
   // application's own client, which rejects on a fault and is quiet where the
   // row is absent; the library's deletion can skip the row without a word.
   const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);

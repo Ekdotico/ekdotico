@@ -20,6 +20,8 @@ export function prepare(label: string, env: Record<string, string> = {}) {
     EMAIL_TRANSPORT: 'sink',
     EMAIL_SINK_DIRECTORY: join(tmpdir(), 'ekdotico-test-mail'),
     DATABASE_URL: database.appUrl,
+    // The origin is not a local one, so a process does not start with 0.
+    TRUSTED_PROXY_COUNT: '1',
     // The limiter keys its counters by this secret, so a secret of its own
     // gives each run counters of its own in the shared Valkey.
     AUTH_SECRET: `test-${randomBytes(24).toString('hex')}`,

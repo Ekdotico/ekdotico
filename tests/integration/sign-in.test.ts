@@ -122,6 +122,13 @@ describe('a successful sign-in (FR-AU-81, FR-AU-84)', () => {
     await expectSignedIn(again, second.id);
     expect(await db().session.count({ where: { id: heldId } })).toBe(0);
     expect(await db().session.count({ where: { userId: first.id } })).toBe(0);
+
+    // Of the same account: the row it held is gone, and the one row is the new one.
+    const once = await signIn(second.email, PASSWORD, { ...from(1), cookie: cookiesOf(again) });
+    const onceId = await expectSignedIn(once, second.id);
+    expect((await db().session.findMany({ where: { userId: second.id } })).map((row) => row.id)).toEqual([
+      onceId,
+    ]);
   });
 
   it('leaves the session the browser held where the sign-in fails', async () => {
