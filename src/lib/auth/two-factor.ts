@@ -39,17 +39,26 @@ import type { EmailMessage } from '../email/index.ts';
 import { faultOf } from '../fault.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { oncePer } from '../rate-limit.ts';
-import { securityLog } from '../security-log.ts';
+import { securityLog, securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, TOKEN } from '../token.ts';
 import { valkey } from '../valkey.ts';
 import { stoppedByFoundingGate, type GatedAccount } from './founding-gate.ts';
-import { notAdmitted, unauthenticated } from './route-answers.ts';
-import { SECOND_STEP, SECOND_STEP_COOKIE } from './second-step.ts';
+import { notAdmitted, refusedOrigin, unauthenticated } from './route-answers.ts';
+import { LINK_STEP, SECOND_STEP, SECOND_STEP_COOKIE } from './second-step.ts';
 import { holdSession, validateSessionRow, type ValidSession } from './session.ts';
+import {
+  claimSignInLink,
+  lockedUntilOf,
+  lockInForce,
+  openSignInLinkOf,
+  SIGN_IN_LINK_NOT_VALID,
+  voidSignInLinks,
+} from './sign-in-lock.ts';
 import {
   checkCodeAtPrompt,
   checkCredentials,
+  clearFailedSignIns,
   countFailedSignIn,
   failedSignInsReached,
   SIGN_IN_REFUSED,
@@ -272,8 +281,8 @@ async function freshCopy(ctx: GenericEndpointContext): Promise<void> {
  * no count outlives what it counts for. A fault of Valkey rejects, and the
  * request is refused (NFR-SE-06 A10).
  */
-async function countCode(key: string): Promise<number> {
-  await valkey().set(key, 0, 'EX', settings().secondStepSeconds, 'NX');
+async function countCode(key: string, seconds: number = settings().secondStepSeconds): Promise<number> {
+  await valkey().set(key, 0, 'EX', seconds, 'NX');
   return valkey().incr(key);
 }
 
@@ -453,19 +462,28 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   const step =
     typeof token === 'string' && TOKEN.test(token)
       ? await db().verification.findFirst({
-          where: { identifier: SECOND_STEP + hashToken(token), expiresAt: { gt: new Date() } },
-          select: { id: true, value: true },
+          where: {
+            identifier: { in: [SECOND_STEP + hashToken(token), LINK_STEP + hashToken(token)] },
+            expiresAt: { gt: new Date() },
+          },
+          select: { id: true, value: true, identifier: true },
         })
       : null;
-  const refused = async (code: 'sign_in_again' | 'code_refused', message: string) => {
+  const refused = async (
+    code: 'sign_in_again' | 'code_refused' | 'sign_in_link_not_valid',
+    message: string,
+  ) => {
     await securityLog({ kind: 'sign_in_refused', userId: step?.value });
     // A step that cannot be completed leaves no cookie behind.
-    if (code === 'sign_in_again') expireCookie(ctx, cookie);
+    if (code !== 'code_refused') expireCookie(ctx, cookie);
     return errorResponse(401, code, message);
   };
   if (!step) return refused('sign_in_again', MESSAGES.again);
   const entered = textFields(ctx.body, 'code');
   if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.codeShape);
+  // FR-AU-81: whether the step began from the sign-in link of a lock email
+  // (register A104, assumed). The mark is the row's, written by the server.
+  const fromLink = step.identifier.startsWith(LINK_STEP);
 
   const end = () => db().verification.deleteMany({ where: { id: step.id } });
   const user = await internalAdapter.findUserById(step.value);
@@ -485,41 +503,72 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   // hour". Where the failed sign-ins of the address have reached their number,
   // a step that was opened before then is over too, before a code is looked
   // at. As a refused attempt, it is counted toward nothing (Q10).
-  if (await failedSignInsReached(user.email)) {
+  // FR-AU-81: "While it is locked, every sign-in to it is refused", a step
+  // that a password began before the lock among them. The step of the lock's
+  // own link is the one sign-in a lock lets through, and it stands only while
+  // the link does: "used or not, the link is void when the lock ends for any
+  // reason". The limit that caused the lock is still reached then, and is not
+  // asked of it.
+  const locked = lockInForce(await lockedUntilOf(user.id));
+  const link = fromLink ? await openSignInLinkOf(user.id) : null;
+  if (fromLink && !link) {
+    await end();
+    return refused('sign_in_link_not_valid', SIGN_IN_LINK_NOT_VALID);
+  }
+  if (!link && (locked || (await failedSignInsReached(user.email)))) {
     await end();
     return refused('sign_in_again', MESSAGES.again);
   }
 
-  // The identifier of the row is random and names no one, so it is the key as it is.
+  // The identifier of the row is random and names no one, so it is the key as
+  // it is. The codes of a link are counted for the link and not for the step:
+  // the link is not spent by beginning a step, so counted for the step, a link
+  // would give five codes as often as it was opened again, where the row of
+  // NFR-SE-07 gives a link five in all ("the link is spent and nothing begins
+  // again").
+  // An accepted ceiling: that count is in Valkey alone. Were Valkey to lose it
+  // within the hour of the lock, the link would have five codes more.
   const most = settings().secondStepWrongCodes;
-  const attempt = await countCode(`second-step-codes:${step.id}`);
-  if (attempt > most) {
+  const attempt = link
+    ? await countCode(`sign-in-link-codes:${link.id}`, settings().signInLockSeconds)
+    : await countCode(`second-step-codes:${step.id}`);
+  // The link "is spent … when its second step is abandoned after five wrong
+  // codes; after that, the person signs in when the lock has ended or after a
+  // password reset": the answer is the statement of a link that is spent.
+  const abandoned = async () => {
     await end();
-    return refused('sign_in_again', MESSAGES.again);
-  }
+    if (!link) return refused('sign_in_again', MESSAGES.again);
+    await voidSignInLinks(db(), user.id);
+    return refused('sign_in_link_not_valid', SIGN_IN_LINK_NOT_VALID);
+  };
+  if (attempt > most) return abandoned();
 
   const wrong = async () => {
+    // NFR-SE-07: where the sign-in began from the link of a lock email, "the
+    // abandoned step is not counted, the account being locked".
+    if (link) {
+      if (attempt < most)
+        return refused('code_refused', kind === 'totp' ? MESSAGES.code : MESSAGES.recoveryCode);
+      await securityLog({ kind: 'rate_limit_reached', userId: user.id });
+      return abandoned();
+    }
     // The owner's answer G1 of the pull request: "a second step that had at
     // least one wrong code and did not complete counts as one failed sign-in,
     // counted at its first wrong code." Once for the step, whichever of its
     // requests is first to be wrong; the fifth counts no second one. A step
     // that completes after it keeps the count: a sign-in clears none
-    // (sign-in.ts). The slice that builds the lock (FR-AU-81) counts nothing
-    // here where the step began from the link of a lock email.
+    // (sign-in.ts).
     if (await oncePer(`second-step-failed:${step.id}`, settings().secondStepSeconds)) {
       await countFailedSignIn(ctx.headers, user.email);
     }
     if (attempt < most) {
       return refused('code_refused', kind === 'totp' ? MESSAGES.code : MESSAGES.recoveryCode);
     }
-    // Abandoned. The slice that builds the lock spends the sign-in link here
-    // where the step began from one.
-    await end();
-    // NFR-SE-19, "a rate limit reached": the number of wrong codes for one
-    // sign-in (the owner's answer of the pull request), with the user and
-    // nothing of a code, beside the sign-in refused.
+    // Abandoned. NFR-SE-19, "a rate limit reached": the number of wrong codes
+    // for one sign-in (the owner's answer of the pull request), with the user
+    // and nothing of a code, beside the sign-in refused.
     await securityLog({ kind: 'rate_limit_reached', userId: user.id });
-    return refused('sign_in_again', MESSAGES.again);
+    return abandoned();
   };
   // FR-AU-83: "a recovery code is accepted in its place and is then spent".
   // Here it is only looked for among the codes as they were read; it is spent
@@ -568,6 +617,15 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
         });
         if (spent.count !== 1) throw CODE_GONE;
       }
+      // FR-AU-81: "the lock is lifted … when that sign-in completes", and the
+      // link is spent. A link made void since it was read completes nothing.
+      // Last, as a completed reset takes the account's row after the steps.
+      if (link) {
+        if (!(await claimSignInLink(tx, link))) throw STEP_GONE;
+        // NFR-SE-19; the owner's decision of 9 October 2026: the entry of a
+        // sign-in by the link, where it completes and not where its step opens.
+        await securityLogIn(tx, { kind: 'sign_in_by_link', userId: user.id });
+      }
       return 'claimed' as const;
     })
     .catch((error: unknown) => {
@@ -578,8 +636,15 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
     await db().session.deleteMany({ where: { token: session.token } });
     return outcome === CODE_GONE ? wrong() : refused('sign_in_again', MESSAGES.again);
   }
-  // The slice that builds the lock lifts it here, and clears the counts of
-  // failed sign-ins, where the step began from the link of a lock email.
+  // FR-AU-81: "the counters of failed sign-ins for the address are cleared
+  // when that sign-in completes". The sign-in stands whether or not this
+  // succeeds, as a reset does (password.ts), with the ceiling stated where
+  // the link signs in without a second step (sign-in.ts).
+  if (link) {
+    await clearFailedSignIns(user.email).catch(() =>
+      console.error('second step: signed in by a link, counts of failed sign-ins not cleared'),
+    );
+  }
 
   // `false`: the cookie lasts as long as the session.
   await setSessionCookie(ctx, { session, user }, false);
@@ -598,6 +663,10 @@ export const verifyTOTP = createAuthEndpoint(
   '/two-factor/verify-totp',
   { method: 'POST', requireHeaders: true },
   async (ctx) => {
+    // NFR-SE-17 (c): the second step carries no session, so the endpoint
+    // checks the origin itself, before anything of the request is read.
+    const foreign = await refusedOrigin(ctx.headers);
+    if (foreign) return foreign;
     const validation = await validateSessionRow(ctx.headers);
     // The enrolment itself: the founding-team gate lets it through (FR-AU-83).
     const own = validation.session ?? validation.stopped;
@@ -609,7 +678,8 @@ export const verifyTOTP = createAuthEndpoint(
 export const verifyBackupCode = createAuthEndpoint(
   '/two-factor/verify-backup-code',
   { method: 'POST', requireHeaders: true },
-  (ctx) => secondStep(ctx, 'recovery'),
+  // NFR-SE-17 (c): as above.
+  async (ctx) => (await refusedOrigin(ctx.headers)) ?? secondStep(ctx, 'recovery'),
 );
 
 // ── Turning it off, and replacing the recovery codes ────────────────────────

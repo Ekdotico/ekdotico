@@ -6,6 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { collecting } from '../../src/lib/after-response.ts';
 import { createDatabase } from './database.ts';
 
 export const ORIGIN = 'https://app.example.test';
@@ -60,9 +61,20 @@ export async function createAccount(auth: Auth, email: string, emailVerified = t
   return user.id;
 }
 
+/**
+ * The handler as the route calls it, inside a request that collects: a check
+ * of a password throws outside one (src/lib/auth/sign-in.ts). What the
+ * endpoint left for after its response is dropped, the lock of a twentieth
+ * failure among it: a test of that goes through `post` and runs `after`.
+ */
+export async function handle(auth: Auth, request: Request): Promise<Response> {
+  return (await collecting(() => auth().handler(request))).result;
+}
+
 /** A sign-in through the handler, as a browser on the application's own origin makes it. */
 export function signIn(auth: Auth, email: string, password = PASSWORD, headers: Record<string, string> = {}) {
-  return auth().handler(
+  return handle(
+    auth,
     new Request(`${ORIGIN}/api/auth/sign-in/email`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: ORIGIN, ...headers },
@@ -77,7 +89,6 @@ export function signIn(auth: Auth, email: string, password = PASSWORD, headers: 
  * response. Until `after` is called none of that has started.
  */
 export async function post(auth: Auth, path: string, body?: unknown, headers: Record<string, string> = {}) {
-  const { collecting } = await import('../../src/lib/after-response.ts');
   const { result, tasks } = await collecting(() =>
     auth().handler(
       new Request(`${ORIGIN}/api/auth${path}`, {

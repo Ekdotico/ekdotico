@@ -228,10 +228,11 @@ describe('the answer does not show who is registered (FR-AU-86, FR-AU-81)', () =
     } finally {
       database.sql('ALTER TABLE "UserAway" RENAME TO "User"');
     }
-    // NFR-SE-19: the work that failed is named, and nothing it held.
+    // NFR-SE-19: the work that failed is named, with the class and code of
+    // the fault, and nothing it held.
     expect(errors.mock.calls).toEqual([
-      ['after response: password reset link failed'],
-      ['after response: password reset link failed'],
+      ['after response: password reset link failed (PrismaClientKnownRequestError P2021)'],
+      ['after response: password reset link failed (PrismaClientKnownRequestError P2021)'],
     ]);
     expect(await mailTo(known.email, RESET_SUBJECT)).toHaveLength(0);
   });

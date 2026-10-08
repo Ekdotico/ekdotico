@@ -79,6 +79,13 @@ export interface Settings {
    */
   secondStepWrongCodes: number;
   /**
+   * FR-AU-81, NFR-SE-07: how long the twentieth failed sign-in locks an
+   * account, "1 hour", an initial value (register D115: "both figures are
+   * settings"; the other is the limit FAILED_SIGN_IN_PER_EMAIL). The sign-in
+   * link of the lock's email is valid as long.
+   */
+  signInLockSeconds: number;
+  /**
    * FR-AU-89: the key of the signed admission requests, or none. Without it
    * every admission request is refused. The name and the form are provisional
    * (docs/contracts/admission-signature.md).
@@ -250,6 +257,19 @@ export function loadSettings(env: Env = process.env): Settings {
   if (passwordMinLength > passwordMaxLength) {
     throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
   }
+  const limits = Object.fromEntries(
+    (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
+  ) as Record<LimitName, Limit>;
+  // At least 1: a lock of 0 seconds would be no lock, without a word.
+  const signInLockSeconds = wholeNumber(env, 'SIGN_IN_LOCK_SECONDS', 3600, 1);
+  // FR-AU-81, NFR-SE-07: the failures that caused a lock are still counted when
+  // a shorter lock ends, so the next single failure would be "the twentieth"
+  // again: a lock and an email for each failure, for the rest of the period.
+  if (signInLockSeconds < limits.FAILED_SIGN_IN_PER_EMAIL.windowSeconds) {
+    throw new Error(
+      'SIGN_IN_LOCK_SECONDS must be no less than the seconds of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL.',
+    );
+  }
   // FR-ED-36. At least 1: with 0 a deletion would be permanent at the next run
   // of the timer, and the confirmation would have promised a restore that is
   // not there. At most 3,650, ten years: the days are taken from the present
@@ -284,6 +304,7 @@ export function loadSettings(env: Env = process.env): Settings {
     // and with 0 wrong codes no count would ever reach the number.
     secondStepSeconds: wholeNumber(env, 'TWO_FACTOR_STEP_SECONDS', 600, 1),
     secondStepWrongCodes: wholeNumber(env, 'TWO_FACTOR_WRONG_CODES', 5, 1),
+    signInLockSeconds,
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
@@ -293,9 +314,7 @@ export function loadSettings(env: Env = process.env): Settings {
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     collabStoreDelayMs,
     collabStoreMaxMs,
-    limits: Object.fromEntries(
-      (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
-    ) as Record<LimitName, Limit>,
+    limits,
   };
 }
 

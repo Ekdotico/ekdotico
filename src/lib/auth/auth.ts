@@ -16,7 +16,7 @@ import { settings } from '../settings.ts';
 import { changePassword, requestPasswordReset, resetPassword } from './password.ts';
 import { FORBIDDEN } from './route-answers.ts';
 import { revokeOtherSessions, revokeSession } from './session-list.ts';
-import { signInEmail, signOut } from './sign-in.ts';
+import { signInEmail, signInLink, signOut } from './sign-in.ts';
 import {
   disableTwoFactor,
   enableTwoFactor,
@@ -50,6 +50,10 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // FR-AU-81: sign-in by email address and password, the only way to sign in.
   // The endpoint is the application's own (sign-in.ts).
   'POST /sign-in/email',
+  // FR-AU-81: the one exception, the single-use sign-in link of a lock email
+  // (register D115; A104, assumed). The application's own (sign-in.ts), and
+  // not the library's magic link, which is not installed (NFR-SE-17 (d)).
+  'POST /sign-in/link',
   // FR-AU-84: signing out ends the session at once and clears the browser's
   // cookies. The application's own too.
   'POST /sign-out',
@@ -87,7 +91,7 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
 // sign-in and sign-out are not in the handler and not in `auth().api`.
 const ownSignIn = {
   id: 'ekdotico-sign-in',
-  endpoints: { signInEmail, signOut },
+  endpoints: { signInEmail, signInLink, signOut },
 } satisfies BetterAuthPlugin;
 
 // FR-AU-85, FR-AU-86: the same for the password and the sessions. The

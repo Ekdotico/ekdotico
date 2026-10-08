@@ -9,21 +9,24 @@
 // and the route that called the library's handler passes it to `after`
 // (src/app/api/auth/[...all]/route.ts).
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { faultOf } from './fault.ts';
 
 type Task = () => Promise<unknown>;
 
 const collected = new AsyncLocalStorage<Task[]>();
 
 /**
- * Leaves `task` for after the response of the request being served. `name`
- * is all a failure prints: an error's message can quote a row or an address
- * (NFR-SE-19).
+ * Leaves `task` for after the response of the request being served. A
+ * failure prints `name` and the class and code of the fault, and nothing
+ * else: an error's message can quote a row or an address (NFR-SE-19).
  *
  * It throws where no request is collecting. Work dropped in silence would be
  * an email that is never sent, with the same answer as one that is.
  */
 export function afterResponse(name: string, task: Task): void {
-  assertCollecting().push(() => task().catch(() => console.error(`after response: ${name} failed`)));
+  assertCollecting().push(() =>
+    task().catch((error: unknown) => console.error(`after response: ${name} failed (${faultOf(error)})`)),
+  );
 }
 
 /**
