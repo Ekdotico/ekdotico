@@ -49,7 +49,7 @@ export interface Settings {
   valkeyUrl: string;
   /** The identity library's secret; it also encrypts the second factor at rest (NFR-SE-17 (a), (e)). */
   authSecret: string;
-  /** How many proxies stand between a client and this process (the owner's answer to Q5). */
+  /** How many proxies stand between a client and this process (the owner's answer to Q5): 1 or more away from localhost. */
   trustedProxyCount: number;
   /** FR-AU-84: both periods of a session, and the renewal interval. */
   sessionIdleSeconds: number;
@@ -57,9 +57,23 @@ export interface Settings {
   sessionMaxSeconds: number;
   /** NFR-SE-17 (c): the lifetime of the signed copy of a session. */
   cookieCacheSeconds: number;
-  /** FR-AU-82: the two limits on the length of a password. */
+  /**
+   * FR-AU-82: the two limits on the length of a password. The initial values, 8
+   * and 32, are the owner's decision of 8 October 2026; the requirement says 15
+   * and 128 until the Docs are amended.
+   */
   passwordMinLength: number;
   passwordMaxLength: number;
+  /** FR-AU-82: the list of commonly used and known-compromised passwords, a file read on the server. */
+  passwordListFile: string;
+  /**
+   * FR-AU-89: the key of the signed admission requests, or none. Without it
+   * every admission request is refused. The name and the form are provisional
+   * (docs/contracts/admission-signature.md).
+   */
+  admissionSecret: string | undefined;
+  /** FR-AU-89 (a): how long an admission invitation stays open. */
+  admissionInvitationDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
   securityLogRetentionDays: number;
   /** Where the local sink writes each message (register D70 (the three checks stand), D92: no real email yet). */
@@ -79,7 +93,7 @@ function required(env: Env, name: string, hint: string): string {
 
 // The least a value may be is 1 wherever 0 would switch a rule off without a
 // word: a session that has ended before it began, a log that keeps nothing, a
-// password of no length.
+// password of no length, an invitation that is never open.
 function wholeNumber(env: Env, name: string, initial: number, least: 0 | 1): number {
   const value = env[name];
   if (value === undefined || value === '') return initial;
@@ -97,6 +111,17 @@ function limit(env: Env, name: LimitName): Limit {
   if (!match)
     throw new Error(`RATE_LIMIT_${name} must be written max/seconds, for example ${max}/${windowSeconds}.`);
   return { max: Number(match[1]), windowSeconds: Number(match[2]) };
+}
+
+// docs/contracts/admission-signature.md, "The setting": at least 43 characters
+// of the URL-safe alphabet, used exactly as set.
+function admissionSecret(env: Env): string | undefined {
+  const value = env.ADMISSION_SECRET;
+  if (value === undefined || value === '') return undefined;
+  if (!/^[A-Za-z0-9_-]{43,}$/.test(value)) {
+    throw new Error('ADMISSION_SECRET must be at least 43 characters of A to Z, a to z, 0 to 9, - and _.');
+  }
+  return value;
 }
 
 const DAY = 24 * 60 * 60;
@@ -158,8 +183,23 @@ export function loadSettings(env: Env = process.env): Settings {
   if (!local && !env.EMAIL_SINK_DIRECTORY) {
     throw new Error('EMAIL_SINK_DIRECTORY is not set. Set it to the directory the email sink writes to.');
   }
+  // NFR-SE-07; the owner's decision of 8 October 2026: the limits for each
+  // network address need the address, and without a proxy that writes it there
+  // is none to trust (docs/operations/deployment.md). With 0 every request
+  // without a session shares one count, which one client can use up for
+  // everyone: admitted on a development machine alone.
+  const trustedProxyCount = wholeNumber(env, 'TRUSTED_PROXY_COUNT', 0, 0);
+  if (!local && trustedProxyCount < 1) {
+    throw new Error(
+      'TRUSTED_PROXY_COUNT must be 1 or more, except on localhost: set it to the number of proxies in front of the process, the outermost of which writes the address of its peer. Without one, the limits for each network address count every client as one.',
+    );
+  }
   const authSecret = required(env, 'AUTH_SECRET', 'Set it to a random value of at least 32 characters.');
   if (authSecret.length < 32) throw new Error('AUTH_SECRET must be at least 32 characters.');
+  // NFR-SE-17 (e): the secrets differ from one another, so that one that
+  // leaks opens one door. The message holds neither.
+  const admission = admissionSecret(env);
+  if (admission === authSecret) throw new Error('ADMISSION_SECRET must differ from AUTH_SECRET.');
 
   const sessionIdleSeconds = wholeNumber(env, 'SESSION_IDLE_SECONDS', 7 * DAY, 1);
   const sessionRenewSeconds = wholeNumber(env, 'SESSION_RENEW_SECONDS', DAY, 1);
@@ -172,8 +212,8 @@ export function loadSettings(env: Env = process.env): Settings {
       'SESSION_RENEW_SECONDS must be no more than SESSION_IDLE_SECONDS, and SESSION_IDLE_SECONDS no more than SESSION_MAX_SECONDS.',
     );
   }
-  const passwordMinLength = wholeNumber(env, 'PASSWORD_MIN_LENGTH', 15, 1);
-  const passwordMaxLength = wholeNumber(env, 'PASSWORD_MAX_LENGTH', 128, 1);
+  const passwordMinLength = wholeNumber(env, 'PASSWORD_MIN_LENGTH', 8, 1);
+  const passwordMaxLength = wholeNumber(env, 'PASSWORD_MAX_LENGTH', 32, 1);
   // FR-AU-82: otherwise no password could be chosen at all.
   if (passwordMinLength > passwordMaxLength) {
     throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
@@ -188,13 +228,17 @@ export function loadSettings(env: Env = process.env): Settings {
     databaseUrl: required(env, 'DATABASE_URL', 'Set it to the connection string of the role ekdotico_app.'),
     valkeyUrl: required(env, 'VALKEY_URL', 'Set it to the address of Valkey.'),
     authSecret,
-    trustedProxyCount: wholeNumber(env, 'TRUSTED_PROXY_COUNT', 0, 0),
+    trustedProxyCount,
     sessionIdleSeconds,
     sessionRenewSeconds,
     sessionMaxSeconds,
     cookieCacheSeconds: wholeNumber(env, 'COOKIE_CACHE_SECONDS', 60, 0),
     passwordMinLength,
     passwordMaxLength,
+    passwordListFile: env.PASSWORD_LIST_FILE || 'data/common-passwords.txt',
+    admissionSecret: admission,
+    // At least 1: an invitation of 0 days has expired before its email is read.
+    admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',

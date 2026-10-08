@@ -33,9 +33,17 @@ model User {
 
   twoFactorEnabled Boolean @default(false)
 
+  // The acknowledgement of the Closed α notice (FR-AU-56): the server time it
+  // was made and the version of the notice acknowledged. Both null until the
+  // account acknowledges.
+  closedAlphaNoticeAcknowledgedAt DateTime?
+  closedAlphaNoticeVersion        Int?
+
   sessions   Session[]
   accounts   Account[]
   twoFactors TwoFactor[]
+  // FR-AU-09: at most one, by the unique `Workspace.ownerId`.
+  personalWorkspace Workspace? @relation("PersonalWorkspace")
 }
 
 model Session {
@@ -124,4 +132,62 @@ model SecurityLogEntry {
   documentId String?  @db.Uuid
 
   @@index([createdAt])
+}
+
+// ── Admission ───────────────────────────────────────────────────────────────
+// One row for each invitation by which the team admits a person to Closed α
+// (FR-AU-89), created on a signed request. The link's token is stored only as
+// a hash, and `requestId` makes a repeated request harmless. On acceptance the
+// address becomes `User.email`.
+//
+// `state` is what was last written. "Expired" is told from `expiresAt` when a
+// row is read (src/lib/admission/invitations.ts), so that an invitation is
+// never open a moment past its expiry for want of a timer; EXPIRED is written
+// only when the row is next changed.
+//
+// The migration adds what this file cannot say: a unique index on `email`
+// over the PENDING rows alone, so that an address never has two open links.
+model AdmissionInvitation {
+  id           String         @id @default(cuid())
+  // Null once cleared: 30 days after `revokedAt` or `expiresAt`, and when the
+  // account made from it is deleted (FR-AU-58 (e), NFR-RE-15; a later slice).
+  email        String?
+  tokenHash    String         @unique
+  requestId    String         @unique
+  state        AdmissionState @default(PENDING)
+  createdAt    DateTime       @default(now())
+  expiresAt    DateTime
+  // Not on the Data models page: the clearing of the address counts its 30
+  // days from the revocation, which no other column records.
+  revokedAt    DateTime?
+  acceptedAt   DateTime?
+  // The `User` created from it. No relation: the row outlives a tombstone.
+  acceptedById String?
+
+  @@index([email])
+}
+
+enum AdmissionState {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+// ── Workspaces ──────────────────────────────────────────────────────────────
+// Personal workspaces only in this slice (Data models, "What α 0.1.0
+// migrates"). A personal workspace is tied to its account by `ownerId`, which
+// is unique, so an account never has two (FR-AU-09; register D61).
+model Workspace {
+  id        String        @id @default(cuid())
+  type      WorkspaceType
+  ownerId   String?       @unique
+  createdAt DateTime      @default(now())
+
+  owner User? @relation("PersonalWorkspace", fields: [ownerId], references: [id], onDelete: Restrict)
+}
+
+enum WorkspaceType {
+  PERSONAL
+  INSTITUTIONAL
 }

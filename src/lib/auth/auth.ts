@@ -4,12 +4,14 @@
 // of Next.js, and it reads no environment until `auth()` is first called.
 import { betterAuth, type BetterAuthPlugin } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
-import { isAPIError } from 'better-auth/api';
+import { APIError, isAPIError } from 'better-auth/api';
 import { twoFactor } from 'better-auth/plugins';
+import { admissionSignUp } from '../admission/sign-up.ts';
 import { clientAddress, UNKNOWN_ADDRESS } from '../client-address.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { settings } from '../settings.ts';
+import { signInEmail, signOut } from './sign-in.ts';
 
 /** Where the library's handler is mounted (API design, "Sign-in and identity"). */
 export const IDENTITY_BASE_PATH = '/api/auth';
@@ -29,14 +31,20 @@ export const IDENTITY_BASE_PATH = '/api/auth';
  */
 export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // FR-AU-81: sign-in by email address and password, the only way to sign in.
-  // OWED before any account can exist on a deployment: the limits and the log
-  // entry of a failed sign-in (NFR-SE-07, NFR-SE-19), the fixed statement, and
-  // the refusal of `rememberMe`, which the sign-in slice builds. Until then
-  // this answers as the library ships it.
+  // The endpoint is the application's own (sign-in.ts).
   'POST /sign-in/email',
-  // FR-AU-84: signing out ends the session at once and clears the browser's cookies.
+  // FR-AU-84: signing out ends the session at once and clears the browser's
+  // cookies. The application's own too.
   'POST /sign-out',
 ]);
+
+// FR-AU-81, FR-AU-84: the application's sign-in and sign-out. A plugin's
+// endpoint replaces the library's of the same name, so the library's own
+// sign-in and sign-out are not in the handler and not in `auth().api`.
+const ownSignIn = {
+  id: 'ekdotico-sign-in',
+  endpoints: { signInEmail, signOut },
+} satisfies BetterAuthPlugin;
 
 // The application's own gate, and no feature of the library.
 const surface = {
@@ -91,7 +99,9 @@ function create() {
     // No `socialProviders`, and of the plugins only two-factor authentication by
     // authenticator application with recovery codes (FR-AU-83). Its code by
     // email exists only where a function to send one is configured; none is.
-    plugins: [twoFactor(), surface],
+    // `admissionSignUp` (FR-AU-90) has one endpoint, without a path: the
+    // handler cannot reach it, and only `POST /api/sign-up` calls it.
+    plugins: [twoFactor(), surface, ownSignIn, admissionSignUp],
     // NFR-SE-17 (d): each is off in the library by default but the linking of
     // accounts; all three are written so that a changed default changes nothing.
     account: { accountLinking: { enabled: false } },
@@ -113,8 +123,9 @@ function create() {
       useSecureCookies: appOrigin.startsWith('https://'),
       defaultCookieAttributes: { httpOnly: true, sameSite: 'lax' },
       crossSubDomainCookies: { enabled: false },
-      // NFR-SE-17 (c): the library's own origin check is on. Left unwritten,
-      // the library switches it off wherever NODE_ENV is `test`.
+      // NFR-SE-17 (c): the library's own check of the `Origin` of a request
+      // that carries cookies stands behind the proxy's. Left unwritten, the
+      // library switches it off wherever NODE_ENV is `test`.
       disableOriginCheck: false,
       disableCSRFCheck: false,
     },
@@ -152,6 +163,17 @@ function create() {
         // A refusal of the request itself, the library's or its router's, is no fault.
         if (isAPIError(error) && error.statusCode < 500) return;
         console.error(`identity: request failed (${faultOf(error)})`);
+        // Left here, the library's router prints the fault whole, with whatever
+        // the database or Valkey put in it, and answers with no body. It
+        // answers an API error thrown from this function instead: the one
+        // shape of an error, in the words of proxy.ts (NFR-SE-06 A10).
+        throw new APIError('INTERNAL_SERVER_ERROR', {
+          error: {
+            code: 'internal',
+            message:
+              'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+          },
+        });
       },
     },
   });

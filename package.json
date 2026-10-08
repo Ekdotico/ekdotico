@@ -23,10 +23,11 @@
     "test:e2e": "playwright test",
     "check:deps": "node scripts/check-deps.mjs",
     "db:migrate": "prisma migrate deploy",
+    "admission": "node scripts/admission.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@ekdotico/domico": "0.25.0",
+    "@ekdotico/domico": "0.26.0",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "better-auth": "1.7.7",
@@ -52,6 +53,18 @@
     "onlyBuiltDependencies": [
       "@prisma/engines",
       "prisma"
-    ]
+    ],
+    "overrides": {
+      "deepmerge-ts": "8.0.2",
+      "mysql2": "3.24.5"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ]
+    },
+    "patchedDependencies": {
+      "@better-auth/core@1.7.7": "patches/@better-auth__core@1.7.7.patch"
+    }
   }
 }

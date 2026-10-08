@@ -16,7 +16,8 @@ const serif = Crimson_Pro({
 const sans = Commissioner({ subsets: ['latin'], display: 'swap', variable: '--font-commissioner' });
 const mono = Fira_Code({ subsets: ['latin'], display: 'swap', variable: '--font-fira-code' });
 
-export const metadata: Metadata = { title: 'Ekdotico' };
+// Each page names itself, and the product's name follows (WCAG 2.2, 2.4.2).
+export const metadata: Metadata = { title: { default: 'Ekdotico', template: '%s – Ekdotico' } };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

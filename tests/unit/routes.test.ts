@@ -5,24 +5,16 @@
 // request that carries the build's own revalidation identifier
 // (docs/operations/deployment.md), so a route does not rest on the proxy: each
 // validates the session itself. A route added without it fails here.
-import { globSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-
-// The routes of NFR-SE-05, each with what authenticates it instead.
-const SESSIONLESS: Record<string, string> = {
-  'src/app/api/health/route.ts': 'NFR-SE-05 (c): reports that the service is up and nothing else',
-  'src/app/api/auth/[...all]/route.ts':
-    'NFR-SE-05 (a): the identity library checks the session of its own endpoints',
-};
-
-const routes = globSync('src/app/**/route.ts');
+import { routes, SESSIONLESS, withSession } from '../routes.ts';
 
 describe('the route handlers', () => {
   it('are found', () => {
     expect(routes.length).toBeGreaterThan(0);
   });
 
-  it.each(routes.filter((route) => !(route in SESSIONLESS)))('%s validates the session', (route) => {
+  it.each(withSession)('%s validates the session', (route) => {
     expect(readFileSync(route, 'utf8')).toMatch(/\bvalidateSession(Row)?\(/);
   });
 

@@ -11,7 +11,7 @@ import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { faultOf } from './lib/fault.ts';
-import { errorResponse, onlyReads, returnPath } from './lib/http.ts';
+import { errorResponse, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
@@ -40,6 +40,7 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   // (a) The pages a person without a session opens (FR-AU-88).
   { group: 'a', methods: ['GET'], path: '/sign-in' }, // FR-AU-81
   { group: 'a', methods: ['GET', 'POST'], path: '/sign-in/link/[token]' }, // FR-AU-81: the link of a lock email; the POST is its one control (register D115; A104, assumed)
+  { group: 'a', methods: ['GET'], path: '/sign-up' }, // FR-AU-90: "without a token" it shows the fixed statement (the owner's decision of 8 October 2026)
   { group: 'a', methods: ['GET'], path: '/sign-up/[token]' }, // FR-AU-90: the link of an admission invitation
   { group: 'a', methods: ['GET'], path: '/reset-password' }, // FR-AU-86
   { group: 'a', methods: ['GET'], path: '/reset-password/[token]' }, // FR-AU-86
@@ -91,8 +92,7 @@ const MESSAGES = {
     'This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again.',
   rateLimited: (seconds: number) =>
     `Too many requests were made in a short time. Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
-  internal:
-    'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+  internal: INTERNAL_FAULT,
 };
 
 function withCookies<T extends Response>(response: T, setCookie: readonly string[]): T {
@@ -203,8 +203,11 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
   // two-factor authentication: an account on the list without it reaches
   // nothing but its enrolment (403, by the answer to Q8).
 
-  // NFR-SE-07: requests to API routes, for each authenticated user.
-  if (pathname.startsWith('/api/')) {
+  // NFR-SE-07: requests to API routes, for each authenticated user. Signing
+  // out is not held back by it: it "ends the session at once" (FR-AU-84), and
+  // a session can be ended once.
+  const signsOut = method === 'POST' && pathname === `${IDENTITY_BASE_PATH}/sign-out`;
+  if (pathname.startsWith('/api/') && !signsOut) {
     progress.stage = 'limit';
     const limit = await takeLimit('API_PER_USER', session.userId);
     if (!limit.ok) {

@@ -13,7 +13,7 @@ const database = prepare('authconfig', {
   SESSION_RENEW_SECONDS: String(DAY / 2),
   COOKIE_CACHE_SECONDS: '45',
 });
-const { auth, IDENTITY_ENDPOINTS, db, valkey } = await load();
+const { auth, IDENTITY_ENDPOINTS, db, valkey, validateSessionRow } = await load();
 
 let userId = '';
 const request = (method: string, path: string, headers: Record<string, string> = {}) =>
@@ -53,8 +53,15 @@ describe('what is configured (NFR-SE-17)', () => {
   });
 
   it('has only two-factor authentication of the plugins, and no social provider (d)', () => {
-    // `ekdotico-surface` is the application's own gate, tested below.
-    expect(auth().options.plugins.map((plugin) => plugin.id)).toEqual(['two-factor', 'ekdotico-surface']);
+    // The other three are the application's own: the gate, tested below; its
+    // sign-in and sign-out (sign-in.test.ts, sign-out.test.ts); and the
+    // acceptance of an admission invitation, which has no path.
+    expect(auth().options.plugins.map((plugin) => plugin.id)).toEqual([
+      'two-factor',
+      'ekdotico-surface',
+      'ekdotico-sign-in',
+      'ekdotico-admission-sign-up',
+    ]);
     expect(auth().options).not.toHaveProperty('socialProviders');
     expect(auth().options.account.accountLinking.enabled).toBe(false);
     expect(auth().options.user).toEqual({ changeEmail: { enabled: false }, deleteUser: { enabled: false } });
@@ -65,8 +72,8 @@ describe('what is configured (NFR-SE-17)', () => {
       enabled: true,
       disableSignUp: true,
       requireEmailVerification: true,
-      minPasswordLength: 15,
-      maxPasswordLength: 128,
+      minPasswordLength: 8,
+      maxPasswordLength: 32,
     });
   });
 
@@ -127,9 +134,15 @@ describe('nothing leaves the process (NFR-SE-17 (b), NFR-DP-05)', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(fetched).not.toHaveBeenCalled();
-    const hosts = connected.mock.calls.map(([first, second]) =>
-      typeof first === 'object' && first !== null ? (first as net.TcpSocketConnectOpts).host : second,
-    );
+    // A sign-in asks Valkey for its limits (sign-in.ts), whose client connects
+    // through `net.createConnection`, which hands its arguments on as one list.
+    const hosts = connected.mock.calls.map(([first, second]) => {
+      const options: unknown = Array.isArray(first) ? first[0] : first;
+      return typeof options === 'object' && options !== null
+        ? (options as net.TcpSocketConnectOpts).host
+        : second;
+    });
+    expect(hosts.length).toBeGreaterThan(0);
     for (const host of hosts) expect(['localhost', '127.0.0.1', '::1']).toContain(host);
   });
 });
@@ -142,6 +155,8 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
   it('are the ones the pinned version is known to have', () => {
     expect(Object.keys(auth().api).sort()).toEqual(
       [
+        // The application's own, without a path: the session of FR-AU-90.
+        'acceptAdmissionInvitation',
         'accountInfo',
         'callbackOAuth',
         'changeEmail',
@@ -338,7 +353,8 @@ describe('the address of an account (FR-AU-02, FR-AU-81)', () => {
   it('cannot sign in until it is verified', async () => {
     const id = await createAccount(auth, 'unverified@example.com', false);
     const response = await signIn(auth, 'unverified@example.com');
-    expect(response.status).toBe(403);
+    // Answered as any failed sign-in is (FR-AU-81; sign-in.test.ts).
+    expect(response.status).toBe(401);
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
   });
@@ -409,8 +425,8 @@ describe('what is logged (NFR-SE-19)', () => {
 
     expect((await signIn(auth, 'person@example.com', 'a wrong password, long enough')).status).toBe(401);
     expect((await signIn(auth, 'nobody@example.com', 'a wrong password, long enough')).status).toBe(401);
-    expect((await signIn(auth, 'not an address', 'a wrong password, long enough')).status).toBe(400);
-    expect((await signIn(auth, 'person@example.com', 'x'.repeat(200))).status).toBe(400);
+    expect((await signIn(auth, 'not an address', 'a wrong password, long enough')).status).toBe(401);
+    expect((await signIn(auth, 'person@example.com', 'x'.repeat(200))).status).toBe(401);
     expect((await request('POST', '/api/auth/sign-up/email')).status).toBe(404);
 
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
@@ -444,10 +460,30 @@ describe('what is logged (NFR-SE-19)', () => {
     }
     expect(response.status).toBe(500);
     expect(await response.text()).not.toMatch(/User|person|prisma/i);
-    // Not the only line: the router under the library prints the error itself
-    // as well (`# SERVER_ERROR`, better-call 1.4.0), which the configuration
-    // does not yet keep it from. That is reported, and not settled here.
-    expect(errors.mock.calls[0]).toEqual(['identity: request failed (PrismaClientKnownRequestError P2021)']);
+    // The only line: the router under the library would print the error
+    // itself (`# SERVER_ERROR`, better-call 1.4.0), and the API error thrown
+    // from `onAPIError.onError` in auth.ts keeps it from that.
+    expect(errors.mock.calls).toEqual([['identity: request failed (PrismaClientKnownRequestError P2021)']]);
+  });
+
+  // The library reads a session and then its user, in a second query. At
+  // 1.7.7 a fault of that query was handed whole to `console.error`, past the
+  // logger configured above: the message of the database, with the query. The
+  // line is patched out (patches/@better-auth__core@1.7.7.patch; decision 0004).
+  it('prints nothing of a fault in the second query of a session but that there was one', async () => {
+    const headers = await sessionHeaders('person@example.com');
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+    database.sql('ALTER TABLE "User" RENAME TO "UserAway"');
+    try {
+      await expect(validateSessionRow(headers)).rejects.toThrow();
+    } finally {
+      database.sql('ALTER TABLE "UserAway" RENAME TO "User"');
+    }
+    const printed = spies.flatMap((spy) => spy.mock.calls);
+    expect(printed.length).toBeGreaterThan(0);
+    for (const line of printed) expect(line).toEqual(['identity: library reported (error)']);
   });
 
   it('answers a failed sign-in in one way, whether or not the address has an account (FR-AU-81)', async () => {
