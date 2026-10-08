@@ -12,6 +12,7 @@ import type { BetterAuthPlugin } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { setSessionCookie } from 'better-auth/cookies';
 import { faultOf } from '../fault.ts';
+import { fieldText } from '../field-text.ts';
 import { readBytes } from '../http.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
@@ -76,11 +77,11 @@ export const admissionSignUp = {
         if (!invitation) return { outcome: 'not_open' };
 
         // FR-AU-90: "a name, of 1 to 100 characters". Spaces around it are not
-        // part of it, and a character is one Unicode code point.
-        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        // part of it, and a character is one Unicode code point: the rule a
+        // document's title shares (../field-text.ts).
+        const { text: name, characters: length } = fieldText(typeof body.name === 'string' ? body.name : '');
         const password = typeof body.password === 'string' ? body.password : '';
         const fields: { name?: string; password?: string } = {};
-        const length = [...name].length;
         // A control character is no character of a name, and PostgreSQL cannot
         // store the first of them.
         if (length < 1 || length > 100 || /[\u0000-\u001f\u007f]/.test(name)) fields.name = NAME_REFUSAL;

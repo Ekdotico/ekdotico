@@ -368,6 +368,23 @@ describe('the list of documents (FR-ED-35; API design, "Documents")', () => {
     expect(others.documents.map((document: { id: string }) => document.id)).toEqual([theirs]);
   });
 
+  it('keeps one order between documents created at one instant: by the identifier, the greatest first', async () => {
+    const owner = await person();
+    const ids = [];
+    for (let n = 0; n < 4; n += 1) ids.push(await documentOf(owner.cookie));
+    await db().document.updateMany({
+      where: { ownerId: owner.id },
+      data: { createdAt: new Date('2026-01-01T00:00:00Z') },
+    });
+    const expected = ids.toSorted().reverse();
+    // Whatever order the rows were last written in.
+    for (const id of [...expected].reverse()) {
+      await db().document.update({ where: { id }, data: { title: 'Written again' } });
+      const answer = await (await list(owner.cookie)).json();
+      expect(answer.documents.map((document: { id: string }) => document.id)).toEqual(expected);
+    }
+  });
+
   it('is empty for an account without a document, and takes no account from the request', async () => {
     const owner = await person();
     const other = await person();
@@ -671,7 +688,7 @@ describe('the title of a document (FR-ED-35, NFR-SE-08, NFR-I18-03)', () => {
       `"double" 'single' \`back\` & <b>bold</b> </title>`,
       '‮right to left‬ ‏ mark ‎',
       'Ελληνικά, 中文, العربية, 😀 👩‍👩‍👧‍👦',
-      '  spaces kept at both ends  ',
+      'spaces   kept\tbetween\nthe ends',
       'a\tb\nc',
       '\'; DROP TABLE "Document"; --',
       'a'.repeat(200),
@@ -697,7 +714,7 @@ describe('the title of a document (FR-ED-35, NFR-SE-08, NFR-I18-03)', () => {
     const owner = await person();
     const id = await documentOf(owner.cookie);
     await rename(owner.cookie, id, { title: 'Kept' });
-    for (const title of ['a'.repeat(201), '😀'.repeat(201), ' '.repeat(201)]) {
+    for (const title of ['a'.repeat(201), '😀'.repeat(201), ` ${'a'.repeat(201)} `]) {
       const error = await expectError(await rename(owner.cookie, id, { title }), 422, 'invalid');
       expect(error.message).toBe(
         'The title was not changed, because it does not meet its rule. Change the title and try again.',
@@ -707,10 +724,31 @@ describe('the title of a document (FR-ED-35, NFR-SE-08, NFR-I18-03)', () => {
     expect((await row(id)).title).toBe('Kept');
   });
 
+  // The owner's decision of 8 October 2026, which amends NFR-SE-08.
+  it('is stored without the white space at its two ends, as a name is, and judged without it', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    for (const [typed, stored] of [
+      ['  spaces at both ends  ', 'spaces at both ends'],
+      ['\t\n a  b  \r\n', 'a  b'],
+      // 200 characters between spaces are within the limit.
+      [`  ${'😀'.repeat(200)}  `, '😀'.repeat(200)],
+    ] as const) {
+      const response = await rename(owner.cookie, id, { title: typed });
+      expect(response.status).toBe(200);
+      expect((await response.json()).title).toBe(stored);
+      expect((await row(id)).title).toBe(stored);
+      expect(value(`SELECT char_length(title) FROM "Document" WHERE id = '${id}'`)).toBe(
+        String([...stored].length),
+      );
+      expect((await (await list(owner.cookie)).json()).documents[0].title).toBe(stored);
+    }
+  });
+
   it('is stored as the default where it is empty', async () => {
     const owner = await person();
     const id = await documentOf(owner.cookie);
-    for (const title of ['', '   ', '\t\n']) {
+    for (const title of ['', '   ', '\t\n', ' '.repeat(201)]) {
       await rename(owner.cookie, id, { title: 'Something else' });
       const response = await rename(owner.cookie, id, { title });
       expect(response.status).toBe(200);
