@@ -53,6 +53,16 @@ function listed(password: string): boolean {
   return list.has(password.toLowerCase());
 }
 
+/** The form of a password that the identity library hashes: Unicode NFKC. */
+export function normalisedPassword(password: string): string {
+  return password.normalize('NFKC');
+}
+
+/** The length of a password, in Unicode code points, of the form that is stored. */
+export function passwordLength(password: string): number {
+  return [...normalisedPassword(password)].length;
+}
+
 /**
  * The statement of the first rule `password` does not meet, for the person who
  * chose it, or null where it meets them all. `email` is the address of the
@@ -60,9 +70,13 @@ function listed(password: string): boolean {
  *
  * A character is one Unicode code point, as NIST SP 800-63B counts.
  */
-export function checkPassword(password: string, email: string): string | null {
+export function checkPassword(entered: string, email: string): string | null {
   const { passwordMinLength, passwordMaxLength } = settings();
-  const length = [...password].length;
+  // The identity library hashes the compatibility form of a password, so a
+  // full-width spelling of a refused password would be stored as that password.
+  // Every rule is judged on the form that is stored.
+  const password = normalisedPassword(entered);
+  const length = passwordLength(password);
   if (length < passwordMinLength) return REFUSALS.tooShort(passwordMinLength);
   if (length > passwordMaxLength) return REFUSALS.tooLong(passwordMaxLength);
 

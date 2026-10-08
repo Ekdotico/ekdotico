@@ -85,7 +85,9 @@ export const admissionSignUp = {
         const password = typeof body.password === 'string' ? body.password : '';
         const fields: { name?: string; password?: string } = {};
         const length = [...name].length;
-        if (length < 1 || length > 100) fields.name = NAME_REFUSAL;
+        // A control character is no character of a name, and PostgreSQL cannot
+        // store the first of them.
+        if (length < 1 || length > 100 || /[\u0000-\u001f\u007f]/.test(name)) fields.name = NAME_REFUSAL;
         const refusal = checkPassword(password, invitation.email);
         if (refusal) fields.password = refusal;
         if (fields.name || fields.password) return { outcome: 'invalid', fields };

@@ -160,3 +160,25 @@ describe('the statements', () => {
     expect(check('known-password-one', EMAIL)).not.toContain('known-password-one');
   });
 });
+
+// The identity library hashes the compatibility form (NFKC) of a password, so
+// the rules judge that form: a full-width spelling is the password it becomes.
+describe('a password as it is stored', () => {
+  it('refuses the full-width spelling of a listed password', async () => {
+    const check = await load();
+    expect(check('ｋｎｏｗｎ-ｐａｓｓｗｏｒｄ-ｏｎｅ', EMAIL)).toMatch(/on a list/);
+  });
+
+  it('refuses the full-width spelling of the address', async () => {
+    const check = await load();
+    expect(check('ａｄａ.ｌｏｖｅｌａｃｅ and more words', EMAIL)).toMatch(
+      /cannot contain your email address/,
+    );
+  });
+
+  it('counts the characters of the stored form', async () => {
+    const check = await load({ passwordMinLength: 3, passwordMaxLength: 3 });
+    // One ligature that the stored form writes as three letters.
+    expect(check('ﬃ', EMAIL)).toBeNull();
+  });
+});

@@ -16,7 +16,8 @@ const WINDOW_MS = 10 * 60 * 1000;
 const FIRST_WAIT_MS = 5_000;
 const LONGEST_WAIT_MS = 60_000;
 
-const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+// A wait does not keep a process alive that is otherwise ready to stop.
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref());
 
 /**
  * Hands one message over, trying again for up to 10 minutes. It never rejects:

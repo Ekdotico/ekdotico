@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { cookiesOf, createAccount, load, ORIGIN, prepare } from './identity.ts';
+import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
 // One step of the transaction, made to fail on demand.
 const fault = vi.hoisted(() => ({ workspace: false }));
@@ -403,5 +403,49 @@ describe('the endpoint inside the identity library', () => {
   it('has no path for the library’s router to match', () => {
     const endpoint = auth().api.acceptAdmissionInvitation as unknown as { path?: string };
     expect(endpoint.path).toBeUndefined();
+  });
+});
+
+// The independent review of 8 October 2026. The identity library hashes the
+// compatibility form (NFKC) of a password; every rule has to judge that form,
+// and sign-in has to count as sign-up counted.
+describe('a password as it is stored (FR-AU-81, FR-AU-82)', () => {
+  it('signs in with a password of characters outside the basic plane, at the longest a password can be', async () => {
+    // 32 characters, 64 units of UTF-16.
+    const password = '😀'.repeat(32);
+    const { token } = await invite('emoji@example.com');
+    expect((await submit({ token, name: 'A Person', password })).status).toBe(201);
+    expect((await signIn(auth, 'emoji@example.com', password)).status).toBe(200);
+    expect((await signIn(auth, 'emoji@example.com', '😀'.repeat(31))).status).toBe(401);
+  });
+
+  it('refuses a password one character longer, however it is counted', async () => {
+    const { token } = await invite('emoji-long@example.com');
+    const response = await submit({ token, name: 'A Person', password: '😀'.repeat(33) });
+    expect(response.status).toBe(422);
+  });
+
+  it('refuses the full-width spelling of a password that holds the address', async () => {
+    const { token } = await invite('probelocal@example.com');
+    // Full-width letters, which the stored form turns into "probelocal-x1".
+    const response = await submit({ token, name: 'A Person', password: 'ｐｒｏｂｅｌｏｃａｌ-x1' });
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.fields.password).toMatch(/cannot contain your email address/);
+  });
+});
+
+describe('a name (FR-AU-90)', () => {
+  it.each([
+    ['a null character', 'a\u0000b'],
+    ['a line feed', 'a\nb'],
+    ['an escape character', 'a\u001bb'],
+    ['a delete character', 'a\u007fb'],
+  ])('refuses %s, with the rule and not a fault', async (_, name) => {
+    const { token } = await invite(`control-${++invitations}@example.com`);
+    const response = await submit({ token, name, password: PASSWORD });
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.fields.name).toMatch(/1 to 100 characters/);
+    // The invitation is still open.
+    expect(await findOpenInvitation(token)).not.toBeNull();
   });
 });

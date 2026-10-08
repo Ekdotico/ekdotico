@@ -18,6 +18,7 @@ import { addressBucket } from '../client-address.ts';
 import { errorResponse } from '../http.ts';
 import { checkLimit, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
+import { passwordLength } from '../password-rules.ts';
 import { settings } from '../settings.ts';
 import { valkey } from '../valkey.ts';
 
@@ -77,7 +78,9 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   const entered = credentials(ctx.body);
   if (!entered) return errorResponse(422, 'invalid_request', INVALID_REQUEST);
   // FR-AU-02: an address is stored, and so compared, in lower case.
-  const email = entered.email.toLowerCase();
+  // No address is longer than 254 characters; what is looked up and counted
+  // is bounded, whatever was sent.
+  const email = entered.email.slice(0, 255).toLowerCase();
   const { internalAdapter, password: hasher, authCookies, secret } = ctx.context;
   // NFR-SE-07: 5 in 15 minutes "for one email address from one network
   // address", and 20 in an hour for the address entered, from everywhere. A
@@ -106,7 +109,7 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // Every other attempt hashes once instead, as the library does for an
     // unknown address, so each path runs scrypt exactly once.
     const passed =
-      open && user?.emailVerified && hash && entered.password.length <= settings().passwordMaxLength
+      open && user?.emailVerified && hash && passwordLength(entered.password) <= settings().passwordMaxLength
         ? await hasher.verify({ hash, password: entered.password })
         : (await hasher.hash(''), false);
     // Counted on each failure, for an address that belongs to no account as

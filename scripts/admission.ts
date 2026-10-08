@@ -63,15 +63,21 @@ export async function run(
   }
 
   // The bytes signed are the bytes sent.
-  const response = await send(new URL(origin).origin + path, {
-    method,
-    headers: {
-      ...signedHeaders(secret, method, path, body),
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body,
-    redirect: 'error',
-  });
+  let response: Response;
+  try {
+    response = await send(new URL(origin).origin + path, {
+      method,
+      headers: {
+        ...signedHeaders(secret, method, path, body),
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body,
+      redirect: 'error',
+    });
+  } catch {
+    print('The application did not answer. Check that it is running and that APP_ORIGIN is its origin.');
+    return 1;
+  }
   const text = await response.text();
   let answer: string;
   try {
