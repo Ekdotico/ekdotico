@@ -1,10 +1,12 @@
 // The parts of the collaboration connection that need no server: the contract
 // a client imports, what is recorded for a connection, and the two timers of
-// the storing.
+// the storing and of its retry, and what a client may send as an update.
 import { describe, expect, it } from 'vitest';
-import { storeTimers } from '../../src/collab/server.ts';
+import * as Y from 'yjs';
+import { storeRetryDelay, storeTimers } from '../../src/collab/server.ts';
 import { isReadOnly, recordConnection } from '../../src/lib/collab/connection.ts';
 import { COLLAB_PATH, documentName, FRAGMENT_NAME, REFUSAL } from '../../src/lib/collab/protocol.ts';
+import { assertUpdate } from '../../src/lib/collab/state.ts';
 import {
   defaultPermissionSet,
   PERMISSIONS,
@@ -26,11 +28,83 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
     expect(REFUSAL).toEqual({
       NO_ACCESS: 'no-access',
       UNAVAILABLE: 'unavailable',
+      LIMITED: 'limited',
       CAPACITY: 'capacity',
       ACCESS_ENDED: 'access-ended',
       SESSION_ENDED: 'session-ended',
     });
-    expect(new Set(Object.values(REFUSAL)).size).toBe(5);
+    expect(new Set(Object.values(REFUSAL)).size).toBe(6);
+  });
+});
+
+describe('a store that failed is tried again less and less often (NFR-RE-07)', () => {
+  it('after 1 second, then twice as long each time, and never more than a minute', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 8, 30].map(storeRetryDelay)).toEqual([
+      1000, 2000, 4000, 8000, 16_000, 32_000, 60_000, 60_000, 60_000,
+    ]);
+  });
+});
+
+describe('what a client may send as an update (src/lib/collab/state.ts)', () => {
+  // The update format of Yjs, version 1, written by hand: for one client, a
+  // run of structs that hold nothing but a length, and no deletions.
+  const varint = (value: number): number[] => {
+    const bytes = [];
+    for (; value > 127; value = Math.floor(value / 128)) bytes.push(128 | (value % 128));
+    return [...bytes, value];
+  };
+  const lengths = (clock: number, ...each: number[]) =>
+    Uint8Array.from([
+      1,
+      each.length,
+      7,
+      ...varint(clock),
+      ...each.flatMap((length) => [0, ...varint(length)]),
+      0,
+    ]);
+  const deletions = (clock: number, length: number) =>
+    Uint8Array.from([0, 1, 7, 1, ...varint(clock), ...varint(length)]);
+  const written = () => {
+    const document = new Y.Doc();
+    document.getArray('changes').push(['one', { two: [2] }]);
+    document.getText('text').insert(0, 'three');
+    document.getArray('changes').delete(0, 1);
+    return document;
+  };
+
+  it('passes what Yjs writes: a whole state, and a single change', () => {
+    const document = written();
+    expect(() => assertUpdate(Y.encodeStateAsUpdate(document))).not.toThrow();
+    const changes: Uint8Array[] = [];
+    document.on('update', (update: Uint8Array) => changes.push(update));
+    document.getArray('changes').push(['four']);
+    expect(changes).toHaveLength(1);
+    expect(() => assertUpdate(changes[0]!)).not.toThrow();
+    // An update that has nothing in it, and lengths as large as a document will ever see.
+    expect(() => assertUpdate(Uint8Array.from([0, 0]))).not.toThrow();
+    expect(() => assertUpdate(lengths(0, 2 ** 40, 2 ** 40))).not.toThrow();
+  });
+
+  it.each([
+    ['no bytes', new Uint8Array(0)],
+    ['bytes that are no update', new Uint8Array(48).fill(0xff)],
+    ['an update cut short', Y.encodeStateAsUpdate(written()).subarray(0, 20)],
+    ['content of a kind there is none of', Uint8Array.from([1, 1, 7, 0, 15, 1, 1, 97, 0])],
+    ['lengths that add up past 2^53', lengths(0, 2 ** 52, 2 ** 52, 2 ** 52)],
+    ['lengths that add up past 2^56', lengths(0, 2 ** 55, 2 ** 55, 2 ** 55)],
+    ['a clock past 2^53', lengths(2 ** 54, 1)],
+    ['a deletion that reaches past 2^53', deletions(5, 2 ** 57)],
+  ])('refuses %s', (_label, update) => {
+    expect(() => assertUpdate(update)).toThrow();
+  });
+
+  // Why the check is there. If an upgrade of Yjs makes this test fail, the
+  // library has closed the fault itself, and the check is then only a second lock.
+  it('guards a real fault: Yjs applies such an update, and cannot read the state it then writes', () => {
+    const document = written();
+    Y.applyUpdate(document, lengths(0, 2 ** 55, 2 ** 55, 2 ** 55));
+    const state = Y.encodeStateAsUpdate(document);
+    expect(() => Y.applyUpdate(new Y.Doc(), state)).toThrow('Integer out of Range');
   });
 });
 

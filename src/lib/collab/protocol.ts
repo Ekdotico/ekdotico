@@ -44,6 +44,14 @@ export const REFUSAL = {
   NO_ACCESS: 'no-access',
   /** The server could not open the document, or is stopping. The client tries again. */
   UNAVAILABLE: 'unavailable',
+  /**
+   * The account reached the limit of NFR-SE-07, 30 in any minute for each
+   * user, against which a handshake counts once and each document opened on
+   * the socket once more. The reason carries no time: the client tries again
+   * after a pause, never at once, and lengthens the pause each time up to a
+   * minute, which is the period of the limit.
+   */
+  LIMITED: 'limited',
   /** Reserved for the limit of ten connections (NFR-PE-05, FR-ED-18); not sent yet. */
   CAPACITY: 'capacity',
   /** Reserved for the end of the account's access to the document (FR-ED-40, FR-ED-41); not sent yet. */

@@ -11,16 +11,27 @@
 // the document. Each is refused at the next handshake, and none ends a
 // connection that is open. Nor is there a limit of connections for a document
 // (NFR-PE-05), presence (FR-ED-17), or a second instance (NFR-SC-04).
-import { randomUUID } from 'node:crypto';
+//
+// CARRIED FORWARD from the review of this slice, for the slices named:
+// - Presence (slice 14). The library takes awareness from a read-only
+//   connection and sends it to every other connection of the document: a
+//   Viewer can show the others any name and any cursor. Nothing reads
+//   awareness yet; the slice that does decides what a connection may say of
+//   itself, in `beforeHandleAwareness`.
+// - Deletion (slices 12 and 15). The deletion of a document must close its
+//   connections here. Today they stay open, and what they change is received
+//   and never stored (FR-ED-36, in src/lib/collab/state.ts).
+import { createHmac, randomUUID } from 'node:crypto';
 import { STATUS_CODES, type IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { setTimeout as wait } from 'node:timers/promises';
-import { Server } from '@hocuspocus/server';
+import { Server, type Document } from '@hocuspocus/server';
+import { messageYjsSyncStep1 } from 'y-protocols/sync';
 import { stoppedByFoundingGate } from '../lib/auth/founding-gate.ts';
 import { validateSessionRow, type ValidSession } from '../lib/auth/session.ts';
 import { isReadOnly, recordConnection, type CollabConnection } from '../lib/collab/connection.ts';
 import { COLLAB_PATH, REFUSAL, type Refusal } from '../lib/collab/protocol.ts';
-import { applyState, loadState, storeState } from '../lib/collab/state.ts';
+import { applyState, assertUpdate, loadState, storeState } from '../lib/collab/state.ts';
 import { db } from '../lib/db.ts';
 import { authorise } from '../lib/documents/access.ts';
 import { assertContractVersion } from '../lib/istorico/index.ts';
@@ -28,6 +39,7 @@ import { isOwnOrigin } from '../lib/origin.ts';
 import { logLimitReached, takeLimit } from '../lib/rate-limit.ts';
 import { securityLog } from '../lib/security-log.ts';
 import { settings, type Settings } from '../lib/settings.ts';
+import { valkey } from '../lib/valkey.ts';
 
 export const HEALTH_PATH = '/collab/health';
 
@@ -35,10 +47,43 @@ type StoreSettings = Pick<Settings, 'collabStoreDelayMs' | 'collabStoreMaxMs'>;
 
 // What the write itself may take and still be inside the period.
 const STORE_WRITE_MARGIN_MS = 500;
-// A store that failed is tried again after this long, for as long as the
-// process runs; and this many times in all once the process is stopping.
+// A store that failed is tried again after this long, then after twice as
+// long each time, and never less often than the last of these; and this many
+// times in all, a second apart, once the process is stopping.
 const STORE_RETRY_MS = 1000;
+const STORE_RETRY_MAX_MS = 60_000;
 const STORE_ATTEMPTS_WHEN_STOPPING = 3;
+// What the orderly stop may take. A write that hangs has no deadline of its
+// own on this branch (the database client gains its timeouts on a lower one),
+// and a platform kills a process that does not stop: better to say so first.
+const STOP_DEADLINE_MS = 30_000;
+// One entry, and one line, for each of these periods and not for each request
+// (see `logRefusedOrigin`).
+const LOG_PERIOD_SECONDS = 60;
+
+/** How long after the `failures`-th failure in a row a store is tried again: 1 s, 2 s, 4 s … 60 s. */
+export function storeRetryDelay(failures: number): number {
+  return Math.min(STORE_RETRY_MS * 2 ** (failures - 1), STORE_RETRY_MAX_MS);
+}
+
+/** The Valkey key that marks the period in which a refused origin was logged (see `logRefusedOrigin`). */
+export function originRefusalMark(): string {
+  // Keyed as the marks of the limits are (src/lib/rate-limit.ts), so that two
+  // environments on one Valkey do not share it.
+  const digest = createHmac('sha256', settings().authSecret).update('collab:origin-refused').digest('hex');
+  return `limit-logged:${digest}`;
+}
+
+/** True once for each period, by this process's own clock. */
+function oncePer(seconds: number): () => boolean {
+  let last = -Infinity;
+  return () => {
+    const now = Date.now();
+    if (now - last < seconds * 1000) return false;
+    last = now;
+    return true;
+  };
+}
 
 /**
  * NFR-RE-07: the state is stored "no later than 2 seconds after the last
@@ -87,9 +132,39 @@ export function createCollabServer(store: StoreSettings) {
   // as its socket lives.
   const admitted = new Map<string, ValidSession>();
   const sockets = new Set<Duplex>();
+  // The documents whose store failed and is being tried again (see `retryStore`).
+  const retrying = new Map<string, { skipped: boolean }>();
+  // Aborted when the stop begins: it wakes every retry that is waiting.
+  const halt = new AbortController();
+  const socketFaultDue = oncePer(LOG_PERIOD_SECONDS);
+  const originLogDueHere = oncePer(LOG_PERIOD_SECONDS);
   let stopping = false;
   let unstored = false;
   let stopped: Promise<boolean> | undefined;
+
+  /**
+   * NFR-SE-19 asks for an entry for "a 403 response". This 403 is answered
+   * before any session is read and before any limit, to anyone who can reach
+   * the port, so an entry for each would let a flood write to the database
+   * without bound. It is read as the limits and a signature that does not
+   * verify are read: one entry for each minute in which a handshake was
+   * refused for its origin (the owner has been asked to confirm that reading
+   * for the three). An entry holds no detail, so nothing is lost but the count.
+   *
+   * The mark is in Valkey, so that it holds across instances. Without Valkey
+   * the entry is still written, a log too full and never one too empty, but
+   * the bound holds: one for each period from this process. It never rejects,
+   * and the refusal does not wait for it.
+   */
+  async function logRefusedOrigin(): Promise<void> {
+    let first: boolean;
+    try {
+      first = (await valkey().set(originRefusalMark(), '1', 'EX', LOG_PERIOD_SECONDS, 'NX')) === 'OK';
+    } catch {
+      first = originLogDueHere();
+    }
+    if (first) await securityLog({ kind: 'forbidden' });
+  }
 
   /**
    * The handshake (FR-AU-08; API design, "Collaboration connection"), in its
@@ -103,9 +178,9 @@ export function createCollabServer(store: StoreSettings) {
 
     // (b) FR-AU-08: "It refuses, before it reads the cookie, a handshake whose
     // `Origin` header is not on the allow-list of NFR-SE-17 (c)". NFR-SE-19: a
-    // 403 is logged; there is no user to name yet.
+    // 403 is logged, once for each period; there is no user to name yet.
     if (!isOwnOrigin(request.headers.origin)) {
-      await securityLog({ kind: 'forbidden' });
+      void logRefusedOrigin();
       return { status: 403 };
     }
 
@@ -153,6 +228,15 @@ export function createCollabServer(store: StoreSettings) {
     },
 
     async onUpgrade({ request, socket }: { request: IncomingMessage; socket: Duplex }) {
+      // FIRST, before anything is awaited. Node takes its own listener off the
+      // socket before it emits 'upgrade', and an 'error' with no listener ends
+      // the process: a client that resets the connection while the checks run,
+      // or that has gone when the refusal is written, would stop the server
+      // for everyone, with nothing stored (NFR-RE-07). A client that goes away
+      // is no fault of the server's: one line for each period, however many.
+      socket.on('error', (error) => {
+        if (socketFaultDue()) fault('socket', error);
+      });
       let outcome: ValidSession | Refused;
       try {
         outcome = await admit(request);
@@ -162,6 +246,12 @@ export function createCollabServer(store: StoreSettings) {
         fault('handshake', error);
         outcome = { status: 500 };
       }
+      // The socket ended while the checks ran: nothing is answered and nothing
+      // is recorded. Its 'close' has been emitted or is about to be, and a
+      // listener added now might never be called, so the record of the
+      // handshake would outlive its socket. Nothing is awaited from here to
+      // the listener below, so a socket that passes this has not closed.
+      if (socket.destroyed) return answered();
       if ('status' in outcome) {
         const head = [
           `HTTP/1.1 ${outcome.status} ${STATUS_CODES[outcome.status]}`,
@@ -195,6 +285,32 @@ export function createCollabServer(store: StoreSettings) {
       // No record of a handshake, or the process is stopping: nothing is opened.
       if (!session || stopping) throw refuse(REFUSAL.UNAVAILABLE);
 
+      // NFR-SE-07, "Collaboration handshakes, for each authenticated user":
+      // opening a document is the handshake of that document, and costs what
+      // the limit is there to bound, a query and perhaps an entry in the log.
+      // So it is counted against the same limit as the upgrade, which leaves a
+      // page that opens one document on one socket 15 loads in a minute. The
+      // library bounds only the documents of one socket that are waiting for
+      // this answer at one moment (100, then it closes the socket), never how
+      // many are opened one after another.
+      let limit;
+      try {
+        limit = await takeLimit('HANDSHAKES_PER_USER', session.userId);
+        if (!limit.ok) {
+          await logLimitReached(
+            'HANDSHAKES_PER_USER',
+            session.userId,
+            limit.retryAfterSeconds,
+            session.userId,
+          );
+        }
+      } catch (error) {
+        // NFR-SE-06, A10: without Valkey nothing is opened.
+        fault('limit', error);
+        throw refuse(REFUSAL.UNAVAILABLE);
+      }
+      if (!limit.ok) throw refuse(REFUSAL.LIMITED);
+
       let access;
       try {
         // (g) NFR-SE-04, FR-ED-39: the one function every route asks.
@@ -219,57 +335,158 @@ export function createCollabServer(store: StoreSettings) {
       return connection;
     },
 
+    /**
+     * A load that fails opens nothing: the client is answered `unavailable`
+     * and may try again, the process goes on, and stderr says which of the
+     * two failed, by the class of the fault alone (NFR-SE-19).
+     *
+     * A stored state that cannot be applied fails every time it is tried: the
+     * document can be opened by no one until an administrator repairs or
+     * clears `Document.yjsState`, or restores it from a backup. Nothing is
+     * built for that. `storeState` and `assertUpdate` are what keeps such a
+     * state from being written (src/lib/collab/state.ts).
+     */
     async onLoadDocument({ documentName, document }) {
+      let step = 'load';
       try {
         const state = await loadState(documentName);
-        if (state) applyState(document, state);
+        // Not where the stop began while the query ran: the connections were
+        // closed before this document had one, so it would gain one that
+        // nothing closes, and the stop would wait for it for ever.
+        if (!stopping) {
+          step = 'stored state';
+          if (state) applyState(document, state);
+          return;
+        }
       } catch (error) {
-        fault('load', error);
-        throw refuse(REFUSAL.UNAVAILABLE);
+        fault(step, error);
+      }
+      // The library drops a document that did not load without destroying it,
+      // and a document that is not destroyed keeps its timer, and so itself,
+      // for as long as the process runs.
+      document.destroy();
+      throw refuse(REFUSAL.UNAVAILABLE);
+    },
+
+    /**
+     * The library hands an update a client sent straight to Yjs, whatever it
+     * holds. Checked here first (src/lib/collab/state.ts says why); what does
+     * not pass closes the connection to the document, and is neither applied,
+     * nor acknowledged, nor sent to anyone. The first step of a
+     * synchronisation carries no update.
+     */
+    async beforeSync({ type, payload }) {
+      if (type === messageYjsSyncStep1) return;
+      try {
+        assertUpdate(payload);
+      } catch {
+        // An object, which the library reads a close code from, and with no
+        // message for it to print: what Yjs throws can quote the update.
+        throw {};
       }
     },
 
     /**
      * NFR-RE-07. It never rejects: the library prints what a store rejects
      * with, and then holds the document without trying again. A store that
-     * fails is reported and tried again here, with the state as it then is,
-     * and the document stays in memory meanwhile.
+     * fails is reported once and tried again by `retryStore`; while that runs
+     * there is nothing for this to do, but to tell it that there is more to
+     * store.
      */
     async onStoreDocument({ documentName, document }) {
-      for (let attempt = 1; ; attempt++) {
-        try {
-          // False for a deleted document, to which nothing is written (FR-ED-36).
-          await storeState(documentName, document);
-          return;
-        } catch (error) {
-          fault('store', error);
-          if (stopping && attempt >= STORE_ATTEMPTS_WHEN_STOPPING) {
-            unstored = true;
-            return;
-          }
-          await wait(STORE_RETRY_MS);
-        }
+      const retry = retrying.get(documentName);
+      if (retry) {
+        retry.skipped = true;
+        return;
       }
+      try {
+        // False for a deleted document, to which nothing is written (FR-ED-36).
+        await storeState(documentName, document);
+      } catch (error) {
+        fault('store', error);
+        const state = { skipped: false };
+        retrying.set(documentName, state);
+        void retryStore(documentName, document, state);
+      }
+    },
+
+    // A document whose store is being tried again stays in memory, whoever
+    // leaves it: there is nowhere else its changes are.
+    async beforeUnloadDocument({ documentName }) {
+      if (retrying.has(documentName)) return answered();
     },
   });
 
   /**
+   * One loop for each document whose store failed, whatever number of stores
+   * the library asks for meanwhile: it waits longer after each failure
+   * (`storeRetryDelay`), stores the state as it is when it tries, and says so
+   * once when a store succeeds. The first failure was reported by the caller.
+   */
+  async function retryStore(documentName: string, document: Document, state: { skipped: boolean }) {
+    let whileStopping = stopping ? 1 : 0;
+    for (let failures = 1; ; failures++) {
+      if (whileStopping >= STORE_ATTEMPTS_WHEN_STOPPING) {
+        unstored = true;
+        break;
+      }
+      await (stopping
+        ? wait(STORE_RETRY_MS)
+        : wait(storeRetryDelay(failures), undefined, { signal: halt.signal }).catch(() => {}));
+      try {
+        // Again at once where the library asked for a store while this one ran:
+        // what it asked for may hold a change this one did not.
+        do {
+          state.skipped = false;
+          await storeState(documentName, document);
+        } while (state.skipped);
+        console.error('collab: store recovered');
+        break;
+      } catch {
+        if (stopping) whileStopping++;
+      }
+    }
+    retrying.delete(documentName);
+    // What `beforeUnloadDocument` held back; it does nothing where a connection is open.
+    void server.hocuspocus.unloadDocument(document);
+  }
+
+  /**
    * The orderly stop of NFR-RE-07: no new handshake and no new document; every
    * open document stored; then the sockets closed. True where every store
-   * succeeded.
+   * succeeded, and false where one did not or the deadline passed first.
    */
-  function stop(): Promise<boolean> {
+  function stop(deadlineMs = STOP_DEADLINE_MS): Promise<boolean> {
     stopping = true;
+    halt.abort();
     return (stopped ??= (async () => {
-      // Closes the listener, tells every connection that it is closed, runs
-      // each store that is waiting, and returns when no document is in memory.
-      await server.destroy();
+      const deadline = new AbortController();
+      const stored = await Promise.race([
+        // Closes the listener, tells every connection that it is closed, runs
+        // each store that is waiting, and returns when no document is in memory.
+        server.destroy().then(() => !unstored),
+        wait(deadlineMs, undefined, { signal: deadline.signal }).then(
+          () => {
+            console.error('collab: stop failed (deadline)');
+            return false;
+          },
+          // Stopped in time: the timer was put out below.
+          () => false,
+        ),
+      ]);
+      deadline.abort();
       for (const socket of sockets) socket.destroy();
-      return !unstored;
+      return stored;
     })());
   }
 
-  return { httpServer: server.httpServer, hocuspocus: server.hocuspocus, stop };
+  return {
+    httpServer: server.httpServer,
+    hocuspocus: server.hocuspocus,
+    stop,
+    /** How many handshakes are recorded and how many sockets are held, for the tests. */
+    held: () => ({ handshakes: admitted.size, sockets: sockets.size }),
+  };
 }
 
 if (import.meta.main) {

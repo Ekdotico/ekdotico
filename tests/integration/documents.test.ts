@@ -883,6 +883,123 @@ describe('what is logged (NFR-SE-19, NFR-SE-06 A10)', () => {
   });
 });
 
+describe('the content of a document is in no row that did not ask for it (src/lib/db.ts; NFR-SE-19)', () => {
+  // A state as the collaboration server stores one, with a text in it that is easy to find.
+  const SECRET = 'state-that-no-answer-may-hold';
+  const STATE = Buffer.from(
+    `\u0001\u0001\u0007\u0000\u0004\u0001\u0007changes\u001d${SECRET}\u0000`,
+    'latin1',
+  );
+  const FORMS = [SECRET, STATE.toString('base64'), STATE.toString('hex'), [...STATE].join(',')];
+
+  /** Fails where the value, however deep, names the column or holds bytes. */
+  function expectWithout(value: unknown, where: string) {
+    const visit = (each: unknown): void => {
+      expect(ArrayBuffer.isView(each) || each instanceof ArrayBuffer, where).toBe(false);
+      if (typeof each !== 'object' || each === null || each instanceof Date) return;
+      expect(Object.keys(each), where).not.toContain('yjsState');
+      Object.values(each).forEach(visit);
+    };
+    visit(value);
+    const text = JSON.stringify(value);
+    for (const form of FORMS) expect(text, where).not.toContain(form);
+  }
+
+  it('in no answer of a documents route, and in nothing the functions behind them return', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const seed = () => db().document.update({ where: { id }, data: { yjsState: STATE } });
+    await seed();
+    // The state is there, for the one query that selects it.
+    const { loadState } = await import('../../src/lib/collab/state.ts');
+    expect(Buffer.from((await loadState(id))!).equals(STATE)).toBe(true);
+
+    // Every route, to the byte.
+    for (const [where, response] of [
+      ['GET /api/documents', await list(owner.cookie)],
+      ['POST /api/documents', await create(owner.cookie)],
+      ['GET /api/documents/[id]', await read(owner.cookie, id)],
+      ['PATCH /api/documents/[id]', await rename(owner.cookie, id, { title: 'Renamed' })],
+    ] as const) {
+      expect(response.status, where).toBeLessThan(300);
+      const body = Buffer.from(await response.arrayBuffer()).toString('latin1');
+      expect(body, where).not.toContain('yjsState');
+      for (const form of FORMS) expect(body, where).not.toContain(form);
+    }
+
+    // The functions the routes, the page, and the collaboration server call.
+    const documents = await import('../../src/lib/documents/documents.ts');
+    expectWithout(await authorise(owner.id, id, 'document.view'), 'authorise');
+    expectWithout(await documents.listDocuments(owner.id), 'listDocuments');
+    expectWithout(await documents.createDocument(owner.id), 'createDocument');
+    expectWithout(await documents.renameDocument(id, 'Renamed again'), 'renameDocument');
+    // What `documentRoute` hands a handler.
+    let handed: unknown;
+    const route = documentRoute('document.view', (call) => {
+      handed = { document: call.document, role: call.role };
+      return new Response(null);
+    });
+    await route(request('GET', `/api/documents/${id}`, owner.cookie), context(id));
+    expect(handed).toBeDefined();
+    expectWithout(handed, 'documentRoute');
+    // A rename and a creation did not clear it.
+    expect(Buffer.from((await loadState(id))!).equals(STATE)).toBe(true);
+  });
+
+  it('in no query of the client that does not select it, a relation or a write included', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    await db().document.update({ where: { id }, data: { yjsState: STATE } });
+    const workspaceId = await workspaceOf(owner.id);
+    const where = { id };
+    const queries: Record<string, () => Promise<unknown>> = {
+      findUnique: () => db().document.findUnique({ where }),
+      findUniqueOrThrow: () => db().document.findUniqueOrThrow({ where }),
+      findFirst: () => db().document.findFirst({ where }),
+      findMany: () => db().document.findMany({ where }),
+      'findMany, with relations': () =>
+        db().document.findMany({ where, include: { owner: true, workspace: true } }),
+      'update, returned': () => db().document.update({ where, data: { title: 'Returned' } }),
+      'updateManyAndReturn, returned': () =>
+        db().document.updateManyAndReturn({ where, data: { title: 'Returned again' } }),
+      'upsert, returned': () =>
+        db().document.upsert({
+          where,
+          update: { title: 'Upserted' },
+          create: {
+            workspaceId,
+            ownerId: owner.id,
+            permissionSet: defaultPermissionSet(),
+            recording: 'UNRECORDED',
+          },
+        }),
+      'the Owner, with the documents included': () =>
+        db().user.findUnique({ where: { id: owner.id }, include: { ownedDocuments: true } }),
+      'the Owner, with the documents selected': () =>
+        db().user.findUnique({ where: { id: owner.id }, select: { ownedDocuments: true } }),
+      'the workspace, with the documents included': () =>
+        db().workspace.findUnique({ where: { id: workspaceId }, include: { documents: true } }),
+      'the workspace, with the documents selected': () =>
+        db().workspace.findMany({ where: { id: workspaceId }, select: { documents: true } }),
+      'the workspace, through the Owner, two relations deep': () =>
+        db().user.findUnique({
+          where: { id: owner.id },
+          include: { personalWorkspace: { include: { documents: { include: { owner: true } } } } },
+        }),
+      'in a transaction': () => db().$transaction((tx) => tx.document.findMany({ where })),
+    };
+    for (const [label, query] of Object.entries(queries)) {
+      const answer = await query();
+      // The document is in the answer, and its content is not.
+      expect(JSON.stringify(answer), label).toContain(id);
+      expectWithout(answer, label);
+    }
+    // The state is read by naming it, and by nothing less.
+    const named = await db().document.findUniqueOrThrow({ where, select: { yjsState: true } });
+    expect(Buffer.from(named.yjsState!).equals(STATE)).toBe(true);
+  });
+});
+
 describe('the rows a document rests on (plan, C17)', () => {
   it('are not deleted from under it: neither its Owner’s nor its workspace’s', async () => {
     const owner = await person();

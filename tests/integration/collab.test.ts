@@ -5,11 +5,11 @@
 // WebSocket, and set `Cookie` and `Origin` themselves as a browser would.
 //
 // A few tests need to look inside the server, and run the same server object
-// in this process: they are in the last two groups.
+// in this process: they are the groups after "The same server, in this process".
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect as tcp, type AddressInfo } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,15 +36,18 @@ vi.doMock('../../src/lib/documents/access.ts', async (original) => {
       answers.get(`${userId} ${String(documentId)}`) ?? actual.authorise(userId, documentId, permission),
   };
 });
-const { createCollabServer } = await import('../../src/collab/server.ts');
+const { createCollabServer, originRefusalMark } = await import('../../src/collab/server.ts');
 
 const UNKNOWN = '3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b';
 // A text no log may hold (NFR-SE-19): it is written into documents below.
 const CONTENT = 'content-that-no-log-may-hold';
+const HANDLE_HEADER = 'x-ekdotico-handshake';
 
 // ── The server process ──────────────────────────────────────────────────────
 
 const children: ChildProcess[] = [];
+// What each process this file started has written to stderr, for the last test of the processes.
+const written: (() => string)[] = [];
 
 async function startServer(env: Record<string, string> = {}, port = 0) {
   const child = spawn('node', ['src/collab/server.ts'], {
@@ -54,6 +57,7 @@ async function startServer(env: Record<string, string> = {}, port = 0) {
   children.push(child);
   let stderr = '';
   child.stderr.on('data', (chunk) => (stderr += chunk));
+  written.push(() => stderr);
   const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) =>
     child.once('exit', (code, signal) => resolve({ code, signal })),
   );
@@ -82,10 +86,12 @@ interface Asked {
   /** null for a request without the header. */
   origin?: string | null;
   path?: string;
+  /** Further headers of the request. */
+  headers?: Record<string, string>;
 }
 
 /** One handshake, as the upgrade request a browser sends, and what the server answered to it. */
-function handshake(port: number, { cookie, origin = ORIGIN, path = COLLAB_PATH }: Asked = {}) {
+function handshake(port: number, { cookie, origin = ORIGIN, path = COLLAB_PATH, headers }: Asked = {}) {
   return new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
     const request = httpRequest({
       host: '127.0.0.1',
@@ -99,6 +105,7 @@ function handshake(port: number, { cookie, origin = ORIGIN, path = COLLAB_PATH }
         'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
         ...(origin === null ? {} : { Origin: origin }),
         ...(cookie ? { Cookie: cookie } : {}),
+        ...headers,
       },
     });
     // Refused: an HTTP answer, and no WebSocket.
@@ -143,21 +150,57 @@ function frame(bytes: Uint8Array) {
   return { name, type: number(), rest: Buffer.from(bytes.subarray(at)).toString('hex') };
 }
 // The types of a frame (@hocuspocus/server, types.ts). A document's state
-// travels in the first and the last of these three, and in no other.
+// travels in the first and the last of these, and in no other.
 const SYNC = 0;
 const AUTH = 2;
 const SYNC_REPLY = 4;
+const CLOSE = 7;
+const SYNC_STATUS = 8;
+// What a frame of the two types that carry state holds (y-protocols, sync.js).
+const STEP_2 = 1;
+const UPDATE = 2;
 /** The rest of the frame that refuses a document: "permission denied", and the reason. */
 const denied = (reason: string) => Buffer.from([1, reason.length, ...Buffer.from(reason)]).toString('hex');
+
+/** A number as the frames write one. */
+function varint(value: number): number[] {
+  const bytes = [];
+  for (; value > 127; value = Math.floor(value / 128)) bytes.push(128 | (value % 128));
+  return [...bytes, value];
+}
+/** A frame a client sends: the document it is addressed to, and numbers and byte strings after it. */
+function sent(name: string, ...parts: (number | Uint8Array)[]): Uint8Array<ArrayBuffer> {
+  const text = Buffer.from(name);
+  return Uint8Array.from([
+    ...varint(text.length),
+    ...text,
+    ...parts.flatMap((part) => (typeof part === 'number' ? varint(part) : [...varint(part.length), ...part])),
+  ]);
+}
+/** The frame that opens a document: authentication, by a token, which is empty. */
+const opening = (name: string) => sent(name, AUTH, 0, 0);
+
+/** An update a client could send: it adds one change. */
+function forgedUpdate(change = 'forged'): Uint8Array {
+  const forged = new Y.Doc();
+  forged.getArray('changes').push([change]);
+  return Y.encodeStateAsUpdate(forged);
+}
+/**
+ * An update of 32 bytes that Yjs 13.6.33 applies, and whose state it then
+ * encodes in a form it cannot read again: three structs of 2^55 in a row for
+ * one client, and an empty set of deletions (src/lib/collab/state.ts).
+ */
+const POISON = Buffer.from([1, 3, 7, 0, ...[1, 2, 3].flatMap(() => [0, ...varint(2 ** 55)]), 0]);
 
 const sockets: HocuspocusProviderWebsocket[] = [];
 
 /** One socket of a signed-in browser, which carries as many documents as are opened on it. */
-function connect(port: number, cookie: string) {
+function connect(port: number, cookie: string, headers: Record<string, string> = {}) {
   const frames: ReturnType<typeof frame>[] = [];
   class Socket extends WebSocket {
     constructor(url: string) {
-      super(url, { headers: { cookie, origin: ORIGIN } } as never);
+      super(url, { headers: { cookie, origin: ORIGIN, ...headers } } as never);
       this.addEventListener('message', (event) => frames.push(frame(new Uint8Array(event.data))));
     }
   }
@@ -196,6 +239,41 @@ async function until<T>(read: () => T | Promise<T>, within = 5000, every = 20): 
   }
 }
 
+/**
+ * The upgrade request as bytes on a bare TCP connection, for what no WebSocket
+ * client does: going away in the middle of the handshake, and asking for a
+ * version of the protocol that does not exist.
+ */
+function upgradeOver(port: number, headers: Record<string, string>, version = '13') {
+  const socket = tcp({ host: '127.0.0.1', port });
+  socket.on('error', () => {});
+  let answer = '';
+  socket.on('data', (chunk) => (answer += chunk));
+  const closed = new Promise<void>((resolve) => socket.on('close', () => resolve()));
+  socket.on('connect', () =>
+    socket.write(
+      [
+        `GET ${COLLAB_PATH} HTTP/1.1`,
+        'Host: app.example.test',
+        'Connection: Upgrade',
+        'Upgrade: websocket',
+        `Sec-WebSocket-Version: ${version}`,
+        `Sec-WebSocket-Key: ${randomBytes(16).toString('base64')}`,
+        ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+        '\r\n',
+      ].join('\r\n'),
+    ),
+  );
+  return { socket, closed, status: () => Number(/^HTTP\/1\.1 (\d+)/.exec(answer)?.[1]) };
+}
+
+/** A client that sends the upgrade request and resets the connection `after` ms later. */
+async function abandon(port: number, headers: Record<string, string>, after: number) {
+  const { socket, closed } = upgradeOver(port, headers);
+  socket.on('connect', () => setTimeout(() => socket.resetAndDestroy(), after));
+  await closed;
+}
+
 // ── Accounts and documents ──────────────────────────────────────────────────
 
 let people = 0;
@@ -219,6 +297,8 @@ const logged = () =>
 
 beforeEach(async () => {
   await db().securityLogEntry.deleteMany();
+  // Each test begins in a period in which no refused origin has been logged.
+  await valkey().del(originRefusalMark());
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -253,7 +333,24 @@ describe('the health check and the path (NFR-SE-05 (c))', () => {
 
   it('refuses a handshake on any path but /collab, written exactly, with a 404', async () => {
     const { cookie } = await person();
-    for (const path of ['/', '/collab/', '/collab?document=1', '/COLLAB', '/collab/health', '/collab/x']) {
+    for (const path of [
+      '/',
+      '/collab/',
+      '/collab?document=1',
+      '/collab?',
+      '/COLLAB',
+      '/collab/health',
+      '/collab/x',
+      // Other writings of the same place, which a server in front, or a
+      // library behind, might read as the path.
+      '//collab',
+      '/./collab',
+      '/%63ollab',
+      '/collab%2F',
+      '/collab%3F',
+      'http://app.example.test/collab',
+      `${ORIGIN}/collab`,
+    ]) {
       await expectRefused(server.port, { cookie, path }, 404);
     }
     expect((await handshake(server.port, { cookie })).status).toBe(101);
@@ -261,7 +358,14 @@ describe('the health check and the path (NFR-SE-05 (c))', () => {
 });
 
 describe('a handshake from another origin (FR-AU-08, NFR-SE-17 (c))', () => {
-  it('is refused with a 403 and logged, whatever cookie it carries', async () => {
+  // NFR-SE-19 lists "a 403 response". This 403 needs no session and comes
+  // before every limit, so it is read as one entry for each period in which an
+  // origin was refused, and not one for each request: the reading the owner has
+  // been asked to confirm for a limit that is reached and for a signature that
+  // does not verify. The cookie was not read, so no user is named.
+  const ENTRY = { kind: 'forbidden', userId: null, documentId: null };
+
+  it('is refused with a 403 whatever cookie it carries, and logged once for the period', async () => {
     const { cookie } = await person();
     const origins = [
       'https://evil.example',
@@ -272,16 +376,37 @@ describe('a handshake from another origin (FR-AU-08, NFR-SE-17 (c))', () => {
       'null',
     ];
     for (const origin of origins) await expectRefused(server.port, { cookie, origin }, 403);
-    // NFR-SE-19: each 403 is logged. The cookie was not read, so no user is named.
-    expect(await logged()).toEqual(
-      origins.map(() => ({ kind: 'forbidden', userId: null, documentId: null })),
-    );
+    // The other process marks the same period: the mark is in Valkey.
+    for (const origin of origins) await expectRefused(team.port, { cookie, origin }, 403);
+    await until(async () => (await logged()).length > 0);
+    await sleep(200);
+    expect(await logged()).toEqual([ENTRY]);
+
+    // The next period: one more entry.
+    await valkey().del(originRefusalMark());
+    for (const origin of origins) await expectRefused(server.port, { cookie, origin }, 403);
+    await until(async () => (await logged()).length > 1);
+    await sleep(200);
+    expect(await logged()).toEqual([ENTRY, ENTRY]);
   });
 
   it('is refused where the request carries no Origin header at all', async () => {
     const { cookie } = await person();
     await expectRefused(server.port, { cookie, origin: null }, 403);
-    expect(await logged()).toEqual([{ kind: 'forbidden', userId: null, documentId: null }]);
+    await until(async () => (await logged()).length > 0);
+    expect(await logged()).toEqual([ENTRY]);
+  });
+
+  it('holds the mark of the period for a minute, under a name that says nothing', async () => {
+    await expectRefused(server.port, { origin: 'https://evil.example' }, 403);
+    const mark = originRefusalMark();
+    expect(mark).toMatch(/^limit-logged:[0-9a-f]{64}$/);
+    const seconds = await until(async () => {
+      const left = await valkey().ttl(mark);
+      return left > 0 ? left : 0;
+    });
+    expect(seconds).toBeGreaterThan(50);
+    expect(seconds).toBeLessThanOrEqual(60);
   });
 
   it('spends nothing of the user’s limit', async () => {
@@ -368,6 +493,52 @@ describe('the founding-team gate at the handshake (FR-AU-83; register D114, A102
     await db().user.update({ where: { id: founder.id }, data: { twoFactorEnabled: false } });
     await expectRefused(team.port, { cookie: founder.cookie }, 403);
   });
+});
+
+describe('a client that goes away during the handshake (NFR-RE-07)', () => {
+  // Node takes its own 'error' listener off a socket before it hands the
+  // socket over for an upgrade. A reset while the checks ran, or before the
+  // refusal was written, was an 'error' nobody listened for, and ended the
+  // process: for everyone, and with what was not yet stored lost.
+  it(
+    'does not end the process, whatever the handshake would have been answered',
+    { timeout: 60_000 },
+    async () => {
+      const instance = await startServer();
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const before = connect(instance.port, owner.cookie).open(id);
+      await before.synced;
+      before.changes.push(['before the resets']);
+      await until(() => before.provider.unsyncedChanges === 0, 1000, 5);
+
+      // Another account's session, so that the 30 handshakes spent are not the Owner's.
+      const session = { Origin: ORIGIN, Cookie: (await person()).cookie };
+      for (const headers of [{ Origin: 'https://evil.example' }, { Origin: ORIGIN }, session]) {
+        for (let round = 0; round < 8; round++) {
+          // At once, and at each of the moments a check is waiting on the database or on Valkey.
+          for (const after of [0, 1, 2, 3, 5]) await abandon(instance.port, headers, after);
+          await sleep(20);
+        }
+      }
+      await sleep(300);
+
+      expect(instance.child.exitCode).toBeNull();
+      expect((await fetch(`http://127.0.0.1:${instance.port}/collab/health`)).status).toBe(200);
+      // A client connects and is sent the document, and what was received before the resets is stored.
+      const after = connect(instance.port, await owner.signedIn()).open(id);
+      await after.synced;
+      expect(after.changes.toArray()).toEqual(['before the resets']);
+      await until(async () => (await stored(id))?.length === 1, 3000);
+      // 120 resets, and at most one line for them, which names no one.
+      const lines = instance
+        .stderr()
+        .split('\n')
+        .filter((line) => line.startsWith('collab:'));
+      expect(lines.length).toBeLessThanOrEqual(1);
+      for (const line of lines) expect(line).toMatch(/^collab: socket failed \(\w+\)$/);
+    },
+  );
 });
 
 // ── One document on the connection ──────────────────────────────────────────
@@ -523,14 +694,15 @@ describe('storing a document’s state (NFR-RE-07; register P14)', () => {
     const { synced, changes } = connect(server.port, owner.cookie).open(id);
     await synced;
 
-    // A change every 250 ms for 11 seconds: never 2 seconds without one.
+    // A change every 250 ms for 21 seconds: never 2 seconds without one, and
+    // long enough for a second store, without which the gap below is no gap.
     const began = Date.now();
     let made = 0;
     const editing = setInterval(() => changes.push([`change ${++made}`]), 250);
     const stores: number[] = [];
     try {
       let last = 0;
-      while (Date.now() - began < 11_000) {
+      while (Date.now() - began < 21_000) {
         const count = (await stored(id))?.length ?? 0;
         if (count > last) stores.push(Date.now() - began);
         last = count;
@@ -539,8 +711,9 @@ describe('storing a document’s state (NFR-RE-07; register P14)', () => {
     } finally {
       clearInterval(editing);
     }
-    // The first store came while the changes still did, within 10 seconds of the first of them.
-    expect(stores.length).toBeGreaterThan(0);
+    // The first store came while the changes still did, within 10 seconds of
+    // the first of them, and the next within 10 seconds of that one.
+    expect(stores.length).toBeGreaterThanOrEqual(2);
     expect(stores[0]).toBeLessThanOrEqual(10_000);
     for (let n = 1; n < stores.length; n++) expect(stores[n]! - stores[n - 1]!).toBeLessThanOrEqual(10_000);
     // And when they stop, the rest within 2 seconds.
@@ -580,24 +753,137 @@ describe('storing a document’s state (NFR-RE-07; register P14)', () => {
     expect((await row()).updatedAt).toEqual(updatedAt);
   });
 
-  it('tries a store that failed again, and says so on stderr by the class of the fault alone', async () => {
-    const owner = await person();
-    const id = await documentOf(owner.id);
-    const { synced, changes } = connect(server.port, owner.cookie).open(id);
-    await synced;
-    const before = server.stderr().length;
-    // The database refuses the write, with an error that quotes the query.
-    database.sql('ALTER TABLE "Document" RENAME COLUMN "yjsState" TO "yjsStateAway"');
-    try {
-      changes.push([CONTENT]);
-      await until(() => /store failed/.test(server.stderr().slice(before)), 5000);
-    } finally {
-      database.sql('ALTER TABLE "Document" RENAME COLUMN "yjsStateAway" TO "yjsState"');
-    }
-    await until(async () => (await stored(id))?.includes(CONTENT), 5000);
-    const lines = server.stderr().slice(before).trim().split('\n');
-    for (const line of lines) expect(line).toMatch(/^collab: store failed \(\w+\)$/);
-  });
+  it(
+    'tries a store that failed again, and says so on stderr by the class of the fault alone',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const { synced, changes } = connect(server.port, owner.cookie).open(id);
+      await synced;
+      const before = server.stderr().length;
+      // The database refuses the write, with an error that quotes the query.
+      database.sql('ALTER TABLE "Document" RENAME COLUMN "yjsState" TO "yjsStateAway"');
+      try {
+        changes.push([CONTENT]);
+        await until(() => /store failed/.test(server.stderr().slice(before)), 5000);
+        // Two more attempts fail, 1 and 3 seconds after the first.
+        await sleep(3500);
+      } finally {
+        database.sql('ALTER TABLE "Document" RENAME COLUMN "yjsStateAway" TO "yjsState"');
+      }
+      // The next attempt is 4 seconds after the third.
+      await until(async () => (await stored(id))?.includes(CONTENT), 6000);
+      await until(() => /recovered/.test(server.stderr().slice(before)));
+      // One line for the failure and one for the recovery, not one for each attempt.
+      const lines = server.stderr().slice(before).trim().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatch(/^collab: store failed \(\w+\)$/);
+      expect(lines[1]).toBe('collab: store recovered');
+    },
+  );
+});
+
+describe('a state that cannot be loaded (NFR-RE-07)', () => {
+  // Nothing of the application writes such a state (the next test, and the
+  // group "what is kept out of a document" below). These are written to the row.
+  it(
+    'opens for no one, is said on stderr by the class of the fault, and the process goes on',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await person();
+      const good = Y.encodeStateAsUpdate(
+        (() => {
+          const document = new Y.Doc();
+          document.getArray('changes').push([CONTENT, CONTENT]);
+          return document;
+        })(),
+      );
+      const poisoned = new Y.Doc();
+      Y.applyUpdate(poisoned, POISON);
+      const states: [string, Uint8Array][] = [
+        ['bytes that are no state', Buffer.alloc(64, 0xff)],
+        ['a state cut short', good.subarray(0, good.length - 7)],
+        ['a state Yjs wrote and cannot read', Y.encodeStateAsUpdate(poisoned)],
+      ];
+      for (const [label, state] of states) {
+        const id = await documentOf(owner.id);
+        await db().document.update({ where: { id }, data: { yjsState: Buffer.from(state) } });
+        const before = server.stderr().length;
+
+        // Twice: trying again is possible, and changes nothing.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const client = connect(server.port, owner.cookie);
+          const opened = client.open(id);
+          // The Owner sees the reason "unavailable", after which a client tries again.
+          await until(() => client.framesFor(id).some((each) => each.rest === denied('unavailable')));
+          await sleep(100);
+          expect(
+            client.frames.some((each) => each.type === SYNC || each.type === SYNC_REPLY),
+            label,
+          ).toBe(false);
+          expect(opened.changes.toArray()).toEqual([]);
+        }
+        expect(server.child.exitCode).toBeNull();
+        // Nothing was written over it.
+        const row = await db().document.findUniqueOrThrow({ where: { id }, select: { yjsState: true } });
+        expect(Buffer.from(row.yjsState!).equals(Buffer.from(state)), label).toBe(true);
+        const lines = server.stderr().slice(before).trim().split('\n');
+        expect(lines, label).toHaveLength(2);
+        for (const line of lines) expect(line).toMatch(/^collab: stored state failed \(\w+\)$/);
+
+        // Recovery is an administrator's, by hand: here, the state is cleared, and the document opens, empty.
+        await db().document.update({ where: { id }, data: { yjsState: null } });
+        const client = connect(server.port, owner.cookie).open(id);
+        await client.synced;
+        expect(client.changes.toArray()).toEqual([]);
+      }
+    },
+  );
+
+  it(
+    'is not written by a client that sends what Yjs cannot store: the connection is closed',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const hostile = connect(server.port, owner.cookie);
+      const mine = hostile.open(id);
+      const honest = connect(server.port, await owner.signedIn()).open(id);
+      await Promise.all([mine.synced, honest.synced]);
+      mine.changes.push(['before']);
+      await until(async () => (await stored(id))?.length === 1, 3000);
+
+      // The update Yjs applies and cannot store, and bytes that are no update:
+      // each as an update and as the second step of a synchronisation.
+      for (const [inner, update] of [
+        [UPDATE, POISON],
+        [STEP_2, POISON],
+        [UPDATE, Buffer.alloc(48, 0xff)],
+        [STEP_2, Buffer.alloc(48, 0xff)],
+      ] as const) {
+        const client = connect(server.port, await owner.signedIn());
+        await client.open(id).synced;
+        // Time for the acknowledgement of the synchronisation itself.
+        await sleep(200);
+        const acknowledged = () => client.framesFor(id).filter((each) => each.type === SYNC_STATUS).length;
+        const acknowledgedBefore = acknowledged();
+        client.socket.webSocket!.send(sent(id, SYNC, inner, update));
+        // The connection to the document is closed, and nothing was acknowledged.
+        await until(() => client.framesFor(id).some((each) => each.type === CLOSE));
+        expect(acknowledged()).toBe(acknowledgedBefore);
+      }
+      expect(server.child.exitCode).toBeNull();
+
+      // The others go on, and what is stored can be read: `stored` applies it.
+      honest.changes.push(['after']);
+      await until(async () => (await stored(id))?.length === 2, 3000);
+      expect(await stored(id)).toEqual(['before', 'after']);
+      const later = connect(team.port, await owner.signedIn()).open(id);
+      await later.synced;
+      expect(later.changes.toArray()).toEqual(['before', 'after']);
+    },
+  );
 });
 
 describe('an orderly stop (NFR-RE-07)', () => {
@@ -730,9 +1016,11 @@ describe('the kill test of NFR-RE-07', () => {
 });
 
 describe('what the processes wrote to stderr (NFR-SE-19)', () => {
-  it('holds no address, no cookie, and nothing of a document', () => {
-    for (const each of [server, team]) {
-      const stderr = each.stderr();
+  it('holds no address, no cookie, and nothing of a document, in any process this file started', () => {
+    // The two of the whole file, and every one a test started for itself.
+    expect(written.length).toBeGreaterThan(5);
+    for (const read of written) {
+      const stderr = read();
       expect(stderr).not.toContain('example.com');
       expect(stderr).not.toContain(CONTENT);
       expect(stderr).not.toContain('session_token');
@@ -810,6 +1098,391 @@ describe('the order of the handshake (FR-AU-08; API design, "Collaboration conne
   });
 });
 
+describe('the log of a refused origin never holds the refusal back (NFR-SE-19, NFR-SE-06)', () => {
+  it('answers the 403 although Valkey does not answer, and the entry is still written, once', async () => {
+    const local = await inProcess();
+    try {
+      // Valkey never answers the mark.
+      const set = vi.spyOn(valkey(), 'set').mockImplementation((() => new Promise(() => {})) as never);
+      const began = Date.now();
+      await expectRefused(local.port, { origin: 'https://evil.example' }, 403);
+      expect(Date.now() - began).toBeLessThan(1000);
+      expect(set).toHaveBeenCalledTimes(1);
+
+      // Valkey fails: the entry is written by this process's own clock, once for the period.
+      set.mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
+      for (let n = 0; n < 5; n++) await expectRefused(local.port, { origin: 'https://evil.example' }, 403);
+      await until(async () => (await logged()).length > 0);
+      await sleep(200);
+      expect(await logged()).toEqual([{ kind: 'forbidden', userId: null, documentId: null }]);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+describe('the record of a handshake, and the socket it belongs to', () => {
+  const NONE = { handshakes: 0, sockets: 0 };
+  const ONE = { handshakes: 1, sockets: 1 };
+
+  it('is not made for a socket that ended while the checks ran', async () => {
+    const local = await inProcess();
+    try {
+      const { cookie } = await person();
+      // The limit is answered 150 ms late, and the socket ends 30 ms into the
+      // checks, as it does when the client resets the connection.
+      const evaluate = valkey().eval.bind(valkey()) as (...args: unknown[]) => Promise<unknown>;
+      const limit = vi
+        .spyOn(valkey(), 'eval')
+        .mockImplementation((async (...args: unknown[]) => (await sleep(150), evaluate(...args))) as never);
+      local.httpServer.once('upgrade', (_request, socket) => setTimeout(() => socket.destroy(), 30));
+      const client = upgradeOver(local.port, { Origin: ORIGIN, Cookie: cookie });
+      await client.closed;
+      await until(() => limit.mock.results.length === 1);
+      await sleep(400);
+      expect(client.status()).toBeNaN();
+      // The handshake was allowed, and nothing was recorded for it: its socket was gone.
+      expect(local.held()).toEqual(NONE);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('is removed when the socket ends, in every way a socket ends', async () => {
+    const local = await inProcess();
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    const headers = { Origin: ORIGIN, Cookie: owner.cookie };
+    try {
+      // The client closes the WebSocket.
+      const closing = connect(local.port, owner.cookie);
+      await closing.open(id).synced;
+      expect(local.held()).toEqual(ONE);
+      closing.socket.destroy();
+      await until(() => local.held().sockets === 0);
+      expect(local.held()).toEqual(NONE);
+
+      // The client resets the connection once it is a WebSocket, with no closing frame.
+      const reset = upgradeOver(local.port, headers);
+      await until(() => reset.status() === 101);
+      expect(local.held()).toEqual(ONE);
+      reset.socket.resetAndDestroy();
+      await until(() => local.held().sockets === 0);
+      expect(local.held()).toEqual(NONE);
+
+      // The handshake passes every check here, and the library then refuses the upgrade itself.
+      const refused = upgradeOver(local.port, headers, '12');
+      await refused.closed;
+      expect(refused.status()).toBe(400);
+      await until(() => local.held().sockets === 0);
+      expect(local.held()).toEqual(NONE);
+
+      // The server stops.
+      await connect(local.port, owner.cookie).open(id).synced;
+      expect(local.held()).toEqual(ONE);
+    } finally {
+      await local.stop();
+    }
+    await until(() => local.held().sockets === 0);
+    expect(local.held()).toEqual(NONE);
+  });
+
+  it('is found by a handle the server wrote: one a client sends is overwritten', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person();
+      const other = await person();
+      const id = await documentOf(owner.id);
+      const own = await documentOf(other.id);
+      await connect(local.port, owner.cookie).open(id).synced;
+      const handleOn = (name: string) =>
+        local.hocuspocus.documents.get(name)!.getConnections()[0]!.request.headers.get(HANDLE_HEADER);
+      const handle = handleOn(id)!;
+      expect(handle).toMatch(/^[0-9a-f-]{36}$/);
+
+      // Another account sends the handle of the Owner's handshake as its own.
+      const intruder = connect(local.port, other.cookie, { [HANDLE_HEADER]: handle });
+      expect(await intruder.open(id).outcome).toEqual({ refused: REFUSAL.NO_ACCESS });
+      // It is still itself: its own document opens, under a handle of its own.
+      await intruder.open(own).synced;
+      expect(handleOn(own)).toMatch(/^[0-9a-f-]{36}$/);
+      expect(handleOn(own)).not.toBe(handle);
+      expect(local.hocuspocus.documents.get(own)!.getConnections()[0]!.context.userId).toBe(other.id);
+      expect(local.hocuspocus.documents.get(id)!.getConnections()).toHaveLength(1);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+describe('opening documents on an accepted socket (NFR-SE-07)', () => {
+  it('counts each document opened against the limit of handshakes, and refuses with a reason of its own', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const client = connect(local.port, owner.cookie);
+      // The upgrade was the first of the 30; 29 documents may be opened, whatever they are.
+      expect(await client.open(id).outcome).toEqual({ scope: 'read-write' });
+      for (let n = 0; n < 28; n++) {
+        expect(await client.open(randomUUID()).outcome).toEqual({ refused: REFUSAL.NO_ACCESS });
+      }
+
+      const queries = vi.spyOn(db().document, 'findUnique');
+      for (const name of [randomUUID(), await documentOf(owner.id)]) {
+        expect(await client.open(name).outcome).toEqual({ refused: REFUSAL.LIMITED });
+        expect(client.framesFor(name).map(({ type, rest }) => ({ type, rest }))).toEqual([
+          { type: AUTH, rest: denied('limited') },
+        ]);
+      }
+      // Refused before the query the limit is there to bound.
+      expect(queries).not.toHaveBeenCalled();
+      // One limit for both: no handshake either, in this process or another.
+      await expectRefused(local.port, { cookie: owner.cookie }, 429);
+      await expectRefused(server.port, { cookie: await owner.signedIn() }, 429);
+      // NFR-SE-19: one entry for the limit reached.
+      expect(await logged()).toEqual([{ kind: 'rate_limit_reached', userId: owner.id, documentId: null }]);
+
+      // The document that was open stays open, and another account is not held back.
+      expect(local.hocuspocus.documents.get(id)!.getConnections()).toHaveLength(1);
+      const other = await person();
+      expect(await connect(local.port, other.cookie).open(await documentOf(other.id)).outcome).toEqual({
+        scope: 'read-write',
+      });
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('opens nothing where the limit cannot be asked (NFR-SE-06, A10)', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person();
+      const client = connect(local.port, owner.cookie);
+      await client.open(await documentOf(owner.id)).synced;
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(valkey(), 'eval').mockRejectedValueOnce(new Error('ECONNREFUSED redis://secret@host'));
+      expect(await client.open(await documentOf(owner.id)).outcome).toEqual({ refused: REFUSAL.UNAVAILABLE });
+      expect(errors.mock.calls).toEqual([['collab: limit failed (Error)']]);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  // What the library bounds by itself (@hocuspocus/server 4.7.0,
+  // ClientConnection.ts, `maxPendingDocuments`): the documents of one socket
+  // that are waiting for the answer to their opening at one moment. At the
+  // 101st it closes the socket. It is no bound on how many are opened one after
+  // another, which is what the limit above is for.
+  it('is bounded by the library at 100 documents waiting on one socket, which then closes', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person();
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const socket = new WebSocket(`ws://127.0.0.1:${local.port}${COLLAB_PATH}`, {
+        headers: { cookie: owner.cookie, origin: ORIGIN },
+      } as never);
+      const closed = new Promise<number>((resolve) =>
+        socket.addEventListener('close', (event) => resolve(event.code)),
+      );
+      await new Promise((resolve) => socket.addEventListener('open', resolve));
+      const limit = vi.spyOn(valkey(), 'eval');
+      const queries = vi.spyOn(db().document, 'findUnique');
+      for (let n = 0; n < 150; n++) socket.send(opening(randomUUID()));
+
+      // "Reset Connection" (@hocuspocus/common, CloseEvents.ts).
+      expect(await closed).toBe(4205);
+      await sleep(300);
+      // 100 were asked of the limit, and it let 29 through to the query.
+      expect(limit).toHaveBeenCalledTimes(100);
+      expect(queries).toHaveBeenCalledTimes(29);
+      expect(warned).toHaveBeenCalledTimes(1);
+      expect(warned.mock.calls[0]![0]).toContain('maxPendingDocuments 100');
+      expect(local.hocuspocus.documents.size).toBe(0);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+describe('the orderly stop, where something does not end (NFR-RE-07)', () => {
+  it('gives up at its deadline, says so, and reports a failure', async () => {
+    const local = await inProcess();
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    const { synced, changes, provider } = connect(local.port, owner.cookie).open(id);
+    await synced;
+    // A write the database never answers, until the test lets it go.
+    let release = () => {};
+    vi.spyOn(db().document, 'updateMany').mockImplementation(
+      (() => new Promise((resolve) => (release = () => resolve({ count: 0 })))) as never,
+    );
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    changes.push(['never stored']);
+    await until(() => provider.unsyncedChanges === 0, 1000, 5);
+
+    const began = Date.now();
+    expect(await local.stop(500)).toBe(false);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(450);
+    expect(Date.now() - began).toBeLessThan(2000);
+    expect(errors.mock.calls).toEqual([['collab: stop failed (deadline)']]);
+    // The sockets were closed all the same.
+    await until(() => local.held().sockets === 0);
+    release();
+  });
+
+  it('opens no document whose load ends after the stop began, and so does not wait for one', async () => {
+    const local = await inProcess();
+    const owner = await person();
+    const first = await documentOf(owner.id);
+    const late = await documentOf(owner.id);
+    const open = connect(local.port, owner.cookie).open(first);
+    await open.synced;
+    open.changes.push(['received, and stored by the stop']);
+    await until(() => open.provider.unsyncedChanges === 0, 1000, 5);
+
+    // The store of the first takes 600 ms, and the load of the second 250 ms:
+    // the second ends its load while the stop is still storing the first.
+    const update = db().document.updateMany.bind(db().document) as (args: unknown) => Promise<unknown>;
+    vi.spyOn(db().document, 'updateMany').mockImplementation(((args: unknown) =>
+      sleep(600).then(() => update(args))) as never);
+    const find = db().document.findUniqueOrThrow.bind(db().document) as (args: unknown) => Promise<unknown>;
+    const load = vi
+      .spyOn(db().document, 'findUniqueOrThrow')
+      .mockImplementation(((args: unknown) => sleep(250).then(() => find(args))) as never);
+    const other = connect(local.port, await owner.signedIn());
+    other.open(late);
+    await until(() => load.mock.calls.length === 1);
+
+    const began = Date.now();
+    expect(await local.stop(5000)).toBe(true);
+    expect(Date.now() - began).toBeLessThan(3000);
+    expect(other.framesFor(late).some((each) => each.rest === denied('unavailable'))).toBe(true);
+    expect(other.frames.some((each) => each.type === SYNC || each.type === SYNC_REPLY)).toBe(false);
+    expect(local.hocuspocus.documents.size).toBe(0);
+    vi.restoreAllMocks();
+    expect(await stored(first)).toEqual(['received, and stored by the stop']);
+  });
+});
+
+describe('a store that fails, tried again (NFR-RE-07)', () => {
+  it(
+    'waits twice as long after each failure, in one loop, with one line for the failure and one for the recovery',
+    { timeout: 30_000 },
+    async () => {
+      const local = await inProcess();
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const client = connect(local.port, owner.cookie);
+        const { synced, changes, provider } = client.open(id);
+        await synced;
+
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const update = db().document.updateMany.bind(db().document) as (args: unknown) => Promise<unknown>;
+        const attempts: number[] = [];
+        let failing = true;
+        vi.spyOn(db().document, 'updateMany').mockImplementation(((args: unknown) => {
+          attempts.push(Date.now());
+          // An error that quotes the row, as the database's does.
+          return failing ? Promise.reject(new Error(`Failing row contains (${CONTENT}).`)) : update(args);
+        }) as never);
+
+        // Changes go on all the while, so the library asks for a store every period.
+        let made = 0;
+        const editing = setInterval(() => changes.push([`change ${++made}`]), 250);
+        try {
+          // The first attempt, then one a second later and one two seconds after that.
+          // (The first comes 6 seconds after the first change, since changes go on.)
+          await until(() => attempts.length === 3, 12_000);
+          // The fourth is four seconds after the third: none in the first two and a half.
+          await sleep(2500);
+        } finally {
+          clearInterval(editing);
+        }
+        expect(attempts).toHaveLength(3);
+        const gaps = [attempts[1]! - attempts[0]!, attempts[2]! - attempts[1]!];
+        expect(gaps[0]).toBeGreaterThanOrEqual(950);
+        expect(gaps[0]).toBeLessThan(1600);
+        expect(gaps[1]).toBeGreaterThanOrEqual(1950);
+        expect(gaps[1]).toBeLessThan(2600);
+        expect(errors.mock.calls).toEqual([['collab: store failed (Error)']]);
+
+        // The last client leaves: the document stays in memory, since nothing else holds its changes.
+        await until(() => provider.unsyncedChanges === 0);
+        client.socket.destroy();
+        await until(() => local.held().sockets === 0);
+        await sleep(100);
+        expect(local.hocuspocus.documents.has(id)).toBe(true);
+        expect(await stored(id)).toBeNull();
+
+        // The database answers again: the next attempt stores the state as it is now, says so, and the document is let go.
+        failing = false;
+        await until(() => errors.mock.calls.length === 2, 6000);
+        expect(errors.mock.calls[1]).toEqual(['collab: store recovered']);
+        expect(attempts[3]! - attempts[2]!).toBeGreaterThanOrEqual(3950);
+        expect(await stored(id)).toHaveLength(made);
+        await until(() => !local.hocuspocus.documents.has(id));
+      } finally {
+        await local.stop();
+      }
+    },
+  );
+});
+
+describe('what is kept out of a document, and out of its row (NFR-RE-07)', () => {
+  it(
+    'stores nothing that could not be loaded again, whatever put it into the document',
+    { timeout: 20_000 },
+    async () => {
+      const local = await inProcess();
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const { synced, changes } = connect(local.port, owner.cookie).open(id);
+      await synced;
+      changes.push(['stored while the document could be loaded']);
+      await until(async () => (await stored(id))?.length === 1, 3000);
+
+      // Into the document the server holds, past the check of what a client
+      // sends: as a fault of Yjs that is not yet known would arrive.
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const held = local.hocuspocus.documents.get(id)!;
+      applyState(held, POISON);
+      changes.push(['received after it']);
+      // The lines of the server. (The client of this test is sent the same
+      // state and complains in this process too, which is not the server's line.)
+      const lines = () => errors.mock.calls.filter(([line]) => String(line).startsWith('collab:'));
+      await until(() => lines().length > 0, 4000);
+      expect(lines()).toEqual([['collab: store failed (UnloadableState)']]);
+      // The row holds what it held, which loads.
+      expect(await stored(id)).toEqual(['stored while the document could be loaded']);
+      // The stop cannot store it either, and says so by its answer.
+      expect(await local.stop()).toBe(false);
+      expect(await stored(id)).toEqual(['stored while the document could be loaded']);
+    },
+  );
+
+  it('lets go of a document that did not load', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      await db().document.update({ where: { id }, data: { yjsState: Buffer.alloc(64, 0xff) } });
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const destroyed = vi.spyOn(Y.Doc.prototype, 'destroy');
+      const client = connect(local.port, owner.cookie);
+      client.open(id);
+      await until(() => client.framesFor(id).some((each) => each.rest === denied('unavailable')));
+      expect(errors.mock.calls).toEqual([['collab: stored state failed (Error)']]);
+      expect(local.hocuspocus.documents.size).toBe(0);
+      // Destroyed, and its timer with it: the library by itself only forgets it.
+      expect(destroyed).toHaveBeenCalled();
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
 describe('what is recorded for a connection, and a role that cannot edit (NFR-SE-03 (a), FR-ED-20)', () => {
   it('records the user, the document, the role, its permissions, and the session presented', async () => {
     const local = await inProcess();
@@ -847,8 +1520,10 @@ describe('what is recorded for a connection, and a role that cannot edit (NFR-SE
       const document = await db().document.findUniqueOrThrow({ where: { id } });
       answers.set(`${viewer.id} ${id}`, { outcome: 'allowed', role: 'viewer', document });
 
-      const writing = connect(local.port, owner.cookie).open(id);
-      const reading = connect(local.port, viewer.cookie).open(id);
+      const owning = connect(local.port, owner.cookie);
+      const viewing = connect(local.port, viewer.cookie);
+      const writing = owning.open(id);
+      const reading = viewing.open(id);
       expect(await writing.outcome).toEqual({ scope: 'read-write' });
       expect(await reading.outcome).toEqual({ scope: 'readonly' });
       await Promise.all([writing.synced, reading.synced]);
@@ -871,11 +1546,28 @@ describe('what is recorded for a connection, and a role that cannot edit (NFR-SE
       await sleep(400);
       expect(held.getArray('changes').toArray()).toEqual(['from the Owner']);
       expect(writing.changes.toArray()).toEqual(['from the Owner']);
+
+      // Past the provider, every frame that carries an update: the second step
+      // of a synchronisation and an update, under each of the two types of
+      // frame that carry state, addressed as this provider addresses its
+      // frames and as one with a session of its own would.
+      for (const outer of [SYNC, SYNC_REPLY]) {
+        for (const inner of [STEP_2, UPDATE]) {
+          for (const address of [id, `${id}\0a-session`]) {
+            viewing.socket.webSocket!.send(sent(address, outer, inner, forgedUpdate()));
+            await sleep(100);
+            expect(held.getArray('changes').toArray(), `${outer}, ${inner}`).toEqual(['from the Owner']);
+          }
+        }
+      }
+      // The same frame is no dead letter: from the Owner's socket it is applied.
+      owning.socket.webSocket!.send(sent(id, SYNC, UPDATE, forgedUpdate('by hand')));
+      await until(() => held.getArray('changes').length === 2);
       // It is never acknowledged, and never stored.
       expect(reading.provider.unsyncedChanges).toBeGreaterThan(0);
-      await until(async () => (await stored(id))?.length === 1, 3000);
+      await until(async () => (await stored(id))?.length === 2, 3000);
       await sleep(300);
-      expect(await stored(id)).toEqual(['from the Owner']);
+      expect((await stored(id))!.sort()).toEqual(['by hand', 'from the Owner']);
     } finally {
       await local.stop();
     }
