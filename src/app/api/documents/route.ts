@@ -3,7 +3,7 @@
 // neither can ask src/lib/documents/access.ts: the list is the session's own
 // account's and takes no identifier from the request, and a creation is
 // authorised by the workspace, which must be that account's own (FR-AU-12).
-import { fault, unauthenticated } from '../../../lib/auth/route-answers.ts';
+import { fault, notAdmitted } from '../../../lib/auth/route-answers.ts';
 import { validateSession, validateSessionRow } from '../../../lib/auth/session.ts';
 import { createDocument, listDocuments } from '../../../lib/documents/documents.ts';
 import { errorResponse, readJson } from '../../../lib/http.ts';
@@ -26,8 +26,9 @@ const MESSAGES = {
 /** It reads, so the signed copy of the session serves (NFR-SE-02). */
 export async function GET(request: Request): Promise<Response> {
   try {
-    const { session } = await validateSession(request.method, request.headers);
-    if (!session) return unauthenticated();
+    const validation = await validateSession(request.method, request.headers);
+    const { session } = validation;
+    if (!session) return await notAdmitted(validation);
     return Response.json({ documents: await listDocuments(session.userId) }, { headers: NO_STORE });
   } catch (error) {
     return fault('documents', error);
@@ -45,8 +46,9 @@ export async function GET(request: Request): Promise<Response> {
  */
 export async function POST(request: Request): Promise<Response> {
   try {
-    const { session } = await validateSessionRow(request.headers);
-    if (!session) return unauthenticated();
+    const validation = await validateSessionRow(request.headers);
+    const { session } = validation;
+    if (!session) return await notAdmitted(validation);
 
     const body = await readJson(request, MAX_BODY_BYTES);
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {

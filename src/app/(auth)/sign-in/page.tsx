@@ -28,8 +28,10 @@ export default async function SignIn({
   // on to where it was going. A read, so the signed copy serves (NFR-SE-02).
   // A fault of it is the page of a fault (page-fault.ts).
   const sent = await headers();
-  const { session } = await reading(() => validateSession('GET', sent));
-  if (session) redirect(returnTo);
+  // The session of an account the founding-team gate stops is one too: where
+  // it is sent, it meets the enrolment (FR-AU-83).
+  const { session, stopped } = await reading(() => validateSession('GET', sent));
+  if (session ?? stopped) redirect(returnTo);
 
   return (
     <>

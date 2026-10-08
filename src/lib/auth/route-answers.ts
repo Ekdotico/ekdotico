@@ -5,7 +5,9 @@
 import { faultOf } from '../fault.ts';
 import { errorResponse, INTERNAL_FAULT } from '../http.ts';
 import { logLimitReached } from '../rate-limit.ts';
+import { securityLog } from '../security-log.ts';
 import type { LimitName } from '../settings.ts';
+import type { Validation } from './session.ts';
 
 /**
  * NFR-SE-07: a 429 that states when the caller may try again, in a header and
@@ -43,6 +45,26 @@ export function unauthenticated(): Response {
     'unauthenticated',
     'This request needs a signed-in session. Sign in and try again.',
   );
+}
+
+/**
+ * FR-AU-83: the statement of the 403 that the founding-team gate answers (the
+ * owner's answer to Q8). Text for a person (the owner's answer to Q6).
+ */
+export const TWO_FACTOR_REQUIRED =
+  'This account belongs to the Ekdotico team, and it cannot be used until two-factor authentication is turned on. Open Ekdotico in the browser and turn it on.';
+
+/**
+ * The answer of a route to a request whose validation gave it no session:
+ * 401 where there is none (FR-AU-07), and 403 where the session is that of an
+ * account the founding-team gate stops, since "every API route refuses the
+ * account's requests other than those of the enrolment itself" (FR-AU-83).
+ * NFR-SE-19: a 403 has its entry.
+ */
+export async function notAdmitted({ stopped }: Pick<Validation, 'stopped'>): Promise<Response> {
+  if (!stopped) return unauthenticated();
+  await securityLog({ kind: 'forbidden', userId: stopped.userId });
+  return errorResponse(403, 'two_factor_required', TWO_FACTOR_REQUIRED);
 }
 
 /**

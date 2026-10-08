@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +20,10 @@ import { APP_ORIGIN, APP_PORT } from './tests/e2e/origin.ts';
 process.env.E2E_EMAIL_SINK ??= mkdtempSync(join(tmpdir(), 'ekdotico-e2e-mail-'));
 // The key of the signed admission requests, for this run and nothing else.
 process.env.E2E_ADMISSION_SECRET ??= 'a-test-value-for-the-end-to-end-tests-and-nothing-else';
+// The one address on the list of the founding team (FR-AU-83): an address no
+// earlier run used, since the database of a development machine keeps its
+// accounts. Written with a capital: the list is compared without regard to case.
+process.env.E2E_FOUNDER ??= `E2E-Founder-${randomBytes(6).toString('hex')}@example.com`;
 // The database. On a development machine it is the local one of README.md,
 // provisioned and migrated. Where an administrator's connection is given, as
 // in CI, which has no such database, the run makes one of its own, as the
@@ -43,7 +48,7 @@ export default defineConfig({
     env: {
       // `next start` listens where PORT says: 3000, or E2E_PORT (tests/e2e/origin.ts).
       PORT: APP_PORT,
-      FOUNDING_TEAM_EMAILS: '',
+      FOUNDING_TEAM_EMAILS: process.env.E2E_FOUNDER,
       APP_ORIGIN,
       DATABASE_URL: process.env.E2E_DATABASE_URL,
       VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',

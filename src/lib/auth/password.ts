@@ -30,9 +30,10 @@ import { logLimitReached, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
-import { tooManyRequests, unauthenticated } from './route-answers.ts';
+import { notAdmitted, tooManyRequests, unauthenticated } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
+import { SECOND_STEP } from './second-step.ts';
 
 /** FR-AU-86: the one answer to every request for a reset, verbatim. */
 export const RESET_REQUESTED =
@@ -211,6 +212,12 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
     if (changed.count !== 1) throw new Error('password reset: no credential');
     // "The completion of a reset makes void every other reset link of the account."
     await tx.verification.deleteMany({ where: { value: reset.userId, identifier: { startsWith: RESET } } });
+    // FR-AU-83: a second step that the old password began does not complete.
+    // Before the sessions: the second step makes its session first and claims
+    // its row after, so one of the two statements here finds what it made.
+    await tx.verification.deleteMany({
+      where: { value: reset.userId, identifier: { startsWith: SECOND_STEP } },
+    });
     // "Setting it ends every session of the account" (FR-AU-85).
     await tx.session.deleteMany({ where: { userId: reset.userId } });
     // FR-AU-81, FR-AU-86: the slice that builds the lock lifts it here, in
@@ -246,6 +253,7 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
 
 // Thrown inside the transaction of a change of password, to undo it.
 const SESSION_ENDED = new Error('password change: session ended');
+const OUTRUN = new Error('password change: the password was set meanwhile');
 
 /**
  * FR-AU-85: `POST /api/auth/change-password`, with `{ "currentPassword",
@@ -258,8 +266,9 @@ export const changePassword = createAuthEndpoint(
   async (ctx) => {
     assertCollecting();
     // NFR-SE-17 (c): a change of the password reads the session's row.
-    const { session } = await validateSessionRow(ctx.headers);
-    if (!session) return unauthenticated();
+    const validation = await validateSessionRow(ctx.headers);
+    const { session } = validation;
+    if (!session) return notAdmitted(validation);
     const entered = textFields(ctx.body, 'currentPassword', 'newPassword');
     if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.changeShape);
 
@@ -292,7 +301,18 @@ export const changePassword = createAuthEndpoint(
     const own = { id: session.sessionId, userId: session.userId };
     const outcome = await db()
       .$transaction(async (tx) => {
-        // The password first, as the completion of a reset takes it, so that
+        // The owner's decision S6 of the pull request: "Void them at a change
+        // of password too." Every reset link of the account that is
+        // outstanding is made void, as the completion of a reset makes void
+        // the others (FR-AU-86). First of all, as the completion of a reset
+        // claims its link before it takes the password: taken after it, the
+        // two would wait for each other in a circle. Whatever below finds that
+        // nothing is to change throws, so that no link is void without a
+        // change.
+        await tx.verification.deleteMany({
+          where: { value: session.userId, identifier: { startsWith: RESET } },
+        });
+        // The password next, as the completion of a reset takes it, so that
         // neither waits for the other in a circle. Written only over the hash
         // that was verified: one set since then is not overwritten (FR-AU-86).
         const changed = await tx.account.updateMany({
@@ -307,7 +327,7 @@ export const changePassword = createAuthEndpoint(
         if (changed.count !== 1) {
           // Whatever set the other password ended this session too, unless it
           // was a change made under this very session.
-          return (await tx.session.count({ where: own })) === 0 ? 'ended' : 'outrun';
+          throw (await tx.session.count({ where: own })) === 0 ? SESSION_ENDED : OUTRUN;
         }
         // FR-AU-84: a session that has ended changes nothing. Prisma has no
         // read that locks a row, so the row is written with its own value:
@@ -326,6 +346,11 @@ export const changePassword = createAuthEndpoint(
           if ((await tx.session.count({ where: own })) === 0) throw SESSION_ENDED;
           throw new Error('password change: session renewed meanwhile');
         }
+        // FR-AU-83: a second step that the old password began does not
+        // complete, as in the completion of a reset, and in the same order.
+        await tx.verification.deleteMany({
+          where: { value: session.userId, identifier: { startsWith: SECOND_STEP } },
+        });
         await tx.session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
         // FR-AU-81: the slice that builds the lock makes void the sign-in link
         // of a lock email here ("when the password … of the account is changed").
@@ -333,6 +358,7 @@ export const changePassword = createAuthEndpoint(
       })
       .catch((error: unknown) => {
         if (error === SESSION_ENDED) return 'ended';
+        if (error === OUTRUN) return 'outrun';
         throw error;
       });
     if (outcome === 'ended') return unauthenticated();

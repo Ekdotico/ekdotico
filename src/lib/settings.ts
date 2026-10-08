@@ -67,6 +67,18 @@ export interface Settings {
   /** FR-AU-82: the list of commonly used and known-compromised passwords, a file read on the server. */
   passwordListFile: string;
   /**
+   * FR-AU-83: "The second step is completed within 10 minutes of the password
+   * (an initial value), or the sign-in begins again." The secret of an
+   * enrolment waits as long for its first code (two-factor.ts).
+   */
+  secondStepSeconds: number;
+  /**
+   * NFR-SE-07, "Wrong second-factor codes, for each sign-in": 5, an initial
+   * value. The wrong code that reaches the number abandons the sign-in, and
+   * at the first code of an enrolment, the enrolment.
+   */
+  secondStepWrongCodes: number;
+  /**
    * FR-AU-89: the key of the signed admission requests, or none. Without it
    * every admission request is refused. The name and the form are provisional
    * (docs/contracts/admission-signature.md).
@@ -268,6 +280,10 @@ export function loadSettings(env: Env = process.env): Settings {
     passwordMinLength,
     passwordMaxLength,
     passwordListFile: env.PASSWORD_LIST_FILE || 'data/common-passwords.txt',
+    // At least 1 each: a second step of 0 seconds could never be completed,
+    // and with 0 wrong codes no count would ever reach the number.
+    secondStepSeconds: wholeNumber(env, 'TWO_FACTOR_STEP_SECONDS', 600, 1),
+    secondStepWrongCodes: wholeNumber(env, 'TWO_FACTOR_WRONG_CODES', 5, 1),
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),

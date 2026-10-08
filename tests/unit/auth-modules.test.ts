@@ -8,21 +8,27 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
-describe.each(['password.ts', 'session-list.ts', 'session.ts', 'sign-in.ts', 'auth.ts', '../timers.ts'])(
-  'src/lib/auth/%s',
-  (first) => {
-    it('loads first, and auth.ts after it', () => {
-      const ran = spawnSync(
-        'node',
-        [
-          '--input-type=module',
-          '--eval',
-          `await import('./src/lib/auth/${first}'); const { IDENTITY_ENDPOINTS } = await import('./src/lib/auth/auth.ts'); if (IDENTITY_ENDPOINTS.size < 1) process.exit(2);`,
-        ],
-        { encoding: 'utf8' },
-      );
-      expect(ran.stderr).toBe('');
-      expect(ran.status).toBe(0);
-    });
-  },
-);
+describe.each([
+  'password.ts',
+  'session-list.ts',
+  'session.ts',
+  'sign-in.ts',
+  'two-factor.ts',
+  'second-step.ts',
+  'auth.ts',
+  '../timers.ts',
+])('src/lib/auth/%s', (first) => {
+  it('loads first, and auth.ts after it', () => {
+    const ran = spawnSync(
+      'node',
+      [
+        '--input-type=module',
+        '--eval',
+        `await import('./src/lib/auth/${first}'); const { IDENTITY_ENDPOINTS } = await import('./src/lib/auth/auth.ts'); if (IDENTITY_ENDPOINTS.size < 1) process.exit(2);`,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+  });
+});
