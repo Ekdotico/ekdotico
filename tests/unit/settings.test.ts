@@ -132,6 +132,23 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     );
   });
 
+  // The days are subtracted from the present moment and added to the moment of
+  // a deletion: about 100,000,001 of them give no date at all.
+  it('retains a deleted document for at most 3,650 days, so that the end of a retention is always a date', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { deletedDocumentRetentionDays: most } = loadSettings({
+      ...env,
+      DELETED_DOCUMENT_RETENTION_DAYS: '3650',
+    });
+    expect(most).toBe(3650);
+    expect(Number.isNaN(new Date(Date.now() - most * DAY_MS).getTime())).toBe(false);
+    for (const days of ['3651', '100000001', '9'.repeat(400)]) {
+      expect(() => loadSettings({ ...env, DELETED_DOCUMENT_RETENTION_DAYS: days })).toThrow(
+        'DELETED_DOCUMENT_RETENTION_DAYS must be no more than 3650.',
+      );
+    }
+  });
+
   it('trusts no proxy unless told how many there are', () => {
     expect(settings.trustedProxyCount).toBe(0);
   });

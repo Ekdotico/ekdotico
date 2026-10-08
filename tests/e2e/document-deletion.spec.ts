@@ -7,7 +7,10 @@ import { expectNoSidewaysScroll, newPerson, screens, signUp, watchOrigins } from
 // The texts, written out here and not taken from the code under test. FR-ED-36
 // gives none: they are the application's, for the owner's approval.
 const STATEMENT =
-  'Deleting “Kept for a while” removes it from the list of documents and closes every open connection to it. Ekdotico keeps the document for 30 days in the list of deleted documents, where it can be restored. After 30 days Ekdotico deletes the document permanently, and it cannot be restored.';
+  'Deleting this document removes it from the list of documents and closes every open connection to it. Ekdotico keeps the document for 30 days in the list of deleted documents, where it can be restored. After 30 days Ekdotico deletes the document permanently, and it cannot be restored.';
+// A title written to read as part of the confirmation, were it set inside the
+// statement: it is whatever its Owner typed.
+const TITLE = 'x” is kept for ever. “y';
 const DELETED = 'Document deleted. Ekdotico keeps it for 30 days in the list of deleted documents.';
 const INTRODUCTION =
   'Ekdotico keeps a deleted document for 30 days and then deletes it permanently. Until then it can be restored.';
@@ -53,19 +56,21 @@ test('a document deleted with its confirmation, seen in the list of deleted docu
   const elsewhere = watchOrigins(page);
   await enter(page);
   await create(page, 'Stays');
-  await create(page, 'Kept for a while');
+  await create(page, TITLE);
   const rows = page.getByRole('listitem');
-  await expect(rows.locator('bdi')).toHaveText(['Kept for a while', 'Stays']);
+  await expect(rows.locator('bdi')).toHaveText([TITLE, 'Stays']);
 
   // The control names what it deletes, and which document.
   const deleteButton = rows.first().getByRole('button', { name: 'Delete document' });
-  await expect(deleteButton).toHaveAccessibleDescription('Kept for a while');
+  await expect(deleteButton).toHaveAccessibleDescription(TITLE);
   await deleteButton.click();
   const dialog = page.getByRole('dialog', { name: 'Delete document' });
   await expect(dialog).toBeVisible();
-  // The statement of what happens, before anything does, read with the name.
-  await expect(dialog.getByRole('paragraph')).toHaveText(STATEMENT);
-  await expect(dialog).toHaveAccessibleDescription(STATEMENT);
+  // Which document, on a line of its own under its label; then the statement
+  // of what happens, before anything does, which holds no word of the title.
+  // Both are read with the name.
+  await expect(dialog.getByRole('paragraph')).toHaveText(['Document', TITLE, STATEMENT]);
+  await expect(dialog).toHaveAccessibleDescription(`${TITLE} ${STATEMENT}`);
   // Focus opens on the way that deletes nothing.
   const cancel = dialog.getByRole('button', { name: 'Cancel' });
   await expect(cancel).toBeFocused();
@@ -104,7 +109,7 @@ test('a document deleted with its confirmation, seen in the list of deleted docu
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await expect(page.getByRole('main').getByRole('paragraph').first()).toHaveText(INTRODUCTION);
   await expect(rows).toHaveCount(1);
-  await expect(rows.locator('bdi')).toHaveText('Kept for a while');
+  await expect(rows.locator('bdi')).toHaveText(TITLE);
 
   // NFR-I18-06: when it was deleted and the day it is deleted permanently, 30
   // days later, in the zone of the browser; UTC for a machine.
@@ -145,7 +150,7 @@ test('a document deleted with its confirmation, seen in the list of deleted docu
 
   // Restored: it leaves this list, and what was done is stated.
   const restoreButton = rows.getByRole('button', { name: 'Restore' });
-  await expect(restoreButton).toHaveAccessibleDescription('Kept for a while');
+  await expect(restoreButton).toHaveAccessibleDescription(TITLE);
   await restoreButton.focus();
   await page.keyboard.press('Enter');
   await expect(rows).toHaveCount(0);
@@ -158,8 +163,8 @@ test('a document deleted with its confirmation, seen in the list of deleted docu
   // And it is back in the list of documents, as it was.
   await page.getByRole('link', { name: 'Documents', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
-  await expect(rows.locator('bdi')).toHaveText(['Kept for a while', 'Stays']);
-  expect((await (await page.request.get(`/api/documents/${id}`)).json()).title).toBe('Kept for a while');
+  await expect(rows.locator('bdi')).toHaveText([TITLE, 'Stays']);
+  expect((await (await page.request.get(`/api/documents/${id}`)).json()).title).toBe(TITLE);
 
   // FR-AU-88: none of this asked another origin for anything.
   expect(elsewhere).toEqual([]);

@@ -35,6 +35,7 @@ export interface DocumentItem {
 
 /** Where the list of deleted documents is (FR-ED-36): the application's choice, the Docs name no page. */
 const DELETED_PATH = '/deleted';
+const DELETE_TITLE_ID = 'delete-document-title';
 const DELETE_STATEMENT_ID = 'delete-document-statement';
 const CANCEL_ID = 'delete-document-cancel';
 
@@ -75,11 +76,24 @@ function DeleteConfirmation({
   return (
     <Stack gap={5}>
       {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
+      {/* The title is whatever its Owner typed, a sentence about what Ekdotico
+          keeps included. So it is no part of the statement: it stands above
+          it, on a line of its own under a label that says what it is, set as
+          a title is set in the list, and the statement below is the same
+          sentence for every document. */}
+      <Stack gap={1}>
+        <p className={styles.meta}>Document</p>
+        <p className={styles.text}>
+          <bdi id={DELETE_TITLE_ID} className={styles.documentTitle}>
+            {document.title}
+          </bdi>
+        </p>
+      </Stack>
       <p id={DELETE_STATEMENT_ID} className={styles.text}>
-        Deleting “<bdi>{document.title}</bdi>” removes it from the list of documents and closes every open
-        connection to it. Ekdotico keeps the document for {days(retentionDays)} in the list of deleted
-        documents, where it can be restored. After {days(retentionDays)} Ekdotico deletes the document
-        permanently, and it cannot be restored.
+        Deleting this document removes it from the list of documents and closes every open connection to it.
+        Ekdotico keeps the document for {days(retentionDays)} in the list of deleted documents, where it can
+        be restored. After {days(retentionDays)} Ekdotico deletes the document permanently, and it cannot be
+        restored.
       </p>
       <Cluster gap={3}>
         <Button variant="destructive" pending={pending} pendingLabel="Deleting document…" onClick={confirm}>
@@ -284,7 +298,8 @@ export function Documents({
         open={deleting !== null}
         onClose={() => setDeleting(null)}
         title="Delete document"
-        aria-describedby={DELETE_STATEMENT_ID}
+        // Which document, and then what happens to it: both are read with the name.
+        aria-describedby={`${DELETE_TITLE_ID} ${DELETE_STATEMENT_ID}`}
         initialFocusRef={cancel}
       >
         {deleting ? (

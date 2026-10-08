@@ -135,6 +135,7 @@ function admissionSecret(env: Env): string | undefined {
 }
 
 const DAY = 24 * 60 * 60;
+const DELETED_DOCUMENT_RETENTION_MAX_DAYS = 3650;
 
 export function loadSettings(env: Env = process.env): Settings {
   // NFR-SE-17 (b), (c): the identity library also reads variables of its own,
@@ -226,6 +227,18 @@ export function loadSettings(env: Env = process.env): Settings {
   if (passwordMinLength > passwordMaxLength) {
     throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
   }
+  // FR-ED-36. At least 1: with 0 a deletion would be permanent at the next run
+  // of the timer, and the confirmation would have promised a restore that is
+  // not there. At most 3,650, ten years: the days are taken from the present
+  // moment and added to the moment of a deletion, and past some 100,000,000 of
+  // them the result is no date at all, which no query can be asked with. Ten
+  // years is far inside that, and longer than "retained" can honestly mean.
+  const deletedDocumentRetentionDays = wholeNumber(env, 'DELETED_DOCUMENT_RETENTION_DAYS', 30, 1);
+  if (deletedDocumentRetentionDays > DELETED_DOCUMENT_RETENTION_MAX_DAYS) {
+    throw new Error(
+      `DELETED_DOCUMENT_RETENTION_DAYS must be no more than ${DELETED_DOCUMENT_RETENTION_MAX_DAYS}.`,
+    );
+  }
 
   return {
     foundingTeamEmails: list
@@ -248,9 +261,7 @@ export function loadSettings(env: Env = process.env): Settings {
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
-    // At least 1: with 0 a deletion would be permanent at the next run of the
-    // timer, and the confirmation would have promised a restore that is not there.
-    deletedDocumentRetentionDays: wholeNumber(env, 'DELETED_DOCUMENT_RETENTION_DAYS', 30, 1),
+    deletedDocumentRetentionDays,
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     collabStoreDelayMs,

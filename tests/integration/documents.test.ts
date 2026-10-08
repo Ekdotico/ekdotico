@@ -971,6 +971,7 @@ describe('the content of a document is in no row that did not ask for it (src/li
             ownerId: owner.id,
             permissionSet: defaultPermissionSet(),
             recording: 'UNRECORDED',
+            updatedAt: new Date(),
           },
         }),
       'the Owner, with the documents included': () =>

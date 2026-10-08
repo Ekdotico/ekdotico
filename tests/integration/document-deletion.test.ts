@@ -33,7 +33,7 @@ vi.doMock('../../src/lib/documents/access.ts', async (original) => {
   };
 });
 const { authorise, authoriseDeleted } = await import('../../src/lib/documents/access.ts');
-const { createDocument } = await import('../../src/lib/documents/documents.ts');
+const { createDocument, renameDocument } = await import('../../src/lib/documents/documents.ts');
 const { CLAIM_STALE_MS, deleteDocument, deleteExpiredDocuments, listDeletedDocuments, restoreDocument } =
   await import('../../src/lib/documents/deletion.ts');
 const { istorico } = await import('../../src/lib/istorico/index.ts');
@@ -42,7 +42,7 @@ const { applyState } = await import('../../src/lib/collab/state.ts');
 const { COLLAB_PATH, REFUSAL } = await import('../../src/lib/collab/protocol.ts');
 const { COLLAB_EVENTS_CHANNEL, publishCollabEvent, readEvent, subscribeCollabEvents } =
   await import('../../src/lib/collab/events.ts');
-const { createCollabServer } = await import('../../src/collab/server.ts');
+const { createCollabServer, ENDED_MEMORY_MAX } = await import('../../src/collab/server.ts');
 const collection = await import('../../src/app/api/documents/route.ts');
 const one = await import('../../src/app/api/documents/[id]/route.ts');
 const deletedList = await import('../../src/app/api/documents/deleted/route.ts');
@@ -229,6 +229,16 @@ async function stored(id: string): Promise<string[] | null> {
   return document.getArray<string>('changes').toArray();
 }
 
+/** Stores these changes as the state of a document, as a collaboration server would have. */
+async function storedAs(id: string, changes: string[]) {
+  const state = new Y.Doc();
+  state.getArray('changes').push(changes);
+  await db().document.update({
+    where: { id },
+    data: { yjsState: Y.encodeStateAsUpdate(state) as Uint8Array<ArrayBuffer> },
+  });
+}
+
 /** The same server, in this process, for what cannot be seen from outside one. */
 async function local() {
   const collab = createCollabServer(settings());
@@ -326,6 +336,116 @@ describe('deleting a document (FR-ED-36, FR-ED-44)', () => {
     expect(outcomes.sort()).toEqual([false, true]);
     expect(await logged()).toHaveLength(1);
     expect(heardFor(id)).toHaveLength(1);
+  });
+
+  it('reads the row of the session: an ended session deletes and restores nothing, although its signed copy still stands', async () => {
+    const owner = await person();
+    const live = await documentOf(owner.id);
+    const gone = await documentOf(owner.id);
+    expect((await remove(owner.cookie, gone)).status).toBe(204);
+    const before = [await row(live), await row(gone)];
+    await db().securityLogEntry.deleteMany();
+    await db().session.deleteMany({ where: { userId: owner.id } });
+
+    // A read is still answered from the signed copy, for up to a minute (NFR-SE-17 (c)).
+    expect(await idsOf(await list(owner.cookie))).toEqual([live]);
+    expect(await idsOf(await listDeleted(owner.cookie))).toEqual([gone]);
+    // What changes state is refused at once.
+    for (const response of [await remove(owner.cookie, live), await restore(owner.cookie, gone)]) {
+      expect(response.status).toBe(401);
+      expect((await response.json()).error.code).toBe('unauthenticated');
+    }
+    expect([await row(live), await row(gone)]).toEqual(before);
+    expect(await logged()).toEqual([]);
+  });
+
+  // PINNED: neither handler reads a body, so nothing in one is refused and
+  // nothing in one is used.
+  it('reads no body: an Owner, a time and a title sent with a deletion or a restore change nothing', async () => {
+    const owner = await person();
+    const other = await person();
+    const id = await documentOf(owner.id);
+    const before = (await row(id))!;
+    const body = {
+      ownerId: other.id,
+      deletedAt: '2000-01-01T00:00:00.000Z',
+      deletedById: other.id,
+      title: 'Changed',
+    };
+
+    const from = Date.now();
+    const path = `/api/documents/${id}`;
+    expect((await one.DELETE(request('DELETE', path, owner.cookie, body), context(id))).status).toBe(204);
+    const deleted = (await row(id))!;
+    expect(deleted.deletedAt!.getTime()).toBeGreaterThanOrEqual(from - 1000);
+    expect(deleted.deletedById).toBe(owner.id);
+    expect({ ...deleted, deletedAt: null, deletedById: null }).toEqual(before);
+
+    const restored = await restoring.POST(
+      request('POST', `${path}/restore`, owner.cookie, body),
+      context(id),
+    );
+    expect(restored.status).toBe(200);
+    expect((await restored.json()).title).toBe(TITLE);
+    expect(await row(id)).toEqual(before);
+  });
+});
+
+describe('a deletion beside an edit (FR-ED-36: restored "as they were at deletion")', () => {
+  it('leaves the time of a rename that committed beside it: authorised before the rename, written after', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    // The row as the DELETE request read it when it was authorised.
+    const authorised = (await row(id))!;
+    await sleep(20);
+    const answered = await renameDocument(id, 'Renamed beside the deletion');
+    const renamed = (await row(id))!;
+    // A rename is an edit: it moves the time, and answers with the row it wrote.
+    expect(renamed.updatedAt.getTime()).toBeGreaterThan(authorised.updatedAt.getTime());
+    expect(answered).toMatchObject({ title: 'Renamed beside the deletion', updatedAt: renamed.updatedAt });
+
+    await sleep(20);
+    expect(await deleteDocument(authorised, owner.id)).toBe(true);
+    const deleted = (await row(id))!;
+    // A deletion is not: the time is not moved, forwards or back.
+    expect({ ...deleted, deletedAt: null, deletedById: null }).toEqual(renamed);
+
+    // Nor is a restore, and it answers with the row as it is, not as it was authorised.
+    await sleep(20);
+    expect(await restoreDocument(deleted)).toMatchObject({
+      title: 'Renamed beside the deletion',
+      updatedAt: renamed.updatedAt,
+    });
+    expect(await row(id)).toEqual(renamed);
+  });
+
+  it('renames nothing of a deleted document: authorised before the deletion, written after', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    const allowed = await authorise(owner.id, id, 'document.rename');
+    expect(allowed.outcome).toBe('allowed');
+    expect((await remove(owner.cookie, id)).status).toBe(204);
+    const deleted = (await row(id))!;
+    await sleep(20);
+
+    expect(await renameDocument(id, 'Renamed while deleted')).toBeNull();
+    // The route: its authorisation is a moment older than the deletion.
+    stale.set(`${owner.id} ${id}`, allowed);
+    const refused = await seen(await rename(owner.cookie, id));
+    expect(refused.status).toBe(404);
+    expect(refused).toEqual(await seen(await rename(owner.cookie, UNKNOWN)));
+    // Neither the title nor the time.
+    expect(await row(id)).toEqual(deleted);
+
+    // So a restore returns the row as it was at deletion, whole.
+    expect((await restore(owner.cookie, id)).status).toBe(200);
+    expect(await row(id)).toEqual({ ...deleted, deletedAt: null, deletedById: null });
+    // And an edit of the restored document moves the time again.
+    await sleep(20);
+    expect((await rename(owner.cookie, id)).status).toBe(200);
+    const edited = (await row(id))!;
+    expect(edited.title).toBe('Another');
+    expect(edited.updatedAt.getTime()).toBeGreaterThan(deleted.updatedAt.getTime());
   });
 });
 
@@ -431,8 +551,9 @@ describe('the notice of a deletion (NFR-SE-03 (d), NFR-SE-19)', () => {
     expect(response.status).toBe(204);
     expect((await row(id))!.deletedAt).not.toBeNull();
     expect(await logged()).toEqual([{ kind: 'document_deleted', userId: owner.id, documentId: id }]);
+    // NFR-SE-19: the line names the document by its identifier, and nothing else of it.
     expect(errors.mock.calls).toEqual([
-      ['collab events: document-deleted not published (Error ECONNREFUSED)'],
+      [`collab events: document-deleted not published for document ${id} (Error ECONNREFUSED)`],
     ]);
   });
 
@@ -463,20 +584,29 @@ describe('the notice of a deletion (NFR-SE-03 (d), NFR-SE-19)', () => {
     }
   });
 
-  it('reaches a subscriber again after its connection was lost, and survives a handler that throws', async () => {
+  it('reaches a subscriber again after its connection was lost, and survives a handler that throws or rejects', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const received: string[] = [];
     const subscription = subscribeCollabEvents((event) => {
       received.push(event.documentId);
-      throw new Error(`a handler that quotes ${TITLE}`);
+      const fault = new Error(`a handler that quotes ${TITLE}`);
+      // The first throws, and every other rejects.
+      if (received.length === 1) throw fault;
+      return Promise.reject(fault);
     });
     try {
       await subscription.subscribed;
       const before = '11111111-1111-4111-8111-111111111111';
+      const rejected = '33333333-3333-4333-8333-333333333333';
       const after = '22222222-2222-4222-8222-222222222222';
       expect(await publishCollabEvent({ kind: 'document-deleted', documentId: before })).toBe(true);
-      await until(() => received.includes(before));
-      expect(errors.mock.calls).toEqual([['collab events: document-deleted not handled (Error)']]);
+      await until(() => errors.mock.calls.length === 1);
+      expect(await publishCollabEvent({ kind: 'document-deleted', documentId: rejected })).toBe(true);
+      await until(() => errors.mock.calls.length === 2);
+      expect(errors.mock.calls).toEqual([
+        [`collab events: document-deleted not handled for document ${before} (Error)`],
+        [`collab events: document-deleted not handled for document ${rejected} (Error)`],
+      ]);
 
       // The connection is lost, as when Valkey restarts or the network drops it.
       const ready = new Promise<void>((resolve) => subscription.client.once('ready', () => resolve()));
@@ -497,7 +627,7 @@ describe('the notice of a deletion (NFR-SE-03 (d), NFR-SE-19)', () => {
 
 describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', () => {
   it(
-    'are closed within 5 seconds on every instance, with the reason; nothing is stored after; a restore returns the state',
+    'are closed within 5 seconds on every instance, with the reason; what was received is stored, and nothing after; a restore returns it',
     { timeout: 30_000 },
     async () => {
       const owner = await person();
@@ -512,25 +642,32 @@ describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', 
 
       onFirst.changes.push(['before']);
       await until(async () => (await stored(id))?.length === 1);
-      // A change that is received and not yet stored when the document is deleted.
+      // A change that is received, and acknowledged, and not yet stored when
+      // the document is deleted: the deletion comes at once, long before the
+      // store that was waiting for it (NFR-RE-07: up to 2 seconds).
       onFirst.changes.push([CONTENT]);
-      await until(() => onFirst.provider.unsyncedChanges === 0);
+      await until(() => onFirst.provider.unsyncedChanges === 0, 1000, 5);
+      expect(await stored(id)).toEqual(['before']);
 
       const at = Date.now();
       expect((await remove(owner.cookie, id)).status).toBe(204);
       await until(() => onFirst.closed() && onSecond.closed(), 5000);
       expect(Date.now() - at).toBeLessThan(5000);
+      // FR-ED-41: "Changes already merged into the document before the close
+      // remain". The instance that held the change stored it before it closed
+      // the connection; the other, which held nothing new, stored nothing over it.
+      expect(await stored(id)).toEqual(['before', CONTENT]);
       // The reason is all that tells the client why (src/lib/collab/protocol.ts).
       expect(onFirst.closed()!.rest).toBe(because(REFUSAL.ACCESS_ENDED));
       expect(onSecond.closed()!.rest).toBe(because('access-ended'));
       expect(onFirst.closedBecause).toContain('access-ended');
       expect(onSecond.closedBecause).toContain('access-ended');
 
-      // Longer than both periods of the store (NFR-RE-07): nothing was written.
-      const { updatedAt } = (await row(id))!;
+      // Longer than both periods of the store (NFR-RE-07): nothing more was written.
+      const deleted = (await row(id))!;
       await sleep(3000);
-      expect(await stored(id)).toEqual(['before']);
-      expect((await row(id))!.updatedAt).toEqual(updatedAt);
+      expect(await stored(id)).toEqual(['before', CONTENT]);
+      expect(await row(id)).toEqual(deleted);
       // The connection to another document of the same account was left alone.
       expect(untouched.closed()).toBeUndefined();
       untouched.changes.push(['still open']);
@@ -541,12 +678,201 @@ describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', 
         refused: REFUSAL.NO_ACCESS,
       });
 
-      // FR-ED-36: restored, it is the document as it was stored.
-      expect((await restore(owner.cookie, id)).status).toBe(200);
+      // FR-ED-36: restored, it is the document as it was at deletion, with
+      // the change that had not been stored when it was deleted.
+      const restored = await restore(owner.cookie, id);
+      expect(restored.status).toBe(200);
+      // The answer is the row as it is, the time of the last store among it.
+      expect((await restored.json()).updatedAt).toBe(deleted.updatedAt.toISOString());
+      expect(await row(id)).toEqual({ ...deleted, deletedAt: null, deletedById: null });
+      expect(await stored(id)).toEqual(['before', CONTENT]);
       const again = open(second.port, await owner.signedIn(), id);
       expect(await again.outcome).toEqual({ scope: 'read-write' });
       await again.synced;
-      expect(again.changes.toArray()).toEqual(['before']);
+      expect(again.changes.toArray()).toEqual(['before', CONTENT]);
+    },
+  );
+
+  it(
+    'takes nothing a client sends between the last store and the close: it is neither stored nor acknowledged',
+    { timeout: 20_000 },
+    async () => {
+      const collab = await local();
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const client = open(collab.port, owner.cookie, id);
+        await client.synced;
+        client.changes.push(['received']);
+        await until(() => client.provider.unsyncedChanges === 0);
+
+        // The last store is slow, and a change arrives while it is being written.
+        const write = db().document.updateMany.bind(db().document) as (query: unknown) => Promise<unknown>;
+        const slow = vi.spyOn(db().document, 'updateMany').mockImplementationOnce((async (query: unknown) => {
+          await sleep(500);
+          return write(query);
+        }) as never);
+        expect((await remove(owner.cookie, id)).status).toBe(204);
+        await until(() => slow.mock.calls.length === 1);
+        const conditions = () => slow.mock.calls.map(([query]) => (query as { where: object }).where);
+        // The condition of the one store that writes to a deleted document: that the row exists.
+        expect(conditions()[0]).toEqual({ id });
+        client.changes.push(['late']);
+
+        await until(() => client.closed());
+        expect(client.closed()!.rest).toBe(because(REFUSAL.ACCESS_ENDED));
+        expect(client.provider.unsyncedChanges).toBeGreaterThan(0);
+        await sleep(2500);
+        expect(await stored(id)).toEqual(['received']);
+        // One store for the deletion, and no other: the one that was waiting found a deleted document.
+        expect(conditions().filter((where) => !('deletedAt' in where))).toHaveLength(1);
+      } finally {
+        await collab.stop();
+      }
+    },
+  );
+
+  it(
+    'are closed all the same where the last store fails, with one line, and the state stored before stays',
+    { timeout: 20_000 },
+    async () => {
+      const collab = await local();
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const client = open(collab.port, owner.cookie, id);
+        await client.synced;
+        client.changes.push(['before']);
+        await until(async () => (await stored(id))?.length === 1);
+        client.changes.push([CONTENT]);
+        await until(() => client.provider.unsyncedChanges === 0);
+
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        // The database fails at the last store, with an error that quotes the row.
+        const lost = Object.assign(new Error(`connection lost ${TITLE} ${CONTENT}`), { code: 'P1001' });
+        vi.spyOn(db().document, 'updateMany').mockRejectedValueOnce(lost);
+        expect((await remove(owner.cookie, id)).status).toBe(204);
+        await until(() => client.closed());
+        expect(client.closed()!.rest).toBe(because(REFUSAL.ACCESS_ENDED));
+        expect(errors.mock.calls).toEqual([[`collab: last store of document ${id} failed (Error P1001)`]]);
+        // What is lost is what had not been stored, and nothing else.
+        await sleep(2500);
+        expect(await stored(id)).toEqual(['before']);
+        expect(errors.mock.calls).toHaveLength(1);
+      } finally {
+        await collab.stop();
+      }
+    },
+  );
+
+  it(
+    'are closed as unavailable where the row cannot be read: the client tries again, and its handshake reads the row',
+    { timeout: 20_000 },
+    async () => {
+      const collab = await local();
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const client = open(collab.port, owner.cookie, id);
+        await client.synced;
+
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const lost = Object.assign(new Error(`connection lost ${TITLE}`), { code: 'P1001' });
+        const find = db().document.findUnique.bind(db().document) as (query: unknown) => Promise<unknown>;
+        // The one query of a notice, and no other: it selects `deletedAt` alone.
+        vi.spyOn(db().document, 'findUnique').mockImplementation(((query: { select?: object }) =>
+          Object.keys(query.select ?? {}).join() === 'deletedAt'
+            ? Promise.reject(lost)
+            : find(query)) as never);
+        // A notice for a document that is NOT deleted, which nothing can tell here.
+        await publishCollabEvent({ kind: 'document-deleted', documentId: id });
+        await until(() => client.closed());
+        expect(client.closed()!.rest).toBe(because(REFUSAL.UNAVAILABLE));
+        expect(errors.mock.calls).toEqual([[`collab: document ${id} not read for a notice (Error P1001)`]]);
+        vi.restoreAllMocks();
+        // The document is live: the handshake of a client that tries again admits it.
+        expect(await open(collab.port, await owner.signedIn(), id).outcome).toEqual({ scope: 'read-write' });
+      } finally {
+        await collab.stop();
+      }
+    },
+  );
+
+  it(
+    'are left alone by a notice for a document that is not deleted: forged, or delivered after a restore',
+    { timeout: 20_000 },
+    async () => {
+      const collab = await local();
+      // Anything that can reach Valkey: no session, no role, no deletion.
+      const forger = new Redis(process.env.VALKEY_URL!);
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const marker = await documentOf(owner.id);
+        const client = open(collab.port, owner.cookie, id);
+        const witness = open(collab.port, await owner.signedIn(), marker);
+        await Promise.all([client.synced, witness.synced]);
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const notice = (documentId: string) =>
+          forger.publish(COLLAB_EVENTS_CHANNEL, JSON.stringify({ kind: 'document-deleted', documentId }));
+        /** A real deletion published after `publish`, and acted on: what was published before it was read before it. */
+        const settled = async () => {
+          expect((await remove(owner.cookie, marker)).status).toBe(204);
+          await until(() => witness.closed());
+          await sleep(200);
+        };
+
+        // Forged: the row says the document is live.
+        await notice(id);
+        await settled();
+        expect(client.closed()).toBeUndefined();
+        expect(client.closedBecause).toEqual([]);
+        client.changes.push(['typed after the forged notice']);
+        await until(async () => (await stored(id))?.length === 1);
+
+        // Genuine, and late: the Owner has restored the document since. The
+        // connection made after the restore is not closed by the old notice.
+        expect((await remove(owner.cookie, id)).status).toBe(204);
+        await until(() => client.closed());
+        expect((await restore(owner.cookie, id)).status).toBe(200);
+        const after = open(collab.port, await owner.signedIn(), id);
+        await after.synced;
+        await notice(id);
+        await sleep(500);
+        expect(after.closed()).toBeUndefined();
+        after.changes.push(['typed after the late notice']);
+        await until(async () => (await stored(id))?.length === 2);
+        // Nothing is printed for a notice that the row does not bear out.
+        expect(errors.mock.calls).toEqual([]);
+      } finally {
+        forger.disconnect();
+        await collab.stop();
+      }
+    },
+  );
+
+  it(
+    'remembers at most 1,000 deletions, whatever number of notices arrive',
+    { timeout: 30_000 },
+    async () => {
+      const collab = await local();
+      const flood = new Redis(process.env.VALKEY_URL!);
+      try {
+        expect(ENDED_MEMORY_MAX).toBe(1000);
+        // Identifiers of no document: a row that is not there counts as deleted.
+        const ids = Array.from({ length: ENDED_MEMORY_MAX + 200 }, () => crypto.randomUUID());
+        const pipeline = flood.pipeline();
+        for (const documentId of ids) {
+          pipeline.publish(COLLAB_EVENTS_CHANNEL, JSON.stringify({ kind: 'document-deleted', documentId }));
+        }
+        await pipeline.exec();
+        await until(() => collab.remembered() >= ENDED_MEMORY_MAX, 20_000);
+        await sleep(1000);
+        expect(collab.remembered()).toBe(ENDED_MEMORY_MAX);
+      } finally {
+        flood.disconnect();
+        await collab.stop();
+      }
     },
   );
 
@@ -564,7 +890,8 @@ describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', 
       expect((await remove(owner.cookie, id)).status).toBe(204);
       await until(() => client.closed());
       await until(() => !collab.hocuspocus.documents.has(id));
-      expect(await stored(id)).toBeNull();
+      // With what it had received, which was stored before the close (FR-ED-41).
+      expect(await stored(id)).toEqual([CONTENT]);
     } finally {
       await collab.stop();
     }
@@ -578,6 +905,7 @@ describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', 
       try {
         const owner = await person();
         const id = await documentOf(owner.id);
+        await storedAs(id, ['kept']);
         const allowed = await authorise(owner.id, id, 'document.view');
         expect(allowed.outcome).toBe('allowed');
 
@@ -591,6 +919,10 @@ describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', 
         expect(await crossed.outcome).toEqual({ scope: 'read-write' });
         await until(() => crossed.closed());
         expect(crossed.closed()!.rest).toBe(because(REFUSAL.ACCESS_ENDED));
+        // PINNED, with its reasoning in the `connected` hook: before it was
+        // closed the connection was sent the state, which its account was
+        // authorised to read when the handshake ran.
+        expect(crossed.changes.toArray()).toEqual(['kept']);
 
         // Restored within the moments the instance remembers the deletion for:
         // the connection is asked again, is allowed, and stays.
@@ -599,9 +931,46 @@ describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', 
         expect(await after.outcome).toEqual({ scope: 'read-write' });
         await after.synced;
         after.changes.push(['after the restore']);
-        await until(async () => (await stored(id))?.length === 1);
+        await until(async () => (await stored(id))?.length === 2);
         expect(after.closed()).toBeUndefined();
       } finally {
+        await collab.stop();
+      }
+    },
+  );
+
+  it(
+    'forgets a deletion after 15 seconds: a connection made later is not asked a second time',
+    { timeout: 20_000 },
+    async () => {
+      const collab = await local();
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const allowed = await authorise(owner.id, id, 'document.view');
+        expect((await remove(owner.cookie, id)).status).toBe(204);
+        await until(() => heardFor(id).length > 0);
+        await sleep(200);
+
+        // The clock alone is moved: the timers and the sockets are the real ones.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        const crossing = async (ms: number) => {
+          vi.setSystemTime(Date.now() + ms);
+          stale.set(`${owner.id} ${id}`, allowed);
+          const made = open(collab.port, await owner.signedIn(), id);
+          expect(await made.outcome).toEqual({ scope: 'read-write' });
+          return made;
+        };
+        // A second short of 15 after the notice: still remembered, asked again, closed.
+        const remembered = await crossing(14_000);
+        await until(() => remembered.closed());
+        // A second past it: forgotten. The answer of the handshake is all there was.
+        const forgotten = await crossing(2000);
+        await forgotten.synced;
+        await sleep(500);
+        expect(forgotten.closed()).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
         await collab.stop();
       }
     },
@@ -856,6 +1225,15 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
       'holds the document',
       async (id: string) => ({ ok: true, value: [{ documentId: id, outcome: 'held' }] }) as const,
     ],
+    // IC-29: only `erased` and `no-record` are followed by the deletion of the rows.
+    [
+      'pseudonymises and does not erase',
+      async (id: string) => ({ ok: true, value: [{ documentId: id, outcome: 'pseudonymised' }] }) as const,
+    ],
+    [
+      'answers with an outcome this version does not know',
+      async (id: string) => ({ ok: true, value: [{ documentId: id, outcome: 'erased-in-part' }] }) as const,
+    ],
     [
       'answers for another document',
       async () => ({ ok: true, value: [{ documentId: UNKNOWN, outcome: 'erased' }] }) as const,
@@ -881,10 +1259,13 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
     expect(kept.deletedAt).not.toBeNull();
     // The claim is released at once, so the next run need not wait an hour.
     expect(kept.deletionClaimedAt).toBeNull();
+    // NFR-SE-19: the line names the document by its identifier, and holds
+    // nothing else of it: not its title, which the thrown error quoted.
     expect(errors.mock.calls).toHaveLength(1);
-    expect(errors.mock.calls[0]![0]).toMatch(
-      /^permanent deletion: document kept \((Istorico did not erase|Error)\)$/,
-    );
+    expect([
+      `permanent deletion: document ${id} kept (Istorico did not erase)`,
+      `permanent deletion: document ${id} kept (Error)`,
+    ]).toContain(errors.mock.calls[0]![0]);
 
     erase.mockImplementation(async (input) => ({
       ok: true,
@@ -893,6 +1274,28 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
     expect(await deleteExpiredDocuments()).toEqual({ deleted: 1, kept: 0 });
     expect(await exists(id)).toBe(false);
     expect(erase).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks each claim with the moment it was made, and not with the start of the run', async () => {
+    await due('RECORDED');
+    await due('RECORDED');
+    const erase = erasing();
+    // The mark of each claim, read while Istorico, which is slow, is being asked.
+    const marks: number[] = [];
+    erase.mockImplementation(async (input) => {
+      const id = input.documents[0]!.documentId;
+      marks.push((await row(id))!.deletionClaimedAt!.getTime());
+      await sleep(300);
+      return { ok: true, value: [{ documentId: id, outcome: 'erased' }] };
+    });
+    const from = Date.now();
+    expect(await deleteExpiredDocuments()).toEqual({ deleted: 2, kept: 0 });
+    expect(marks).toHaveLength(2);
+    expect(marks[0]).toBeGreaterThanOrEqual(from - 5);
+    // A claim marked with the start of a long run would be an hour old, and
+    // another instance's to take over, while the run was still at work on it.
+    expect(marks[1]! - marks[0]!).toBeGreaterThanOrEqual(250);
+    expect(marks[1]).toBeLessThanOrEqual(Date.now());
   });
 
   it('deletes each document once under two runs at the same moment', async () => {
@@ -961,7 +1364,7 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
 
     const from = Date.now();
     expect(await deleteExpiredDocuments()).toEqual({ deleted: 0, kept: 1 });
-    expect(errors.mock.calls).toEqual([['permanent deletion: document kept (Error P1001)']]);
+    expect(errors.mock.calls).toEqual([[`permanent deletion: document ${id} kept (Error P1001)`]]);
     // Istorico has erased, so the claim is kept: no other run begins beside this one.
     const { deletionClaimedAt } = (await row(id))!;
     expect(deletionClaimedAt!.getTime()).toBeGreaterThanOrEqual(from - 1000);

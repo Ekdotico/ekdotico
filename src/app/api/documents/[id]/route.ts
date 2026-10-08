@@ -44,7 +44,7 @@ export const GET = documentRoute('document.view', ({ document }) =>
  * Authorisation before validation (the owner's answer to Q8): nothing is said
  * of the body to a caller who may not rename the document.
  */
-export const PATCH = documentRoute('document.rename', async ({ request, document }) => {
+export const PATCH = documentRoute('document.rename', async ({ request, document, session }) => {
   const body = await readJson(request, MAX_BODY_BYTES);
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return errorResponse(422, 'invalid_request', MESSAGES.invalid);
@@ -64,7 +64,11 @@ export const PATCH = documentRoute('document.rename', async ({ request, document
     );
   }
 
-  return Response.json(await renameDocument(document.id, read.title), { headers: NO_STORE });
+  const renamed = await renameDocument(document.id, read.title);
+  // Deleted by a request beside this one, after it was authorised: nothing
+  // was renamed, and the document is gone, as to anyone (FR-ED-36).
+  if (!renamed) return refusal({ outcome: 'not_found' }, session.userId, document.id);
+  return Response.json(renamed, { headers: NO_STORE });
 });
 
 /**

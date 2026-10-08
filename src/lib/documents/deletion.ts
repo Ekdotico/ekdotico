@@ -37,7 +37,17 @@ export interface DeletedDocumentSummary extends DocumentSummary {
   permanentDeletionAt: Date;
 }
 
-/** FR-ED-36: a document deleted before this moment has had its retention ("30 days (an initial value)"). */
+/**
+ * FR-ED-36: a document deleted before this moment has had its retention ("30
+ * days (an initial value)").
+ *
+ * The moment is this instance's: its own clock, and its own setting, against
+ * a `deletedAt` that the clock of the instance that deleted the document
+ * wrote. So the instances must agree on the time and on the setting, and a
+ * setting that is lowered applies to the documents already deleted
+ * (docs/operations/deployment.md). The comparison is not moved to the
+ * database's clock, which would need SQL written by hand (NFR-SE-06, A05).
+ */
 function retainedSince(now: Date): Date {
   return new Date(now.getTime() - settings().deletedDocumentRetentionDays * DAY_MS);
 }
@@ -64,8 +74,9 @@ export function isRetained(
  * out. NFR-SE-19: the entry of the deletion is written in the same
  * transaction, so neither stands without the other.
  *
- * `updatedAt` is kept as it was: a restore returns the document as it was at
- * deletion, and a deletion is not a change to it.
+ * A deletion is not an edit: `updatedAt` is not named, and so stays what the
+ * last edit made it, one that committed beside this request included
+ * (src/lib/documents/documents.ts, `renameDocument`).
  *
  * FR-ED-40 (c): once the deletion is committed, and only then, every
  * collaboration server instance is told to close the connections to the
@@ -73,14 +84,14 @@ export function isRetained(
  * deletion stands, and `publishCollabEvent` has said so on stderr.
  */
 export async function deleteDocument(
-  document: Pick<DocumentRow, 'id' | 'updatedAt'>,
+  document: Pick<DocumentRow, 'id'>,
   userId: string,
   now: Date = new Date(),
 ): Promise<boolean> {
   const deleted = await db().$transaction(async (transaction) => {
     const { count } = await transaction.document.updateMany({
       where: { id: document.id, deletedAt: null },
-      data: { deletedAt: now, deletedById: userId, updatedAt: document.updatedAt },
+      data: { deletedAt: now, deletedById: userId },
     });
     if (count !== 1) return false;
     await securityLogIn(transaction, { kind: 'document_deleted', userId, documentId: document.id });
@@ -122,17 +133,20 @@ export async function listDeletedDocuments(
  * Nothing but the two marks is changed: the document returns with its title,
  * its state, its permission set, and its collaborators and their roles, "as
  * they were at deletion". NFR-SE-19 lists the deletion of a document and not
- * its restoring, so no entry is written.
+ * its restoring, so no entry is written. What is answered is the row the
+ * write returned, and not the one read at the authorisation: the collaboration
+ * server may have stored the document's last changes in between
+ * (src/lib/collab/state.ts, `storeFinalState`).
  */
 export async function restoreDocument(
-  document: DocumentRow,
+  document: Pick<DocumentRow, 'id'>,
   now: Date = new Date(),
 ): Promise<DocumentSummary | null> {
-  const { count } = await db().document.updateMany({
+  const [restored] = await db().document.updateManyAndReturn({
     where: { id: document.id, deletedAt: { gt: retainedSince(now) }, deletionClaimedAt: null },
-    data: { deletedAt: null, deletedById: null, updatedAt: document.updatedAt },
+    data: { deletedAt: null, deletedById: null },
   });
-  return count === 1 ? summary(document) : null;
+  return restored ? summary(restored) : null;
 }
 
 type Due = Pick<DocumentRow, 'id' | 'ownerId' | 'recording'>;
@@ -152,6 +166,11 @@ type Due = Pick<DocumentRow, 'id' | 'ownerId' | 'recording'>;
  * stopped, is taken over by the first run that finds it an hour old
  * (`CLAIM_STALE_MS`), which begins again from the first step. Every step can
  * be repeated: `erase` is idempotent on its request identifier (IC-11).
+ *
+ * `now` is the moment of THIS claim, and not the start of the run: a run that
+ * works for a long time would otherwise write claims that were old when they
+ * were made, and another instance would take the last of them over while this
+ * one was still at work on it.
  */
 async function deletePermanently(
   document: Due,
@@ -188,6 +207,12 @@ async function deletePermanently(
         // The same for every attempt, so that a repeated call is the same
         // request (IC-11). The outbox that carries a request identifier of its
         // own arrives with the release that links Istorico (IC-27, IC-18).
+        //
+        // CARRIED FORWARD, to be raised with Istorico's owner when that outbox
+        // is built, and not built here: if Istorico keys idempotency on the
+        // request identifier and answers a repeated identifier with its first
+        // outcome, a document once `held` stays held for this caller, whatever
+        // has changed since, because every attempt carries this one identifier.
         requestId: document.id,
         subjectUserId: document.ownerId,
         // FR-ED-36 "covers documents in a personal workspace", the only kind there is.
@@ -198,7 +223,8 @@ async function deletePermanently(
         : null;
       // IC-29: `erased` and `no-record` are the two outcomes after which the
       // application deletes its rows. Anything else keeps them: an error, a
-      // hold, and an answer that does not name the document.
+      // hold, `pseudonymised`, an outcome this version does not know, and an
+      // answer that does not name the document.
       erased = outcome === 'erased' || outcome === 'no-record';
     } else {
       erased = true;
@@ -227,7 +253,12 @@ async function deletePermanently(
  * call deleted and how many it had to leave for the next run.
  *
  * One document that cannot be deleted does not hold the others back: it is
- * one line, with the class of the fault alone (NFR-SE-19), and the run goes on.
+ * one line, with the document's identifier and the class of the fault and
+ * nothing else (NFR-SE-19 allows the identifier, and never the title), and
+ * the run goes on.
+ *
+ * `now` is when the run began, for the tests; each claim is marked with the
+ * time that has passed since on this instance's clock (`deletePermanently`).
  *
  * ponytail: the documents due are found by a scan of the table, once an
  * hour; an index on `deletedAt` when the table is large enough for it to show.
@@ -235,6 +266,7 @@ async function deletePermanently(
 export async function deleteExpiredDocuments(
   now: Date = new Date(),
 ): Promise<{ deleted: number; kept: number }> {
+  const began = Date.now();
   const retained = retainedSince(now);
   const due: Due[] = await db().document.findMany({
     where: { deletedAt: { lte: retained } },
@@ -246,14 +278,15 @@ export async function deleteExpiredDocuments(
     let fault = 'Istorico did not erase';
     let outcome: Awaited<ReturnType<typeof deletePermanently>> = 'kept';
     try {
-      outcome = await deletePermanently(document, retained, now);
+      const claimedAt = new Date(now.getTime() + Date.now() - began);
+      outcome = await deletePermanently(document, retained, claimedAt);
     } catch (error) {
       fault = faultOf(error);
     }
     if (outcome === 'deleted') deleted += 1;
     if (outcome === 'kept') {
       kept += 1;
-      console.error(`permanent deletion: document kept (${fault})`);
+      console.error(`permanent deletion: document ${document.id} kept (${fault})`);
     }
   }
   return { deleted, kept };

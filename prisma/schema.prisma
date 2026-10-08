@@ -248,7 +248,14 @@ model Document {
   // Data models page: reported to the owner, with the plan's choice.
   deletionClaimedAt DateTime?
   createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  // When the document was last EDITED: created, renamed, or its state stored.
+  // Not `@updatedAt`, under which every write moves it, the deletion, the
+  // restore and the claim among them, unless each remembers to pass the old
+  // value (FR-ED-36: a restore returns the document "as it was at deletion").
+  // The three writes that are edits set it themselves, and no other write
+  // names it. The attribute is the client's and no part of the database, so
+  // the column is as the migration made it: required, with no default.
+  updatedAt         DateTime
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   owner     User      @relation("DocumentOwner", fields: [ownerId], references: [id], onDelete: Restrict)

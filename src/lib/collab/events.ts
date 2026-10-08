@@ -18,8 +18,10 @@
 //
 // NFR-SE-19: a message holds the kind and identifiers of the application, and
 // nothing else: no title, no content, no address. A message is read as data
-// and never trusted for more than it says: a collaboration server closes what
-// it is told to close, and that is all a message can do.
+// and is never obeyed for what it says: anything that reaches Valkey can
+// publish one, and a genuine one can arrive after what it tells of was undone.
+// It is a reason to look, and the collaboration server acts on what the
+// document's row then says (src/collab/server.ts, `endDocument`).
 //
 // Nothing here is of Next.js.
 import { Redis } from 'ioredis';
@@ -64,9 +66,9 @@ export function readEvent(message: string): CollabEvent | null {
  * Publishes a change that HAS BEEN COMMITTED. It never rejects, and answers
  * whether the notice was handed to Valkey: the change stands either way, so a
  * caller neither fails its request nor undoes anything for a notice that was
- * not sent. The failure is not silent: one line, with the kind and the class
- * of the fault (NFR-SE-19). What it leaves open is closed by the re-check
- * (see the head of this file).
+ * not sent. The failure is not silent: one line, with the kind, the document's
+ * identifier, and the class of the fault (NFR-SE-19). What it leaves open is
+ * closed by the re-check (see the head of this file).
  */
 export async function publishCollabEvent(event: CollabEvent): Promise<boolean> {
   try {
@@ -75,9 +77,34 @@ export async function publishCollabEvent(event: CollabEvent): Promise<boolean> {
     await valkey().publish(COLLAB_EVENTS_CHANNEL, message);
     return true;
   } catch (error) {
-    console.error(`collab events: ${event.kind} not published (${faultOf(error)})`);
+    console.error(
+      `collab events: ${event.kind} not published for document ${event.documentId} (${faultOf(error)})`,
+    );
     return false;
   }
+}
+
+// A subscription that was refused is asked for again after this long, then
+// after twice as long each time, and never less often than the last of these.
+const SUBSCRIBE_RETRY_MS = 1000;
+const SUBSCRIBE_RETRY_MAX_MS = 30_000;
+
+/** How long after the `failures`-th refusal in a row the subscription is asked for again: 1 s, 2 s, 4 s … 30 s. */
+export function subscribeRetryDelay(failures: number): number {
+  return Math.min(SUBSCRIBE_RETRY_MS * 2 ** (failures - 1), SUBSCRIBE_RETRY_MAX_MS);
+}
+
+/**
+ * What a line says of a subscription that failed: the class of the fault, and
+ * for a reply of Valkey the code word it begins with, such as `NOPERM` (the
+ * ACL lacks the channel) or `NOAUTH`. The word is Valkey's own, capitals and
+ * nothing else, and the rest of the reply, which names a user, is left out
+ * (NFR-SE-19).
+ */
+function subscribeFault(error: unknown): string {
+  const word =
+    error instanceof Error && error.name === 'ReplyError' ? /^[A-Z]{2,16}(?= |$)/.exec(error.message) : null;
+  return word ? `${faultOf(error)} ${word[0]}` : faultOf(error);
 }
 
 export interface CollabEventSubscription {
@@ -98,12 +125,20 @@ export interface CollabEventSubscription {
  * itself, for ever), and not by the client's own bookkeeping, which
  * resubscribes only what was once subscribed and so never recovers a first
  * attempt that failed. A subscription that fails on a ready connection drops
- * the connection, so that the next one tries again.
+ * the connection, so that the next one tries again: but only after a wait of
+ * this module's own (`subscribeRetryDelay`), because the client begins its
+ * own waits afresh each time a connection becomes ready, and a Valkey that
+ * accepts the connection and refuses the subscription, as one whose ACL lacks
+ * the channel does, would otherwise be asked seven times a second for ever.
+ * One line is printed for each distinct state and not for each attempt: the
+ * fault when it first appears or changes, and the recovery.
  *
- * `handle` is called for each event that `readEvent` passes. What it throws
- * is reported by its class and goes no further.
+ * `handle` is called for each event that `readEvent` passes. What it throws,
+ * or rejects with, is reported by its class and goes no further.
  */
-export function subscribeCollabEvents(handle: (event: CollabEvent) => void): CollabEventSubscription {
+export function subscribeCollabEvents(
+  handle: (event: CollabEvent) => void | Promise<void>,
+): CollabEventSubscription {
   const client = new Redis(settings().valkeyUrl, {
     maxRetriesPerRequest: 2,
     connectTimeout: 5000,
@@ -114,21 +149,43 @@ export function subscribeCollabEvents(handle: (event: CollabEvent) => void): Col
 
   let first!: () => void;
   const subscribed = new Promise<void>((resolve) => (first = resolve));
+  // How many subscriptions were refused in a row, the fault the last line
+  // named, and how many were asked for in all.
+  let failures = 0;
+  let said: string | undefined;
+  let attempts = 0;
   client.on('ready', () => {
-    client.subscribe(COLLAB_EVENTS_CHANNEL).then(first, (error: unknown) => {
-      console.error(`collab events: not subscribed (${faultOf(error)})`);
-      // Not after `quit` or `disconnect`: a connection that was ended stays ended.
-      if (client.status === 'ready') client.disconnect(true);
-    });
+    const attempt = ++attempts;
+    client.subscribe(COLLAB_EVENTS_CHANNEL).then(
+      () => {
+        if (said !== undefined) console.error('collab events: subscribed again');
+        failures = 0;
+        said = undefined;
+        first();
+      },
+      (error: unknown) => {
+        const state = subscribeFault(error);
+        if (state !== said) console.error(`collab events: not subscribed (${state})`);
+        said = state;
+        // unref: the wait never keeps a stopping process alive.
+        setTimeout(() => {
+          // Not where the connection was lost and made again meanwhile: that
+          // one has asked for itself. And not after `quit` or `disconnect`: a
+          // connection that was ended stays ended.
+          if (attempt === attempts && client.status === 'ready') client.disconnect(true);
+        }, subscribeRetryDelay(++failures)).unref();
+      },
+    );
   });
   client.on('message', (_channel, message) => {
     const event = readEvent(message);
     if (!event) return;
-    try {
-      handle(event);
-    } catch (error) {
-      console.error(`collab events: ${event.kind} not handled (${faultOf(error)})`);
-    }
+    // `handle` may throw or reject: both end here.
+    new Promise<void>((resolve) => resolve(handle(event))).catch((error: unknown) => {
+      console.error(
+        `collab events: ${event.kind} not handled for document ${event.documentId} (${faultOf(error)})`,
+      );
+    });
   });
   return { subscribed, client };
 }

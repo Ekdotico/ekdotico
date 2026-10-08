@@ -81,6 +81,8 @@ export async function createDocument(userId: string): Promise<DocumentSummary> {
       title: DEFAULT_TITLE,
       permissionSet: defaultPermissionSet(),
       recording: recording ? 'RECORDED' : 'UNRECORDED',
+      // An edit, the first: see `renameDocument`.
+      updatedAt: new Date(),
     },
   });
 
@@ -124,7 +126,23 @@ export async function listDocuments(userId: string): Promise<DocumentSummary[]> 
   return documents.map(summary);
 }
 
-/** FR-ED-35: stores a title that `readTitle` has passed, for a document the caller was authorised to rename. */
-export async function renameDocument(id: string, title: string): Promise<DocumentSummary> {
-  return summary(await db().document.update({ where: { id }, data: { title } }));
+/**
+ * FR-ED-35: stores a title that `readTitle` has passed, for a document the
+ * caller was authorised to rename; null where the document was deleted
+ * between the authorisation and this write, and nothing was changed (FR-ED-36:
+ * a restore returns the document as it was at deletion). The condition is in
+ * the write, as it is in every write to a document.
+ *
+ * `updatedAt` is when a document was last edited, and the model does not move
+ * it by itself (prisma/schema.prisma): the writes that are edits set it, and
+ * they are three, this one, the creation above, and the store of the state
+ * (src/lib/collab/state.ts). The deletion, the restore, and the claim of the
+ * permanent deletion and its release are not edits, and do not name the column.
+ */
+export async function renameDocument(id: string, title: string): Promise<DocumentSummary | null> {
+  const [renamed] = await db().document.updateManyAndReturn({
+    where: { id, deletedAt: null },
+    data: { title, updatedAt: new Date() },
+  });
+  return renamed ? summary(renamed) : null;
 }
