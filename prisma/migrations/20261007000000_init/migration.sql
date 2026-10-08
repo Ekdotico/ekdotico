@@ -1,0 +1,2 @@
+-- The first migration is empty on purpose. It establishes the migration history
+-- inside the `ekdotico` schema, under the migration role, before any model exists.
