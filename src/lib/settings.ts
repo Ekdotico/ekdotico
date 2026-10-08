@@ -57,9 +57,23 @@ export interface Settings {
   sessionMaxSeconds: number;
   /** NFR-SE-17 (c): the lifetime of the signed copy of a session. */
   cookieCacheSeconds: number;
-  /** FR-AU-82: the two limits on the length of a password. */
+  /**
+   * FR-AU-82: the two limits on the length of a password. The initial values, 8
+   * and 32, are the owner's decision of 8 October 2026; the requirement says 15
+   * and 128 until the Docs are amended.
+   */
   passwordMinLength: number;
   passwordMaxLength: number;
+  /** FR-AU-82: the list of commonly used and known-compromised passwords, a file read on the server. */
+  passwordListFile: string;
+  /**
+   * FR-AU-89: the key of the signed admission requests, or none. Without it
+   * every admission request is refused. The name and the form are provisional
+   * (docs/contracts/admission-signature.md).
+   */
+  admissionSecret: string | undefined;
+  /** FR-AU-89 (a): how long an admission invitation stays open. */
+  admissionInvitationDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
   securityLogRetentionDays: number;
   /** Where the local sink writes each message (register A52, A72: no real email yet). */
@@ -92,6 +106,17 @@ function limit(env: Env, name: LimitName): Limit {
   if (!match)
     throw new Error(`RATE_LIMIT_${name} must be written max/seconds, for example ${max}/${windowSeconds}.`);
   return { max: Number(match[1]), windowSeconds: Number(match[2]) };
+}
+
+// docs/contracts/admission-signature.md, "The setting": at least 43 characters
+// of the URL-safe alphabet, used exactly as set.
+function admissionSecret(env: Env): string | undefined {
+  const value = env.ADMISSION_SECRET;
+  if (value === undefined || value === '') return undefined;
+  if (!/^[A-Za-z0-9_-]{43,}$/.test(value)) {
+    throw new Error('ADMISSION_SECRET must be at least 43 characters of A to Z, a to z, 0 to 9, - and _.');
+  }
+  return value;
 }
 
 const DAY = 24 * 60 * 60;
@@ -143,8 +168,11 @@ export function loadSettings(env: Env = process.env): Settings {
     sessionRenewSeconds: wholeNumber(env, 'SESSION_RENEW_SECONDS', DAY),
     sessionMaxSeconds: wholeNumber(env, 'SESSION_MAX_SECONDS', 30 * DAY),
     cookieCacheSeconds: wholeNumber(env, 'COOKIE_CACHE_SECONDS', 60),
-    passwordMinLength: wholeNumber(env, 'PASSWORD_MIN_LENGTH', 15),
-    passwordMaxLength: wholeNumber(env, 'PASSWORD_MAX_LENGTH', 128),
+    passwordMinLength: wholeNumber(env, 'PASSWORD_MIN_LENGTH', 8),
+    passwordMaxLength: wholeNumber(env, 'PASSWORD_MAX_LENGTH', 32),
+    passwordListFile: env.PASSWORD_LIST_FILE || 'data/common-passwords.txt',
+    admissionSecret: admissionSecret(env),
+    admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',

@@ -23,6 +23,7 @@
     "test:e2e": "playwright test",
     "check:deps": "node scripts/check-deps.mjs",
     "db:migrate": "prisma migrate deploy",
+    "admission": "node scripts/admission.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

@@ -1,0 +1,22 @@
+{
+  "files": ["src/app/**/*.tsx", "src/app/**/*.ts", "src/components/**/*.tsx", "src/components/**/*.ts"],
+
+  "ignore": [],
+
+  "failOn": "blocking",
+
+  "registers": {
+    "src/components/send.ts": "system-feedback",
+    "src/app/api/**": "system-feedback",
+    "src/app/(app)/not-found.tsx": ["system-feedback", "instructional"],
+    "src/app/**": ["functional", "instructional", "system-feedback"]
+  },
+
+  "overrides": [
+    {
+      "files": "src/app/layout.tsx",
+      "rules": ["normal-baseline"],
+      "reason": "The match is the CSS keyword in the next/font style array, style: ['normal', 'italic'], which @ekdotico/domico/fonts requires, and not a statement about a person's writing. The rule's own text admits the CSS keyword."
+    }
+  ]
+}

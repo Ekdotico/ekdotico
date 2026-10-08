@@ -20,6 +20,10 @@ A process refuses to start without `FOUNDING_TEAM_EMAILS`, `APP_ORIGIN`, `DATABA
 
 Changing `AUTH_SECRET` ends every session and forgets every count of NFR-SE-07, since the counters are stored under digests keyed by it. The procedure for rotating each secret is recorded before the first test user is admitted (NFR-SE-17 (e)); it is not yet written.
 
+## The password list
+
+`PASSWORD_LIST_FILE` names the list of commonly used and known-compromised passwords (FR-AU-82), by default `data/common-passwords.txt` under the directory the process is started in. The file ships with the deployment. Where it cannot be read, every request that sets a password fails, so that none is set unchecked. **The file in the repository is a placeholder of a few dozen entries** and is replaced before a test user is admitted; which list replaces it is the owner's decision (register A66, D86).
+
 ## Email
 
 The only sender built so far writes each message to a file and sends nothing (register A52, A72). A deployment that sets `EMAIL_TRANSPORT=sink` sends no invitation, no reset link, and no notice.

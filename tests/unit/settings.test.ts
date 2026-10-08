@@ -72,7 +72,7 @@ describe('loadSettings: what a process cannot start without', () => {
   });
 
   it('holds the two limits of a password as settings (FR-AU-82)', () => {
-    expect(loadSettings(env)).toMatchObject({ passwordMinLength: 15, passwordMaxLength: 128 });
+    expect(loadSettings(env)).toMatchObject({ passwordMinLength: 8, passwordMaxLength: 32 });
     expect(loadSettings({ ...env, PASSWORD_MIN_LENGTH: '20' }).passwordMinLength).toBe(20);
   });
 });

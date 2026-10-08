@@ -13,6 +13,12 @@ const SESSIONLESS: Record<string, string> = {
   'src/app/api/health/route.ts': 'NFR-SE-05 (c): reports that the service is up and nothing else',
   'src/app/api/auth/[...all]/route.ts':
     'NFR-SE-05 (a): the identity library checks the session of its own endpoints',
+  'src/app/api/sign-up/route.ts':
+    'NFR-SE-05 (a), FR-AU-90: authorised by the token of a pending admission invitation',
+  'src/app/api/admission/invitations/route.ts':
+    'NFR-SE-05 (b), FR-AU-89 (a), (b): the signature of each request is verified before any processing',
+  'src/app/api/admission/invitations/[id]/route.ts':
+    'NFR-SE-05 (b), FR-AU-89 (c): the signature of each request is verified before any processing',
 };
 
 const routes = globSync('src/app/**/route.ts');

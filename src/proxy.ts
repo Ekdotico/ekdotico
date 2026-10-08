@@ -186,8 +186,11 @@ async function decide(request: NextRequest): Promise<Response> {
   // two-factor authentication: an account on the list without it reaches
   // nothing but its enrolment (403, by the answer to Q8).
 
-  // NFR-SE-07: requests to API routes, for each authenticated user.
-  if (pathname.startsWith('/api/')) {
+  // NFR-SE-07: requests to API routes, for each authenticated user. Signing
+  // out is not held back by it: it "ends the session at once" (FR-AU-84), and
+  // a session can be ended once.
+  const signsOut = method === 'POST' && pathname === `${IDENTITY_BASE_PATH}/sign-out`;
+  if (pathname.startsWith('/api/') && !signsOut) {
     const limit = await takeLimit('API_PER_USER', session.userId);
     if (!limit.ok) {
       return tooManyRequests('API_PER_USER', session.userId, limit.retryAfterSeconds, session.userId);
