@@ -50,6 +50,11 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
+          # Writes a user-level .npmrc that names NODE_AUTH_TOKEN for this
+          # registry. pnpm does not take a registry credential from the
+          # project's .npmrc, so the token cannot be configured there.
+          registry-url: https://npm.pkg.github.com
+          scope: '@ekdotico'
       - run: pnpm install --frozen-lockfile
       - name: Exact pins and licences (NFR-IC-08, NFR-IC-12)
         run: pnpm check:deps
