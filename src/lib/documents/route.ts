@@ -6,17 +6,16 @@
 //
 // Nothing here is of Next.js: a handler is called with a Request, and with the
 // parameters of the path as Next.js 16 hands them, a promise.
-import type { Document } from '../../generated/prisma/client.ts';
 import { fault, unauthenticated } from '../auth/route-answers.ts';
 import { validateSession, type ValidSession } from '../auth/session.ts';
-import { authorise, refusal } from './access.ts';
+import { authorise, refusal, type DocumentRow } from './access.ts';
 import type { DocumentRole, Permission } from './permissions.ts';
 
 /** All that a handler is given: the document is the one the caller was authorised for, and there is no other. */
 export interface DocumentCall {
   request: Request;
   session: ValidSession;
-  document: Document;
+  document: DocumentRow;
   role: DocumentRole;
 }
 

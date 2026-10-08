@@ -13,7 +13,7 @@ describe('the health check of the web application', () => {
 });
 
 describe('the health check of the collaboration server', () => {
-  const server = createCollabServer();
+  const server = createCollabServer({ collabStoreDelayMs: 2000, collabStoreMaxMs: 10000 }).httpServer;
   let base = '';
   beforeAll(async () => {
     await new Promise<void>((resolve) => server.listen(0, resolve));

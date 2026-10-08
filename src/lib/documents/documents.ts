@@ -22,7 +22,13 @@ export interface DocumentSummary {
   updatedAt: Date;
 }
 
-export function summary({ id, title, recording, createdAt, updatedAt }: Document): DocumentSummary {
+export function summary({
+  id,
+  title,
+  recording,
+  createdAt,
+  updatedAt,
+}: Omit<Document, 'yjsState'>): DocumentSummary {
   return { id, title, recording, createdAt, updatedAt };
 }
 

@@ -122,6 +122,23 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(() => loadSettings({ ...env, RATE_LIMIT_API_PER_USER: value })).toThrow(/RATE_LIMIT_API_PER_USER/);
   });
 
+  // NFR-RE-07 (register P14): both periods of the storing are settings.
+  it('stores a document’s state 2 seconds after the last change, and every 10 seconds', () => {
+    expect(settings).toMatchObject({ collabStoreDelayMs: 2000, collabStoreMaxMs: 10000 });
+    const changed = loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '1000', COLLAB_STORE_MAX_MS: '3000' });
+    expect(changed).toMatchObject({ collabStoreDelayMs: 1000, collabStoreMaxMs: 3000 });
+  });
+
+  it('refuses a period of the storing too short for the write to fit in it', () => {
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '999' })).toThrow(/COLLAB_STORE_DELAY_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '0' })).toThrow(/COLLAB_STORE_DELAY_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '2s' })).toThrow(/COLLAB_STORE_DELAY_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_MAX_MS: '4999' })).toThrow(/COLLAB_STORE_MAX_MS/);
+    expect(() => loadSettings({ ...env, COLLAB_STORE_MAX_MS: '5000' })).not.toThrow();
+    // The second period is held to the first.
+    expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '5000' })).toThrow(/COLLAB_STORE_MAX_MS/);
+  });
+
   it.each(['-1', '1.5', 'seven', '1e3'])('refuses %s as a whole number', (value) => {
     expect(() => loadSettings({ ...env, TRUSTED_PROXY_COUNT: value })).toThrow(/TRUSTED_PROXY_COUNT/);
   });

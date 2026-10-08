@@ -5,8 +5,11 @@
 //
 // Nothing here catches an error. Where Valkey cannot be reached the call
 // rejects, and the caller refuses the request (NFR-SE-06 A10: fail closed).
+// Nothing here is of Next.js: the collaboration server limits its handshakes
+// through this module.
 import { createHmac, randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
+import { securityLog } from './security-log.ts';
 import { settings, type Limit, type LimitName } from './settings.ts';
 import { valkey } from './valkey.ts';
 
@@ -77,6 +80,29 @@ export function takeLimit(name: LimitName, key: string): Promise<LimitResult> {
 /** Whether the limit is reached, without counting anything. */
 export function checkLimit(name: LimitName, key: string): Promise<LimitResult> {
   return limitWith(valkey(), settings().limits[name], name, key, false);
+}
+
+/**
+ * NFR-SE-19: the entry for a limit that was reached, with the user where
+ * there is one and never the address. One entry for each period of a limit and
+ * not one for each request refused in it, or a flood over the limit would
+ * write to the database at the rate the limit exists to keep from it. The mark
+ * is in Valkey, under a keyed digest, so that it holds across instances and
+ * holds no address. `seconds` is what is left of the period.
+ *
+ * Here and not in the proxy, so that the collaboration server, which cannot
+ * load anything of Next.js, marks the same way.
+ */
+export async function logLimitReached(
+  name: LimitName,
+  key: string,
+  seconds: number,
+  userId?: string,
+): Promise<void> {
+  const digest = createHmac('sha256', settings().authSecret).update(`${name}:${key}`).digest('hex');
+  if ((await valkey().set(`limit-logged:${digest}`, '1', 'EX', seconds, 'NX')) === 'OK') {
+    await securityLog({ kind: 'rate_limit_reached', userId });
+  }
 }
 
 /** Forgets the events counted for this key (a completed password reset clears the failed sign-ins). */

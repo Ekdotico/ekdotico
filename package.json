@@ -11,7 +11,7 @@
   "packageManager": "pnpm@10.34.6",
   "scripts": {
     "dev": "next dev",
-    "dev:collab": "node --watch src/collab/server.ts",
+    "dev:collab": "node --env-file=.env.local --watch src/collab/server.ts",
     "build": "next build",
     "start": "next start",
     "start:collab": "node src/collab/server.ts",
@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@ekdotico/domico": "0.25.0",
+    "@hocuspocus/server": "4.7.0",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "better-auth": "1.7.7",
@@ -35,9 +36,12 @@
     "next": "16.4.0",
     "pg": "8.23.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.33"
   },
   "devDependencies": {
+    "@hocuspocus/provider": "4.7.0",
     "@playwright/test": "1.63.0",
     "@types/node": "26.6.4",
     "@types/pg": "8.23.1",

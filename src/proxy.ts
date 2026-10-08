@@ -5,17 +5,15 @@
 // It exports no `config.matcher`: it runs on every request. A path a matcher
 // left out would be a path without validation that the list below does not
 // show, and the list is what is reviewed on each deployment (NFR-SE-05).
-import { createHmac } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { errorResponse, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
-import { takeLimit } from './lib/rate-limit.ts';
+import { logLimitReached, takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
 import { settings, type LimitName } from './lib/settings.ts';
-import { valkey } from './lib/valkey.ts';
 
 /** Where a visitor without a session is sent (FR-AU-07; API design, "Sign-in and identity"). */
 export const SIGN_IN_PATH = '/sign-in';
@@ -106,22 +104,15 @@ async function forbidden(userId?: string): Promise<Response> {
 }
 
 // NFR-SE-07: a 429 that states when the caller may try again, in a header and
-// in words. NFR-SE-19: an entry when the limit is reached, with the user where
-// there is one and never the address. One entry for each period of a limit and
-// not one for each request refused in it, or a flood over the limit would
-// write to the database at the rate the limit exists to keep from it. The mark
-// is in Valkey, under a keyed digest, so that it holds across instances and
-// holds no address.
+// in words. NFR-SE-19: an entry when the limit is reached, one for each period
+// of the limit (src/lib/rate-limit.ts).
 async function tooManyRequests(
   limit: LimitName,
   key: string,
   seconds: number,
   userId?: string,
 ): Promise<Response> {
-  const digest = createHmac('sha256', settings().authSecret).update(`${limit}:${key}`).digest('hex');
-  if ((await valkey().set(`limit-logged:${digest}`, '1', 'EX', seconds, 'NX')) === 'OK') {
-    await securityLog({ kind: 'rate_limit_reached', userId });
-  }
+  await logLimitReached(limit, key, seconds, userId);
   return errorResponse(429, 'rate_limited', MESSAGES.rateLimited(seconds), {
     'Retry-After': String(seconds),
   });
