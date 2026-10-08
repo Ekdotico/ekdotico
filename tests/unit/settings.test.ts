@@ -150,6 +150,31 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(settings.securityLogRetentionDays).toBe(30);
   });
 
+  // FR-ED-36: "retained for 30 days (an initial value)".
+  it('retains a deleted document for 30 days, or for the days it is told', () => {
+    expect(settings.deletedDocumentRetentionDays).toBe(30);
+    expect(loadSettings({ ...env, DELETED_DOCUMENT_RETENTION_DAYS: '7' }).deletedDocumentRetentionDays).toBe(
+      7,
+    );
+  });
+
+  // The days are subtracted from the present moment and added to the moment of
+  // a deletion: about 100,000,001 of them give no date at all.
+  it('retains a deleted document for at most 3,650 days, so that the end of a retention is always a date', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { deletedDocumentRetentionDays: most } = loadSettings({
+      ...env,
+      DELETED_DOCUMENT_RETENTION_DAYS: '3650',
+    });
+    expect(most).toBe(3650);
+    expect(Number.isNaN(new Date(Date.now() - most * DAY_MS).getTime())).toBe(false);
+    for (const days of ['3651', '100000001', '9'.repeat(400)]) {
+      expect(() => loadSettings({ ...env, DELETED_DOCUMENT_RETENTION_DAYS: days })).toThrow(
+        'DELETED_DOCUMENT_RETENTION_DAYS must be no more than 3650.',
+      );
+    }
+  });
+
   it('trusts no proxy unless told how many there are, which only localhost admits', () => {
     const local = { ...env, APP_ORIGIN: 'http://localhost:3000', TRUSTED_PROXY_COUNT: undefined };
     expect(loadSettings(local).trustedProxyCount).toBe(0);
@@ -215,6 +240,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'SESSION_RENEW_SECONDS',
     'SESSION_MAX_SECONDS',
     'SECURITY_LOG_RETENTION_DAYS',
+    'DELETED_DOCUMENT_RETENTION_DAYS',
     'PASSWORD_MIN_LENGTH',
     'PASSWORD_MAX_LENGTH',
     'ADMISSION_INVITATION_DAYS',
@@ -230,6 +256,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
       SESSION_RENEW_SECONDS: '1',
       SESSION_MAX_SECONDS: '1',
       SECURITY_LOG_RETENTION_DAYS: '1',
+      DELETED_DOCUMENT_RETENTION_DAYS: '1',
       PASSWORD_MIN_LENGTH: '1',
       PASSWORD_MAX_LENGTH: '1',
       ADMISSION_INVITATION_DAYS: '1',

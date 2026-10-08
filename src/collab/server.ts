@@ -7,10 +7,18 @@
 // NOT HERE YET, and so true of this process until the slice that ends and
 // switches connections is built (NFR-SE-03 (b) to (e), FR-ED-40, FR-ED-41): a
 // connection that was accepted outlives a sign-out, a revoked or expired
-// session, the loss of the role, a change of the role, and the deletion of
-// the document. Each is refused at the next handshake, and none ends a
-// connection that is open. Nor is there a limit of connections for a document
-// (NFR-PE-05), presence (FR-ED-17), or a second instance (NFR-SC-04).
+// session, the loss of the role, and a change of the role. Each is refused at
+// the next handshake, and none ends a connection that is open. Nor is there a
+// limit of connections for a document (NFR-PE-05), presence (FR-ED-17), or a
+// second instance (NFR-SC-04).
+//
+// HERE of FR-ED-40: event (c), the deletion of a document. Every instance is
+// told of it on the channel of src/lib/collab/events.ts, reads the document's
+// row, and where the row says so stores what it had received and closes its
+// connections to the document (`endDocument`). The channel can lose a
+// notice, and the re-check that would then close the connection (FR-ED-41) is
+// not built yet: until it is, a connection whose notice was lost stays open,
+// and what it changes is received and never stored.
 //
 // CARRIED FORWARD from the review of this slice, for the slices named:
 // - Presence (slice 14). The library takes awareness from a read-only
@@ -18,9 +26,6 @@
 //   Viewer can show the others any name and any cursor. Nothing reads
 //   awareness yet; the slice that does decides what a connection may say of
 //   itself, in `beforeHandleAwareness`.
-// - Deletion (slices 12 and 15). The deletion of a document must close its
-//   connections here. Today they stay open, and what they change is received
-//   and never stored (FR-ED-36, in src/lib/collab/state.ts).
 import { randomUUID } from 'node:crypto';
 import { STATUS_CODES, type IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -30,10 +35,16 @@ import { messageYjsSyncStep1 } from 'y-protocols/sync';
 import { stoppedByFoundingGate } from '../lib/auth/founding-gate.ts';
 import { validateSessionRow, type ValidSession } from '../lib/auth/session.ts';
 import { isReadOnly, recordConnection, type CollabConnection } from '../lib/collab/connection.ts';
+import {
+  subscribeCollabEvents,
+  type CollabEvent,
+  type CollabEventSubscription,
+} from '../lib/collab/events.ts';
 import { COLLAB_PATH, REFUSAL, type Refusal } from '../lib/collab/protocol.ts';
-import { applyState, assertUpdate, loadState, storeState } from '../lib/collab/state.ts';
+import { applyState, assertUpdate, loadState, storeFinalState, storeState } from '../lib/collab/state.ts';
 import { db } from '../lib/db.ts';
 import { authorise } from '../lib/documents/access.ts';
+import { faultOf } from '../lib/fault.ts';
 import { assertContractVersion } from '../lib/istorico/index.ts';
 import { isOwnOrigin } from '../lib/origin.ts';
 import { logLimitReached, markKey, oncePer, takeLimit } from '../lib/rate-limit.ts';
@@ -59,6 +70,22 @@ const STOP_DEADLINE_MS = 30_000;
 // One entry, and one line, for each of these periods and not for each request
 // (see `logRefusedOrigin`).
 const LOG_PERIOD_SECONDS = 60;
+// How long the deletion of a document is remembered by an instance that was
+// told of it (see `endDocument`): longer than the authorisation and the load
+// of a handshake can take, each of which the database client bounds at 5
+// seconds (src/lib/db.ts).
+const ENDED_MEMORY_MS = 15_000;
+// And how many are remembered at most. Anything that reaches Valkey can
+// publish a notice, for any identifier: without a bound, a flood of them would
+// be kept for 15 seconds each. Past the bound the oldest is forgotten early,
+// and all that is lost with it is the second look at a handshake that crossed
+// its deletion (the `connected` hook).
+export const ENDED_MEMORY_MAX = 1000;
+// What the two steps of a notice may take, the reading of the row and the
+// last store, so that the connections are closed "within 5 seconds of the
+// change being committed" (FR-ED-40) where the database is slow to answer.
+const NOTICE_READ_MS = 2000;
+const FINAL_STORE_MS = 2500;
 // The mark of that period for a refused origin, kept as every such mark is (src/lib/rate-limit.ts).
 const ORIGIN_REFUSED = 'collab:origin-refused';
 
@@ -108,6 +135,19 @@ function fault(what: string, error: unknown): void {
   console.error(`collab: ${what} failed (${error instanceof Error ? error.name : 'unknown'})`);
 }
 
+/** A wait that ran out. No message: the class says it all. */
+class TimedOut extends Error {
+  name = 'TimedOut';
+}
+
+/** What `work` resolves or rejects with, or a rejection once `ms` have passed. The timer keeps no process alive. */
+function within<T>(ms: number, work: PromiseLike<T>): Promise<T> {
+  const late = wait(ms, undefined, { ref: false }).then(() => {
+    throw new TimedOut();
+  });
+  return Promise.race([work, late]);
+}
+
 // The library carries on to its own answer unless a hook rejects, and throws
 // a rejection on where it carries a value (@hocuspocus/server, Server.ts). A
 // hook that has answered rejects with none.
@@ -139,6 +179,128 @@ export function createCollabServer(store: StoreSettings) {
   let stopping = false;
   let unstored = false;
   let stopped: Promise<boolean> | undefined;
+  // The documents this instance was just told were deleted, each with the time
+  // it was told (see `endDocument` and the `connected` hook).
+  const ended = new Map<string, number>();
+  let events: CollabEventSubscription | undefined;
+  // How many changes each document in memory has taken since it was loaded,
+  // and how many of them its last store held: where the two differ, this
+  // instance holds changes that are stored nowhere.
+  const changes = new WeakMap<Document, number>();
+  const storedChanges = new WeakMap<Document, number>();
+
+  /** One store, by either of the two of src/lib/collab/state.ts, which notes what it stored. */
+  async function storeNow(write: typeof storeState, documentName: string, document: Document) {
+    const held = changes.get(document) ?? 0;
+    const done = await write(documentName, document);
+    if (done) storedChanges.set(document, held);
+    return done;
+  }
+
+  /**
+   * Remembers that a document was deleted, for `ENDED_MEMORY_MS`, and forgets
+   * what is older. The map keeps the order in which it was written, which is
+   * the order of the times, so what has expired is at its head: each call
+   * looks at what it removes and one entry more, and never at the whole map.
+   */
+  function rememberEnded(documentId: string): void {
+    const now = Date.now();
+    ended.delete(documentId);
+    ended.set(documentId, now);
+    for (const [each, at] of ended) {
+      if (now - at <= ENDED_MEMORY_MS && ended.size <= ENDED_MEMORY_MAX) break;
+      ended.delete(each);
+    }
+  }
+
+  function closeDocument(documentId: string, reason: Refusal): void {
+    const document = server.hocuspocus.documents.get(documentId);
+    for (const connection of document?.getConnections() ?? []) {
+      connection.close({ code: 1000, reason });
+    }
+  }
+
+  /**
+   * FR-ED-40 (c), NFR-SE-03 (b): a notice says the document was deleted.
+   *
+   * THE ROW DECIDES, and not the notice. Anything that reaches Valkey can
+   * publish one for a document that is live, and a genuine one can arrive
+   * after the Owner restored the document; a client that is closed with
+   * `access-ended` does not come back (FR-ED-41). So the row is read, one
+   * query by its identifier, and only where it is deleted, or is not there at
+   * all, is anything done. Otherwise nothing is done and nothing is printed.
+   * Where the row cannot be read, the connections are closed as `unavailable`:
+   * each client tries again, and its handshake reads the row.
+   *
+   * THE LAST STORE. FR-ED-41: "Changes already merged into the document before
+   * the close remain"; FR-ED-36: a restore returns the document as it was at
+   * deletion. A change this instance received in the 2 seconds before the
+   * deletion, or the 10 under changes that kept arriving (NFR-RE-07), is not
+   * stored yet, and `storeState` writes nothing to a deleted document. So what
+   * is held is stored here, once, by the store whose condition is that the row
+   * exists (`storeFinalState`), before the connections are closed. Only where
+   * this instance holds a change it has not stored: one that holds none would
+   * write an older state over what another instance had just stored.
+   *
+   * Nothing a client sends can arrive between that store and the close. Every
+   * connection is made read-only, and the state is encoded, in one step with
+   * nothing awaited between them: an update the library had applied is in the
+   * state, and one it has yet to apply meets a read-only connection, on which
+   * the library applies nothing and acknowledges nothing (it tests the flag in
+   * the same step as it applies). A connection made after that step, by a
+   * handshake that crossed the deletion, can still change the document in
+   * memory: nothing stores it, and the `connected` hook closes it.
+   *
+   * Where the last store fails, the connections are closed all the same, one
+   * line says so, and what is lost is what this instance had not yet stored:
+   * the stored state stays as the last store before the deletion left it.
+   *
+   * After the close nothing is stored: the library runs the store that was
+   * waiting when the last connection goes, and `storeState` leaves a deleted
+   * document alone.
+   *
+   * A handshake for the document that was authorised a moment before the
+   * deletion was committed has no connection yet, and would gain one a moment
+   * after this ran. So the deletion is remembered for a while, and such a
+   * connection is asked again when it is made (the `connected` hook).
+   */
+  async function endDocument(documentId: string): Promise<void> {
+    let row;
+    try {
+      row = await within(
+        NOTICE_READ_MS,
+        db().document.findUnique({ where: { id: documentId }, select: { deletedAt: true } }),
+      );
+    } catch (error) {
+      console.error(`collab: document ${documentId} not read for a notice (${faultOf(error)})`);
+      closeDocument(documentId, REFUSAL.UNAVAILABLE);
+      return;
+    }
+    // Live: forged, or restored since. Stopping: the stop stores and closes everything itself.
+    if ((row && row.deletedAt === null) || stopping) return;
+
+    rememberEnded(documentId);
+    const document = server.hocuspocus.documents.get(documentId);
+    if (!document) return;
+    for (const connection of document.getConnections()) connection.readOnly = true;
+    if ((changes.get(document) ?? 0) !== (storedChanges.get(document) ?? 0)) {
+      try {
+        // Its state is encoded as it is called, before anything is awaited.
+        await within(FINAL_STORE_MS, storeNow(storeFinalState, documentId, document));
+      } catch (error) {
+        console.error(`collab: last store of document ${documentId} failed (${faultOf(error)})`);
+      }
+    }
+    // The reason is the only thing that tells the client why: the library
+    // closes with one code always (src/lib/collab/protocol.ts).
+    closeDocument(documentId, REFUSAL.ACCESS_ENDED);
+  }
+
+  /** What this instance does for each event of the channel: one case for each kind of FR-ED-40 that is built. */
+  async function onEvent(event: CollabEvent): Promise<void> {
+    if (stopping) return;
+    if (event.kind === 'document-deleted') await endDocument(event.documentId);
+  }
 
   /**
    * NFR-SE-19 asks for an entry for "a 403 response". This 403 is answered
@@ -219,9 +381,15 @@ export function createCollabServer(store: StoreSettings) {
     stopOnSignals: false,
 
     async onRequest({ request, response }) {
-      // NFR-SE-05 (c): reports whether the service is up and returns nothing else.
-      const up = request.method === 'GET' && request.url === HEALTH_PATH;
-      response.writeHead(up ? 200 : 404, { 'Cache-Control': 'no-store' }).end();
+      // NFR-SE-05 (c): reports whether the service is up and returns nothing
+      // else. It checks no dependency (plan, C20) but one, by the owner's
+      // amendment of 8 October 2026: an instance that is not subscribed to
+      // the channel of deletions cannot be told to close a connection
+      // (FR-ED-40), and is not up. Nothing is asked of Valkey or of the
+      // database for the answer: it is what the subscription last said.
+      const health = request.method === 'GET' && request.url === HEALTH_PATH;
+      const status = !health ? 404 : events?.isSubscribed() ? 200 : 503;
+      response.writeHead(status, { 'Cache-Control': 'no-store' }).end();
       return answered();
     },
 
@@ -334,6 +502,40 @@ export function createCollabServer(store: StoreSettings) {
     },
 
     /**
+     * Runs when the connection to a document has been made. Where this
+     * instance was told of the document's deletion in the last moments, the
+     * authorisation that admitted the connection may be older than the
+     * deletion (see `endDocument`): it is asked again, and a connection that
+     * would not be admitted now is closed. Asked, and not closed outright,
+     * because the Owner may have restored the document since.
+     *
+     * WHAT SUCH A CONNECTION RECEIVED FIRST. The library answers the messages
+     * that were waiting before it calls this hook, so the connection has been
+     * sent the state of the document, as the last store left it, and is then
+     * closed. That is recorded and not closed off, and is no disclosure: the
+     * account held the role when its handshake was authorised, the state is
+     * what a handshake a moment earlier would have been sent, and the
+     * connection is closed inside the 5 seconds FR-ED-40 gives every instance.
+     * Refusing the state would take a second authorisation of every
+     * connection, deleted document or not, before its first message. What
+     * the connection sends meanwhile changes the copy in memory and is stored
+     * by nothing (`storeState`).
+     */
+    async connected({ documentName, context, connection }) {
+      const at = ended.get(documentName);
+      if (at === undefined || Date.now() - at > ENDED_MEMORY_MS) return;
+      let reason: Refusal | undefined;
+      try {
+        const access = await authorise(context.userId, documentName, 'document.view');
+        if (access.outcome !== 'allowed') reason = REFUSAL.ACCESS_ENDED;
+      } catch (error) {
+        fault('authorisation', error);
+        reason = REFUSAL.UNAVAILABLE;
+      }
+      if (reason) connection.close({ code: 1000, reason });
+    },
+
+    /**
      * A load that fails opens nothing: the client is answered `unavailable`
      * and may try again, the process goes on, and stderr says which of the
      * two failed, by the class of the fault alone (NFR-SE-19).
@@ -354,6 +556,8 @@ export function createCollabServer(store: StoreSettings) {
         if (!stopping) {
           step = 'stored state';
           if (state) applyState(document, state);
+          // Counted from here: what was loaded is stored already (see `endDocument`).
+          document.on('update', () => changes.set(document, (changes.get(document) ?? 0) + 1));
           return;
         }
       } catch (error) {
@@ -398,8 +602,9 @@ export function createCollabServer(store: StoreSettings) {
         return;
       }
       try {
-        // False for a deleted document, to which nothing is written (FR-ED-36).
-        await storeState(documentName, document);
+        // False for a deleted document, to which nothing is written (FR-ED-36)
+        // but once, by `endDocument`.
+        await storeNow(storeState, documentName, document);
       } catch (error) {
         fault('store', error);
         const state = { skipped: false };
@@ -436,7 +641,7 @@ export function createCollabServer(store: StoreSettings) {
         // what it asked for may hold a change this one did not.
         do {
           state.skipped = false;
-          await storeState(documentName, document);
+          await storeNow(storeState, documentName, document);
         } while (state.skipped);
         console.error('collab: store recovered');
         break;
@@ -457,6 +662,8 @@ export function createCollabServer(store: StoreSettings) {
   function stop(deadlineMs = STOP_DEADLINE_MS): Promise<boolean> {
     stopping = true;
     halt.abort();
+    // No further event is acted on: the stop closes every connection itself.
+    events?.client.disconnect();
     return (stopped ??= (async () => {
       const deadline = new AbortController();
       const stored = await Promise.race([
@@ -481,9 +688,18 @@ export function createCollabServer(store: StoreSettings) {
   return {
     httpServer: server.httpServer,
     hocuspocus: server.hocuspocus,
+    /**
+     * Subscribes this instance to the changes the web application publishes
+     * (NFR-SE-03 (d)), once. The promise resolves when it first hears them.
+     */
+    listenForEvents: (): Promise<void> => (events ??= subscribeCollabEvents(onEvent)).subscribed,
+    /** The connection of that subscription, for the tests. */
+    eventsClient: () => events?.client,
     stop,
     /** How many handshakes are recorded and how many sockets are held, for the tests. */
     held: () => ({ handshakes: admitted.size, sockets: sockets.size }),
+    /** How many deletions are remembered, for the tests. */
+    remembered: () => ended.size,
   };
 }
 
@@ -491,11 +707,19 @@ if (import.meta.main) {
   assertContractVersion();
   // Refuses to start where a setting is absent or out of its bounds.
   const collab = createCollabServer(settings());
-  collab.httpServer.listen(Number(process.env.COLLAB_PORT ?? 1234), () => {
-    const address = collab.httpServer.address();
-    console.log(`collaboration server listening on ${typeof address === 'object' ? address?.port : address}`);
-  });
   let signalled = false;
+  // FR-ED-40: it accepts no connection before it can be told to close one. An
+  // instance that cannot reach Valkey therefore does not listen, and its
+  // health check says so; it could admit no one either (NFR-SE-07).
+  void collab.listenForEvents().then(() => {
+    if (signalled) return;
+    collab.httpServer.listen(Number(process.env.COLLAB_PORT ?? 1234), () => {
+      const address = collab.httpServer.address();
+      console.log(
+        `collaboration server listening on ${typeof address === 'object' ? address?.port : address}`,
+      );
+    });
+  });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
       // A second signal exits at once.

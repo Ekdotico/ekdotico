@@ -179,13 +179,17 @@ describe('startTimers', () => {
     startTimers();
     startTimers();
 
-    expect(setInterval).toHaveBeenCalledTimes(1);
+    // One timer for each scheduled operation of NFR-RE-15 that is built: the
+    // deletion of the log, which is the first, and the permanent deletion of
+    // deleted documents (tests/integration/document-deletion.test.ts).
+    expect(setInterval).toHaveBeenCalledTimes(2);
     const call = setInterval.mock.calls[0];
-    const timer = setInterval.mock.results[0];
-    if (!call || !timer) throw new Error('no timer was started');
-    expect(call[1]).toBe(DAY_MS / 24);
-    // unref: the timer does not keep a stopping process alive.
-    expect((timer.value as NodeJS.Timeout).hasRef()).toBe(false);
+    if (!call) throw new Error('no timer was started');
+    for (const [index, each] of setInterval.mock.calls.entries()) {
+      expect(each[1]).toBe(DAY_MS / 24);
+      // unref: the timer does not keep a stopping process alive.
+      expect((setInterval.mock.results[index]!.value as NodeJS.Timeout).hasRef()).toBe(false);
+    }
     await vi.waitFor(() => expect(rows(`SELECT id FROM ${TABLE}`)).toEqual(['fresh']));
 
     // What the timer runs each hour.

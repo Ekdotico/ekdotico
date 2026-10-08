@@ -78,7 +78,27 @@ export async function loadState(documentId: string): Promise<Uint8Array | null> 
  * ponytail: the whole state is decoded once for each store. A check of the
  * updates since the last store, if a large document ever shows in a profile.
  */
-export async function storeState(documentId: string, document: Y.Doc): Promise<boolean> {
+export function storeState(documentId: string, document: Y.Doc): Promise<boolean> {
+  return store({ id: documentId, deletedAt: null }, document);
+}
+
+/**
+ * Stores the state of a document that has just been deleted: the one store
+ * whose condition is that the row exists, and not that it is live. FR-ED-41:
+ * "Changes already merged into the document before the close remain", and a
+ * change is merged when the server received it, up to 2 seconds before it is
+ * stored (NFR-RE-07); FR-ED-36: a restore returns the document "as it was at
+ * deletion". Called once, by the collaboration server, as it ends the document
+ * for the notice of its deletion (`endDocument`), and by nothing else: at
+ * every other time nothing is written to a deleted document.
+ */
+export function storeFinalState(documentId: string, document: Y.Doc): Promise<boolean> {
+  return store({ id: documentId }, document);
+}
+
+// The state is encoded before anything is awaited: what is stored is the
+// document as it was when the store was called.
+async function store(where: { id: string; deletedAt?: null }, document: Y.Doc): Promise<boolean> {
   const state = encodeState(document);
   try {
     applyState(new Y.Doc(), state);
@@ -86,8 +106,10 @@ export async function storeState(documentId: string, document: Y.Doc): Promise<b
     throw new UnloadableState();
   }
   const { count } = await db().document.updateMany({
-    where: { id: documentId, deletedAt: null },
-    data: { yjsState: state },
+    where,
+    // An edit: the one write beside the rename and the creation that moves
+    // `updatedAt`, which the model no longer moves by itself (prisma/schema.prisma).
+    data: { yjsState: state, updatedAt: new Date() },
   });
   return count === 1;
 }

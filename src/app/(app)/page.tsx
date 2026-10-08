@@ -1,6 +1,7 @@
 // The first screen after sign-in: the documents of the account (FR-ED-35),
-// with the means to create one and to rename one.
+// with the means to create one, to rename one, and to delete one (FR-ED-36).
 import { listDocuments } from '../../lib/documents/documents.ts';
+import { settings } from '../../lib/settings.ts';
 import { reading } from '../page-fault.ts';
 import { currentAccount, titled } from './account.ts';
 import { Documents } from './documents.tsx';
@@ -23,6 +24,8 @@ export default async function Home() {
         // NFR-I18-06: stored and sent in UTC; the browser shows it in its own zone.
         createdAt: createdAt.toISOString(),
       }))}
+      // FR-ED-36: the retention, which the confirmation of a deletion states.
+      retentionDays={settings().deletedDocumentRetentionDays}
     />
   );
 }
