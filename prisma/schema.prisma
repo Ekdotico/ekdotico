@@ -33,6 +33,11 @@ model User {
 
   twoFactorEnabled Boolean @default(false)
 
+  // FR-AU-81: sign-in is refused until this time, after the twentieth failed
+  // sign-in in any hour. Set by the server alone (NFR-SE-17 (d)); null, or a
+  // time that has passed, is no lock (src/lib/auth/sign-in-lock.ts).
+  lockedUntil DateTime?
+
   // The acknowledgement of the Closed α notice (FR-AU-56): the server time it
   // was made and the version of the notice acknowledged. Both null until the
   // account acknowledges.

@@ -4,7 +4,17 @@
 // application has made of it.
 import net from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cookiesOf, createAccount, DAY, load, ORIGIN, PASSWORD, prepare, signIn } from './identity.ts';
+import {
+  cookiesOf,
+  createAccount,
+  DAY,
+  handle,
+  load,
+  ORIGIN,
+  PASSWORD,
+  prepare,
+  signIn,
+} from './identity.ts';
 
 const database = prepare('authconfig', {
   TRUSTED_PROXY_COUNT: '1',
@@ -17,7 +27,8 @@ const { auth, IDENTITY_ENDPOINTS, db, valkey, validateSessionRow } = await load(
 
 let userId = '';
 const request = (method: string, path: string, headers: Record<string, string> = {}) =>
-  auth().handler(
+  handle(
+    auth,
     new Request(`${ORIGIN}${path}`, {
       method,
       headers: {
@@ -204,6 +215,7 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
         'sendVerificationEmail',
         'setPassword',
         'signInEmail',
+        'signInLink',
         'signInSocial',
         'signOut',
         'signUpEmail',
@@ -218,9 +230,10 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     );
   });
 
-  it('serves these twelve and no other', () => {
+  it('serves these thirteen and no other', () => {
     expect([...IDENTITY_ENDPOINTS]).toEqual([
       'POST /sign-in/email', // FR-AU-81
+      'POST /sign-in/link', // FR-AU-81: the link of a lock email (register D115; A104)
       'POST /sign-out', // FR-AU-84
       'POST /request-password-reset', // FR-AU-86
       'POST /reset-password', // FR-AU-86

@@ -20,21 +20,31 @@ import { setTimeout as pause } from 'node:timers/promises';
 import type { AuthContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, expireCookie, setSessionCookie } from 'better-auth/cookies';
+import { afterResponse, assertCollecting } from '../after-response.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
-import { errorResponse } from '../http.ts';
+import { errorResponse, textFields } from '../http.ts';
 import { checkLimit, logLimitReached, takeLimit, type LimitResult } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { passwordLength } from '../password-rules.ts';
 import { settings, type LimitName } from '../settings.ts';
 import { valkey } from '../valkey.ts';
 import { beginSecondStep, SECOND_STEP_COOKIE } from './second-step.ts';
+import {
+  beginLock,
+  claimSignInLink,
+  findOpenSignInLink,
+  lockedUntilOf,
+  lockInForce,
+  SIGN_IN_LINK_NOT_VALID,
+} from './sign-in-lock.ts';
 
 /** FR-AU-81: the one fixed statement of a failed sign-in, verbatim. */
 export const SIGN_IN_REFUSED = 'The email address or the password is not correct.';
 
 // Text for a person (the owner's answer to Q6 of the plan: approved with the pull request).
 const INVALID_REQUEST = 'The request must hold an email address and a password, and nothing else.';
+const INVALID_LINK_REQUEST = 'The request must hold the token of a link, and nothing else.';
 
 /**
  * The body of a sign-in: an email address and a password. Any other field is
@@ -136,6 +146,23 @@ async function countKeys(email: string, headers: Headers | undefined) {
 }
 
 /**
+ * Counts one failed sign-in under both counts. NFR-SE-07: "The twentieth
+ * failed sign-in for one email address in any hour also locks the account for
+ * 1 hour, counted from that failure": the failure that was counted and left
+ * the count for the address at its number. The lock, its link and its notice
+ * are begun after the answer (sign-in-lock.ts), for an address without an
+ * account as for one with: whether there is anything to lock is looked at
+ * only then, so that neither the answer nor its time shows it (FR-AU-81).
+ */
+async function countFailure(pair: string, everywhere: string, email: string): Promise<void> {
+  await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
+  const counted = await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+  if (counted.ok && !(await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere)).ok) {
+    afterResponse('sign-in lock', () => beginLock(email));
+  }
+}
+
+/**
  * Whether the 20 failed sign-ins in an hour are reached for the address, from
  * everywhere, under the key a sign-in counts them by. The second step asks
  * before it looks at a code: NFR-SE-07, "no more than 100 codes can be tried
@@ -155,9 +182,13 @@ export async function failedSignInsReached(enteredEmail: string): Promise<boolea
  * attempt (the owner's answer to Q10).
  */
 export async function countFailedSignIn(headers: Headers | undefined, enteredEmail: string): Promise<void> {
-  const { pair, everywhere } = await countKeys(normalised(enteredEmail), headers);
-  await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
-  await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+  // The twentieth leaves the lock for after the answer, which only a request
+  // that collects can take: asked on every call, so that a caller that does
+  // not collect fails at its first use and not at its twentieth failure.
+  assertCollecting();
+  const email = normalised(enteredEmail);
+  const { pair, everywhere } = await countKeys(email, headers);
+  await countFailure(pair, everywhere, email);
 }
 
 /**
@@ -175,6 +206,7 @@ export async function checkCodeAtPrompt(
   enteredEmail: string,
   check: () => Promise<boolean>,
 ): Promise<boolean> {
+  assertCollecting();
   const email = normalised(enteredEmail);
   return inTurn(email, async () => {
     const { pair, everywhere } = await countKeys(email, headers);
@@ -184,8 +216,7 @@ export async function checkCodeAtPrompt(
     ]);
     if (!byPair.ok || !byEmail.ok) return false;
     if (await check()) return true;
-    await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
-    await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
+    await countFailure(pair, everywhere, email);
     return false;
   }).catch((error: unknown) => {
     if (error instanceof NoTurn) return false;
@@ -215,6 +246,7 @@ export async function checkCredentials(
   enteredEmail: string,
   enteredPassword: string,
 ) {
+  assertCollecting();
   const email = normalised(enteredEmail);
   const { internalAdapter, password: hasher } = context;
 
@@ -226,14 +258,20 @@ export async function checkCredentials(
       checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair),
       checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere),
     ]);
-    const open = byPair.ok && byEmail.ok;
-    // Two reads on every path. Asked for the user with its credentials in one
+    // Three reads on every path. Asked for the user with its credentials in one
     // call, the library reads the credentials only where it found a user: one
     // read fewer for an address that belongs to no account.
     const user = (await internalAdapter.findUserByEmail(email))?.user;
     const credential = (await internalAdapter.findAccounts(user?.id ?? '')).find(
       (account) => account.providerId === 'credential' && account.accountId === user?.id,
     );
+    // FR-AU-81: "While it is locked, every sign-in to it is refused with the
+    // same fixed statement, a sign-in with the right password included", and
+    // such an attempt "is not counted … and does not extend the lock": it is
+    // one more cause for which the attempt is not open. The library answers a
+    // user without the column, so the row is read for it.
+    const locked = lockInForce(await lockedUntilOf(user?.id));
+    const open = byPair.ok && byEmail.ok && !locked;
     const hash = credential?.password;
     // Verified only where the attempt could succeed: no limit is reached (a
     // refused attempt is not verified; the owner's answer to Q10), the address
@@ -250,10 +288,7 @@ export async function checkCredentials(
     // extends nothing (Q10). A successful sign-in clears neither count: the
     // table names a completed password reset and the link of a lock email, and
     // nothing else.
-    if (open && !passed) {
-      await takeLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
-      await takeLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
-    }
+    if (open && !passed) await countFailure(pair, everywhere, email);
     // The row whose hash was verified, for the caller that acts on the check
     // later: by then the password may be another (FR-AU-85, FR-AU-86).
     const verified =
@@ -373,6 +408,89 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
   await setSessionCookie(ctx, { session, user }, false);
   ctx.setHeader('Cache-Control', 'no-store');
+  return ctx.json({});
+});
+
+// Thrown inside the transaction that completes a sign-in by a link, to undo it.
+const LINK_GONE = new Error('sign-in link: the link is void');
+
+/**
+ * FR-AU-81: `POST /api/auth/sign-in/link`, with `{ "token" }`: the one control
+ * of the page that the sign-in link of a lock email opens (register D115;
+ * A104, assumed). No session: the request is authorised by the token of an
+ * unspent link of a lock in force, and by nothing else. No page and no route
+ * makes such a link: one is written where a lock begins (sign-in-lock.ts).
+ *
+ * "On confirmation the person is signed in, after the second step of FR-AU-83
+ * where two-factor authentication is on": for such an account no session is
+ * made here and the link is not spent. A step is begun that is marked as the
+ * link's, and its endpoint spends the link and lifts the lock where it
+ * completes, or spends the link where it is abandoned (two-factor.ts).
+ *
+ * It reads and writes rows, and never the signed copy (NFR-SE-17 (d)). The
+ * answer to success is that of a sign-in by password. A link that is spent,
+ * void, or not known is answered with the one fixed statement. NFR-SE-19: a
+ * sign-in refused, with the user where the link names one; the token is logged
+ * nowhere.
+ */
+export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }, async (ctx) => {
+  const entered = textFields(ctx.body, 'token');
+  if (!entered) return errorResponse(422, 'invalid_request', INVALID_LINK_REQUEST);
+  const { internalAdapter, authCookies, secret } = ctx.context;
+  const link = await findOpenSignInLink(entered.token);
+  const notValid = async () => {
+    await securityLog({ kind: 'sign_in_refused', userId: link?.userId });
+    return errorResponse(409, 'sign_in_link_not_valid', SIGN_IN_LINK_NOT_VALID);
+  };
+  if (!link) return notValid();
+  // "Where the browser already holds a session of another account, … the
+  // confirmation ends that session before it signs the person in"; and a
+  // session of this account too, as every sign-in does (the owner's decision
+  // of 8 October 2026, above).
+  const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
+  ctx.setHeader('Cache-Control', 'no-store');
+
+  if (link.twoFactorEnabled) {
+    await beginSecondStep(ctx, link.userId, link.until);
+    if (held) {
+      await db().session.deleteMany({ where: { token: held } });
+      deleteSessionCookie(ctx);
+    }
+    return ctx.json({ twoFactorRedirect: true });
+  }
+
+  const user = await internalAdapter.findUserById(link.userId);
+  if (!user) return notValid();
+  // The session first and the claim after, as a sign-in by password makes its
+  // session before it asks the password again: whatever makes the link void
+  // either finds this session among those it ends, or leaves the claim nothing.
+  const session = await internalAdapter.createSession(user.id);
+  if (!session) throw new NoSession('sign-in link: no session');
+  const claimed = await db()
+    .$transaction(async (tx) => {
+      if (held) await tx.session.deleteMany({ where: { token: held } });
+      if (!(await claimSignInLink(tx, link))) throw LINK_GONE;
+      return true;
+    })
+    .catch((error: unknown) => {
+      if (error === LINK_GONE) return false;
+      throw error;
+    });
+  if (!claimed) {
+    await db().session.deleteMany({ where: { token: session.token } });
+    return notValid();
+  }
+  // "The counters of failed sign-ins for the address are cleared when that
+  // sign-in completes." The sign-in stands whether or not this succeeds, as a
+  // reset does (password.ts): uncleared, the counts refuse for the rest of
+  // their hour and no longer.
+  await clearFailedSignIns(link.email).catch(() =>
+    console.error('sign-in link: signed in, counts of failed sign-ins not cleared'),
+  );
+  const step = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
+  if (ctx.getCookie(step.name)) expireCookie(ctx, step);
+  // "The session is an ordinary session (FR-AU-84), and the password is not changed."
+  await setSessionCookie(ctx, { session, user }, false);
   return ctx.json({});
 });
 

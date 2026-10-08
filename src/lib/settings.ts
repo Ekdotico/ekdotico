@@ -79,6 +79,13 @@ export interface Settings {
    */
   secondStepWrongCodes: number;
   /**
+   * FR-AU-81, NFR-SE-07: how long the twentieth failed sign-in locks an
+   * account, "1 hour", an initial value (register D115: "both figures are
+   * settings"; the other is the limit FAILED_SIGN_IN_PER_EMAIL). The sign-in
+   * link of the lock's email is valid as long.
+   */
+  signInLockSeconds: number;
+  /**
    * FR-AU-89: the key of the signed admission requests, or none. Without it
    * every admission request is refused. The name and the form are provisional
    * (docs/contracts/admission-signature.md).
@@ -252,6 +259,8 @@ export function loadSettings(env: Env = process.env): Settings {
     // and with 0 wrong codes no count would ever reach the number.
     secondStepSeconds: wholeNumber(env, 'TWO_FACTOR_STEP_SECONDS', 600, 1),
     secondStepWrongCodes: wholeNumber(env, 'TWO_FACTOR_WRONG_CODES', 5, 1),
+    // At least 1: a lock of 0 seconds would be no lock, without a word.
+    signInLockSeconds: wholeNumber(env, 'SIGN_IN_LOCK_SECONDS', 3600, 1),
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),

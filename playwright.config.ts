@@ -62,6 +62,10 @@ export default defineConfig({
       // The same for the requests for a password reset, 10 an hour, which
       // the runs of an afternoon would use up between them.
       RATE_LIMIT_RESET_PER_ADDRESS: '100000/3600',
+      // And for the lock of FR-AU-81: one network address is allowed five
+      // failed sign-ins for an email address, so it never reaches a
+      // twentieth. Here the fifth is the one that locks.
+      RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '5/3600',
     },
     reuseExistingServer: false,
     timeout: 180_000,

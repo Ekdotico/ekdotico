@@ -22,6 +22,8 @@ A process refuses to start without `FOUNDING_TEAM_EMAILS`, `APP_ORIGIN`, `DATABA
 
 `TWO_FACTOR_STEP_SECONDS` is how long the second step of a sign-in stays open after the password, and how long the secret of an enrolment waits for its first code: 600, the 10 minutes of FR-AU-83, where the setting is absent. `TWO_FACTOR_WRONG_CODES` is the number of wrong codes at which either is over and begins again with the password: 5 where the setting is absent (NFR-SE-07). Each is a whole number, 1 or more, and anything else stops a process.
 
+`SIGN_IN_LOCK_SECONDS` is how long the twentieth failed sign-in for an email address locks its account, and how long the sign-in link in the email of the lock is valid: 3600, the 1 hour of FR-AU-81, where the setting is absent. The twenty and the hour they are counted in are the limit `RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL`. The email of the lock states all three as they are set. The lock is the column `User.lockedUntil`, so it holds on every instance; a sign-in reads it once, and is refused where the database does not answer.
+
 The database client gives up on a connection after 5 seconds, the server ends a statement after 5 seconds, and the client stops waiting for an answer after 5 seconds (`src/lib/db.ts`; NFR-SE-06). A connection to Valkey and a command sent to it are given 5 seconds each (`src/lib/valkey.ts`). A request that meets either fault is refused and never passed on.
 
 Changing `AUTH_SECRET` ends every session and forgets every count of NFR-SE-07, since the counters are stored under digests keyed by it. The procedure for rotating each secret is recorded before the first test user is admitted (NFR-SE-17 (e)); it is not yet written.

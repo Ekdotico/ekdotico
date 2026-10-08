@@ -90,8 +90,10 @@
   display: inline-flex;
 }
 
-/* A paragraph of a page. */
+/* A paragraph of a page. One may name an email address, which has no place to
+   break: it wraps inside the column at 320 CSS pixels (FR-AU-88). */
 .text {
   margin: var(--sp-0);
   max-inline-size: var(--measure);
+  overflow-wrap: anywhere;
 }

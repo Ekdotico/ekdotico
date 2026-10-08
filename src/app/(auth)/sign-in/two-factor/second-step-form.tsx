@@ -47,8 +47,10 @@ export function SecondStepForm({ returnTo }: { returnTo: string }) {
     setPending(false);
   }
 
-  // The sign-in "begins again with the password" (NFR-SE-07): no field is left to fill.
-  if (fault?.code === 'sign_in_again') {
+  // The sign-in "begins again with the password" (NFR-SE-07): no field is left
+  // to fill. Nor is one where the step began from the link of a lock email and
+  // the link is spent or void (FR-AU-81): the statement is the link's own.
+  if (fault?.code === 'sign_in_again' || fault?.code === 'sign_in_link_not_valid') {
     const signIn = returnTo === '/' ? '/sign-in' : `/sign-in?return=${encodeURIComponent(returnTo)}`;
     return (
       <FormFault title={fault.message} focusKey={attempt}>
