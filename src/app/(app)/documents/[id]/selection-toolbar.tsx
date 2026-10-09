@@ -5,7 +5,7 @@
 // (`@ekdotico/domico`, "The toolbar and the toggle button").
 'use client';
 
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useContext, useEffect, useLayoutEffect, useState } from 'react';
 import { useEditorState, type Editor } from '@tiptap/react';
 import {
   Button,
@@ -31,6 +31,7 @@ import {
 } from '@ekdotico/domico/icons';
 import { linkAddress } from '../../../../lib/editor/link.ts';
 import styles from './editor.module.css';
+import { Editable } from './extensions.tsx';
 
 // FR-ED-02, in its order: the name of each mark in the schema, the name of its
 // control, and its icon. The hyperlink is the eighth and has its own control.
@@ -57,7 +58,9 @@ function LinkForm({ editor, onDone }: { editor: Editor; onDone: () => void }) {
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const href = linkAddress(new FormData(event.currentTarget).get('address'));
+    // What a person typed, without the space round it: the rule itself mends nothing.
+    const typed = new FormData(event.currentTarget).get('address');
+    const href = linkAddress(typeof typed === 'string' ? typed.trim() : typed);
     if (!href) return setRefused((count) => count + 1);
     editor.chain().extendMarkRange('link').setLink({ href }).run();
     onDone();
@@ -130,6 +133,11 @@ export function SelectionToolbar({
   const [link, setLink] = useState(0);
   const [linking, setLinking] = useState(false);
   const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  // FR-ED-18: the dialog of a link does not outlast the editing it belongs to.
+  // Its command would change nothing (`mayApply`), so it is closed, and the
+  // text takes the focus (./editor.tsx).
+  const editable = useContext(Editable);
+  if (!editable && linking) setLinking(false);
 
   const selection = useEditorState({
     editor,
@@ -160,7 +168,7 @@ export function SelectionToolbar({
     };
   }, [editor, rowRef]);
 
-  const shown = selection.shown && (inText || inRow || linking);
+  const shown = editable && selection.shown && (inText || inRow || linking);
 
   // Above the start of the selection, and inside the surface at any width.
   useLayoutEffect(() => {

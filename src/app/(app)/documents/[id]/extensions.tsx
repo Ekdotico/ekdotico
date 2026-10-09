@@ -8,8 +8,15 @@
 // that a document or a clipboard supplied: a paste and a change from another
 // client both become nodes of this schema or nothing, there is no node for
 // raw HTML, and the one attribute that a browser acts on, the address of a
-// link, is held to src/lib/editor/link.ts where it is read and where it is
-// rendered. Every other attribute is read as one of a closed list.
+// link, is held to src/lib/editor/link.ts.
+//
+// The collaboration server does not read content, so every attribute of every
+// node and mark that arrives is hostile, whatever its type. Each attribute the
+// schema defines has one rule in `ATTRIBUTE_RULES` below, a closed list or a
+// bounded number, and the rule is applied where the schema makes a node or a
+// mark (`closeAttributes`): a plugin, a node view and `renderHTML` are all
+// handed the value the rule returned, and never the one that arrived. A value
+// outside its rule becomes the default; nothing throws.
 //
 // Every control is the design package's (E2), and every name the stylesheet
 // answers to is the one its contract gives (`@ekdotico/domico`, "The document
@@ -17,7 +24,7 @@
 'use client';
 
 import { createContext, useContext, useId, useState } from 'react';
-import { mergeAttributes, Node } from '@tiptap/core';
+import { Extension, mergeAttributes, Node } from '@tiptap/core';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Collaboration from '@tiptap/extension-collaboration';
 import Highlight from '@tiptap/extension-highlight';
@@ -26,6 +33,8 @@ import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { Placeholder } from '@tiptap/extensions';
+import type { Schema } from '@tiptap/pm/model';
+import { Plugin, type Transaction } from '@tiptap/pm/state';
 import {
   NodeViewContent,
   NodeViewWrapper,
@@ -35,6 +44,7 @@ import {
   type NodeViewProps,
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import { ySyncPluginKey } from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
 import type * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
@@ -76,6 +86,25 @@ function BlockControls({
     </div>
   );
 }
+
+/**
+ * Writes text to the clipboard. False where the browser refused it, or offers
+ * no clipboard at all, as on a page that is not served securely: either way
+ * nothing was copied, and the one who asked is told so (the owner's decision
+ * of 9 October 2026). No other way of copying is tried.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The owner approves the words with the pull request (the answer to Q6 of the plan).
+const CODE_NOT_COPIED =
+  'The code could not be copied. The browser may have refused access to the clipboard. Select the code and copy it with the keyboard.';
 
 // ── Code block (FR-ED-03) ───────────────────────────────────────────────────
 
@@ -128,18 +157,14 @@ export const codeLanguage = (given: unknown): string =>
 function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
   const editable = useContext(Editable);
   const id = useId();
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'no' | 'yes' | 'refused'>('no');
   const language = codeLanguage(node.attrs.language);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(node.textContent);
-    } catch {
-      // The browser refused the clipboard: nothing was copied, and the button says nothing else.
-      return;
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (!(await copyText(node.textContent))) return setCopied('refused');
+    setCopied('yes');
+    // The statement of a refusal stays until the next press; this one goes.
+    setTimeout(() => setCopied((now) => (now === 'yes' ? 'no' : now)), 2000);
   }
 
   return (
@@ -161,10 +186,11 @@ function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
           ))}
         </Select>
         <Button variant="quiet" onClick={copy}>
-          {copied ? 'Copied' : 'Copy'}
+          {copied === 'yes' ? 'Copied' : 'Copy'}
         </Button>
-        <span role="status" className="sr-only">
-          {copied ? 'Code copied' : ''}
+        {/* A refusal is said where it is seen as well as heard: the button does not say it. */}
+        <span role="status" className={copied === 'refused' ? undefined : 'sr-only'}>
+          {copied === 'yes' ? 'Code copied' : copied === 'refused' ? CODE_NOT_COPIED : ''}
         </span>
       </BlockControls>
       {/* FR-ED-03: "Code blocks shall not be subject to spell-checking". */}
@@ -396,7 +422,16 @@ function TableBlockView({ node, editor, getPos }: NodeViewProps) {
       const { from } = current.state.selection;
       if (pos === undefined || from <= pos || from >= pos + node.nodeSize) return null;
       const can = current.can();
-      return TABLE_ACTIONS.map(([command]) => can[command]());
+      const table = current.state.doc.nodeAt(pos);
+      const rows = table?.firstChild?.childCount ?? 0;
+      const columns = table?.firstChild?.firstChild?.childCount ?? 0;
+      return TABLE_ACTIONS.map(
+        ([command]) =>
+          can[command]() &&
+          // The bound of the schema: a row or a column past it would be no table at all.
+          !(command.startsWith('addRow') && rows >= TABLE_MOST) &&
+          !(command.startsWith('addColumn') && columns >= TABLE_MOST),
+      );
     },
   });
   const headerRow = node.firstChild?.firstChild?.firstChild?.type.name === 'tableHeader';
@@ -453,6 +488,118 @@ const TableCaption = Node.create({
   },
 });
 
+// ── What an attribute may hold ──────────────────────────────────────────────
+
+// The bounds are this file's: the Docs give none (reported for the register).
+/** The most cells one cell may span, each way. */
+const SPAN_MOST = 100;
+/** The most rows of a table, and the most cells of a row: ten thousand cells at most. */
+export const TABLE_MOST = 100;
+/** The widest column a cell may ask for, in CSS pixels. */
+const WIDTH_MOST = 2000;
+/** The highest number an ordered list may start at. */
+const START_MOST = 9999;
+const LIST_TYPES: readonly unknown[] = ['1', 'a', 'A', 'i', 'I'];
+const ALIGNMENTS: readonly unknown[] = ['left', 'center', 'right'];
+
+/** A whole number from `least` to `most`, or `otherwise`. A number written as text is not one. */
+const whole = (given: unknown, least: number, most: number, otherwise: number): number =>
+  typeof given === 'number' && Number.isInteger(given) && given >= least && given <= most ? given : otherwise;
+
+type Rule = (given: unknown, attributes: Record<string, unknown>) => unknown;
+
+const span: Rule = (given) => whole(given, 1, SPAN_MOST, 1);
+const CELL: Record<string, Rule> = {
+  colspan: span,
+  rowspan: span,
+  // Null, or one width for each column the cell spans, 0 for a column without one.
+  colwidth: (given, attributes) =>
+    Array.isArray(given) &&
+    given.length === span(attributes.colspan, attributes) &&
+    given.every((width) => whole(width, 0, WIDTH_MOST, -1) === width)
+      ? [...given]
+      : null,
+  align: (given) => (ALIGNMENTS.includes(given) ? given : null),
+};
+
+/**
+ * Every attribute of the schema, by node or mark, and what it may hold.
+ * tests/unit/editor-schema.test.ts fails where the schema has an attribute
+ * that is not here, so an upgrade of the library cannot add one unseen.
+ */
+export const ATTRIBUTE_RULES: Record<string, Record<string, Rule>> = {
+  heading: { level: (given) => whole(given, 1, 3, 1) },
+  orderedList: {
+    start: (given) => whole(given, 1, START_MOST, 1),
+    type: (given) => (LIST_TYPES.includes(given) ? given : null),
+  },
+  codeBlock: { language: codeLanguage },
+  callout: { type: calloutType },
+  tableOfContents: { depth: tocDepth },
+  tableCell: CELL,
+  tableHeader: CELL,
+  link: { href: linkAddress },
+};
+
+/**
+ * Has the schema apply the rules wherever it makes a node or a mark: from a
+ * change of another client, from a paste, from a command, from JSON. The
+ * library has no place to say this, so the one function through which each
+ * type computes its attributes is wrapped (`NodeType.computeAttrs`, which
+ * prosemirror-model 1.25.12 does not declare, and `MarkType.create`). The
+ * test of this file's rules fails if an upgrade moves either.
+ */
+export function closeAttributes(schema: Schema): Schema {
+  const closed = (name: string, spec: Record<string, { default?: unknown }>, made: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.keys(spec).map((key) => {
+        const rule = ATTRIBUTE_RULES[name]?.[key];
+        // An attribute without a rule holds its default and nothing else.
+        return [key, rule ? rule(made[key], made) : (spec[key]!.default ?? null)];
+      }),
+    );
+  for (const type of Object.values(schema.nodes)) {
+    const spec = type.spec.attrs;
+    if (!spec || Object.keys(spec).length === 0) continue;
+    const inner = type as unknown as { computeAttrs(given: unknown): Record<string, unknown> };
+    const compute = inner.computeAttrs.bind(type);
+    inner.computeAttrs = (given) => (given ? closed(type.name, spec, compute(given)) : compute(given));
+  }
+  for (const type of Object.values(schema.marks)) {
+    const spec = type.spec.attrs;
+    if (!spec || Object.keys(spec).length === 0) continue;
+    const create = type.create.bind(type);
+    type.create = (given = null) => (given ? create(closed(type.name, spec, create(given).attrs)) : create());
+  }
+  return schema;
+}
+
+/**
+ * FR-ED-18: whether a transaction may be applied. One that changes the
+ * document is applied only while the document can be edited, whichever control
+ * or command made it: a dialog or a menu that was open when the connection was
+ * lost changes nothing. A change that arrives from the collaboration binding
+ * is another client's, or the undoing of one's own, and always passes.
+ */
+export function mayApply(transaction: Transaction, editable: boolean): boolean {
+  const binding = transaction.getMeta(ySyncPluginKey) as { isChangeOrigin?: boolean } | undefined;
+  return !transaction.docChanged || editable || binding?.isChangeOrigin === true;
+}
+
+const Closed = Extension.create({
+  name: 'closed',
+  onBeforeCreate() {
+    closeAttributes(this.editor.schema);
+  },
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        filterTransaction: (transaction) => mayApply(transaction, this.editor.isEditable),
+      }),
+    ];
+  },
+});
+
 // ── The whole schema ────────────────────────────────────────────────────────
 
 const lowlight = createLowlight(common);
@@ -501,9 +648,11 @@ export function extensions(document: Y.Doc) {
     Callout,
     TableOfContents,
     PageBreak,
-    // A table stands only inside its block, with its caption.
-    Table.extend({ group: '' }),
-    TableRow,
+    // A table stands only inside its block, with its caption. Bounded, so
+    // that no table a client sends is too large to lay out (`TABLE_MOST`): one
+    // past the bound is not content of this schema, as a node without a type is not.
+    Table.extend({ group: '', content: `tableRow{1,${TABLE_MOST}}` }),
+    TableRow.extend({ content: `(tableCell | tableHeader){0,${TABLE_MOST}}` }),
     TableHeader,
     TableCell,
     TableBlock,
@@ -514,5 +663,6 @@ export function extensions(document: Y.Doc) {
         node.type.name === 'tableCaption' ? 'Caption' : editor.isEmpty ? 'Write the document here' : '',
     }),
     Collaboration.configure({ document, field: FRAGMENT_NAME }),
+    Closed,
   ];
 }

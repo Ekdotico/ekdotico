@@ -71,6 +71,11 @@ export default defineConfig({
       // The same for the requests for a password reset, 10 an hour, which
       // the runs of an afternoon would use up between them.
       RATE_LIMIT_RESET_PER_ADDRESS: '100000/3600',
+      // And for the admission endpoints, 60 a minute in all: each test makes
+      // an invitation, and the suite has nearly that many tests, so two runs
+      // within a minute, or a few more tests, would use it up. The limit
+      // itself is tested where it is counted (tests/integration).
+      RATE_LIMIT_ADMISSION: '100000/60',
     },
     reuseExistingServer: false,
     timeout: 180_000,

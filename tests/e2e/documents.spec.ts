@@ -2,7 +2,7 @@
 // creation of one, its renaming, the mark "Not recorded" with its explanation,
 // and the date in the zone of the browser (FR-ED-35, FR-ED-43, NFR-I18-06,
 // NFR-SE-08, NFR-SE-04).
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import { alertOn, expectNoSidewaysScroll, newPerson, screens, signUp, watchOrigins } from './account.ts';
 
 // The fixed texts, written out here and not taken from the code under test.

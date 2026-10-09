@@ -18,7 +18,7 @@ import { DocumentConnection, syncStatus, type Ending } from '../../../../lib/col
 import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
-import { BLOCK_CONTROLS, Editable, extensions } from './extensions.tsx';
+import { BLOCK_CONTROLS, Editable, copyText, extensions } from './extensions.tsx';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 
 // The fixed texts, word for word.
@@ -30,6 +30,8 @@ const AT_CAPACITY =
 // Expression Guidelines; the owner approves them with the pull request (the
 // answer to Q6 of the plan).
 const DISCARDED = 'Changes that were not yet sent were discarded.';
+const TEXT_NOT_COPIED =
+  'The text could not be copied. The browser may have refused access to the clipboard. Close this dialog, select the text in the document, and copy it with the keyboard before reloading.';
 const ENDED: Record<Ending, { title: string; text: string; href: string; link: string }> = {
   // FR-ED-41: "a neutral statement that the user's access to the document has ended".
   [REFUSAL.ACCESS_ENDED]: {
@@ -88,11 +90,20 @@ function Text({
   const keys = useId();
   // What the region says of itself, which follows `editable` (below).
   const readOnly = useRef(!editable);
+  // Whether the focus was last in the surface: the text, the toolbar, a
+  // block's controls, the dialog of a link.
+  const within = useRef(false);
   const all = useMemo(() => extensions(document), [document]);
 
   const editor = useEditor({
     extensions: all,
     editable,
+    // The library writes a `<style>` element, which the policy of the page
+    // admits by the nonce of the document that is loaded (src/lib/csp.ts). It
+    // is read from a script of that document, which is where a script may: a
+    // page reached without a load is rendered for another request, and the
+    // nonce of that one opens nothing here.
+    injectNonce: globalThis.document.querySelector<HTMLScriptElement>('script[nonce]')?.nonce,
     // Rendered in the browser alone: the server has no document to render.
     immediatelyRender: false,
     // FR-ED-14, the Markdown shortcuts, is the next slice's: the library's own
@@ -128,14 +139,17 @@ function Text({
   }, [onEditor, editor]);
 
   // FR-ED-18: read-only in the error state, and editable again when the
-  // connection returns. The focus stays where it was: a region that stops
-  // being editable would otherwise drop it.
+  // connection returns. The focus stays in the text: a region that stops being
+  // editable would otherwise drop it, and so would the toolbar, the controls
+  // of a block and the dialog of a link, which go when the editing does.
   useEffect(() => {
     if (!editor || editor.isEditable === editable) return;
-    const focused = editor.view.hasFocus();
+    const page = editor.view.dom.ownerDocument;
+    const active = page.activeElement;
+    const held = within.current && (active === page.body || surface.current?.contains(active));
     readOnly.current = !editable;
     editor.setEditable(editable);
-    if (focused) editor.view.dom.focus();
+    if (held) editor.view.dom.focus({ preventScroll: true });
   }, [editor, editable]);
 
   return (
@@ -143,7 +157,18 @@ function Text({
       <p id={keys} className={pageStyles.meta}>
         {KEYS}
       </p>
-      <div ref={surface} className={styles.surface}>
+      <div
+        ref={surface}
+        className={styles.surface}
+        onFocus={() => (within.current = true)}
+        onBlur={(event) => {
+          // To somewhere else on the page. A control that is removed while it
+          // has the focus names no such place, and the focus is still the surface's.
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
+            within.current = false;
+          }
+        }}
+      >
         {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
         <EditorContent editor={editor} />
       </div>
@@ -165,7 +190,9 @@ function SyncCheck({
   text: () => string;
   onClose: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  // Whether the last press of "Copy text" copied it. A refusal is never left
+  // unsaid: the reader was just told to copy before reloading.
+  const [copied, setCopied] = useState<boolean | null>(null);
   if (result === 'checking') return <p role="status">Checking the working version against the server…</p>;
   if (result === 'in-sync') {
     return (
@@ -190,22 +217,13 @@ function SyncCheck({
         </p>
       </FormFault>
       <Cluster gap={3}>
-        <Button
-          onClick={() =>
-            navigator.clipboard.writeText(text()).then(
-              () => setCopied(true),
-              () => {},
-            )
-          }
-        >
-          Copy text
-        </Button>
+        <Button onClick={() => void copyText(text()).then(setCopied)}>Copy text</Button>
         <Button variant="destructive" onClick={() => window.location.reload()}>
           Reload document
         </Button>
         <Button onClick={onClose}>Close</Button>
       </Cluster>
-      <p role="status">{copied ? 'Text copied.' : ''}</p>
+      <p role="status">{copied === null ? '' : copied ? 'Text copied.' : TEXT_NOT_COPIED}</p>
     </Stack>
   );
 }
@@ -213,6 +231,13 @@ function SyncCheck({
 function OpenDocument({ connection, canEdit }: { connection: DocumentConnection; canEdit: boolean }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
   const [check, setCheck] = useState<'checking' | 'in-sync' | 'unconfirmed' | null>(null);
+  // Which check the dialog is showing. An answer to a check whose dialog was
+  // closed, or that another check replaced, opens nothing and takes no focus.
+  const asked = useRef(0);
+  const close = () => {
+    asked.current += 1;
+    setCheck(null);
+  };
   const editor = useRef<TextEditor | null>(null);
   const keep = useCallback((made: TextEditor | null) => {
     editor.current = made;
@@ -244,8 +269,11 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
           state={status.state}
           label={status.label}
           onClick={() => {
+            const mine = (asked.current += 1);
             setCheck('checking');
-            void connection.verify().then((same) => setCheck(same ? 'in-sync' : 'unconfirmed'));
+            void connection.verify().then((same) => {
+              if (asked.current === mine) setCheck(same ? 'in-sync' : 'unconfirmed');
+            });
           }}
         />
       )}
@@ -253,13 +281,13 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
       {state.opened ? (
         <Text document={connection.document} editable={canEdit && state.phase !== 'lost'} onEditor={keep} />
       ) : null}
-      <Dialog open={check !== null} onClose={() => setCheck(null)} title="Sync status">
+      <Dialog open={check !== null} onClose={close} title="Sync status">
         {check ? (
           <SyncCheck
             result={check}
             // The text as the blocks hold it, a blank line between two.
             text={() => editor.current?.getText() ?? ''}
-            onClose={() => setCheck(null)}
+            onClose={close}
           />
         ) : null}
       </Dialog>

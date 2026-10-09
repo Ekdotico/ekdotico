@@ -130,6 +130,9 @@ async function expectRefused(port: number, asked: Asked, status: number) {
   expect(answer.status).toBe(status);
   expect(answer.body).toBe('');
   expect(answer.headers['cache-control']).toBe('no-store');
+  // src/lib/csp.ts: an answer of this server is no page, and admits nothing.
+  expect(answer.headers['content-security-policy']).toBe("default-src 'none'; frame-ancestors 'none'");
+  expect(answer.headers['x-content-type-options']).toBe('nosniff');
   expect(answer.headers.upgrade).toBeUndefined();
   return answer;
 }
@@ -320,6 +323,14 @@ describe('the health check and the path (NFR-SE-05 (c))', () => {
     const health = await fetch(`${base}/collab/health`);
     expect(health.status).toBe(200);
     expect(await health.text()).toBe('');
+    const owed = (response: Response) => {
+      expect(response.headers.get('content-security-policy')).toBe(
+        "default-src 'none'; frame-ancestors 'none'",
+      );
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    };
+    owed(health);
     for (const [method, path] of [
       ['POST', '/collab/health'],
       ['GET', '/collab'],
@@ -328,6 +339,7 @@ describe('the health check and the path (NFR-SE-05 (c))', () => {
       const response = await fetch(base + path, { method });
       expect(response.status).toBe(404);
       expect(await response.text()).toBe('');
+      owed(response);
     }
   });
 

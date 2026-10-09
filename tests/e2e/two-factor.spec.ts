@@ -4,7 +4,7 @@
 // replacing the codes, turning it off; and an account of the founding team,
 // which meets the enrolment before anything else.
 import { randomUUID } from 'node:crypto';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import {
   NOTICE_TITLE,
   alertOn,
@@ -311,7 +311,9 @@ test('an account of the founding team meets the enrolment first, then the notice
     const sent = await response!.text();
     expect(sent).not.toContain(title);
     expect(sent).not.toContain('Page not found');
-    answers.push(sent.replaceAll(id, 'ID'));
+    // But for the address itself, and the nonce of the request (src/lib/csp.ts).
+    const nonce = /'nonce-([^']+)'/.exec(response!.headers()['content-security-policy']!)![1]!;
+    answers.push(sent.replaceAll(id, 'ID').replaceAll(nonce, 'NONCE'));
   }
   expect(answers[0]).toBe(answers[1]);
   // FR-AU-83: every page shows it in place of its content, with only the means to sign out beside it…

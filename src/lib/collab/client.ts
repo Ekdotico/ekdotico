@@ -194,6 +194,13 @@ export class DocumentConnection {
     clearTimeout(this.retryTimer);
     if (this.state.phase !== 'lost') this.set({ phase: 'restoring' });
     this.expectConnection();
+    // FOR THE SLICE THAT BUILDS SHARING (slice 13): the socket that the library
+    // opens next carries whatever session cookie the browser holds then. Once a
+    // document can have two accounts, a tab opened by one could resume as
+    // another, with the first account's unsent changes in it. This probe is
+    // where the page learns of the account again: it should then answer whose
+    // session it is, and a session of another account should end the
+    // connection as an ended session does, before anything is sent.
     void this.options.probe().then(
       (status) => {
         if (status === 401) this.end(REFUSAL.SESSION_ENDED);

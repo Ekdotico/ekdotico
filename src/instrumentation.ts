@@ -5,11 +5,21 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     try {
       // Inside the `try`: a module that fails to load stops the process as well.
-      const { loadSettings } = await import('./lib/settings.ts');
+      const { loadSettings, refuseBuiltCollabRewrite } = await import('./lib/settings.ts');
       const { assertContractVersion } = await import('./lib/istorico/index.ts');
       const { startTimers } = await import('./lib/timers.ts');
       const { auth } = await import('./lib/auth/auth.ts');
-      loadSettings();
+      const { readFileSync } = await import('node:fs');
+      const { appOrigin } = loadSettings();
+      // docs/operations/deployment.md, item 9: the rewrites this process serves
+      // are those of the build, read from where `next start` reads them.
+      let manifest: string | null = null;
+      try {
+        manifest = readFileSync('.next/routes-manifest.json', 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      refuseBuiltCollabRewrite(appOrigin, manifest);
       assertContractVersion();
       // NFR-SE-17: a configuration the library would not take as written stops
       // the process here. The library builds it in the background, and refuses
