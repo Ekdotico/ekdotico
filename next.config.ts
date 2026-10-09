@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next';
+import { COMPANION_HEADERS, STATIC_POLICY } from './src/lib/csp.ts';
 
 /**
  * The pages whose address holds the token of a single-use link (src/proxy.ts,
@@ -17,15 +18,59 @@ export const TOKEN_PAGES = [
   '/confirm-address/:token',
 ];
 
+const onLocalhost = (url: string | undefined) =>
+  URL.canParse(url ?? '') && ['localhost', '127.0.0.1'].includes(new URL(url!).hostname);
+
+/**
+ * DEVELOPMENT ONLY. The session cookie is host-only, so a page reaches the
+ * collaboration server on its own origin and nowhere else (FR-AU-08). A
+ * deployment's reverse proxy serves `/collab` there
+ * (docs/operations/deployment.md); a development machine has none, so where
+ * `COLLAB_PROXY_TARGET` is set the web application itself passes `/collab`,
+ * the WebSocket upgrade included, to the collaboration server. The `Origin`
+ * and `Cookie` headers travel as the browser sent them, and the collaboration
+ * server checks both exactly as it does in production: nothing here answers
+ * for it.
+ *
+ * Refused unless the application and the target are both on localhost, so
+ * that no deployment comes to rest on it: there the proxy's rules for
+ * `X-Forwarded-For` and `x-prerender-revalidate` must hold in front of both
+ * processes, and this would put one behind the other.
+ */
+export function collabRewrites(env: Record<string, string | undefined> = process.env) {
+  const target = env.COLLAB_PROXY_TARGET;
+  if (!target) return [];
+  if (!onLocalhost(env.APP_ORIGIN) || !onLocalhost(target)) {
+    throw new Error(
+      'COLLAB_PROXY_TARGET is for a development machine: unset it, or set it and APP_ORIGIN to addresses on localhost.',
+    );
+  }
+  return [{ source: '/collab', destination: `${new URL(target).origin}/collab` }];
+}
+
 const config: NextConfig = {
   poweredByHeader: false,
+  rewrites: async () => collabRewrites(),
   // The development server would write an AGENTS.md of its own into the repository.
   agentRules: false,
-  headers: async () =>
-    TOKEN_PAGES.map((source) => ({
+  headers: async () => [
+    // Every response, the proxy's own answers and those it never saw among
+    // them (docs/operations/deployment.md): the headers of src/lib/csp.ts,
+    // with the policy that admits nothing. The proxy replaces the policy on
+    // the pages it passes on, with one that holds the nonce of the request
+    // (src/proxy.ts); a page that reaches a browser without passing the proxy
+    // runs nothing.
+    {
+      source: '/:path*',
+      headers: [{ key: 'Content-Security-Policy', value: STATIC_POLICY }, ...COMPANION_HEADERS],
+    },
+    // After the rule above, so that this value is the one sent: where two
+    // rules set one header, Next.js sends the last.
+    ...TOKEN_PAGES.map((source) => ({
       source,
       headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }],
     })),
+  ],
 };
 
 export default config;

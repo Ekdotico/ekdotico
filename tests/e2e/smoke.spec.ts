@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
+import { AUTH_SECRET } from './origin.ts';
 
 // NFR-SE-05, FR-AU-07: a path that is not on the allow-list requires a session,
 // and a visitor without one is sent to sign in and returned afterwards.
@@ -35,5 +36,32 @@ test('the web application refuses to start without FOUNDING_TEAM_EMAILS', () => 
     timeout: 30_000,
   });
   expect(started.stderr).toContain('FOUNDING_TEAM_EMAILS is not set');
+  expect(started.status).toBe(1);
+});
+
+// docs/operations/deployment.md, item 9. The build of this run holds the
+// development rewrite of `/collab` (playwright.config.ts), and `next start`
+// serves the rewrites of the build whatever the environment says: started
+// where the origin is not on localhost, the process has to exit.
+test('the web application refuses to start away from localhost on a build that holds the development rewrite', () => {
+  // Next.js itself and not through pnpm: were the start not refused, the end of the wait would stop the server it left.
+  const started = spawnSync('node', ['node_modules/next/dist/bin/next', 'start', '-p', '3997'], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN: 'https://app.example.test',
+      // The setting itself is absent here: it is the build that is refused.
+      COLLAB_PROXY_TARGET: '',
+      EMAIL_TRANSPORT: 'sink',
+      EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
+      TRUSTED_PROXY_COUNT: '1',
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(started.stderr).toContain('This build passes /collab to the collaboration server itself');
   expect(started.status).toBe(1);
 });

@@ -5,7 +5,7 @@
 // ready. Each such control is disabled until it is (src/components/ready.ts),
 // so a press waits and then works once; left enabled, the press did nothing,
 // or the form posted itself to the address of its page.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import { NOTICE_TITLE, invite, newPerson } from './account.ts';
 
 const HELD_MS = 1500;

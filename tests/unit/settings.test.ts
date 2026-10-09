@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadSettings } from '../../src/lib/settings.ts';
+import { loadSettings, refuseBuiltCollabRewrite } from '../../src/lib/settings.ts';
 
 const env = {
   FOUNDING_TEAM_EMAILS: '',
@@ -254,6 +254,13 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(changed).toMatchObject({ collabStoreDelayMs: 1000, collabStoreMaxMs: 3000 });
   });
 
+  // FR-ED-23: "30 seconds (an initial value)".
+  it('shows the error state of the editor after 30 seconds without a connection', () => {
+    expect(settings.collabErrorAfterMs).toBe(30000);
+    expect(loadSettings({ ...env, COLLAB_ERROR_AFTER_MS: '5000' }).collabErrorAfterMs).toBe(5000);
+    expect(() => loadSettings({ ...env, COLLAB_ERROR_AFTER_MS: '0' })).toThrow(/COLLAB_ERROR_AFTER_MS/);
+  });
+
   it('refuses a period of the storing too short for the write to fit in it', () => {
     expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '999' })).toThrow(/COLLAB_STORE_DELAY_MS/);
     expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '0' })).toThrow(/COLLAB_STORE_DELAY_MS/);
@@ -410,4 +417,74 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(() => loadSettings({ ...env, SESSION_MAX_SECONDS: '3600' })).toThrow(/SESSION_MAX_SECONDS/);
     expect(load(600, 600, 600)).toMatchObject({ sessionRenewSeconds: 600, sessionMaxSeconds: 600 });
   });
+});
+
+// docs/operations/deployment.md, item 9: the development rewrite of `/collab`
+// is refused at the start of a process that is not on localhost, by the
+// setting and by what the build holds, since `next start` reads the build.
+describe('the development rewrite of /collab, at the start of a process', () => {
+  const target = 'http://127.0.0.1:1234';
+  const manifest = (afterFiles: unknown[]) =>
+    JSON.stringify({ version: 3, rewrites: { beforeFiles: [], afterFiles, fallback: [] } });
+  const rewrite = { source: '/collab', destination: `${target}/collab`, regex: '^/collab(?:/)?$' };
+
+  it('is refused by its setting where the origin is not on localhost', () => {
+    expect(() => loadSettings({ ...env, COLLAB_PROXY_TARGET: target })).toThrow(
+      /COLLAB_PROXY_TARGET is for a development machine/,
+    );
+    expect(() => loadSettings({ ...env, COLLAB_PROXY_TARGET: target })).not.toThrow(/127\.0\.0\.1/);
+    expect(loadSettings({ ...env, COLLAB_PROXY_TARGET: '' }).appOrigin).toBe(env.APP_ORIGIN);
+  });
+
+  it.each(['http://localhost:3000', 'http://127.0.0.1:3000'])('is admitted on %s', (origin) => {
+    expect(loadSettings({ ...env, APP_ORIGIN: origin, COLLAB_PROXY_TARGET: target }).appOrigin).toBe(origin);
+    expect(() => refuseBuiltCollabRewrite(origin, manifest([rewrite]))).not.toThrow();
+  });
+
+  it('is refused where the build holds it and the origin is not on localhost', () => {
+    const refused = /This build passes \/collab to the collaboration server itself/;
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([rewrite]))).toThrow(refused);
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([rewrite]))).not.toThrow(/127\.0\.0\.1/);
+    expect(() =>
+      refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{ source: '/collab/:path*', destination: target }])),
+    ).toThrow(refused);
+    // The older form of the manifest, a list; and each of the three lists of this one.
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, JSON.stringify({ rewrites: [rewrite] }))).toThrow(
+      refused,
+    );
+    for (const list of ['beforeFiles', 'fallback']) {
+      expect(() =>
+        refuseBuiltCollabRewrite(env.APP_ORIGIN, JSON.stringify({ rewrites: { [list]: [rewrite] } })),
+      ).toThrow(refused);
+    }
+    // A rewrite that cannot be read is not taken for another path.
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{}]))).toThrow(refused);
+  });
+
+  it('admits a build without it', () => {
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([]))).not.toThrow();
+    expect(() =>
+      refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{ source: '/collaborators', destination: '/x' }])),
+    ).not.toThrow();
+  });
+
+  // A build that is not where it is looked for cannot be checked, so it does
+  // not pass: only a development machine starts without one.
+  it('refuses the absence of a build where the origin is not on localhost, and admits it there', () => {
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, null)).toThrow(
+      /routes manifest of the build was not found/,
+    );
+    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:3000']) {
+      expect(() => refuseBuiltCollabRewrite(origin, null)).not.toThrow();
+    }
+  });
+
+  it.each(['', 'not JSON', '{}', '{"rewrites":null}', '{"rewrites":"none"}'])(
+    'refuses a manifest that cannot be read (%j)',
+    (text) => {
+      expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, text)).toThrow(
+        /routes manifest of the build cannot be read/,
+      );
+    },
+  );
 });

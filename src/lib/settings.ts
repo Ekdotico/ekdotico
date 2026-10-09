@@ -110,6 +110,12 @@ export interface Settings {
    */
   collabStoreDelayMs: number;
   collabStoreMaxMs: number;
+  /**
+   * FR-ED-23: how long the editor tries to restore a lost connection before
+   * the sync status indicator shows its error state. Milliseconds; the initial
+   * value is 30 seconds. The page hands it to the editor.
+   */
+  collabErrorAfterMs: number;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -205,6 +211,14 @@ export function loadSettings(env: Env = process.env): Settings {
   // deployment loses its email unnoticed: sign-in and reset answer the same
   // whether or not a message went.
   const local = ['localhost', '127.0.0.1'].includes(hostname);
+  // docs/operations/deployment.md, item 9: the web application passes `/collab`
+  // to the collaboration server itself on a development machine alone
+  // (next.config.ts). The build refuses the setting with an origin that is not
+  // on localhost; a build made on localhost and started elsewhere is refused
+  // here, and what such a build holds is refused by `refuseBuiltCollabRewrite`.
+  if (!local && env.COLLAB_PROXY_TARGET) {
+    throw new Error('COLLAB_PROXY_TARGET is for a development machine: unset it.');
+  }
   if (env.EMAIL_TRANSPORT ? env.EMAIL_TRANSPORT !== 'sink' : !local) {
     throw new Error('EMAIL_TRANSPORT must be set to sink: no other sender of email is built yet.');
   }
@@ -330,8 +344,51 @@ export function loadSettings(env: Env = process.env): Settings {
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     collabStoreDelayMs,
     collabStoreMaxMs,
+    collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),
     limits,
   };
+}
+
+/**
+ * Refuses a start where the application is not on localhost and the build it
+ * runs holds the development rewrite of `/collab` (next.config.ts): `next
+ * start` reads its rewrites from the build and never from the environment, so
+ * a build made with `COLLAB_PROXY_TARGET` would serve the rewrite wherever it
+ * is started, whatever is set there.
+ *
+ * `manifest` is the text of `.next/routes-manifest.json`, or null where the
+ * file is absent. On localhost that is no fault: the development server has
+ * no build. Anywhere else a build that cannot be checked is refused as one
+ * that fails the check, whether the file is absent or cannot be read as a
+ * manifest: a start from another directory would otherwise pass unchecked.
+ */
+export function refuseBuiltCollabRewrite(appOrigin: string, manifest: string | null): void {
+  if (['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) return;
+  if (manifest === null) {
+    throw new Error(
+      'The routes manifest of the build was not found at .next/routes-manifest.json: start the application in the directory that holds its build.',
+    );
+  }
+  let rewrites: unknown;
+  try {
+    rewrites = (JSON.parse(manifest) as { rewrites?: unknown }).rewrites;
+  } catch {
+    rewrites = undefined;
+  }
+  if (rewrites === null || typeof rewrites !== 'object') {
+    throw new Error('The routes manifest of the build cannot be read: build the application again.');
+  }
+  // An array in an older manifest, and three lists by name in this one.
+  const all = (Array.isArray(rewrites) ? rewrites : Object.values(rewrites).flat()) as unknown[];
+  const collab = all.some((each) => {
+    const source = (each as { source?: unknown } | null)?.source;
+    return typeof source !== 'string' || source === '/collab' || source.startsWith('/collab/');
+  });
+  if (collab) {
+    throw new Error(
+      'This build passes /collab to the collaboration server itself, which is for a development machine: build the application again without COLLAB_PROXY_TARGET.',
+    );
+  }
 }
 
 let loaded: Settings | undefined;

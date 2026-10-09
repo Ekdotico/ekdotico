@@ -3,7 +3,7 @@
 // FR-AU-88, FR-AU-90; the owner's answer to Q3 of the plan, and the owner's
 // decision of 9 October 2026 that the change is confirmed only under a
 // session of the account that asked for it).
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import {
   SIGN_IN_REFUSED,
   alertOn,

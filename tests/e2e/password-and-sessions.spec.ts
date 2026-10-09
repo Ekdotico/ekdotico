@@ -1,7 +1,7 @@
 // The reset of a password by an emailed link, its change in the account
 // settings, and the list of sessions with the means to end them (FR-AU-85,
 // FR-AU-86, FR-AU-87 (c), (d), FR-AU-88; NFR-I18-06).
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import {
   NOTICE_TITLE,
   SIGN_IN_REFUSED,

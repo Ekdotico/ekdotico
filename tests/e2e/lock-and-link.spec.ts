@@ -7,7 +7,7 @@
 // the sign-in by its link are what only a lock produces, and the first test
 // reads both. That the lock alone refuses, with the counts cleared, is shown
 // in tests/integration/sign-in-lock.test.ts.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import {
   NOTICE_TITLE,
   SIGN_IN_REFUSED,

@@ -18,7 +18,10 @@ describe('the pages whose address holds a token', () => {
   });
 
   it('are each answered with Referrer-Policy: no-referrer, and with nothing weaker', async () => {
-    const rules = await config.headers!();
+    // After the rule of every response (tests/unit/csp.test.ts), which sets a
+    // weaker value: where two rules set one header, Next.js sends the last.
+    const [every, ...rules] = await config.headers!();
+    expect(every!.source).toBe('/:path*');
     expect(rules.map((rule) => rule.source)).toEqual(TOKEN_PAGES);
     for (const rule of rules) {
       expect(rule.headers, rule.source).toEqual([{ key: 'Referrer-Policy', value: 'no-referrer' }]);

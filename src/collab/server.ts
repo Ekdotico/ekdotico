@@ -40,7 +40,16 @@ import {
   type CollabEventSubscription,
 } from '../lib/collab/events.ts';
 import { COLLAB_PATH, REFUSAL, type Refusal } from '../lib/collab/protocol.ts';
-import { applyState, assertUpdate, loadState, storeFinalState, storeState } from '../lib/collab/state.ts';
+import { ISOLATION_HEADERS, STATIC_POLICY } from '../lib/csp.ts';
+import {
+  applyState,
+  assertUpdate,
+  loadState,
+  MAX_MESSAGE_BYTES,
+  pastLimits,
+  storeFinalState,
+  storeState,
+} from '../lib/collab/state.ts';
 import { db } from '../lib/db.ts';
 import { authorise } from '../lib/documents/access.ts';
 import { faultOf } from '../lib/fault.ts';
@@ -51,6 +60,16 @@ import { securityLog } from '../lib/security-log.ts';
 import { settings, type Settings } from '../lib/settings.ts';
 
 export const HEALTH_PATH = '/collab/health';
+
+// What every answer over HTTP carries, the health check and each refusal of a
+// handshake: none is kept, none is a page, and none is read as anything but
+// what it is (src/lib/csp.ts).
+const ANSWER_HEADERS = {
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': STATIC_POLICY,
+  'X-Content-Type-Options': 'nosniff',
+  ...Object.fromEntries(ISOLATION_HEADERS.map(({ key, value }) => [key, value])),
+};
 
 type StoreSettings = Pick<Settings, 'collabStoreDelayMs' | 'collabStoreMaxMs'>;
 
@@ -381,6 +400,11 @@ export function createCollabServer(store: StoreSettings) {
     quiet: true,
     // Stopping is this file's own: see `stop`.
     stopOnSignals: false,
+    // Handed to the socket library as they are (@hocuspocus/server 4.7.0,
+    // Server.ts: `serverOptions` of crossws, which are those of `ws`). A
+    // message longer than this is never read to its end: the socket is closed
+    // with the code 1009.
+    websocketOptions: { maxPayload: MAX_MESSAGE_BYTES },
 
     async onRequest({ request, response }) {
       // NFR-SE-05 (c): reports whether the service is up and returns nothing
@@ -391,7 +415,7 @@ export function createCollabServer(store: StoreSettings) {
       // database for the answer: it is what the subscription last said.
       const health = request.method === 'GET' && request.url === HEALTH_PATH;
       const status = !health ? 404 : events?.isSubscribed() ? 200 : 503;
-      response.writeHead(status, { 'Cache-Control': 'no-store' }).end();
+      response.writeHead(status, ANSWER_HEADERS).end();
       return answered();
     },
 
@@ -425,8 +449,9 @@ export function createCollabServer(store: StoreSettings) {
           `HTTP/1.1 ${outcome.status} ${STATUS_CODES[outcome.status]}`,
           'Connection: close',
           'Content-Length: 0',
-          'Cache-Control: no-store',
-          ...Object.entries(outcome.headers ?? {}).map(([name, value]) => `${name}: ${value}`),
+          ...Object.entries({ ...ANSWER_HEADERS, ...outcome.headers }).map(
+            ([name, value]) => `${name}: ${value}`,
+          ),
         ];
         socket.end(`${head.join('\r\n')}\r\n\r\n`, () => socket.destroy());
         return answered();
@@ -579,13 +604,24 @@ export function createCollabServer(store: StoreSettings) {
      * nor acknowledged, nor sent to anyone. The first step of a
      * synchronisation carries no update.
      */
-    async beforeSync({ type, payload }) {
+    async beforeSync({ type, payload, document, documentName, context }) {
       if (type === messageYjsSyncStep1) return;
+      let past: boolean;
       try {
         assertUpdate(payload);
+        // The limits of a document (src/lib/collab/state.ts): an update that
+        // would take it past one is refused as one that cannot be stored is.
+        past = pastLimits(document, payload);
       } catch {
         // An object, which the library reads a close code from, and with no
         // message for it to print: what Yjs throws can quote the update.
+        throw {};
+      }
+      if (past) {
+        // NFR-SE-19: a refusal of what an account may not do, as a 403 is, with
+        // the user and the document and nothing of the update. ASSUMED: the
+        // requirement lists no kind for it (reported for the register).
+        await securityLog({ kind: 'forbidden', userId: context.userId, documentId: documentName });
         throw {};
       }
     },

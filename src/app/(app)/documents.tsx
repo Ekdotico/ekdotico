@@ -17,11 +17,7 @@ import { useReady } from '../../components/ready.ts';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { InBrowser, LocalTime } from './local-time.tsx';
-
-// FR-ED-43, the two fixed texts, word for word: the mark, and its explanation.
-const NOT_RECORDED = 'Not recorded';
-const NOT_RECORDED_EXPLANATION =
-  'This document was created while writing was not being recorded. It has no provenance record, and it can never be sealed.';
+import { NOT_RECORDED, NOT_RECORDED_EXPLANATION } from './not-recorded.ts';
 
 // FR-ED-35: the limit of a title and its default, stated where a title is typed.
 const TITLE_HINT = 'A title has at most 200 characters. An empty title is stored as “Untitled document”.';
@@ -256,7 +252,8 @@ export function Documents({
                         `bdi` keeps a title written right to left from
                         reordering the mark beside it. */}
                     <bdi id={`title-${document.id}`} className={styles.documentTitle}>
-                      {document.title}
+                      {/* The owner's decision E4 of 8 October 2026: the page of a document. */}
+                      <Link href={`/documents/${document.id}`}>{document.title}</Link>
                     </bdi>
                     {document.recording === 'UNRECORDED' ? (
                       <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>

@@ -117,6 +117,12 @@
   overflow-wrap: anywhere;
 }
 
+/* The same, of a title set as the heading of its page. */
+.breakable {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
 .meta {
   margin: var(--sp-0);
   font-size: var(--fs-sm);

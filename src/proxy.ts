@@ -10,6 +10,7 @@ import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { FORBIDDEN, notAdmitted, tooManyRequests } from './lib/auth/route-answers.ts';
 import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
+import { newNonce, NONCE_HEADER, pagePolicy } from './lib/csp.ts';
 import { faultOf } from './lib/fault.ts';
 import { errorResponse, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
@@ -110,6 +111,36 @@ const MESSAGES = {
   internal: INTERNAL_FAULT,
 };
 
+/**
+ * Passes a request on. A page is passed on with a Content-Security-Policy that
+ * holds a nonce made for this request, on the request, where Next.js reads it
+ * and writes the nonce on every script of the page, and on the response
+ * (Next.js 16.4.0, "Content Security Policy"). Everything else, an API route
+ * and a file of the build, keeps the policy every response has, which admits
+ * nothing (next.config.ts), and so does every answer this file makes itself.
+ */
+function onward(request: NextRequest): NextResponse {
+  const { pathname } = request.nextUrl;
+  // Under `/_next/` nothing is a page, whether or not it is a file of the
+  // build. A route is handed the request as it came, and nothing with it
+  // (tests/integration/proxy.test.ts): it reads no nonce.
+  if (pathname === '/api' || pathname.startsWith('/api/') || pathname.startsWith('/_next/')) {
+    return NextResponse.next();
+  }
+  const nonce = newNonce();
+  const policy = pagePolicy(nonce, {
+    development: process.env.NODE_ENV === 'development',
+    local: ['localhost', '127.0.0.1'].includes(new URL(settings().appOrigin).hostname),
+  });
+  // In place of whatever the client sent under these names: never a nonce of its choosing.
+  const headers = new Headers(request.headers);
+  headers.set(NONCE_HEADER, nonce);
+  headers.set('Content-Security-Policy', policy);
+  const response = NextResponse.next({ request: { headers } });
+  response.headers.set('Content-Security-Policy', policy);
+  return response;
+}
+
 function withCookies<T extends Response>(response: T, setCookie: readonly string[]): T {
   for (const cookie of setCookie) response.headers.append('Set-Cookie', cookie);
   return response;
@@ -134,7 +165,7 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
 
   // (c) The health check is exempt from every limit (NFR-SE-07), and static
   // assets are not among the rows of its table.
-  if (group === 'c' || group === 'static') return NextResponse.next();
+  if (group === 'c' || group === 'static') return onward(request);
 
   // (b) The admission endpoints pass untouched. Their limit, 60 in any minute
   // in all, cannot rightly be taken here: "a request whose signature does not
@@ -145,7 +176,7 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
   // takes the limit. Nor is the origin check theirs: they carry no session,
   // are called by a command and never from a browser, and the signature is
   // what authenticates them (NFR-SE-17 (c); API design, "Admission").
-  if (group === 'b') return NextResponse.next();
+  if (group === 'b') return onward(request);
 
   // (a) The pages and endpoints of a person without a session: limited for
   // each network address (NFR-SE-07), and counted before anything else, so
@@ -164,7 +195,7 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
       progress.stage = 'origin';
       return await forbidden();
     }
-    return NextResponse.next();
+    return onward(request);
   }
 
   // Every other path requires a session. The order is that of the owner's
@@ -223,7 +254,7 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
 
   // The route validates again where it needs the user (session.ts): no header
   // carries the identity from here, so there is none for a client to forge.
-  return withCookies(NextResponse.next(), setCookie);
+  return withCookies(onward(request), setCookie);
 }
 
 export async function proxy(request: NextRequest): Promise<Response> {

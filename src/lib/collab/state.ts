@@ -52,6 +52,80 @@ export function assertUpdate(update: Uint8Array): void {
   }
 }
 
+// The two limits of a document (the owner's decision of 9 October 2026 on the
+// second review of pull request 20; its register row is pending). They are
+// named here and nowhere else.
+/** The most bytes the state of a document may be, encoded as it is stored (`encodeState`). */
+export const MAX_STATE_BYTES = 5 * 1024 * 1024;
+/**
+ * The most elements one inside another, counted from an element that stands
+ * directly in the document to the innermost, both included: a paragraph is 1,
+ * and a paragraph in a quote is 2. The text of an element is no level.
+ */
+export const MAX_ELEMENT_DEPTH = 50;
+/**
+ * The longest message the socket takes: an update that is the whole of the
+ * largest document, and the frame around it. Without it the socket library
+ * takes 100 MiB (`ws` 8, as crossws 0.4.15 carries it: `maxPayload: 104857600`).
+ */
+export const MAX_MESSAGE_BYTES = MAX_STATE_BYTES + 64 * 1024;
+
+/**
+ * How deep the elements of a document are nested: 0 for an empty one. Counted
+ * with a list of what is still to be looked at, and never by a function that
+ * calls itself: the document that is measured is the one that may be ten
+ * thousand deep. Every shared type that is not text is a level, whatever it
+ * is and wherever in the document it hangs, the value of an attribute included.
+ */
+export function elementDepth(document: Y.Doc): number {
+  let deepest = 0;
+  type Shared = Y.Doc['share'] extends Map<string, infer Type> ? Type : never;
+  const waiting: [Shared, number][] = [];
+  for (const root of document.share.values()) waiting.push([root, 0]);
+  for (let next = waiting.pop(); next; next = waiting.pop()) {
+    const [type, depth] = next;
+    if (depth > deepest) deepest = depth;
+    const inner = (item: Y.Item | null) => {
+      if (!item || item.deleted || !(item.content instanceof Y.ContentType)) return;
+      const held = item.content.type as Shared;
+      waiting.push([held, held instanceof Y.Text ? depth : depth + 1]);
+    };
+    for (let item = type._start; item; item = item.right) inner(item);
+    for (const item of type._map.values()) inner(item);
+  }
+  return deepest;
+}
+
+/**
+ * Whether an update a client sent would take the document past one of its two
+ * limits: its state longer than `MAX_STATE_BYTES`, or an element deeper than
+ * `MAX_ELEMENT_DEPTH`. Asked before the update is applied, of a copy that it
+ * is applied to, because Yjs takes nothing back.
+ *
+ * A document that is past a limit already, stored before there was one, is
+ * not closed to every change: an update is refused for the limit it takes the
+ * document FURTHER past, so what is too deep can still be deleted.
+ *
+ * ponytail: the whole state is copied and encoded for every update, which is
+ * the time of a store for each change received. A count of what the updates
+ * since the last measure can have added, and the copy only near a limit, if a
+ * large document ever shows in a profile.
+ */
+export function pastLimits(document: Y.Doc, update: Uint8Array): boolean {
+  const after = new Y.Doc();
+  try {
+    const before = encodeState(document);
+    applyState(after, before);
+    applyState(after, update);
+    const bytes = encodeState(after).byteLength;
+    if (bytes > MAX_STATE_BYTES && bytes > before.byteLength) return true;
+    const depth = elementDepth(after);
+    return depth > MAX_ELEMENT_DEPTH && depth > elementDepth(document);
+  } finally {
+    after.destroy();
+  }
+}
+
 /**
  * The stored state of a document, null where it has never been stored. It
  * rejects where there is no such document. The caller has authorised the

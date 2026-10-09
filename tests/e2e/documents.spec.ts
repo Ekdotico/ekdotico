@@ -2,7 +2,7 @@
 // creation of one, its renaming, the mark "Not recorded" with its explanation,
 // and the date in the zone of the browser (FR-ED-35, FR-ED-43, NFR-I18-06,
 // NFR-SE-08, NFR-SE-04).
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import { alertOn, expectNoSidewaysScroll, newPerson, screens, signUp, watchOrigins } from './account.ts';
 import { shown } from './shown.ts';
 
@@ -156,9 +156,14 @@ test('the explanation of "Not recorded": by keyboard, by pointer, and to a scree
   await expect(mark).toHaveAccessibleDescription(EXPLANATION);
 
   // "Shown … when the mark receives keyboard focus, so the mark can be reached
-  // by keyboard": the next stop after the control that creates a document.
+  // by keyboard": after the control that creates a document comes the title,
+  // which is the link to the document's page, and then the mark beside it.
   await expect(page.getByRole('button', { name: 'New document' })).toBeEnabled();
   await page.getByRole('button', { name: 'New document' }).focus();
+  await page.keyboard.press('Tab');
+  const title = page.getByRole('link', { name: DEFAULT_TITLE });
+  await expect(title).toBeFocused();
+  expect(await title.getAttribute('href')).toMatch(/^\/documents\/[0-9a-f-]{36}$/);
   await page.keyboard.press('Tab');
   await expect(mark).toBeFocused();
   await expect(explanation).toBeVisible();

@@ -1,7 +1,7 @@
 // The path a person takes from an invitation to the first screen and back in
 // again, and what the pages on it owe (FR-AU-55 to FR-AU-57, FR-AU-81,
 // FR-AU-84, FR-AU-88, FR-AU-90, FR-AU-07).
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 import {
   NOTICE_BODY,
   NOTICE_TITLE,

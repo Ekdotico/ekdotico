@@ -1,0 +1,29 @@
+/* The placement of the editor's parts, and nothing else. The document surface,
+   the toolbar, and every control are drawn by the package's own stylesheets
+   (@ekdotico/domico, "The editor"); every value here is one of its tokens. */
+
+/* What the toolbar on the selection is placed in. */
+.surface {
+  position: relative;
+}
+
+/* Where the toolbar goes is the application's (the package's contract): over
+   the start of the selection, by the two offsets the component sets, and
+   lifted above the line by its own height and a step. It is no wider than the
+   surface, and its row wraps. */
+.toolbar {
+  position: absolute;
+  z-index: 1;
+  max-inline-size: 100%;
+  transform: translateY(calc(-100% - var(--sp-2)));
+}
+
+/* The controls of a block, inside the block and clear of its text. */
+.controls {
+  margin-block: var(--sp-2);
+}
+
+/* A table with its caption: the browser's own margins of a figure are not the document's. */
+.table {
+  margin: var(--sp-0);
+}

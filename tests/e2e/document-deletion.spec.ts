@@ -1,7 +1,7 @@
 // Deleting a document from the list, with its confirmation; the list of
 // deleted documents, with the day each is deleted permanently, in the zone of
 // the browser; and restoring one (FR-ED-36, NFR-I18-06, NFR-SE-04).
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import { expectNoSidewaysScroll, newPerson, screens, signUp, watchOrigins } from './account.ts';
 import { shown } from './shown.ts';
 
