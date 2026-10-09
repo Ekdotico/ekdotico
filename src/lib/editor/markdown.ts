@@ -28,10 +28,14 @@ export const MARKDOWN = {
   /** Three backticks + Enter, the whole of the block before the cursor. */
   codeBlock: new RegExp(`^\`\`\`${ENTER}$`),
   // The four marks, "on closing": the closing sign is the last thing typed,
-  // and the text between the signs holds none of them. A single sign does not
-  // open where another stands before it, so `**text*` waits for its last `*`.
-  bold: /\*\*([^*]+)\*\*$/,
-  italic: /(?<!\*)\*([^*]+)\*$/,
-  strike: /~~([^~]+)~~$/,
-  code: /(?<!`)`([^`]+)`$/,
+  // and the text between the signs holds none of them. The opening sign
+  // stands at the start of the block or directly after white space (`\s`: a
+  // space, a no-break space, a tab, a line break, any other Unicode space), so
+  // `snake*case*`, `1*2*` and `(*x*` stay as typed; and the text between the
+  // signs neither starts nor ends with white space, so `5 * 3 * 2` stays too.
+  // A single sign therefore cannot open next to another sign: `**text*` waits.
+  bold: /(?<=^|\s)\*\*([^*\s](?:[^*]*[^*\s])?)\*\*$/,
+  italic: /(?<=^|\s)\*([^*\s](?:[^*]*[^*\s])?)\*$/,
+  strike: /(?<=^|\s)~~([^~\s](?:[^~]*[^~\s])?)~~$/,
+  code: /(?<=^|\s)`([^`\s](?:[^`]*[^`\s])?)`$/,
 } as const;

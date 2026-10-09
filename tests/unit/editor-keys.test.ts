@@ -68,6 +68,63 @@ describe('the Markdown input (FR-ED-14)', () => {
     expect(MARKDOWN.code.exec('call `f(x)`')![1]).toBe('f(x)');
   });
 
+  // The four marks convert only where the opening sign stands at the start of
+  // a block or after white space (\s: space, no-break space, tab), and the text
+  // between the signs neither starts nor ends with white space.
+  describe.each([
+    ['bold', '**'],
+    ['italic', '*'],
+    ['strike', '~~'],
+    ['code', '`'],
+  ] as const)('%s, between %s', (rule, sign) => {
+    const found = (typed: string) => MARKDOWN[rule].exec(typed)?.[1];
+    const wrap = (inner: string) => `${sign}${inner}${sign}`;
+
+    it('converts at the start of a block', () => {
+      expect(found(wrap('text'))).toBe('text');
+      expect(found(wrap('x'))).toBe('x');
+      expect(found(wrap('two words'))).toBe('two words');
+    });
+
+    it.each([
+      ['a space', ' '],
+      ['a no-break space', ' '],
+      ['a tab', '\t'],
+    ])('converts after %s', (_, white) => {
+      expect(found(`one${white}${wrap('text')}`)).toBe('text');
+      expect(found(`one two${white}${wrap('two words')}`)).toBe('two words');
+    });
+
+    it.each([
+      ['a letter', 'a'],
+      ['a digit', '1'],
+      ['a full stop', 'a.'],
+      ['an opening bracket, which is not white space', '('],
+      ['a word of its own', 'snake'],
+    ])('does not convert after %s', (_, before) => {
+      expect(found(`${before}${wrap('b')}`)).toBeUndefined();
+      expect(found(`one ${before}${wrap('text')}`)).toBeUndefined();
+    });
+
+    it('does not convert text that starts or ends with white space', () => {
+      for (const inner of [' x ', ' x', 'x ', ' ', ' x', 'x\t', '  ']) {
+        expect(found(wrap(inner))).toBeUndefined();
+        expect(found(`a ${wrap(inner)}`)).toBeUndefined();
+      }
+      expect(found(`5 ${sign} 3 ${sign}`)).toBeUndefined();
+    });
+
+    it('does not convert empty text', () => {
+      expect(found(`${sign}${sign}`)).toBeUndefined();
+    });
+  });
+
+  it('leaves the examples of the owner as typed', () => {
+    for (const typed of ['5 * 3 *', 'a ** b **', '~~ x ~~', 'snake*case*', 'a*b*', '1*2*', '(*x*']) {
+      expect(Object.entries(MARKDOWN).filter(([, pattern]) => pattern.test(typed))).toEqual([]);
+    }
+  });
+
   // What the library's own rules convert and the requirement does not list,
   // every row one key short or one key over, and what could carry an address.
   it.each([

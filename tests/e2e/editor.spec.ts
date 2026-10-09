@@ -512,6 +512,8 @@ test('the Markdown input of the requirement converts as it is typed, and nothing
     '___ ',
     '*** ',
     '--- dashes',
+    // A mark opens at the start of a block or after white space, and holds no white space at its edges.
+    'snake*case*name a**b** 1~~2~~ (*x*) x`y` 5 * 3 * 2 a ** b ** c ~~ x ~~ ` y `',
     '~~~',
     '```js',
     '``` ',
