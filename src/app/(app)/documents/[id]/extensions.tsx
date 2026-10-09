@@ -42,6 +42,8 @@ import { LightbulbIcon, StickyNoteIcon, TriangleAlertIcon } from '@ekdotico/domi
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
 import styles from './editor.module.css';
+import { MarkdownInput } from './input-rules.ts';
+import { Shortcuts } from './shortcuts.ts';
 
 /** Whether the document can be edited now: the role, and the connection (FR-ED-18). Node views read it. */
 export const Editable = createContext(false);
@@ -514,5 +516,7 @@ export function extensions(document: Y.Doc) {
         node.type.name === 'tableCaption' ? 'Caption' : editor.isEmpty ? 'Write the document here' : '',
     }),
     Collaboration.configure({ document, field: FRAGMENT_NAME }),
+    Shortcuts,
+    MarkdownInput,
   ];
 }

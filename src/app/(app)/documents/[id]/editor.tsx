@@ -19,6 +19,7 @@ import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
 import { BLOCK_CONTROLS, Editable, extensions } from './extensions.tsx';
+import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 
 // The fixed texts, word for word.
@@ -95,9 +96,9 @@ function Text({
     editable,
     // Rendered in the browser alone: the server has no document to render.
     immediatelyRender: false,
-    // FR-ED-14, the Markdown shortcuts, is the next slice's: the library's own
-    // set, which is not that list, stays off until then.
-    enableInputRules: false,
+    // FR-ED-14: the rules of ./input-rules.ts and of no other extension. The
+    // library's own set is not that list, and nothing pasted is converted.
+    enableInputRules: [MARKDOWN_INPUT],
     enablePasteRules: false,
     editorProps: {
       // NFR-IC-19: the region has a role and a name, says whether it can be

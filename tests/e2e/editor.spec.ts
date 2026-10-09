@@ -346,6 +346,263 @@ test('two browsers that edit one document converge', async ({ page, browser }) =
   await second.close();
 });
 
+/** Selects the whole text of a block, as three presses do, and waits for the editor to read it. */
+async function selectText(block: Locator) {
+  await block.click({ clickCount: 3 });
+  await block.page().waitForTimeout(100);
+}
+
+// Every element a mark or a block of the editor is drawn as, apart from the paragraph.
+const FORMATTED = 'strong, em, u, s, code, sub, sup, mark, a, h1, h2, h3, ol, ul, blockquote, pre, hr';
+
+test('the keyboard shortcuts of the requirement act, and the others the library ships do not', async ({
+  page,
+}) => {
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  const line = doc.locator('p').first();
+  const link = page.getByRole('dialog', { name: 'Link' });
+  await doc.click();
+  await page.keyboard.type('Marked words.');
+
+  // FR-ED-13: bold, italic, underline, strikethrough and inline code, each on and off again.
+  await selectText(line);
+  for (const [key, tag] of [
+    ['b', 'strong'],
+    ['i', 'em'],
+    ['u', 'u'],
+    ['Shift+S', 's'],
+    ['Backquote', 'code'],
+  ] as const) {
+    await page.keyboard.press(`ControlOrMeta+${key}`);
+    await expect(line.locator(tag), key).toHaveText('Marked words.');
+    await page.keyboard.press(`ControlOrMeta+${key}`);
+    await expect(line.locator(tag), key).toHaveCount(0);
+  }
+
+  // The library's own, which are not on the list: inline code on its other
+  // key, highlight, subscript, superscript, the three headings, the two
+  // lists, the blockquote and the code block. None acts.
+  for (const key of [
+    'e',
+    'Shift+H',
+    'Comma',
+    'Period',
+    'Alt+Digit1',
+    'Alt+Digit2',
+    'Alt+Digit3',
+    'Shift+Digit7',
+    'Shift+Digit8',
+    'Shift+B',
+    'Alt+C',
+  ]) {
+    await page.keyboard.press(`ControlOrMeta+${key}`);
+    await expect(doc.locator(FORMATTED), key).toHaveCount(0);
+  }
+  await expect(doc).toHaveText('Marked words.');
+  await expect(doc).toBeFocused();
+
+  // The hyperlink: the key opens the dialog of the toolbar, with its rule for the address.
+  await page.keyboard.press('ControlOrMeta+k');
+  await link.getByLabel('Link address').fill('javascript:alert(1)');
+  await link.getByRole('button', { name: 'Save' }).click();
+  await expect(link.getByRole('alert')).toContainText('The link was not saved');
+  await expect(doc.locator('a')).toHaveCount(0);
+  await link.getByLabel('Link address').fill('https://example.org/key');
+  await link.getByRole('button', { name: 'Save' }).click();
+  await expect(link).toBeHidden();
+  await expect(line.locator('a[href="https://example.org/key"]')).toHaveText('Marked words.');
+  // The dialog returns the focus to the text it was opened from.
+  await expect(doc).toBeFocused();
+  // "Or edit": with the cursor in a link and nothing selected, the dialog holds its address.
+  await place(line.locator('a'));
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(link.getByLabel('Link address')).toHaveValue('https://example.org/key');
+  await link.getByRole('button', { name: 'Remove link' }).click();
+  await expect(doc.locator('a')).toHaveCount(0);
+  // With nothing selected and no link under the cursor there is nothing to link.
+  await place(line);
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.waitForTimeout(300);
+  await expect(link).toBeHidden();
+  await expect(doc).toBeFocused();
+
+  // Undo and redo. The editor joins what is typed within half a second into one step.
+  await placeAtEnd(line);
+  await page.waitForTimeout(700);
+  await page.keyboard.type(' More.');
+  await expect(doc).toHaveText('Marked words. More.');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(doc).toHaveText('Marked words.');
+  await page.keyboard.press('ControlOrMeta+Shift+Z');
+  await expect(doc).toHaveText('Marked words. More.');
+
+  // The paragraph of a heading is not a shortcut either: a heading stays one.
+  await placeAtEnd(line);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('# Heading');
+  await page.keyboard.press('ControlOrMeta+Alt+Digit0');
+  await expect(doc.locator('h1')).toHaveText('Heading');
+
+  // Tab and Shift+Tab indent and outdent a list item.
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('- one');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('two');
+  await page.keyboard.press('Tab');
+  await expect(doc.locator('ul ul > li')).toHaveText('two');
+  await page.keyboard.press('Shift+Tab');
+  await expect(doc.locator('ul ul')).toHaveCount(0);
+  await expect(doc.locator('ul > li')).toHaveText(['one', 'two']);
+  // NFR-IC-19: outside a list and a table, Tab is the browser's, and leaves the text.
+  await place(line);
+  await page.keyboard.press('Tab');
+  await expect(doc).not.toBeFocused();
+  await expect(doc.locator('ul > li')).toHaveText(['one', 'two']);
+});
+
+test('the Markdown input of the requirement converts as it is typed, and nothing else does', async ({
+  page,
+}) => {
+  page.on('dialog', () => {
+    throw new Error('a dialog was opened by content');
+  });
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  const lines = async (...typed: string[]) => {
+    for (const each of typed) {
+      await page.keyboard.type(each);
+      await page.keyboard.press('Enter');
+    }
+  };
+  await doc.click();
+
+  // FR-ED-14, row by row. A second Enter leaves a list or a blockquote.
+  await lines('# One', '## Two', '### Three', '- dash', '', '* star', '', '1. first', '', '> quoted', '');
+  await lines('---', 'Marks: **bold** *italic* ~~struck~~ `code` and on.');
+  const converted = async () => {
+    await expect(doc.locator('h1')).toHaveText('One');
+    await expect(doc.locator('h2')).toHaveText('Two');
+    await expect(doc.locator('h3')).toHaveText('Three');
+    await expect(doc.locator('ul > li')).toHaveText(['dash', 'star']);
+    await expect(doc.locator('ol > li')).toHaveText('first');
+    await expect(doc.locator('blockquote')).toHaveText('quoted');
+    await expect(doc.locator('hr')).toHaveCount(1);
+    await expect(doc.locator('strong')).toHaveText('bold');
+    await expect(doc.locator('em')).toHaveText('italic');
+    await expect(doc.locator('s')).toHaveText('struck');
+    await expect(doc.locator('p code')).toHaveText('code');
+    await expect(doc.locator('u, sub, sup, mark, a')).toHaveCount(0);
+  };
+  await converted();
+  // The signs are gone, and what follows a mark is not marked.
+  await expect(doc.locator('p', { hasText: 'Marks:' })).toHaveText('Marks: bold italic struck code and on.');
+  await expect(doc.locator('ol')).not.toHaveAttribute('start');
+
+  // What the library's own rules would convert, and the requirement does not
+  // list; and what could carry an address. Each stays as it was typed.
+  const kept = [
+    '#### four',
+    '+ plus',
+    '2. two',
+    '10. ten',
+    '__under__ _score_ ==equals==',
+    '___ ',
+    '*** ',
+    '--- dashes',
+    '~~~',
+    '```js',
+    '``` ',
+    '[x](javascript:alert(1)) <https://example.com/> https://example.net/ <b>markup</b>',
+  ];
+  await lines(...kept);
+  // The paragraphs of the document itself that hold text, in their order.
+  const plain = doc.locator(':scope > p').filter({ hasText: /\S/ });
+  const typed = ['Marks: bold italic struck code and on.', ...kept.map((each) => each.trim())];
+  await expect(plain).toHaveText(typed);
+  await converted();
+  await expect(doc.locator('pre')).toHaveCount(0);
+
+  // Markdown that is pasted is text: FR-ED-14 is of what is typed.
+  const pasted = '# pasted **strong** [y](javascript:alert(2)) https://example.org/ `tick`';
+  await doc.evaluate((element, words) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', words);
+    element.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  }, pasted);
+  await expect(plain).toHaveText([...typed, pasted]);
+  await converted();
+
+  // The code block, last: three backticks and Enter, plain text, and no rule acts inside it.
+  await page.keyboard.press('Enter');
+  await lines('```');
+  await page.keyboard.type('# not **converted** `here`');
+  await expect(doc.locator('pre code')).toHaveText('# not **converted** `here`');
+  await expect(doc.getByRole('combobox', { name: 'Language' })).toHaveValue('plaintext');
+  await converted();
+
+  // A caption is plain text (FR-ED-09, Build phases): it takes no mark, and keeps its signs.
+  await placeAtEnd(plain.last());
+  await paste(page, '<table><tbody><tr><td>Cell</td></tr></tbody></table>');
+  await place(doc.locator('figcaption'));
+  await page.keyboard.type('**kept** *as* ~~it~~ `was`');
+  await expect(doc.locator('figcaption')).toHaveText('**kept** *as* ~~it~~ `was`');
+  await converted();
+
+  // Each conversion reached the server as the block or the mark it became.
+  await expect(status(page, 'In sync')).toBeVisible();
+  await page.reload();
+  await converted();
+  await expect(doc.locator('pre code')).toHaveText('# not **converted** `here`');
+  await expect(plain).toHaveText([...typed, pasted]);
+});
+
+test('in the read-only state no shortcut changes the document', async ({ page }) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  const link = page.getByRole('dialog', { name: 'Link' });
+  await doc.click();
+  await page.keyboard.type('Kept as it is.');
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  await stopCollab();
+  try {
+    // FR-ED-18: read-only in the error state.
+    await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
+    await selectText(doc.locator('p'));
+    // The hyperlink first, while the text carries no mark that would refuse one.
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.waitForTimeout(300);
+    await expect.soft(link).toBeHidden();
+    await page.keyboard.press('Escape');
+    await selectText(doc.locator('p'));
+    // Each is looked at before the next: an undo would take the others back with it.
+    for (const key of ['b', 'i', 'u', 'Shift+S', 'Backquote']) {
+      await page.keyboard.press(`ControlOrMeta+${key}`);
+      await page.waitForTimeout(100);
+      await expect.soft(doc.locator(FORMATTED), key).toHaveCount(0);
+    }
+    await page.keyboard.press('ControlOrMeta+z');
+    await page.waitForTimeout(300);
+    await expect.soft(doc.locator('p')).toContainText('Kept as it is.');
+    await expect.soft(doc.locator(FORMATTED)).toHaveCount(0);
+  } finally {
+    await startCollab();
+  }
+
+  // The connection returns, and so do the keys.
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  await selectText(doc.locator('p'));
+  await page.keyboard.press('ControlOrMeta+b');
+  await expect(doc.locator('strong')).toHaveText('Kept as it is.');
+});
+
 test('an account without a role on a document reaches neither its page nor its connection', async ({
   page,
   browser,
