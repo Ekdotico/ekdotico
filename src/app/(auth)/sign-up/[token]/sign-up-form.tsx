@@ -12,12 +12,22 @@ import { INVITATION_NOT_OPEN } from '../../../../lib/admission/statements.ts';
  * submission: a screen reader says it, and it takes focus (FR-AU-88). On a
  * page that opens with the statement it is part of the page and no alert,
  * since an alert there from the first paint announces nothing.
+ *
+ * There it is also drawn in the neutral tone: "a statement that is part of a
+ * page and is not a fault", so that the page "does not open on what looks
+ * like an alert" (@ekdotico/domico 0.27.0, `FormFault`). The tone is what is
+ * drawn and no more: the role, the heading, and the words are the same. After
+ * a submission it is the refusal of what the person sent, and is drawn as one.
  */
 export function NotOpen({ announce = false }: { announce?: boolean }) {
   return (
     <>
       <PageHeading>Invitation</PageHeading>
-      <FormFault title={INVITATION_NOT_OPEN} announce={announce ? undefined : 'off'} />
+      {announce ? (
+        <FormFault title={INVITATION_NOT_OPEN} />
+      ) : (
+        <FormFault title={INVITATION_NOT_OPEN} announce="off" tone="neutral" />
+      )}
     </>
   );
 }
