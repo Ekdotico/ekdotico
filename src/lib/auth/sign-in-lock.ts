@@ -78,8 +78,13 @@ export async function beginLock(email: string, now: Date = new Date()): Promise<
     const locked = await tx.user.updateMany({
       // FR-AU-81: an account is used only once its address is verified, and
       // the notice goes to no address that is not.
+      // FR-AU-03: and only under the address the lock was begun for. A change
+      // of the address that committed since the read above leaves this
+      // statement nothing: no lock, no link, no entry, and no notice to an
+      // address that "no longer signs in to it".
       where: {
         id: account.id,
+        email,
         emailVerified: true,
         OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }],
       },

@@ -370,6 +370,15 @@ test('an account of the founding team meets the enrolment first, then the notice
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Turn off two-factor authentication' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Replace recovery codes' })).toBeVisible();
+  // FR-AU-03: nor can its address be changed. The form is not offered, and the
+  // request, made without it, is answered as any other and sends nothing
+  // (tests/integration/name-and-address.test.ts).
+  const address = page.getByRole('region', { name: 'Email address' });
+  await expect(
+    address.getByText('This account belongs to the Ekdotico team, so its email address cannot be changed.'),
+  ).toBeVisible();
+  await expect(address.getByRole('button')).toHaveCount(0);
+  await expect(address.getByRole('textbox')).toHaveCount(0);
   await screens(page, 'two-factor-founding-team');
   expect(elsewhere).toEqual([]);
 });

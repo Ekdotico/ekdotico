@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 import { RecoveryCodes, TwoFactorEnrolment } from '../two-factor-enrolment.tsx';
@@ -43,6 +44,7 @@ function PasswordForm({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,7 +105,13 @@ function PasswordForm({
           />
         ) : null}
         <div>
-          <Button variant={variant} type="submit" pending={pending} pendingLabel={pendingLabel}>
+          <Button
+            variant={variant}
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel={pendingLabel}
+          >
             {label}
           </Button>
         </div>

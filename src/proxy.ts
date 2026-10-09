@@ -44,7 +44,7 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   { group: 'a', methods: ['GET'], path: '/sign-up/[token]' }, // FR-AU-90: the link of an admission invitation
   { group: 'a', methods: ['GET'], path: '/reset-password' }, // FR-AU-86
   { group: 'a', methods: ['GET'], path: '/reset-password/[token]' }, // FR-AU-86
-  { group: 'a', methods: ['GET'], path: '/confirm-address/[token]' }, // FR-AU-03
+  { group: 'a', methods: ['GET'], path: '/confirm-address/[token]' }, // FR-AU-03: the page alone, which tells a browser without a session to sign in; the confirmation itself needs a session of the account (the owner's decision of 9 October 2026)
   // (a) The endpoints of the identity library that a person without a session
   // must reach, one by one and never the prefix: every other endpoint under
   // /api/auth is validated here like any route. Each is also on the list of

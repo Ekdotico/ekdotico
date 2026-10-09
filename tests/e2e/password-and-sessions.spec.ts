@@ -218,6 +218,8 @@ test.describe('the account settings', () => {
     await expect(page).toHaveTitle('Account settings – Ekdotico');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Account settings');
     await expect(page.getByRole('heading', { level: 2 })).toHaveText([
+      'Name',
+      'Email address',
       'Password',
       'Two-factor authentication',
       'Sessions',
@@ -279,7 +281,8 @@ test.describe('the account settings', () => {
 
     await current.fill(person.password);
     await page.getByRole('button', { name: 'Change password' }).click();
-    await expect(page.getByRole('status')).toHaveText(CHANGED);
+    // In its own part of the page: the name and the address each have a status too.
+    await expect(page.getByRole('region', { name: 'Password' }).getByRole('status')).toHaveText(CHANGED);
     await expect(alertOn(page)).toHaveCount(0);
     // Neither password stays in the page.
     await expect(current).toHaveValue('');

@@ -52,6 +52,8 @@ The `.next` directory holds the identifier of item 4. A container image, a build
 
 A process refuses to start without `FOUNDING_TEAM_EMAILS`, `APP_ORIGIN`, `DATABASE_URL`, `VALKEY_URL`, and `AUTH_SECRET`, and, away from a development machine, without `EMAIL_TRANSPORT`, `EMAIL_SINK_DIRECTORY`, and a `TRUSTED_PROXY_COUNT` of 1 or more. `.env.example` describes each. No variable whose name begins `BETTER_AUTH_` may be set: the identity library reads several of its own, which would change its configuration, and each of the two processes refuses to start where one is present. A variable whose name begins `RATE_LIMIT_` and names no limit stops a process in the same way, as does a period or a length that is 0 or out of order.
 
+An entry of `FOUNDING_TEAM_EMAILS` that is not an email address an account can have stops a process too (the owner's decision of 9 October 2026): an entry with no domain, or with a domain written in full-width or other compatibility letters, or with a label that begins or ends with a hyphen. Such an entry would match no account, and the account it was meant for would not be required to use two-factor authentication. The message gives the position of the entry in the list and never the entry.
+
 `EMAIL_SINK_DIRECTORY` names the directory the email sink writes to. Each file in it holds an address and may hold a single-use link, so a deployment says where they go: only on a development machine is a directory under the working directory used where the setting is absent.
 
 `TWO_FACTOR_STEP_SECONDS` is how long the second step of a sign-in stays open after the password, and how long the secret of an enrolment waits for its first code: 600, the 10 minutes of FR-AU-83, where the setting is absent. `TWO_FACTOR_WRONG_CODES` is the number of wrong codes at which either is over and begins again with the password: 5 where the setting is absent (NFR-SE-07). Each is a whole number, 1 or more, and anything else stops a process.
@@ -63,6 +65,14 @@ Three ceilings of the lock and its link are accepted as they are. The count of t
 The database client gives up on a connection after 5 seconds, the server ends a statement after 5 seconds, and the client stops waiting for an answer after 5 seconds (`src/lib/db.ts`; NFR-SE-06). A connection to Valkey and a command sent to it are given 5 seconds each (`src/lib/valkey.ts`). A request that meets either fault is refused and never passed on.
 
 Changing `AUTH_SECRET` ends every session and forgets every count of NFR-SE-07, since the counters are stored under digests keyed by it. The procedure for rotating each secret is recorded before the first test user is admitted (NFR-SE-17 (e)); it is not yet written.
+
+## Before a deployment that holds accounts created under an earlier rule
+
+A one-off check, which the owner decided on 9 October 2026. An address is stored in its one spelling and under the one rule of an address (`src/lib/field-text.ts`; FR-AU-02): composed, in lower case, with one sigma, and with a domain that is plain or is a Unicode label that normalisation leaves as it is. An account created before that rule, or before a later change to it, may hold an address that the rule now spells otherwise or refuses. Such an account may be one that no sign-in finds, one that the list of the founding team does not match, or one beside which the same person is given a second account.
+
+1. **Before the first deployment to a database that holds accounts created under an earlier spelling or rule of an address, run the check, with the settings of that deployment:** `node --env-file=<the file of settings> scripts/check-addresses.ts`. It reads the identifier and the address of every account and changes nothing. It prints one line, `address check: <n> of <m> accounts hold an address that is not in its one spelling or that the rule of an address refuses`, and then the identifier of each such account on a line of its own. It never prints an address (NFR-SE-19). It exits with 0 where there is no such account, with 1 where there is one or more, and with 2 where it could not run, in which case the line says `address check: not run`.
+2. **Where it names an account, the deployment waits, and the identifiers are reported to the owner.** No row is migrated silently, by the check or by hand. The owner decides for each account what becomes of it: an address rewritten to its one spelling could be the address of another account, and a person signs in with the address as they know it.
+3. **The check is run again after whatever the owner decides is done, and the deployment goes ahead when it exits with 0.** The result is recorded with the deployment.
 
 ## The password list
 

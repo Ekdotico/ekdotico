@@ -157,6 +157,7 @@ test('the explanation of "Not recorded": by keyboard, by pointer, and to a scree
 
   // "Shown … when the mark receives keyboard focus, so the mark can be reached
   // by keyboard": the next stop after the control that creates a document.
+  await expect(page.getByRole('button', { name: 'New document' })).toBeEnabled();
   await page.getByRole('button', { name: 'New document' }).focus();
   await page.keyboard.press('Tab');
   await expect(mark).toBeFocused();

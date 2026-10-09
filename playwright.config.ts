@@ -62,6 +62,12 @@ export default defineConfig({
       // The same for the requests for a password reset, 10 an hour, which
       // the runs of an afternoon would use up between them.
       RATE_LIMIT_RESET_PER_ADDRESS: '100000/3600',
+      // And for the admission endpoints, 60 a minute in all (NFR-SE-07). A
+      // run asks for some forty invitations within its minute, and the count
+      // is kept in Valkey under a key that every run shares, so a run begun
+      // within a minute of another was answered 429. The limit itself is
+      // tested against a count of its own (tests/integration).
+      RATE_LIMIT_ADMISSION: '100000/60',
       // And for the lock of FR-AU-81. Every request of a run comes from one
       // network address, which is allowed five failed sign-ins for an email
       // address in 15 minutes: left so, that limit would refuse by itself at

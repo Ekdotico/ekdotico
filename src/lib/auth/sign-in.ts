@@ -23,6 +23,8 @@ import { deleteSessionCookie, expireCookie, setSessionCookie } from 'better-auth
 import { afterResponse, assertCollecting } from '../after-response.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
+import { faultOf } from '../fault.ts';
+import { enteredAddress } from '../field-text.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { checkLimit, logLimitReached, takeLimit, type LimitResult } from '../rate-limit.ts';
 import { securityLog, securityLogIn } from '../security-log.ts';
@@ -123,14 +125,14 @@ const generationKey = (email: string) =>
  * too (FR-AU-81).
  */
 export async function clearFailedSignIns(email: string): Promise<void> {
-  await valkey().incr(generationKey(email.toLowerCase()));
+  await valkey().incr(generationKey(normalised(email)));
 }
 
 /** A limit on failed sign-ins as a check found it, with the key it is counted under. */
 type Reached = [name: LimitName, key: string, limit: LimitResult];
 
-/** The address as it is stored and compared (FR-AU-02), and bounded: no address is longer than 254 characters. */
-const normalised = (email: string) => email.slice(0, 255).toLowerCase();
+/** The address as it is stored and compared (FR-AU-02), in its one spelling, and bounded (../field-text.ts). */
+const normalised = enteredAddress;
 
 /**
  * The keys of the two counts of NFR-SE-07 for an address as `normalised`
@@ -333,6 +335,45 @@ export async function stillVerified(
   return count === 1;
 }
 
+/**
+ * FR-AU-03: "this address no longer signs in to it". Whether the sign-in that
+ * was checked still stands: the password is still the one verified, and the
+ * address of the account is still the one it was found by. The confirmation
+ * of a changed address holds the row of the credentials before it ends the
+ * sessions and the steps it can see (name-and-address.ts), so the first
+ * question waits for one that has not yet committed, and the second then reads
+ * the address it set: a session or a step made beside it does not stand.
+ */
+async function stillSignsIn(
+  verified: { id: string; hash: string; updatedAt: Date },
+  user: { id: string; email: string },
+): Promise<boolean> {
+  if (!(await stillVerified(verified))) return false;
+  return (await db().user.count({ where: { id: user.id, email: user.email } })) === 1;
+}
+
+/**
+ * The owner's decision of 9 October 2026: a fault between the making of a
+ * session and the answer of its sign-in leaves no session behind. The browser
+ * was given no cookie for it, so no one could use the row or end it. Whatever
+ * `rest` throws is thrown on once the row is deleted, by its token and by the
+ * application's own client. A fault of that deletion does not take the place
+ * of the first: it is printed by its class (NFR-SE-19), and the row then ends
+ * with its period.
+ */
+export async function orEndSession<T>(token: string, rest: () => Promise<T>): Promise<T> {
+  try {
+    return await rest();
+  } catch (error) {
+    await db()
+      .session.deleteMany({ where: { token } })
+      .catch((second: unknown) =>
+        console.error(`sign-in: the session of a sign-in that failed was not deleted (${faultOf(second)})`),
+      );
+    throw error;
+  }
+}
+
 /** FR-AU-81: `POST /api/auth/sign-in/email`. The answer to success is `{}`: the session is the cookie alone (FR-AU-84). */
 export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST' }, async (ctx) => {
   // NFR-SE-17 (c): before anything of the request is read.
@@ -369,8 +410,9 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     const step = await beginSecondStep(ctx, user.id);
     // As below: the step is begun first and the password asked after, so that
     // none begun by a password that was set meanwhile stands. A reset and a
-    // change of the password delete the steps they can see (password.ts).
-    if (!(await stillVerified(verified))) {
+    // change of the password delete the steps they can see (password.ts), and
+    // so does the confirmation of a changed address (FR-AU-03).
+    if (!(await stillSignsIn(verified, user))) {
       await db().verification.deleteMany({ where: { id: step } });
       expireCookie(ctx, ctx.context.createAuthCookie(SECOND_STEP_COOKIE));
       return refused();
@@ -395,33 +437,36 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
   // one may not have been among them, so it is ended here: the session is
   // made first and the password asked after, which leaves no order in which
   // one made by the old password stands. Not counted as a failed sign-in: the
-  // password was the right one when it was checked.
-  if (!(await stillVerified(verified))) {
-    // By the application's own client, which rejects on a fault: the
-    // library's deletion can skip the row without a word.
-    await db().session.deleteMany({ where: { token: session.token } });
-    return refused();
-  }
+  // password was the right one when it was checked. The same for an address
+  // changed since the check (FR-AU-03).
+  return orEndSession(session.token, async () => {
+    if (!(await stillSignsIn(verified, user))) {
+      // By the application's own client, which rejects on a fault: the
+      // library's deletion can skip the row without a word.
+      await db().session.deleteMany({ where: { token: session.token } });
+      return refused();
+    }
 
-  // A session the browser already holds is ended, whoever it belongs to: its
-  // cookie is replaced below, and no browser could sign out of it afterwards.
-  // The owner's decision of 8 October 2026, for a sign-in and for a sign-up
-  // (src/lib/admission/sign-up.ts); FR-AU-81 itself asks it of the link of a
-  // lock email alone. A sign-in that fails ends nothing. The row is deleted by the
-  // application's own client, which rejects on a fault and is quiet where the
-  // row is absent; the library's deletion can skip the row without a word.
-  const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
-  if (held) await db().session.deleteMany({ where: { token: held } });
-  // The cookie of a second step that this browser left open, for this account
-  // before its second factor was turned off or for another, opens nothing
-  // under the session that begins here.
-  const step = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
-  if (ctx.getCookie(step.name)) expireCookie(ctx, step);
+    // A session the browser already holds is ended, whoever it belongs to: its
+    // cookie is replaced below, and no browser could sign out of it afterwards.
+    // The owner's decision of 8 October 2026, for a sign-in and for a sign-up
+    // (src/lib/admission/sign-up.ts); FR-AU-81 itself asks it of the link of a
+    // lock email alone. A sign-in that fails ends nothing. The row is deleted by the
+    // application's own client, which rejects on a fault and is quiet where the
+    // row is absent; the library's deletion can skip the row without a word.
+    const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
+    if (held) await db().session.deleteMany({ where: { token: held } });
+    // The cookie of a second step that this browser left open, for this account
+    // before its second factor was turned off or for another, opens nothing
+    // under the session that begins here.
+    const step = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
+    if (ctx.getCookie(step.name)) expireCookie(ctx, step);
 
-  // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
-  await setSessionCookie(ctx, { session, user }, false);
-  ctx.setHeader('Cache-Control', 'no-store');
-  return ctx.json({});
+    // `false`: the cookie lasts as long as the session, whatever an earlier cookie said.
+    await setSessionCookie(ctx, { session, user }, false);
+    ctx.setHeader('Cache-Control', 'no-store');
+    return ctx.json({});
+  });
 });
 
 // Thrown inside the transaction that completes a sign-in by a link, to undo it.
@@ -501,53 +546,55 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
   // finds this session among those it ends.
   const session = await internalAdapter.createSession(user.id);
   if (!session) throw new NoSession('sign-in link: no session');
-  const claimed = await db()
-    .$transaction(async (tx) => {
-      // First of all: the row of the credentials, then the session, then the
-      // row of the account, as a reset takes them (password.ts), so that none
-      // waits for another in a circle.
-      if (!(await stillVerified(password, tx))) throw LINK_GONE;
-      if (held) await tx.session.deleteMany({ where: { token: held } });
-      // FR-AU-83: only for an account whose two-factor authentication is still
-      // off. An enrolment confirmed since the read above leaves the claim nothing.
-      if (!(await claimSignInLink(tx, { id: link.id, userId: link.userId, twoFactorEnabled: false }))) {
-        throw LINK_GONE;
-      }
-      // NFR-SE-19; the owner's decision of 9 October 2026: the sign-in by
-      // the link has its entry, with the user and nothing else, written with
-      // the claim so that neither stands without the other.
-      await securityLogIn(tx, { kind: 'sign_in_by_link', userId: link.userId });
-      return true;
-    })
-    .catch((error: unknown) => {
-      if (error === LINK_GONE) return false;
-      throw error;
-    });
-  if (!claimed) {
-    await db().session.deleteMany({ where: { token: session.token } });
-    // Where two-factor authentication was turned on meanwhile the link still
-    // stands, and its sign-in goes on to the second step: "after the second
-    // step of FR-AU-83 where two-factor authentication is on". No session is
-    // made on this path without it.
-    const standing = await findOpenSignInLink(entered.token);
-    if (standing?.twoFactorEnabled) return toSecondStep(standing.until);
-    return notValid();
-  }
-  // "The counters of failed sign-ins for the address are cleared when that
-  // sign-in completes." The sign-in stands whether or not this succeeds, as a
-  // reset does (password.ts): uncleared, the counts refuse for the rest of
-  // their hour and no longer.
-  // An accepted ceiling: after a fault of Valkey here the count for the
-  // address is still at its number while the lock is lifted, so until those
-  // failures leave their hour, the next lock costs one failure and not twenty.
-  await clearFailedSignIns(link.email).catch(() =>
-    console.error('sign-in link: signed in, counts of failed sign-ins not cleared'),
-  );
-  const step = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
-  if (ctx.getCookie(step.name)) expireCookie(ctx, step);
-  // "The session is an ordinary session (FR-AU-84), and the password is not changed."
-  await setSessionCookie(ctx, { session, user }, false);
-  return ctx.json({});
+  return orEndSession(session.token, async () => {
+    const claimed = await db()
+      .$transaction(async (tx) => {
+        // First of all: the row of the credentials, then the session, then the
+        // row of the account, as a reset takes them (password.ts), so that none
+        // waits for another in a circle.
+        if (!(await stillVerified(password, tx))) throw LINK_GONE;
+        if (held) await tx.session.deleteMany({ where: { token: held } });
+        // FR-AU-83: only for an account whose two-factor authentication is still
+        // off. An enrolment confirmed since the read above leaves the claim nothing.
+        if (!(await claimSignInLink(tx, { id: link.id, userId: link.userId, twoFactorEnabled: false }))) {
+          throw LINK_GONE;
+        }
+        // NFR-SE-19; the owner's decision of 9 October 2026: the sign-in by
+        // the link has its entry, with the user and nothing else, written with
+        // the claim so that neither stands without the other.
+        await securityLogIn(tx, { kind: 'sign_in_by_link', userId: link.userId });
+        return true;
+      })
+      .catch((error: unknown) => {
+        if (error === LINK_GONE) return false;
+        throw error;
+      });
+    if (!claimed) {
+      await db().session.deleteMany({ where: { token: session.token } });
+      // Where two-factor authentication was turned on meanwhile the link still
+      // stands, and its sign-in goes on to the second step: "after the second
+      // step of FR-AU-83 where two-factor authentication is on". No session is
+      // made on this path without it.
+      const standing = await findOpenSignInLink(entered.token);
+      if (standing?.twoFactorEnabled) return toSecondStep(standing.until);
+      return notValid();
+    }
+    // "The counters of failed sign-ins for the address are cleared when that
+    // sign-in completes." The sign-in stands whether or not this succeeds, as a
+    // reset does (password.ts): uncleared, the counts refuse for the rest of
+    // their hour and no longer.
+    // An accepted ceiling: after a fault of Valkey here the count for the
+    // address is still at its number while the lock is lifted, so until those
+    // failures leave their hour, the next lock costs one failure and not twenty.
+    await clearFailedSignIns(link.email).catch(() =>
+      console.error('sign-in link: signed in, counts of failed sign-ins not cleared'),
+    );
+    const step = ctx.context.createAuthCookie(SECOND_STEP_COOKIE);
+    if (ctx.getCookie(step.name)) expireCookie(ctx, step);
+    // "The session is an ordinary session (FR-AU-84), and the password is not changed."
+    await setSessionCookie(ctx, { session, user }, false);
+    return ctx.json({});
+  });
 });
 
 /**

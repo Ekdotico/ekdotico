@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button, type ButtonVariant } from '@ekdotico/domico/components';
+import { useReady } from '../../components/ready.ts';
 import { send, type Fault } from '../../components/send.ts';
 
 /**
@@ -17,10 +18,12 @@ export function SignOutButton({
   /** A sign-out that did not complete is stated in text by whoever holds the button. */
   onFault: (fault: Fault | null) => void;
 }) {
+  const ready = useReady();
   const [pending, setPending] = useState(false);
   return (
     <Button
       variant={variant}
+      disabled={!ready}
       pending={pending}
       pendingLabel="Signing out…"
       onClick={async () => {

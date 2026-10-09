@@ -96,7 +96,9 @@ test('a locked account is refused like any other, and the link of the email sign
   await page.reload();
   await expect(page.getByText(NAMES(person.email))).toBeVisible();
 
-  // The one control, by the keyboard alone.
+  // The one control, by the keyboard alone, once the page is ready for it
+  // (src/components/ready.ts): a control that is disabled takes no focus.
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeEnabled();
   await page.getByRole('button', { name: 'Sign in' }).focus();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();

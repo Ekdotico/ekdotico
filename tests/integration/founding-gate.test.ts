@@ -160,6 +160,8 @@ describe('the gate at the proxy (FR-AU-83; the owner’s answer to Q8)', () => {
       ['GET', '/api'],
       ['GET', '/api/auth/list-sessions'],
       ['POST', '/api/auth/change-password'],
+      ['POST', '/api/auth/update-user'],
+      ['POST', '/api/auth/change-email'],
       ['POST', '/api/auth/revoke-session'],
       ['POST', '/api/auth/revoke-other-sessions'],
       ['POST', '/api/auth/two-factor/disable'],
@@ -229,6 +231,9 @@ describe('the gate with the proxy skipped: the endpoints of the identity library
       ['/revoke-other-sessions', undefined],
       ['/two-factor/disable', { password: PASSWORD, code: '123456' }],
       ['/two-factor/generate-backup-codes', { password: PASSWORD }],
+      // FR-AU-90, FR-AU-03: the name and the address.
+      ['/update-user', { name: 'Another Name' }],
+      ['/change-email', { newEmail: 'elsewhere@example.com', password: PASSWORD }],
     ] as const) {
       const refused = await post(auth, path, body, { cookie, ...fresh() });
       expect(refused.response.status, path).toBe(403);
@@ -236,9 +241,13 @@ describe('the gate with the proxy skipped: the endpoints of the identity library
       expect(refused.left).toBe(0);
     }
     expect((await db().account.findFirstOrThrow({ where: { userId: id } })).password).toBe(hash);
+    expect(await db().user.findUniqueOrThrow({ where: { id } })).toMatchObject({ name: 'A Person' });
+    expect(await db().verification.count({ where: { identifier: { startsWith: 'confirm-address:' } } })).toBe(
+      0,
+    );
     expect(await db().session.count({ where: { userId: id } })).toBe(2);
     expect((await validateSessionRow(new Headers({ cookie: other }))).stopped?.userId).toBe(id);
-    expect(await forbidden()).toEqual(Array(5).fill(id));
+    expect(await forbidden()).toEqual(Array(7).fill(id));
   });
 
   it('lets the account sign out', async () => {

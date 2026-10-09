@@ -23,6 +23,10 @@ const KINDS = [
   // email (FR-AU-81). Each is written in the transaction of the change.
   'sign_in_locked',
   'sign_in_by_link',
+  // The owner's decision of 9 October 2026 on pull request 19 (S9; its
+  // register row is pending): a change of the address that took effect
+  // (FR-AU-03), written in the transaction of the change.
+  'address_changed',
   'forbidden',
   'rate_limit_reached',
   'signature_invalid',
