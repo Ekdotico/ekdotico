@@ -112,7 +112,7 @@ export function SignUp({
             id="name"
             name="name"
             label="Name"
-            hint="1 to 100 characters."
+            hint="1 to 100 characters. At least one of them can be seen."
             autoComplete="name"
             required
             error={fields.name}

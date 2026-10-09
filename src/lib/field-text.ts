@@ -70,8 +70,10 @@ const SIGMA = String.fromCodePoint(0x3c3);
  * have a composed form where its upper case has none, and the spelling of a
  * spelling must be itself.
  *
- * Not done here, and not decided: the mapping of a domain written in
- * full-width or other compatibility letters, or in punycode, to one form.
+ * No domain is mapped to another form here or anywhere: an address whose
+ * domain is written in a form that would need it is refused by
+ * `acceptedAddress`, and where an address is only looked up it finds no
+ * account.
  */
 export function addressSpelling(value: string): string {
   return value.normalize('NFC').toLowerCase().replace(FINAL_SIGMA, SIGMA).normalize('NFC');
@@ -95,14 +97,48 @@ export function enteredAddress(value: string): string {
 const PART = String.raw`[^\s@\p{Cc}<>(),;:"[\]\\]+`;
 const ADDRESS = new RegExp(`^${PART}@${PART}\\.${PART}$`, 'u');
 
+// The owner's decision of 9 October 2026 (its register row is pending): "refuse
+// any address whose domain is not plain lower-case ASCII, or a Unicode label
+// that survives normalisation unchanged. The address is refused, not mapped."
+// Otherwise a domain in full-width letters, or in any other compatibility
+// form of a letter or a digit, would be an address of its own beside the
+// plain one: a second account, and one that the list of the founding team
+// does not match.
+//
+// The shape of a label: 1 to 63 letters, marks, digits and hyphens, with no
+// hyphen first or last. The letters of ASCII are among them, in lower case by
+// the time this is asked, so a label in punycode (`xn--…`) passes as it was
+// typed: it is not decoded, and not compared with its Unicode form.
+const LABEL = /^(?!-)[\p{L}\p{M}\p{N}-]{1,63}(?<!-)$/u;
+
+/** Whether the domain of a spelt address is one that is stored. It changes nothing. */
+function domainAccepted(domain: string): boolean {
+  return (
+    domain.length <= 253 &&
+    domain.split('.').every(
+      (label) =>
+        LABEL.test(label) &&
+        // No compatibility form: full-width, superscript, ligature, and every
+        // capital that has no lower case of its own.
+        label.normalize('NFKC') === label &&
+        // Always so after `addressSpelling`, which is the only way here; it is
+        // asked so that the rule stands whole should the spelling change.
+        label.toLowerCase() === label,
+    )
+  );
+}
+
 /**
  * An email address as it is stored, in its one spelling (FR-AU-02), or null
- * where what was given could not be one or is longer than an address can be
- * (254 characters). The one rule of an address, for an admission invitation
- * (FR-AU-89) and for the change of an account's address (FR-AU-03).
+ * where what was given could not be one, is longer than an address can be
+ * (254 characters), or has a domain that is not stored (above). The one rule
+ * of an address, for an admission invitation (FR-AU-89), for the change of an
+ * account's address (FR-AU-03), and for an entry of the list of the founding
+ * team (src/lib/settings.ts).
  */
 export function acceptedAddress(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const email = addressSpelling(value);
-  return email.length > 254 || !ADDRESS.test(email) ? null : email;
+  if (email.length > 254 || !ADDRESS.test(email)) return null;
+  return domainAccepted(email.slice(email.lastIndexOf('@') + 1)) ? email : null;
 }

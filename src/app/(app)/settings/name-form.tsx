@@ -56,7 +56,7 @@ export function NameForm({ name }: { name: string }) {
           id="name"
           name="name"
           label="Name"
-          hint="The name that collaborators see beside this account. It has 1 to 100 characters."
+          hint="The name that collaborators see beside this account. It has 1 to 100 characters. At least one of them can be seen."
           autoComplete="name"
           defaultValue={name}
           required

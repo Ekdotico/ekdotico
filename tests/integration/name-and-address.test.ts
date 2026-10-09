@@ -448,6 +448,17 @@ describe('asking for a change of the address (FR-AU-03)', () => {
       'line\nbreak@example.com',
       'nodot@example',
       '',
+      // The owner's decision of 9 October 2026: a domain that is not plain, or
+      // not a Unicode label that normalisation leaves as it is. The first would
+      // otherwise be a second address beside one on the list of the founding team.
+      'listed@\u{ff45}xample.com',
+      'a@example\u{b2}.com',
+      'a@of\u{fb01}ce.example',
+      'a@\u{24d0}xample.com',
+      'a@-example.com',
+      'a@example-.com',
+      'a@example..com',
+      `a@${'b'.repeat(64)}.com`,
     ]) {
       const refused = await ask(again.cookie, address);
       expect(refused.response.status, address).toBe(422);

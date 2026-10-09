@@ -60,8 +60,9 @@ describe('the spelling of an email address (FR-AU-02)', () => {
 
   it('leaves an ordinary address as its lower case, and maps no domain', () => {
     expect(addressSpelling('Ada.Lovelace@Example.COM')).toBe('ada.lovelace@example.com');
-    // Not decided: a domain in full-width letters is not made the plain one.
+    // A domain in full-width letters is not made the plain one: the rule refuses it.
     expect(addressSpelling('ada@\u{ff45}xample.com')).toBe('ada@\u{ff45}xample.com');
+    expect(acceptedAddress('ada@\u{ff45}xample.com')).toBeNull();
   });
 
   it('bounds what was entered where an address is looked up, a long decomposed address included', () => {
@@ -136,6 +137,102 @@ describe('the rule of an email address (FR-AU-03, FR-AU-89)', () => {
     expect(acceptedAddress(7)).toBeNull();
     expect(acceptedAddress(`${'a'.repeat(242)}@example.com`)).toHaveLength(254);
     expect(acceptedAddress(`${'a'.repeat(243)}@example.com`)).toBeNull();
+  });
+});
+
+// The owner's decision of 9 October 2026: "refuse any address whose domain is
+// not plain lower-case ASCII, or a Unicode label that survives normalisation
+// unchanged. The address is refused, not mapped."
+describe('the domain of an email address (FR-AU-02, FR-AU-03, FR-AU-89)', () => {
+  const GREEK = `${of('3c0 3b1 3c1 3ac 3b4 3b5 3b9 3b3 3bc 3b1')}.${of('3b5 3bb')}`;
+  it.each([
+    ['an ordinary domain', 'example.com'],
+    ['subdomains', 'mail.dept.example.ac.uk'],
+    ['hyphens inside a label', 'my-university.ex-ample.org'],
+    ['digits, first and last in a label too', '1example2.3com'],
+    ['a label of one character', 'a.b.io'],
+    ['a label of 63 characters', `${'a'.repeat(63)}.com`],
+    ['a Greek domain in lower case', GREEK],
+    ['a Greek label that ends in sigma', `${of('3bf 3b4 3bf 3c3')}.gr`],
+    ['letters with marks, composed', 'b\u{fc}cher.example'],
+    ['a letter with a mark that has no composed form', 'x\u{301}y.example'],
+    ['Chinese', `${of('4f8b 5b50')}.${of('4e2d 56fd')}`],
+    ['a punycode domain, as it was typed', 'xn--bcher-kva.example'],
+    ['a punycode last label', 'example.xn--qxam'],
+  ])('accepts %s', (_what, domain) => {
+    expect(acceptedAddress(`ada@${domain}`)).toBe(`ada@${domain}`);
+  });
+
+  it('accepts a domain typed in capitals as its lower case, which is one address (FR-AU-02)', () => {
+    expect(acceptedAddress('Ada@Example.COM')).toBe('ada@example.com');
+    expect(acceptedAddress('ada@XN--BCHER-KVA.example')).toBe('ada@xn--bcher-kva.example');
+    expect(acceptedAddress(`ada@${GREEK.toUpperCase()}`)).toBe(`ada@${GREEK}`);
+  });
+
+  it('does not make a punycode label and its Unicode form one address', () => {
+    expect(acceptedAddress('ada@xn--bcher-kva.example')).not.toBe(acceptedAddress('ada@b\u{fc}cher.example'));
+  });
+
+  // Each of these is changed by the compatibility normalisation (NFKC).
+  it.each([
+    ['a full-width letter', '\u{ff45}xample.com'],
+    ['a full-width letter in the last label', 'example.c\u{ff4f}m'],
+    ['a full-width capital', '\u{ff25}xample.com'],
+    ['a full-width digit', 'example\u{ff11}.com'],
+    ['a superscript digit', 'example\u{b2}.com'],
+    ['a ligature', 'of\u{fb01}ce.example'],
+    ['a circled letter', '\u{24d0}xample.com'],
+    ['a capital that has no lower case of its own: the upsilon with a hook', `${of('3d2')}.gr`],
+    ['a capital that has no lower case of its own: a mathematical bold A', `${of('1d400')}.example`],
+    ['a letter that is its capital and the next letter in one', `${of('1c5')}emal.example`],
+    ['the micro sign, which is not the Greek letter', '\u{b5}.example'],
+    ['a half-width katakana letter', `${of('ff76')}.example`],
+  ])('refuses a domain with %s', (_what, domain) => {
+    expect(domain.normalize('NFKC')).not.toBe(domain);
+    expect(acceptedAddress(`ada@${domain}`)).toBeNull();
+    // Refused, and the plain domain it would be mapped to is not put in its place.
+    expect(acceptedAddress(`ada@sub.${domain}`)).toBeNull();
+  });
+
+  // The shape of a label. None of these is changed by NFKC or by lower case.
+  it.each([
+    ['an empty label', 'example..com'],
+    ['an empty first label', '.example.com'],
+    ['an empty last label', 'example.com.'],
+    ['a label that starts with a hyphen', '-example.com'],
+    ['a label that ends with a hyphen', 'example-.com'],
+    ['a last label that starts with a hyphen', 'example.-com'],
+    ['a Greek label that ends with a hyphen', `${of('3c0 3b1')}-.gr`],
+    ['a label of 64 characters', `${'a'.repeat(64)}.com`],
+    ['a Greek label of 64 characters', `${of('3b1').repeat(64)}.gr`],
+    ['an underscore', 'ex_ample.com'],
+    ['a symbol', 'ex\u{2665}ample.com'],
+    ['an emoji', `${of('1f600')}.example`],
+    ['a punctuation mark', 'ex!ample.com'],
+    ['a zero-width joiner', `exam${ZWJ}ple.com`],
+    ['a soft hyphen', 'exam\u{ad}ple.com'],
+    ['an ideographic full stop between labels', `example${of('3002')}com.example`],
+  ])('refuses a domain with %s', (_what, domain) => {
+    expect(domain.normalize('NFKC').toLowerCase(), 'not for its form').toBe(domain);
+    expect(acceptedAddress(`ada@${domain}`)).toBeNull();
+  });
+
+  it('refuses a domain of 254 characters, and one too long for an address of 254', () => {
+    const label = 'a'.repeat(62);
+    // Four labels of 62 and their dots, and a last label: 254 in all.
+    const domain = `${`${label}.`.repeat(4)}${'b'.repeat(2)}`;
+    expect(domain).toHaveLength(254);
+    expect(acceptedAddress(`a@${domain}`)).toBeNull();
+    // The longest that fits beside a local part of one character: 252.
+    const longest = domain.slice(2);
+    expect(acceptedAddress(`a@${longest}`)).toBe(`a@${longest}`);
+    expect(acceptedAddress(`a@${longest}`)).toHaveLength(254);
+  });
+
+  it('judges the local part as before: it is not held to the rule of a domain', () => {
+    for (const address of ['a_b@example.com', '-ada-@example.com', `${'a'.repeat(64)}@example.com`]) {
+      expect(acceptedAddress(address)).toBe(address);
+    }
   });
 });
 

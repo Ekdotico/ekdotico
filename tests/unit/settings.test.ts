@@ -53,6 +53,35 @@ describe('loadSettings (FR-AU-83; register A102)', () => {
     });
     expect(foundingTeamEmails).toEqual(['one@example.com', 'two@example.com']);
   });
+
+  // The owner's decision of 9 October 2026: an entry that no account can have
+  // as its address would match none, and exempt the account it was meant for.
+  it.each([
+    ['a full-width letter in its domain', 'listed@\u{ff45}xample.com'],
+    ['a ligature in its domain', 'listed@of\u{fb01}ce.example'],
+    ['a label that ends with a hyphen', 'listed@example-.com'],
+    ['an empty label', 'listed@example..com'],
+    ['no domain', 'listed'],
+    ['a semicolon where a comma was meant', 'listed@example.com;other@example.com'],
+  ])('refuses to start where an entry has %s, and says which without repeating it', (_what, entry) => {
+    const start = () => loadSettings({ ...env, FOUNDING_TEAM_EMAILS: `One@Example.com, ${entry} ,` });
+    expect(start).toThrow(
+      new Error(
+        'FOUNDING_TEAM_EMAILS: entry 2 is not an email address that an account can have. Write it in the form name@example.com, with its domain in plain letters, digits and hyphens.',
+      ),
+    );
+    expect(start).not.toThrow('listed');
+    expect(start).not.toThrow('One@');
+  });
+
+  it('starts with entries in Greek and in punycode, each in its one spelling', () => {
+    const greek = String.fromCodePoint(0x3c0, 0x3b1);
+    const { foundingTeamEmails } = loadSettings({
+      ...env,
+      FOUNDING_TEAM_EMAILS: `A@${greek.toUpperCase()}.GR,b@XN--BCHER-KVA.example`,
+    });
+    expect(foundingTeamEmails).toEqual([`a@${greek}.gr`, 'b@xn--bcher-kva.example']);
+  });
 });
 
 describe('loadSettings: what a process cannot start without', () => {
