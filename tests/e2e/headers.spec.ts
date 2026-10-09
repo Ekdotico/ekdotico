@@ -42,14 +42,16 @@ const pages = globSync('src/app/**/page.tsx').map(address);
 const routes = globSync('src/app/**/route.ts').map(address);
 // What is neither: an address without a page, one without a route, a file of
 // the build that is not there, the image optimiser, which no path admits, and
-// the page of a token that no file serves yet.
+// the endpoints of the identity handler that `[...all]` above does not name:
+// one without a session, and two of an account.
 const others = [
   '/no-such-page',
   '/api/no-such-route',
   '/_next/static/no-such-file.js',
   '/_next/image?url=%2Fx&w=64&q=75',
-  `/sign-in/link/${TOKEN}`,
-  `/confirm-address/${TOKEN}`,
+  '/api/auth/sign-in/link',
+  '/api/auth/verify-email',
+  '/api/auth/change-email',
   '/collab/health',
   '/favicon.ico',
   '/robots.txt',
@@ -107,8 +109,27 @@ test('every page, every route and every other answer carries the policy and the 
   expect(new Set(nonces).size).toBe(nonces.length);
 
   // The page of a token keeps its stricter word (next.config.ts, `TOKEN_PAGES`).
-  for (const path of [`/sign-up/${TOKEN}`, `/reset-password/${TOKEN}`]) {
-    expect((await request.get(path)).headers()['referrer-policy'], path).toBe('no-referrer');
+  // Each of them is a page of the repository, so it was asked for above; and
+  // the word is sent once, not beside the weaker one of every response.
+  const tokenPages = pages.filter((path) => path.endsWith(`/${TOKEN}`)).sort();
+  expect(tokenPages).toEqual(
+    [
+      `/confirm-address/${TOKEN}`,
+      `/reset-password/${TOKEN}`,
+      `/sign-in/link/${TOKEN}`,
+      `/sign-up/${TOKEN}`,
+    ].sort(),
+  );
+  for (const path of tokenPages) {
+    const response = await request.get(path);
+    expect(response.status(), path).toBe(200);
+    expect(
+      response
+        .headersArray()
+        .filter(({ name }) => name.toLowerCase() === 'referrer-policy')
+        .map(({ value }) => value),
+      path,
+    ).toEqual(['no-referrer']);
   }
   expect((await request.get('/sign-in')).headers()['referrer-policy']).toBe(
     'strict-origin-when-cross-origin',
@@ -169,6 +190,25 @@ test('a response that did not pass the proxy carries the policy that admits noth
     expect(headers['content-security-policy'], what).toBe(NOTHING);
     expect(headers['x-content-type-options'], what).toBe('nosniff');
     expect(headers['x-frame-options'], what).toBe('DENY');
+  }
+  // The answers an endpoint makes itself, where the proxy did not refuse
+  // first (src/lib/auth/route-answers.ts, `refusedOrigin`): a 403 for a
+  // request without the application's origin, a 409 for a link that is none,
+  // and a 401 without a session. And the 409 again by way of the proxy.
+  const own = { ...skipping, origin: APP_ORIGIN };
+  const made: [string, Record<string, string>, number][] = [
+    ['/api/auth/sign-in/link', skipping, 403],
+    ['/api/auth/sign-in/link', own, 409],
+    ['/api/auth/verify-email', skipping, 403],
+    ['/api/auth/verify-email', own, 401],
+    ['/api/sign-up', skipping, 403],
+    ['/api/auth/sign-in/link', { origin: APP_ORIGIN }, 409],
+  ];
+  for (const [path, headers, status] of made) {
+    const response = await request.post(path, { headers, data: { token: TOKEN } });
+    const what = `POST ${path} (${response.status()})`;
+    expect(response.status(), what).toBe(status);
+    expect(await owed(response, what, path)).toBeNull();
   }
   // The proxy did not run: the sign-in page was answered, and as no page of the proxy's is.
   expect((await request.get('/sign-in', { headers: skipping })).status()).toBe(200);
