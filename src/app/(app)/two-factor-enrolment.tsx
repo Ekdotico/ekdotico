@@ -11,6 +11,7 @@ import {
   TextArea,
   TextField,
 } from '@ekdotico/domico/components';
+import { useReady } from '../../components/ready.ts';
 import { QR_SIZE, qrFits } from '../../components/qr-size.ts';
 import { sendFor, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
@@ -121,6 +122,7 @@ export function TwoFactorEnrolment({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
   const secretHeading = useRef<HTMLHeadingElement>(null);
 
   // The form of the password is gone when the secret is shown, and focus with it.
@@ -253,7 +255,13 @@ export function TwoFactorEnrolment({
           required
         />
         <div>
-          <Button variant="primary" type="submit" pending={pending} pendingLabel="Continuing…">
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Continuing…"
+          >
             Continue
           </Button>
         </div>

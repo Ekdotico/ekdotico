@@ -61,6 +61,7 @@ import {
   clearFailedSignIns,
   countFailedSignIn,
   failedSignInsReached,
+  orEndSession,
   SIGN_IN_REFUSED,
   stillVerified,
 } from './sign-in.ts';
@@ -257,9 +258,11 @@ async function standing(
  * two-factor authentication is on, and a page reads it for up to a minute
  * (NFR-SE-17 (c)). After a change the copy is written again from the rows, so
  * that the page which follows shows the account as it now is, and the
- * founding-team gate opens at once for the browser that turned it on.
+ * founding-team gate opens at once for the browser that turned it on. The
+ * change of a name and of an address write it again too, under their own
+ * word in the line of a fault (name-and-address.ts).
  */
-async function freshCopy(ctx: GenericEndpointContext): Promise<void> {
+export async function freshCopy(ctx: GenericEndpointContext, what = 'two-factor'): Promise<void> {
   const { authCookies, secret, internalAdapter } = ctx.context;
   try {
     const token = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
@@ -270,7 +273,7 @@ async function freshCopy(ctx: GenericEndpointContext): Promise<void> {
     // nothing was changed, and at an enrolment that answer would lose the
     // recovery codes. The browser's copy is then at most a minute behind.
     // NFR-SE-19: the class of the fault, and nothing of its message.
-    console.error(`two-factor: changed, signed copy not written again (${faultOf(error)})`);
+    console.error(`${what}: changed, signed copy not written again (${faultOf(error)})`);
   }
 }
 
@@ -587,70 +590,74 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   // step gone or the session made here is among those ended.
   const session = await internalAdapter.createSession(user.id);
   if (!session) throw new NoSession('second step: no session');
-  // The owner's decision S5: "a sign-in ends the session the browser held".
-  // The password step ended the one it held then (sign-in.ts), but the browser
-  // may have been given another since, and a recovery code is taken here under
-  // a session too (`verifyBackupCode`).
-  const held = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, secret);
-  const fewer = left ? await seal(ctx, JSON.stringify(left)) : null;
-  // One transaction, so that none of the three happens without the others; a
-  // fault of any is a fault of the request, and nothing is swallowed. The
-  // session the browser held first, as a change of the password holds its own
-  // before it deletes the steps: the two then never wait for each other in a
-  // circle.
-  const outcome = await db()
-    .$transaction(async (tx) => {
-      if (held) await tx.session.deleteMany({ where: { token: held } });
-      // The step is claimed once, and only while it is open: it may have
-      // reached its 10 minutes since it was read above.
-      const claimed = await tx.verification.deleteMany({
-        where: { id: step.id, expiresAt: { gt: new Date() } },
-      });
-      if (claimed.count !== 1) throw STEP_GONE;
-      if (fewer !== null) {
-        // Written only over the codes that were read, so of two requests with
-        // one code the second finds it gone, and codes replaced meanwhile stay
-        // as they were set.
-        const spent = await tx.twoFactor.updateMany({
-          where: { id: factor.id, backupCodes: factor.backupCodes },
-          data: { backupCodes: fewer },
+  // The owner's decision of 9 October 2026: a fault from here to the answer
+  // leaves no session behind (sign-in.ts).
+  return orEndSession(session.token, async () => {
+    // The owner's decision S5: "a sign-in ends the session the browser held".
+    // The password step ended the one it held then (sign-in.ts), but the browser
+    // may have been given another since, and a recovery code is taken here under
+    // a session too (`verifyBackupCode`).
+    const held = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, secret);
+    const fewer = left ? await seal(ctx, JSON.stringify(left)) : null;
+    // One transaction, so that none of the three happens without the others; a
+    // fault of any is a fault of the request, and nothing is swallowed. The
+    // session the browser held first, as a change of the password holds its own
+    // before it deletes the steps: the two then never wait for each other in a
+    // circle.
+    const outcome = await db()
+      .$transaction(async (tx) => {
+        if (held) await tx.session.deleteMany({ where: { token: held } });
+        // The step is claimed once, and only while it is open: it may have
+        // reached its 10 minutes since it was read above.
+        const claimed = await tx.verification.deleteMany({
+          where: { id: step.id, expiresAt: { gt: new Date() } },
         });
-        if (spent.count !== 1) throw CODE_GONE;
-      }
-      // FR-AU-81: "the lock is lifted … when that sign-in completes", and the
-      // link is spent. A link made void since it was read completes nothing.
-      // Last, as a completed reset takes the account's row after the steps.
-      if (link) {
-        if (!(await claimSignInLink(tx, link))) throw STEP_GONE;
-        // NFR-SE-19; the owner's decision of 9 October 2026: the entry of a
-        // sign-in by the link, where it completes and not where its step opens.
-        await securityLogIn(tx, { kind: 'sign_in_by_link', userId: user.id });
-      }
-      return 'claimed' as const;
-    })
-    .catch((error: unknown) => {
-      if (error === STEP_GONE || error === CODE_GONE) return error;
-      throw error;
-    });
-  if (outcome !== 'claimed') {
-    await db().session.deleteMany({ where: { token: session.token } });
-    return outcome === CODE_GONE ? wrong() : refused('sign_in_again', MESSAGES.again);
-  }
-  // FR-AU-81: "the counters of failed sign-ins for the address are cleared
-  // when that sign-in completes". The sign-in stands whether or not this
-  // succeeds, as a reset does (password.ts), with the ceiling stated where
-  // the link signs in without a second step (sign-in.ts).
-  if (link) {
-    await clearFailedSignIns(user.email).catch(() =>
-      console.error('second step: signed in by a link, counts of failed sign-ins not cleared'),
-    );
-  }
+        if (claimed.count !== 1) throw STEP_GONE;
+        if (fewer !== null) {
+          // Written only over the codes that were read, so of two requests with
+          // one code the second finds it gone, and codes replaced meanwhile stay
+          // as they were set.
+          const spent = await tx.twoFactor.updateMany({
+            where: { id: factor.id, backupCodes: factor.backupCodes },
+            data: { backupCodes: fewer },
+          });
+          if (spent.count !== 1) throw CODE_GONE;
+        }
+        // FR-AU-81: "the lock is lifted … when that sign-in completes", and the
+        // link is spent. A link made void since it was read completes nothing.
+        // Last, as a completed reset takes the account's row after the steps.
+        if (link) {
+          if (!(await claimSignInLink(tx, link))) throw STEP_GONE;
+          // NFR-SE-19; the owner's decision of 9 October 2026: the entry of a
+          // sign-in by the link, where it completes and not where its step opens.
+          await securityLogIn(tx, { kind: 'sign_in_by_link', userId: user.id });
+        }
+        return 'claimed' as const;
+      })
+      .catch((error: unknown) => {
+        if (error === STEP_GONE || error === CODE_GONE) return error;
+        throw error;
+      });
+    if (outcome !== 'claimed') {
+      await db().session.deleteMany({ where: { token: session.token } });
+      return outcome === CODE_GONE ? wrong() : refused('sign_in_again', MESSAGES.again);
+    }
+    // FR-AU-81: "the counters of failed sign-ins for the address are cleared
+    // when that sign-in completes". The sign-in stands whether or not this
+    // succeeds, as a reset does (password.ts), with the ceiling stated where
+    // the link signs in without a second step (sign-in.ts).
+    if (link) {
+      await clearFailedSignIns(user.email).catch(() =>
+        console.error('second step: signed in by a link, counts of failed sign-ins not cleared'),
+      );
+    }
 
-  // `false`: the cookie lasts as long as the session.
-  await setSessionCookie(ctx, { session, user }, false);
-  expireCookie(ctx, cookie);
-  ctx.setHeader('Cache-Control', 'no-store');
-  return ctx.json({});
+    // `false`: the cookie lasts as long as the session.
+    await setSessionCookie(ctx, { session, user }, false);
+    expireCookie(ctx, cookie);
+    ctx.setHeader('Cache-Control', 'no-store');
+    return ctx.json({});
+  });
 }
 
 /**

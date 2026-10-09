@@ -13,6 +13,7 @@ import {
   TextField,
   Tooltip,
 } from '@ekdotico/domico/components';
+import { useReady } from '../../components/ready.ts';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { InBrowser, LocalTime } from './local-time.tsx';
@@ -181,6 +182,7 @@ export function Documents({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [creating, setCreating] = useState(false);
+  const ready = useReady();
   const [renaming, setRenaming] = useState<DocumentItem | null>(null);
   const [deleting, setDeleting] = useState<DocumentItem | null>(null);
   // How many documents were deleted from this page: the statement of the last
@@ -224,7 +226,13 @@ export function Documents({
         <PageHeading>Documents</PageHeading>
         <Cluster gap={4}>
           <Link href={DELETED_PATH}>Deleted documents</Link>
-          <Button variant="primary" pending={creating} pendingLabel="Creating document…" onClick={create}>
+          <Button
+            variant="primary"
+            disabled={!ready}
+            pending={creating}
+            pendingLabel="Creating document…"
+            onClick={create}
+          >
             New document
           </Button>
         </Cluster>
@@ -263,6 +271,7 @@ export function Documents({
                 <Cluster gap={2}>
                   <Button
                     variant="quiet"
+                    disabled={!ready}
                     aria-describedby={`title-${document.id}`}
                     onClick={() => setRenaming(document)}
                   >
@@ -270,6 +279,7 @@ export function Documents({
                   </Button>
                   <Button
                     variant="quiet"
+                    disabled={!ready}
                     aria-describedby={`title-${document.id}`}
                     onClick={() => setDeleting(document)}
                   >

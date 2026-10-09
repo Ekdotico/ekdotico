@@ -2,10 +2,22 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 let stopped: (typeof import('../../src/lib/auth/founding-gate.ts'))['stoppedByFoundingGate'];
 
+// Written by their code points (tests/unit/field-text.test.ts).
+const of = (points: string) =>
+  String.fromCodePoint(...points.split(' ').map((point) => Number.parseInt(point, 16)));
+const GREEK = {
+  upper: `${of('39f 394 39f 3a3')}@example.gr`,
+  finalSigma: `${of('3bf 3b4 3bf 3c2')}@example.gr`,
+  sigma: `${of('3bf 3b4 3bf 3c3')}@example.gr`,
+};
+const MARKED = { composed: `andr${of('e9')}@example.com`, decomposed: `andre${of('301')}@example.com` };
+
 beforeAll(async () => {
   Object.assign(process.env, {
     // Entries are lowered when the list is read (FR-AU-83).
-    FOUNDING_TEAM_EMAILS: 'Founder@Example.com, second@example.com',
+    // The third is Greek in capitals, ending in sigma; the fourth has a
+    // letter typed as a base and a mark.
+    FOUNDING_TEAM_EMAILS: `Founder@Example.com, second@example.com, ${GREEK.upper}, ${MARKED.decomposed}`,
     APP_ORIGIN: 'https://app.example.test',
     TRUSTED_PROXY_COUNT: '1',
     EMAIL_TRANSPORT: 'sink',
@@ -34,6 +46,19 @@ describe('the founding-team gate', () => {
   it('compares without regard to case', () => {
     expect(stopped(account('FOUNDER@example.COM'))).toBe(true);
     expect(stopped(account('Founder@Example.com'))).toBe(true);
+  });
+
+  // FR-AU-02; the owner's decision of 9 October 2026: both sides of the
+  // comparison are written in the one spelling of an address (field-text.ts).
+  it('compares in the one spelling of an address: either sigma, and a letter composed or not', () => {
+    // As an account stores it, and as a row from before the rule could.
+    for (const email of [GREEK.sigma, GREEK.finalSigma, GREEK.upper]) {
+      expect(stopped(account(email)), email).toBe(true);
+    }
+    for (const email of [MARKED.composed, MARKED.decomposed]) {
+      expect(stopped(account(email)), email).toBe(true);
+    }
+    expect(stopped(account(GREEK.sigma, true))).toBe(false);
   });
 
   it('takes anything but true for two-factor authentication as off', () => {

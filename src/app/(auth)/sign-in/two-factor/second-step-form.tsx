@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Button, Cluster, FormFault, OneTimeCodeField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../../components/ready.ts';
 import { send, type Fault } from '../../../../components/send.ts';
 import styles from '../../../pages.module.css';
 
@@ -26,6 +27,7 @@ export function SecondStepForm({ returnTo }: { returnTo: string }) {
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,11 +85,18 @@ export function SecondStepForm({ returnTo }: { returnTo: string }) {
           <OneTimeCodeField key="code" id="code" name="code" label="Six-digit code" required />
         )}
         <Cluster gap={3}>
-          <Button variant="primary" type="submit" pending={pending} pendingLabel="Signing in…">
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Signing in…"
+          >
             Sign in
           </Button>
           <Button
             variant="quiet"
+            disabled={!ready}
             onClick={() => {
               setRecovery((now) => !now);
               setFault(null);

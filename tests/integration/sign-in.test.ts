@@ -38,6 +38,12 @@ const signIn = (email: string, password = PASSWORD, headers: Record<string, stri
 let people = 0;
 /** A new address, so that each test has counts of its own. */
 const address = () => `person${++people}@example.com`;
+/**
+ * An address that no account can have (the owner's decision of 9 October 2026:
+ * a full-width letter in its domain). Where an address is only looked up it is
+ * not refused for that: it finds no account, as any unknown address.
+ */
+const neverStored = () => `person${++people}@\u{ff45}xample.com`;
 async function person(verified = true) {
   const email = address();
   return { email, id: await createAccount(auth, email, verified) };
@@ -329,6 +335,8 @@ describe('the time a refusal takes (FR-AU-81)', () => {
     const instead = { verified: 0, hashed: 1 };
     expect(await work(() => signIn(address()), 401)).toEqual(instead);
     expect(await work(() => signIn('not an address'), 401)).toEqual(instead);
+    expect(await work(() => signIn(neverStored()), 401)).toEqual(instead);
+    await expectRefused(await signIn(neverStored()));
     expect(await work(() => signIn(unverified.email), 401)).toEqual(instead);
     expect(await work(() => signIn(withoutPassword.email), 401)).toEqual(instead);
     expect(await work(() => signIn(known.email, 'x'.repeat(129)), 401)).toEqual(instead);
@@ -362,6 +370,7 @@ describe('the time a refusal takes (FR-AU-81)', () => {
     const failed = [2, 1, 1, 6];
     expect(await work(() => signIn(known.email, WRONG))).toEqual(failed);
     expect(await work(() => signIn(address(), WRONG))).toEqual(failed);
+    expect(await work(() => signIn(neverStored(), WRONG))).toEqual(failed);
     expect(await work(() => signIn(unverified.email))).toEqual(failed);
     // Refused by the lock alone, with both limits open (FR-AU-81): Valkey is
     // asked as often as for a failure, by checks that count nothing

@@ -118,6 +118,17 @@ describe('classify', () => {
     ['POST', '/sign-in/two-factor'],
     ['GET', '/sign-in/two-factor/x'],
     ['POST', '/api/auth/change-password'],
+    // FR-AU-03, FR-AU-90: the name and the request for a change of the address
+    // need a session, and so does the confirmation (the owner's decision of
+    // 9 October 2026); the page of a confirmation link is read and never
+    // posted to, and its endpoint answers no GET.
+    ['POST', '/api/auth/update-user'],
+    ['POST', '/api/auth/change-email'],
+    ['POST', '/api/auth/verify-email'],
+    ['GET', '/api/auth/verify-email'],
+    ['POST', '/confirm-address/tok'],
+    ['GET', '/confirm-address'],
+    ['GET', '/confirm-address/tok/more'],
     ['POST', '/api/auth/revoke-session'],
     ['POST', '/api/auth/revoke-other-sessions'],
     ['GET', '/api/auth/list-sessions'],

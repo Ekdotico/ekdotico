@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button, FormFault, PageHeading, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../components/send.ts';
 import { INVITATION_NOT_OPEN } from '../../../../lib/admission/statements.ts';
 
@@ -47,6 +48,7 @@ export function SignUp({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -110,7 +112,7 @@ export function SignUp({
             id="name"
             name="name"
             label="Name"
-            hint="1 to 100 characters."
+            hint="1 to 100 characters. At least one of them can be seen."
             autoComplete="name"
             required
             error={fields.name}
@@ -126,7 +128,13 @@ export function SignUp({
             error={fields.password}
           />
           <div>
-            <Button variant="primary" type="submit" pending={pending} pendingLabel="Creating account…">
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!ready}
+              pending={pending}
+              pendingLabel="Creating account…"
+            >
               Create account
             </Button>
           </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
+import { useReady } from '../../components/ready.ts';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { SignOutButton } from './sign-out-button.tsx';
@@ -30,6 +31,7 @@ export function ClosedAlphaNotice({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
 
   useEffect(() => {
     heading.current?.focus();
@@ -68,7 +70,13 @@ export function ClosedAlphaNotice({
             attempt, so that a second refusal is announced as the first was. */}
         {fault ? <FormFault key={attempt} title={fault.message} autoFocus={false} /> : null}
         <Cluster gap={3}>
-          <Button variant="primary" pending={pending} pendingLabel="Continuing…" onClick={acknowledge}>
+          <Button
+            variant="primary"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Continuing…"
+            onClick={acknowledge}
+          >
             Continue
           </Button>
           <SignOutButton variant="quiet" onFault={state} />

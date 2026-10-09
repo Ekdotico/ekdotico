@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Button, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
+import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
 import styles from '../../../../pages.module.css';
 
@@ -47,6 +48,7 @@ export function LinkForm({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -81,7 +83,13 @@ export function LinkForm({
           </p>
           {otherAccount ? <p className={styles.text}>{OTHER_ACCOUNT}</p> : null}
           <div>
-            <Button variant="primary" type="submit" pending={pending} pendingLabel="Signing in…">
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!ready}
+              pending={pending}
+              pendingLabel="Signing in…"
+            >
               Sign in
             </Button>
           </div>

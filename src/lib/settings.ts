@@ -1,6 +1,7 @@
 // Settings read from the environment when a process starts. The web application
 // and the collaboration server both load them through this one module
 // (NFR-SE-17 (f)). Every secret is read here and nowhere else (NFR-SE-19).
+import { acceptedAddress } from './field-text.ts';
 
 /** A limit of NFR-SE-07: at most `max` in any `windowSeconds`. */
 export interface Limit {
@@ -283,11 +284,26 @@ export function loadSettings(env: Env = process.env): Settings {
     );
   }
 
+  // The owner's decision of 9 October 2026: an entry that no account can have
+  // as its address (src/lib/field-text.ts) matches none, and the account it
+  // was meant for would be exempt from the gate without a word. The message
+  // says which entry and never repeats it (NFR-SE-19).
+  const foundingTeamEmails = list
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry, index) => {
+      const address = acceptedAddress(entry);
+      if (address === null) {
+        throw new Error(
+          `FOUNDING_TEAM_EMAILS: entry ${index + 1} is not an email address that an account can have. Write it in the form name@example.com, with its domain in plain letters, digits and hyphens.`,
+        );
+      }
+      return address;
+    });
+
   return {
-    foundingTeamEmails: list
-      .split(',')
-      .map((address) => address.trim().toLowerCase())
-      .filter(Boolean),
+    foundingTeamEmails,
     appOrigin,
     databaseUrl: required(env, 'DATABASE_URL', 'Set it to the connection string of the role ekdotico_app.'),
     valkeyUrl: required(env, 'VALKEY_URL', 'Set it to the address of Valkey.'),
