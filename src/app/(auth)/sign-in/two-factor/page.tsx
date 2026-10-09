@@ -10,7 +10,7 @@ import { returnPath } from '../../../../lib/http.ts';
 import { RETURN_PARAMETER } from '../../../../proxy.ts';
 import { SecondStepForm } from './second-step-form.tsx';
 
-export const metadata: Metadata = { title: 'Enter the code' };
+export const metadata: Metadata = { title: 'Enter code' };
 
 export default async function SecondStep({
   searchParams,
@@ -22,7 +22,7 @@ export default async function SecondStep({
   const returnTo = returnPath(typeof asked === 'string' ? asked : null);
   return (
     <>
-      <PageHeading>Enter the code</PageHeading>
+      <PageHeading>Enter code</PageHeading>
       <SecondStepForm returnTo={returnTo} />
     </>
   );

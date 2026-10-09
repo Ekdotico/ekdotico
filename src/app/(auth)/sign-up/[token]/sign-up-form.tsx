@@ -103,7 +103,7 @@ export function SignUp({
             id="email"
             type="email"
             label="Email address"
-            hint="The invitation was sent to this address. It cannot be changed here."
+            hint="The Ekdotico team sent the invitation to this address. The address cannot be changed here."
             autoComplete="username"
             value={email}
             readOnly

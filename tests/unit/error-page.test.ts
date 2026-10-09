@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import PageFault from '../../src/app/error.tsx';
 
 const STATEMENT =
-  'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.';
+  'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.';
 
 describe('the page of a fault', () => {
   const markup = renderToStaticMarkup(createElement(PageFault));

@@ -339,7 +339,7 @@ describe('a request that cannot be read', () => {
     const response = await submit(undefined, raw);
     expect(looked).not.toHaveBeenCalled();
     expect(await refused(response, 422, token)).toBe(
-      'The account was not created, because the request could not be read. Reload the page and try again.',
+      'The account was not created, because Ekdotico could not read the request. Reload the page and try again.',
     );
   });
 });

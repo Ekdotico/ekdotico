@@ -21,7 +21,7 @@ const MESSAGES = {
   tooLong:
     'The account was not created, because the request is longer than a name and a password can make it. Shorten the name or the password and try again.',
   notRead:
-    'The account was not created, because the request could not be read. Reload the page and try again.',
+    'The account was not created, because Ekdotico could not read the request. Reload the page and try again.',
   internal: 'The account could not be created because of a fault on the server. Try again in a few minutes.',
 };
 

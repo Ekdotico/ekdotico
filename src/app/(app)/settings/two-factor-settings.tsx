@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
 import { useReady } from '../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../components/send.ts';
@@ -14,7 +14,7 @@ const TEXT = {
   off: 'Two-factor authentication is turned off. With it turned on, each sign-in asks for the password and then for a code from an authenticator application.',
   on: 'Two-factor authentication is turned on. Each sign-in asks for the password and then for a code from the authenticator application.',
   replace:
-    'Replacing the recovery codes gives ten new ones. The earlier codes stop working, the ones not yet used among them.',
+    'Replacing the recovery codes gives ten new ones. All earlier codes stop working, including the codes that have not been used.',
   team: 'This account belongs to the Ekdotico team, so two-factor authentication cannot be turned off for it.',
   turnOff:
     'Turning two-factor authentication off needs the current password and either the code that the authenticator application shows now or a recovery code.',
@@ -36,7 +36,7 @@ function PasswordForm({
   email: string;
   path: string;
   withCode?: boolean;
-  label: string;
+  label: ReactNode;
   pendingLabel: string;
   variant: 'secondary' | 'destructive';
   onAnswer: (answer: unknown) => void;
@@ -77,7 +77,7 @@ function PasswordForm({
           id={`${name}-email`}
           type="email"
           label="Email address"
-          hint="The password is that of the account with this address."
+          hint="The password is for the account with this address."
           autoComplete="username"
           value={email}
           readOnly
@@ -176,7 +176,12 @@ export function TwoFactorSettings({
               email={email}
               path="/api/auth/two-factor/disable"
               withCode
-              label="Turn off two-factor authentication"
+              // The name a screen reader is given names what is turned off (WCAG 2.5.3).
+              label={
+                <>
+                  Turn off<span className="sr-only"> two-factor authentication</span>
+                </>
+              }
               pendingLabel="Turning off…"
               variant="destructive"
               onAnswer={() => router.refresh()}

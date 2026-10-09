@@ -17,7 +17,7 @@ import { SIGN_IN_PATH } from '../../proxy.ts';
 import { reading } from '../page-fault.ts';
 
 /** The title of the screen that turns two-factor authentication on. Text for a person (the owner's answer to Q6). */
-export const ENROLMENT_TITLE = 'Turn on two-factor authentication';
+export const ENROLMENT_TITLE = 'Two-factor authentication';
 
 export interface CurrentAccount extends ValidSession {
   /**

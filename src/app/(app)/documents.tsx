@@ -24,7 +24,7 @@ const NOT_RECORDED_EXPLANATION =
   'This document was created while writing was not being recorded. It has no provenance record, and it can never be sealed.';
 
 // FR-ED-35: the limit of a title and its default, stated where a title is typed.
-const TITLE_HINT = 'At most 200 characters. An empty title is stored as “Untitled document”.';
+const TITLE_HINT = 'A title has at most 200 characters. An empty title is stored as “Untitled document”.';
 
 export interface DocumentItem {
   id: string;

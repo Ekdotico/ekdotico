@@ -19,8 +19,7 @@ const MESSAGES = {
     'This request was not accepted as a signed admission request. Check the admission secret and the clock of the caller, then send it again.',
   rateLimited: (seconds: number) =>
     `Too many requests were made in a short time. Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
-  internal:
-    'The request could not be completed because of a fault on the server. Try again in a few minutes.',
+  internal: 'The request could not complete because of a fault on the server. Try again in a few minutes.',
 };
 
 // NFR-SE-19 asks for an entry where a signature does not verify. These paths

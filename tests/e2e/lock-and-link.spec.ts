@@ -27,13 +27,13 @@ import { APP_ORIGIN } from './origin.ts';
 // FR-AU-87 (h), around the link and the time, with the number of this server.
 const LOCK_EMAIL = (link: string) =>
   `Subject: Sign-in to your Ekdotico account is locked for 1 hour\n` +
-  `[^]*\n\nSign-in to your Ekdotico account is locked for 1 hour, because sign-in to it failed 5 times within an hour\\. To sign in now, open this link:\n${link}\nIt works once, until [0-9]{2}:[0-9]{2} UTC on [0-9]{4}-[0-9]{2}-[0-9]{2}, and it lifts the lock\\. If the failed attempts were not yours, set a new password from the sign-in page\\.$`;
+  `[^]*\n\nSign-in to your Ekdotico account is locked for 1 hour, because sign-in to it failed 5 times within an hour\\. To sign in now, open this link:\n${link}\nIt works once, until [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4}, [0-9]{2}:[0-9]{2} UTC, and it lifts the lock\\. If the failed attempts were not yours, set a new password from the sign-in page\\.$`;
 // FR-AU-81.
 const NOT_VALID =
   'This link is no longer valid. Sign in with your email address and password, or set a new password from the sign-in page.';
 // The application's own words (the owner's answer to Q6 of the plan).
 const NAMES = (email: string) =>
-  `This link signs in to the Ekdotico account with the email address ${email}, and lifts the lock on sign-in to it.`;
+  `This link signs in to the Ekdotico account with the email address ${email}. It also lifts the lock on sign-in.`;
 const OTHER_ACCOUNT = 'This browser is signed in to another account. Signing in here ends that session.';
 
 const firstScreen = { level: 1, name: 'Documents' } as const;

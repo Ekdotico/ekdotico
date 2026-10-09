@@ -39,7 +39,7 @@ const STOPPED = {
   error: {
     code: 'two_factor_required',
     message:
-      'This account belongs to the Ekdotico team, and it cannot be used until two-factor authentication is turned on. Open Ekdotico in the browser and turn it on.',
+      'This account belongs to the Ekdotico team. It cannot be used until two-factor authentication is turned on. Open Ekdotico in the browser and turn it on.',
   },
 };
 const CANNOT_TURN_OFF = {
@@ -393,9 +393,9 @@ describe('the gate at the pages, with the proxy skipped (FR-AU-83, FR-AU-90)', (
 
     const shown = await AppLayout({ children: 'THE CONTENT OF A PAGE' });
     expect(shown.type).toBe(EnrolmentGate);
-    expect(shown.props).toEqual({ title: 'Turn on two-factor authentication', email });
+    expect(shown.props).toEqual({ title: 'Two-factor authentication', email });
     expect(JSON.stringify(shown.props)).not.toContain('THE CONTENT OF A PAGE');
-    expect(await titled('Account settings')).toEqual({ title: 'Turn on two-factor authentication' });
+    expect(await titled('Account settings')).toEqual({ title: 'Two-factor authentication' });
 
     // Each page renders nothing itself: Next.js sends a page beside its layout.
     expect(pages.length).toBeGreaterThan(2);

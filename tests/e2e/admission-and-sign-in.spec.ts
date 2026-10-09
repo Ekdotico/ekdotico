@@ -326,7 +326,7 @@ test('the sign-in page offers sign-up to no one, and asks no other origin for an
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sign in');
   // FR-AU-57. One link, to the page that asks for a password reset (FR-AU-86).
   await expect(page.getByRole('link')).toHaveCount(1);
-  await expect(page.getByRole('link')).toHaveText('Set a new password');
+  await expect(page.getByRole('link')).toHaveText('Set new password');
   await expect(page.getByRole('link')).toHaveAttribute('href', '/reset-password');
   await expect(page.getByRole('main')).not.toContainText(/sign up|create account|invitation/i);
   // FR-AU-88: each field has a visible label and the attribute a password manager fills by.
