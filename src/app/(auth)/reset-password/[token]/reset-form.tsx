@@ -12,8 +12,7 @@ const NOT_VALID =
   'This link is no longer valid. A link to set a new password works once and is valid for 1 hour. Ask for a new one.';
 // FR-AU-86: "a reset … does not sign the person in: the person then signs in
 // with the new password", and "setting it ends every session of the account".
-const CHANGED =
-  'The password is changed, and every session of the account has ended. Sign in with the new password.';
+const CHANGED = 'Password changed. Every session of the account has ended. Sign in with the new password.';
 
 /**
  * All that the page shows for a link that is spent, expired, or not known, and
@@ -25,11 +24,11 @@ const CHANGED =
 export function NotValid({ announce = false }: { announce?: boolean }) {
   return (
     <>
-      <PageHeading>Set a new password</PageHeading>
+      <PageHeading>Set new password</PageHeading>
       <FormFault title={NOT_VALID} announce={announce ? undefined : 'off'} />
       <p className={styles.text}>
         <Link href="/reset-password" prefetch={false}>
-          Set a new password
+          Set new password
         </Link>
       </p>
     </>
@@ -80,7 +79,7 @@ export function ResetForm({
   if (changed) {
     return (
       <>
-        <PageHeading>Set a new password</PageHeading>
+        <PageHeading>Set new password</PageHeading>
         <p ref={statement} tabIndex={-1} role="status" className={styles.text}>
           {CHANGED}
         </p>
@@ -96,7 +95,7 @@ export function ResetForm({
   const refusal = fault?.fields?.newPassword;
   return (
     <>
-      <PageHeading>Set a new password</PageHeading>
+      <PageHeading>Set new password</PageHeading>
       <form method="post" noValidate onSubmit={submit}>
         <Stack gap={5}>
           {fault ? (

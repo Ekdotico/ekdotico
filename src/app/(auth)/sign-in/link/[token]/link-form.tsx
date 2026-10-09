@@ -76,8 +76,8 @@ export function LinkForm({
         <Stack gap={5}>
           {fault ? <FormFault title={fault.message} focusKey={attempt} /> : null}
           <p className={styles.text}>
-            This link signs in to the Ekdotico account with the email address {email}, and lifts the lock on
-            sign-in to it.
+            This link signs in to the Ekdotico account with the email address {email}. It also lifts the lock
+            on sign-in.
           </p>
           {otherAccount ? <p className={styles.text}>{OTHER_ACCOUNT}</p> : null}
           <div>

@@ -14,7 +14,7 @@ export function onlyReads(method: string): boolean {
  * Q6 of the plan).
  */
 export const INTERNAL_FAULT =
-  'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.';
+  'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.';
 
 /**
  * The one body of an error, `{ "error": { "code", "message" } }` (the owner's

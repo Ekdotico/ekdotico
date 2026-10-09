@@ -31,13 +31,13 @@ describe('the email of a lock', () => {
     expect(text.split('\n')).toEqual([
       'Sign-in to your Ekdotico account is locked for 1 hour, because sign-in to it failed 20 times within an hour. To sign in now, open this link:',
       `${ORIGIN}/sign-in/link/${TOKEN}`,
-      'It works once, until 14:05 UTC on 2026-10-08, and it lifts the lock. If the failed attempts were not yours, set a new password from the sign-in page.',
+      'It works once, until 8 Oct 2026, 14:05 UTC, and it lifts the lock. If the failed attempts were not yours, set a new password from the sign-in page.',
     ]);
     // The requirement's own sentence, but for the line of the link and "[time]".
     expect(
       text
         .replace(`\n${ORIGIN}/sign-in/link/${TOKEN}\n`, ' [link]. ')
-        .replace('14:05 UTC on 2026-10-08', '[time]'),
+        .replace('8 Oct 2026, 14:05 UTC', '[time]'),
     ).toBe(
       'Sign-in to your Ekdotico account is locked for 1 hour, because sign-in to it failed 20 times within an hour. To sign in now, open this link: [link]. It works once, until [time], and it lifts the lock. If the failed attempts were not yours, set a new password from the sign-in page.',
     );

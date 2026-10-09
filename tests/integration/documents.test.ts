@@ -20,7 +20,7 @@ const one = await import('../../src/app/api/documents/[id]/route.ts');
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const UNKNOWN = '3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b';
 const NOT_FOUND =
-  'No document was found at this address for this account. Check the address, or open the list of documents.';
+  'No document was found for this account. Reload the list of documents to see the documents that exist.';
 
 const request = (method: string, path: string, cookie?: string, body?: unknown) =>
   new Request(`${ORIGIN}${path}`, {
@@ -914,7 +914,7 @@ describe('what is logged (NFR-SE-19, NFR-SE-06 A10)', () => {
     ]) {
       const error = await expectError(response, 500, 'internal');
       expect(error.message).toBe(
-        'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+        'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.',
       );
     }
     expect(errors.mock.calls).toEqual(Array(4).fill(['documents: request failed (Error)']));

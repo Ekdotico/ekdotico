@@ -1,14 +1,7 @@
 'use client';
 
 import { useSyncExternalStore, type ReactNode } from 'react';
-
-const two = (value: number) => String(value).padStart(2, '0');
-
-/** The day and the minute in the zone of the browser, in the one form the Expression Guidelines give a date (ISO 8601). */
-function localTime(iso: string): string {
-  const at = new Date(iso);
-  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
-}
+import { dateText } from '../../lib/date-text.ts';
 
 const never = () => () => {};
 
@@ -28,7 +21,10 @@ export function InBrowser({ children }: { children: ReactNode }) {
   return inBrowser ? children : null;
 }
 
-/** A time, given in UTC (ISO 8601), shown in the zone of the browser. Always inside `InBrowser`. */
+/**
+ * A time, given in UTC (ISO 8601), shown in the zone of the browser in the one
+ * form a person reads (src/lib/date-text.ts). Always inside `InBrowser`.
+ */
 export function LocalTime({ at }: { at: string }) {
-  return <time dateTime={at}>{localTime(at)}</time>;
+  return <time dateTime={at}>{dateText(new Date(at))}</time>;
 }

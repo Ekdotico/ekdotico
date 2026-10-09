@@ -93,7 +93,7 @@ export function SecondStepForm({ returnTo }: { returnTo: string }) {
               setFault(null);
             }}
           >
-            {recovery ? 'Use a code from the authenticator application' : 'Use a recovery code'}
+            {recovery ? 'Use six-digit code' : 'Use recovery code'}
           </Button>
         </Cluster>
       </Stack>

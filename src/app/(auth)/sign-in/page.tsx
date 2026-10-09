@@ -37,12 +37,13 @@ export default async function SignIn({
     <>
       <PageHeading>Sign in</PageHeading>
       <SignInForm returnTo={returnTo} />
-      {/* FR-AU-86. The words are those the email of the account uses for it:
-          "set a new password from the sign-in page" (FR-AU-87 (d)). Not
-          fetched ahead: each request to these pages is counted (NFR-SE-07). */}
+      {/* FR-AU-86. The verb and the noun are those the email of the account
+          uses for it, "set a new password from the sign-in page" (FR-AU-87
+          (d)), without the article, as a label has none. Not fetched ahead:
+          each request to these pages is counted (NFR-SE-07). */}
       <p className={styles.text}>
         <Link href="/reset-password" prefetch={false}>
-          Set a new password
+          Set new password
         </Link>
       </p>
     </>

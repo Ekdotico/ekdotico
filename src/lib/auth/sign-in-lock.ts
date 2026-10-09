@@ -20,6 +20,7 @@
 // NFR-SE-19: nothing here logs an address, a token or a link. The token
 // leaves this module once, inside the email of FR-AU-87 (h).
 import { randomUUID } from 'node:crypto';
+import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { handOver } from '../email/hand-over.ts';
 import type { EmailMessage } from '../email/index.ts';
@@ -139,17 +140,16 @@ const period = (seconds: number): string => {
  * its setting, never a literal.
  *
  * The requirement gives "[time]" no form. It is written here to the minute,
- * never later than the link's end, with the day as the Expression Guidelines
- * write one, in UTC since an email knows nothing of its reader's clock: for
- * the owner's approval.
+ * never later than the link's end, in the one form a person reads
+ * (../date-text.ts; the owner's decision of 9 October 2026), and in UTC, which
+ * it says, since an email knows nothing of its reader's clock.
  */
 export function lockEmail(to: string, token: string, until: Date): EmailMessage {
   const { appOrigin, signInLockSeconds, limits } = settings();
   const { max, windowSeconds } = limits.FAILED_SIGN_IN_PER_EMAIL;
   const locked = `locked for ${period(signInLockSeconds)}`;
   const within = windowSeconds === 3600 ? 'an hour' : period(windowSeconds);
-  const stamp = until.toISOString();
-  const time = `${stamp.slice(11, 16)} UTC on ${stamp.slice(0, 10)}`;
+  const time = dateText(until, 'utc');
   return {
     to,
     subject: `Sign-in to your Ekdotico account is ${locked}`,

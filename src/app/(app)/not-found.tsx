@@ -10,7 +10,8 @@ export default function NotFound() {
     <Stack gap={4}>
       <PageHeading>Page not found</PageHeading>
       <p className={styles.text}>
-        No page of Ekdotico has this address. Check the address, or open the <Link href="/">first page</Link>.
+        No page of Ekdotico has this address. Check the address, or open the{' '}
+        <Link href="/">list of documents</Link>.
       </p>
     </Stack>
   );

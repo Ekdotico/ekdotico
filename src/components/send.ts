@@ -15,7 +15,10 @@ export interface Fault {
 // arrived. Written under the Expression Guidelines (system feedback, classes B
 // and C); the owner approves them with the pull request.
 const NOT_REACHED = 'The request did not reach Ekdotico. Check the connection and try again.';
-const NOT_READ = 'Ekdotico could not complete the request. Try again in a few minutes.';
+// An answer that cannot be read says nothing of whether the request was
+// carried out, so the statement does not say that it was not.
+const NOT_READ =
+  'Ekdotico could not read the answer to the request, so the result is not known. Reload the page to see the current state, then try again.';
 
 /**
  * A request that changes state, to a path of this origin: a POST, or the

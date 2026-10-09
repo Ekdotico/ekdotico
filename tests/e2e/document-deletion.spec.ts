@@ -3,6 +3,7 @@
 // the browser; and restoring one (FR-ED-36, NFR-I18-06, NFR-SE-04).
 import { expect, test, type Page } from '@playwright/test';
 import { expectNoSidewaysScroll, newPerson, screens, signUp, watchOrigins } from './account.ts';
+import { shown } from './shown.ts';
 
 // The texts, written out here and not taken from the code under test. FR-ED-36
 // gives none: they are the application's, for the owner's approval.
@@ -18,17 +19,6 @@ const RESTORED = 'Document restored. It is in the list of documents again.';
 
 const ZONE = 'Pacific/Auckland';
 test.use({ timezoneId: ZONE });
-
-/** A time as the lists show it, in a zone: `2026-10-09 07:52`. */
-const shown = (iso: string, timeZone: string) =>
-  new Intl.DateTimeFormat('sv-SE', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(iso));
 
 async function enter(page: Page) {
   await signUp(page, newPerson());

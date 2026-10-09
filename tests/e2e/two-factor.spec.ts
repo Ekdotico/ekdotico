@@ -34,10 +34,10 @@ const CODES_EMAIL =
 const CODE_REFUSED = 'The code is not correct. Enter the code that the authenticator application shows now.';
 const RECOVERY_REFUSED =
   'The recovery code is not correct, or it has been used. Enter a recovery code that has not been used.';
-const ENROLMENT_TITLE = 'Turn on two-factor authentication';
+const ENROLMENT_TITLE = 'Two-factor authentication';
 
 const firstScreen = { level: 1, name: 'Documents' } as const;
-const secondStep = { level: 1, name: 'Enter the code' } as const;
+const secondStep = { level: 1, name: 'Enter code' } as const;
 
 /** The part of the account settings that holds two-factor authentication. */
 const part = (page: Page) => page.getByRole('region', { name: 'Two-factor authentication' });
@@ -56,13 +56,13 @@ async function enrol(page: Page, person: Person, within = page.locator('body'), 
   await within.getByRole('button', { name: 'Continue' }).click();
 
   // FR-AU-83: "the secret the application shows", as text, and as a link that holds it.
-  const heading = page.getByRole('heading', { name: 'Add this account to an authenticator application' });
+  const heading = page.getByRole('heading', { name: 'Authenticator application' });
   await expect(heading).toBeFocused();
-  const shown = within.getByLabel('Secret');
+  const shown = within.getByLabel('Secret', { exact: true });
   await expect(shown).not.toBeEditable();
   const secret = await shown.inputValue();
   expect(secret).toMatch(/^[A-Z2-7]{52}$/);
-  const link = within.getByRole('link', { name: 'Open in the authenticator application on this device' });
+  const link = within.getByRole('link', { name: 'Open authenticator application' });
   const address = new URL((await link.getAttribute('href'))!);
   expect(address.protocol).toBe('otpauth:');
   expect(address.host).toBe('totp');
@@ -74,7 +74,7 @@ async function enrol(page: Page, person: Person, within = page.locator('body'), 
   // the link holds and of no other value. The package's control is asked here
   // for the code of that address, and the page's is the same, module for
   // module. It is drawn at its size and is not made smaller to fit.
-  const image = within.getByRole('img', { name: 'QR code for an authenticator application' });
+  const image = within.getByRole('img', { name: 'Secret QR code' });
   await expect(image).toBeVisible();
   const own = renderToStaticMarkup(createElement(QrCode, { value: address.href, label: 'The same' }));
   expect(await image.getAttribute('viewBox')).toBe(/ viewBox="([^"]+)"/.exec(own)![1]);
@@ -103,19 +103,19 @@ async function enrol(page: Page, person: Person, within = page.locator('body'), 
   // "Confirms with one code from it; only then is it on": a wrong code turns
   // nothing on, and is stated at the head of the form and beside the field.
   await code.fill(wrongCode(secret));
-  await within.getByRole('button', { name: ENROLMENT_TITLE }).click();
+  await within.getByRole('button', { name: 'Turn on two-factor authentication' }).click();
   await expect(alertOn(page)).toBeFocused();
   await expect(alertOn(page)).toContainText(CODE_REFUSED);
   await expect(code).toHaveAttribute('aria-invalid', 'true');
 
   await code.fill(await freshCode(secret));
-  await within.getByRole('button', { name: ENROLMENT_TITLE }).click();
+  await within.getByRole('button', { name: 'Turn on two-factor authentication' }).click();
 
   // "Ten single-use recovery codes, once", and the statement to keep them.
-  await expect(page.getByRole('heading', { name: 'Keep the recovery codes' })).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'Keep recovery codes' })).toBeFocused();
   const codes = within.getByLabel('Recovery codes');
   await expect(codes).not.toBeEditable();
-  await expect(within.getByText('Keep them where only you can read them.')).toBeVisible();
+  await expect(within.getByText('Keep the codes where only you can read them.')).toBeVisible();
   const recoveryCodes = (await codes.inputValue()).split('\n');
   expect(recoveryCodes).toHaveLength(10);
   for (const each of recoveryCodes) expect(each).toMatch(/^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/);
@@ -163,7 +163,7 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   await signOut(page);
   await signIn(page, person);
   await expect(page).toHaveURL('/sign-in/two-factor?return=%2F');
-  await expect(page).toHaveTitle('Enter the code – Ekdotico');
+  await expect(page).toHaveTitle('Enter code – Ekdotico');
   await expect(page.getByRole('heading', secondStep)).toBeVisible();
   expect((await page.request.get('/api/account/onboarding')).status()).toBe(401);
   const code = page.getByLabel('Six-digit code');
@@ -186,7 +186,7 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   // "A recovery code is accepted in its place and is then spent."
   await signOut(page);
   await signIn(page, person);
-  await page.getByRole('button', { name: 'Use a recovery code' }).click();
+  await page.getByRole('button', { name: 'Use recovery code' }).click();
   const recovery = page.getByLabel('Recovery code');
   await recovery.fill(recoveryCodes[0]!);
   await screens(page, 'second-step-recovery-code');
@@ -194,12 +194,12 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
   await signOut(page);
   await signIn(page, person);
-  await page.getByRole('button', { name: 'Use a recovery code' }).click();
+  await page.getByRole('button', { name: 'Use recovery code' }).click();
   await page.getByLabel('Recovery code').fill(recoveryCodes[0]!);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(alertOn(page)).toHaveText(RECOVERY_REFUSED);
   // "No device is remembered": back to the code of the authenticator, which is asked for again.
-  await page.getByRole('button', { name: 'Use a code from the authenticator application' }).click();
+  await page.getByRole('button', { name: 'Use six-digit code' }).click();
   await page.getByLabel('Six-digit code').fill(await freshCode(secret));
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
@@ -211,7 +211,7 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   });
   await replace.getByLabel('Current password', { exact: true }).fill(person.password);
   await replace.getByRole('button', { name: 'Replace recovery codes' }).click();
-  await expect(page.getByRole('heading', { name: 'Keep the recovery codes' })).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'Keep recovery codes' })).toBeFocused();
   const replaced = (await part(page).getByLabel('Recovery codes').inputValue()).split('\n');
   expect(replaced).toHaveLength(10);
   for (const each of replaced) expect(recoveryCodes).not.toContain(each);
@@ -268,7 +268,7 @@ test('a sign-in whose second step is abandoned begins again with the password', 
     if (n < 4) await expect(alertOn(page)).toHaveText(CODE_REFUSED);
   }
   // No field is left: the statement, announced, and the way back to the password.
-  await expect(alertOn(page)).toContainText('This sign-in can no longer be completed');
+  await expect(alertOn(page)).toContainText('This sign-in can no longer complete');
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await screens(page, 'second-step-abandoned');
   await page.getByRole('link', { name: 'Sign in again' }).click();
@@ -289,11 +289,11 @@ test('an enrolment whose first code is wrong five times begins again with the pa
   const within = part(page);
   await within.getByLabel('Current password', { exact: true }).fill(person.password);
   await within.getByRole('button', { name: 'Continue' }).click();
-  const secret = await within.getByLabel('Secret').inputValue();
+  const secret = await within.getByLabel('Secret', { exact: true }).inputValue();
   // NFR-SE-07, as at a sign-in: five wrong codes, and the secret is gone.
   for (let n = 0; n < 5; n++) {
     await within.getByLabel('Six-digit code').fill(wrongCode(secret));
-    await within.getByRole('button', { name: ENROLMENT_TITLE }).click();
+    await within.getByRole('button', { name: 'Turn on two-factor authentication' }).click();
     await expect(alertOn(page)).toBeFocused();
     if (n < 4) await expect(alertOn(page)).toContainText(CODE_REFUSED);
   }

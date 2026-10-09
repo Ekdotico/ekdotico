@@ -12,7 +12,7 @@ import { NotValid, ResetForm } from './reset-form.tsx';
 // FR-AU-86 is silent for this one, whose path holds a token as well. As on the
 // sign-up page, the element changes nothing a person sees and keeps the token
 // out of any `Referer` header.
-export const metadata: Metadata = { title: 'Set a new password', referrer: 'no-referrer' };
+export const metadata: Metadata = { title: 'Set new password', referrer: 'no-referrer' };
 
 // Never prerendered and never cached: the answer is the link's state now.
 export const dynamic = 'force-dynamic';

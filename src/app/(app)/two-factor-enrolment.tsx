@@ -20,7 +20,7 @@ import styles from '../pages.module.css';
 // first; `withoutCode` is what stood there before there was one, and stands
 // there still where the code is not drawn (qr-size.ts).
 const TEXT = {
-  secretHeading: 'Add this account to an authenticator application',
+  secretHeading: 'Authenticator application',
   withCode: {
     body: 'An authenticator application shows a six-digit code that changes every 30 seconds. To add this account to one, scan the QR code with the application. Where the QR code cannot be scanned, open the link on a device that has the application, or type the secret into it. Then enter the code it shows.',
     hint: 'Type this into the authenticator application where the QR code cannot be scanned and the link cannot be opened. The account is named Ekdotico, and the code is based on the time.',
@@ -30,11 +30,11 @@ const TEXT = {
     hint: 'Type this into the authenticator application where the link cannot be opened. The account is named Ekdotico, and the code is based on the time.',
   },
   // The name of the image: all that a screen reader is given of it.
-  qrLabel: 'QR code for an authenticator application',
-  secretLink: 'Open in the authenticator application on this device',
-  codesHeading: 'Keep the recovery codes',
+  qrLabel: 'Secret QR code',
+  secretLink: 'Open authenticator application',
+  codesHeading: 'Keep recovery codes',
   codesHint:
-    'Each recovery code signs this account in once, in place of a code from the authenticator application. Keep them where only you can read them. They are shown here once and cannot be shown again.',
+    'Each recovery code signs this account in once, in place of a code from the authenticator application. Keep the codes where only you can read them. Ekdotico shows them once and cannot show them again.',
 };
 
 /** What the server answered with, where it is the shape that was asked for. */
@@ -239,7 +239,7 @@ export function TwoFactorEnrolment({
           id="two-factor-email"
           type="email"
           label="Email address"
-          hint="The password is that of the account with this address."
+          hint="The password is for the account with this address."
           autoComplete="username"
           value={email}
           readOnly

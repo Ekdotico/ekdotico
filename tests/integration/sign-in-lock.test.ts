@@ -162,10 +162,13 @@ describe('the twentieth failed sign-in for an email address in any hour (FR-AU-8
     const messages = await mailTo(email);
     expect(messages).toHaveLength(1);
     const token = tokenIn(messages[0]!.text);
-    const until = (await account(id)).lockedUntil!.toISOString();
-    expect(messages[0]!.text).toBe(
-      TEXT(`${ORIGIN}/sign-in/link/${token}`, `${until.slice(11, 16)} UTC on ${until.slice(0, 10)}`),
-    );
+    // "[time]" as a person reads it, in UTC: `9 Oct 2026, 14:05 UTC`.
+    const until = (await account(id)).lockedUntil!;
+    const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][
+      until.getUTCMonth()
+    ];
+    const time = `${until.getUTCDate()} ${month} ${until.getUTCFullYear()}, ${until.toISOString().slice(11, 16)} UTC`;
+    expect(messages[0]!.text).toBe(TEXT(`${ORIGIN}/sign-in/link/${token}`, time));
   });
 
   it('stores the token of the link only as a hash, with 256 bits, valid until the lock would have ended', async () => {

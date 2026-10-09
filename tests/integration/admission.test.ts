@@ -715,7 +715,7 @@ describe('the command (FR-AU-89; register D113)', () => {
     const lines: string[] = [];
     expect(await run(['list'], ENV, broken, (line) => lines.push(line))).toBe(1);
     expect(lines).toEqual([
-      'The answer of the application could not be read. List the invitations to see what was done.',
+      'The command could not read the answer of the application. List the invitations to see what was done.',
     ]);
   });
 

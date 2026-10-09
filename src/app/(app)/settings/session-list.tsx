@@ -5,36 +5,34 @@ import { useState, useSyncExternalStore } from 'react';
 import { Badge, Button, Cluster, FormFault, Stack } from '@ekdotico/domico/components';
 import { send, type Fault } from '../../../components/send.ts';
 import type { SessionView } from '../../../lib/auth/session-list.ts';
+import { dateText } from '../../../lib/date-text.ts';
 import styles from '../../pages.module.css';
 
-// One spelling of a date and a time for every reader, in British English as
-// the rest of the interface is; the time zone alone is the browser's.
-const FORMAT = { dateStyle: 'medium', timeStyle: 'short' } as const;
-const local = new Intl.DateTimeFormat('en-GB', FORMAT);
-const utc = new Intl.DateTimeFormat('en-GB', { ...FORMAT, timeZone: 'UTC' });
 const never = () => () => {};
 
 /**
  * A time in the reader's own time zone, "as reported by the browser"
- * (NFR-I18-06). The server cannot know the zone, so it writes the time in UTC
- * and says so, and the browser replaces it once the page is its own.
+ * (NFR-I18-06), in the one form a person reads (src/lib/date-text.ts). The
+ * server cannot know the zone, so it writes the time in UTC and says so, and
+ * the browser replaces it once the page is its own.
  */
 function LocalTime({ value }: { value: string }) {
   const date = new Date(value);
   const text = useSyncExternalStore(
     never,
-    () => local.format(date),
-    () => `${utc.format(date)} UTC`,
+    () => dateText(date),
+    () => dateText(date, 'utc'),
   );
   return <time dateTime={value}>{text}</time>;
 }
 
-// Text for a person (the owner's answer to Q6 of the plan).
-const UNNAMED = 'A browser that gave no name';
+// Text for a person (the owner's answer to Q6 of the plan). A label, so three
+// words at most and no article (Expression Guidelines, functional, rules 1 and 8).
+const UNNAMED = 'Unnamed browser';
 
 /** "Firefox on macOS": the browser's name and the operating system family (FR-AU-85), as far as each is known. */
 const named = ({ browser, system }: SessionView) =>
-  system ? `${browser ?? 'A browser'} on ${system}` : (browser ?? UNNAMED);
+  system ? `${browser ?? 'Browser'} on ${system}` : (browser ?? UNNAMED);
 
 /**
  * FR-AU-85: for each session when it began, when it was last renewed, the

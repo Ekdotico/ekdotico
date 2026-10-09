@@ -13,7 +13,7 @@ const TEXT = {
   off: 'Two-factor authentication is turned off. With it turned on, each sign-in asks for the password and then for a code from an authenticator application.',
   on: 'Two-factor authentication is turned on. Each sign-in asks for the password and then for a code from the authenticator application.',
   replace:
-    'Replacing the recovery codes gives ten new ones. The earlier codes stop working, the ones not yet used among them.',
+    'Replacing the recovery codes gives ten new ones. All earlier codes stop working, including the codes that have not been used.',
   team: 'This account belongs to the Ekdotico team, so two-factor authentication cannot be turned off for it.',
   turnOff:
     'Turning two-factor authentication off needs the current password and either the code that the authenticator application shows now or a recovery code.',
@@ -75,7 +75,7 @@ function PasswordForm({
           id={`${name}-email`}
           type="email"
           label="Email address"
-          hint="The password is that of the account with this address."
+          hint="The password is for the account with this address."
           autoComplete="username"
           value={email}
           readOnly
