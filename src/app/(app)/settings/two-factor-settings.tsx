@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
 import { useReady } from '../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../components/send.ts';
@@ -36,7 +36,7 @@ function PasswordForm({
   email: string;
   path: string;
   withCode?: boolean;
-  label: string;
+  label: ReactNode;
   pendingLabel: string;
   variant: 'secondary' | 'destructive';
   onAnswer: (answer: unknown) => void;
@@ -176,7 +176,12 @@ export function TwoFactorSettings({
               email={email}
               path="/api/auth/two-factor/disable"
               withCode
-              label="Turn off two-factor authentication"
+              // The name a screen reader is given names what is turned off (WCAG 2.5.3).
+              label={
+                <>
+                  Turn off<span className="sr-only"> two-factor authentication</span>
+                </>
+              }
               pendingLabel="Turning off…"
               variant="destructive"
               onAnswer={() => router.refresh()}

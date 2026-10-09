@@ -4,7 +4,7 @@
 // replacing the codes, turning it off; and an account of the founding team,
 // which meets the enrolment before anything else.
 import { QrCode } from '@ekdotico/domico/components';
-import { expect, test, type Page, type Request } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Request } from '@playwright/test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
@@ -41,6 +41,22 @@ const secondStep = { level: 1, name: 'Enter code' } as const;
 
 /** The part of the account settings that holds two-factor authentication. */
 const part = (page: Page) => page.getByRole('region', { name: 'Two-factor authentication' });
+
+/**
+ * A button whose label is two words for the eye and names its object for a
+ * screen reader (Expression Guidelines, functional, rule 1; WCAG 2.5.3): the
+ * words that are seen begin the name, and the rest is in the page and takes
+ * no room on it.
+ */
+async function expectShortLabel(button: Locator, seen: string, rest: string) {
+  await expect(button).toHaveAccessibleName(`${seen} ${rest}`);
+  expect(await button.evaluate((element) => element.firstChild?.textContent)).toBe(seen);
+  const hidden = button.locator('span');
+  await expect(hidden).toHaveText(rest);
+  const box = await hidden.boundingBox();
+  expect(box!.width).toBeLessThanOrEqual(1);
+  expect(box!.height).toBeLessThanOrEqual(1);
+}
 
 /**
  * The enrolment, from the password to the recovery codes, as a person makes
@@ -103,7 +119,9 @@ async function enrol(page: Page, person: Person, within = page.locator('body'), 
   // "Confirms with one code from it; only then is it on": a wrong code turns
   // nothing on, and is stated at the head of the form and beside the field.
   await code.fill(wrongCode(secret));
-  await within.getByRole('button', { name: 'Turn on two-factor authentication' }).click();
+  const turnOn = within.getByRole('button', { name: 'Turn on two-factor authentication' });
+  await expectShortLabel(turnOn, 'Turn on', 'two-factor authentication');
+  await turnOn.click();
   await expect(alertOn(page)).toBeFocused();
   await expect(alertOn(page)).toContainText(CODE_REFUSED);
   await expect(code).toHaveAttribute('aria-invalid', 'true');
@@ -225,6 +243,11 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   const turnOff = part(page).locator('form', {
     has: page.getByRole('button', { name: 'Turn off two-factor authentication' }),
   });
+  await expectShortLabel(
+    turnOff.getByRole('button', { name: 'Turn off two-factor authentication' }),
+    'Turn off',
+    'two-factor authentication',
+  );
   await turnOff.getByLabel('Current password', { exact: true }).fill(person.password);
   await turnOff.getByLabel('Code', { exact: true }).fill(recoveryCodes[1]!);
   await turnOff.getByRole('button', { name: 'Turn off two-factor authentication' }).click();
@@ -299,7 +322,7 @@ test('an enrolment whose first code is wrong five times begins again with the pa
   }
   // The statement, announced, with the field it asks for and no field for a code.
   await expect(alertOn(page)).toContainText(
-    'No secret is waiting for its first code. Enter the password to begin again.',
+    'There is no secret to confirm. Enter the password to begin again.',
   );
   await expect(alertOn(page)).toBeFocused();
   await expect(within.getByLabel('Six-digit code')).toHaveCount(0);

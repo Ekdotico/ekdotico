@@ -276,7 +276,7 @@ describe('turning two-factor authentication on (FR-AU-83)', () => {
     expect(await refused.response.json()).toEqual({
       error: {
         code: 'two_factor_not_begun',
-        message: 'No secret is waiting for its first code. Enter the password to begin again.',
+        message: 'There is no secret to confirm. Enter the password to begin again.',
       },
     });
     expect(await isOn(id)).toBe(false);
@@ -953,7 +953,7 @@ describe('replacing the recovery codes (FR-AU-83)', () => {
         error: {
           code: 'two_factor_not_on',
           message:
-            'Two-factor authentication is not turned on for this account. Reload the page to see its settings.',
+            'Two-factor authentication is not turned on for this account. Reload the page to see the current state.',
         },
       });
       expect(refused.left).toBe(0);
@@ -1221,7 +1221,7 @@ describe('the first code of an enrolment, under its two bounds (FR-AU-83; NFR-SE
   const NOT_BEGUN = {
     error: {
       code: 'two_factor_not_begun',
-      message: 'No secret is waiting for its first code. Enter the password to begin again.',
+      message: 'There is no secret to confirm. Enter the password to begin again.',
     },
   };
   const begin = async (cookie: string) =>

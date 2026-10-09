@@ -222,7 +222,8 @@ export function TwoFactorEnrolment({
           />
           <div>
             <Button variant="primary" type="submit" pending={pending} pendingLabel="Turning on…">
-              Turn on two-factor authentication
+              {/* The name a screen reader is given names what is turned on (WCAG 2.5.3). */}
+              Turn on<span className="sr-only"> two-factor authentication</span>
             </Button>
           </div>
         </Stack>

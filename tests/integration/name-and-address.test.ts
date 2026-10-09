@@ -40,7 +40,7 @@ const UNAUTHENTICATED =
 const FOREIGN =
   '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}';
 const INTERNAL =
-  '{"error":{"code":"internal","message":"The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes."}}';
+  '{"error":{"code":"internal","message":"The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes."}}';
 // Text of this application, for the owner's approval.
 const ASKED =
   '{"message":"Ekdotico sends a confirmation link only to an address that can become the address of this account. If the new address can, it receives an email with a link that works once and is valid for 1 hour. The address of the account stays as it is until that link is opened."}';
