@@ -14,3 +14,10 @@ export const newToken = () => randomBytes(32).toString('base64url');
 // guess and nothing a salt or a slow function would add. The row is found by
 // the hash, through an index; no comparison of secrets is made in code.
 export const hashToken = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
+
+// The reset links of an account are rows of the identity library's table of
+// single-use tokens (Data models, `Verification`): the identifier is this
+// prefix and the hash of the token, and the value is the user. Here, so that
+// the change of an address, which makes them void (FR-AU-03), and the reset
+// itself read one spelling without loading each other.
+export const RESET_LINK = 'reset-password:';

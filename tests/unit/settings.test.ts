@@ -53,6 +53,35 @@ describe('loadSettings (FR-AU-83; register A102)', () => {
     });
     expect(foundingTeamEmails).toEqual(['one@example.com', 'two@example.com']);
   });
+
+  // The owner's decision of 9 October 2026: an entry that no account can have
+  // as its address would match none, and exempt the account it was meant for.
+  it.each([
+    ['a full-width letter in its domain', 'listed@\u{ff45}xample.com'],
+    ['a ligature in its domain', 'listed@of\u{fb01}ce.example'],
+    ['a label that ends with a hyphen', 'listed@example-.com'],
+    ['an empty label', 'listed@example..com'],
+    ['no domain', 'listed'],
+    ['a semicolon where a comma was meant', 'listed@example.com;other@example.com'],
+  ])('refuses to start where an entry has %s, and says which without repeating it', (_what, entry) => {
+    const start = () => loadSettings({ ...env, FOUNDING_TEAM_EMAILS: `One@Example.com, ${entry} ,` });
+    expect(start).toThrow(
+      new Error(
+        'FOUNDING_TEAM_EMAILS: entry 2 is not an email address that an account can have. Write it in the form name@example.com, with its domain in plain letters, digits and hyphens.',
+      ),
+    );
+    expect(start).not.toThrow('listed');
+    expect(start).not.toThrow('One@');
+  });
+
+  it('starts with entries in Greek and in punycode, each in its one spelling', () => {
+    const greek = String.fromCodePoint(0x3c0, 0x3b1);
+    const { foundingTeamEmails } = loadSettings({
+      ...env,
+      FOUNDING_TEAM_EMAILS: `A@${greek.toUpperCase()}.GR,b@XN--BCHER-KVA.example`,
+    });
+    expect(foundingTeamEmails).toEqual([`a@${greek}.gr`, 'b@xn--bcher-kva.example']);
+  });
 });
 
 describe('loadSettings: what a process cannot start without', () => {
@@ -282,6 +311,38 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(least).toMatchObject({ sessionMaxSeconds: 1, trustedProxyCount: 0, cookieCacheSeconds: 0 });
     expect(least.admissionInvitationDays).toBe(1);
     expect(loadSettings(env).admissionInvitationDays).toBe(30);
+  });
+
+  // FR-AU-81, NFR-SE-07: a lock that ended while its failures were still
+  // counted would begin again, with its email, at each single failure.
+  describe('SIGN_IN_LOCK_SECONDS and the period of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL', () => {
+    const refusal =
+      'SIGN_IN_LOCK_SECONDS must be no less than the seconds of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL.';
+
+    it.each([
+      [{ SIGN_IN_LOCK_SECONDS: '3599' }],
+      [{ SIGN_IN_LOCK_SECONDS: '1' }],
+      [{ RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/3601' }],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/601' }],
+    ])('refuses a lock shorter than the period its failures are counted in: %o', (changed) => {
+      expect(() => loadSettings({ ...env, ...changed })).toThrow(new Error(refusal));
+    });
+
+    it.each([
+      [{}, 3600],
+      [{ SIGN_IN_LOCK_SECONDS: '3600' }, 3600],
+      [{ SIGN_IN_LOCK_SECONDS: '7200' }, 7200],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/600' }, 600],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '5/60' }, 600],
+    ])('admits one as long as the period, or longer: %o', (changed, seconds) => {
+      expect(loadSettings({ ...env, ...changed }).signInLockSeconds).toBe(seconds);
+    });
+
+    it('still refuses 0', () => {
+      expect(() => loadSettings({ ...env, SIGN_IN_LOCK_SECONDS: '0' })).toThrow(
+        'SIGN_IN_LOCK_SECONDS must be a whole number, 1 or more.',
+      );
+    });
   });
 
   // docs/contracts/admission-signature.md, "The setting"; NFR-SE-17 (e).

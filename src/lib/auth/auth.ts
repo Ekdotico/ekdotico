@@ -13,10 +13,11 @@ import { faultOf } from '../fault.ts';
 import { INTERNAL_FAULT } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
+import { changeEmail, updateUser, verifyEmail } from './name-and-address.ts';
 import { changePassword, requestPasswordReset, resetPassword } from './password.ts';
 import { FORBIDDEN } from './route-answers.ts';
 import { revokeOtherSessions, revokeSession } from './session-list.ts';
-import { signInEmail, signOut } from './sign-in.ts';
+import { signInEmail, signInLink, signOut } from './sign-in.ts';
 import {
   disableTwoFactor,
   enableTwoFactor,
@@ -50,6 +51,10 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // FR-AU-81: sign-in by email address and password, the only way to sign in.
   // The endpoint is the application's own (sign-in.ts).
   'POST /sign-in/email',
+  // FR-AU-81: the one exception, the single-use sign-in link of a lock email
+  // (register D115; A104, assumed). The application's own (sign-in.ts), and
+  // not the library's magic link, which is not installed (NFR-SE-17 (d)).
+  'POST /sign-in/link',
   // FR-AU-84: signing out ends the session at once and clears the browser's
   // cookies. The application's own too.
   'POST /sign-out',
@@ -80,6 +85,14 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   'POST /two-factor/verify-backup-code',
   'POST /two-factor/disable',
   'POST /two-factor/generate-backup-codes',
+  // FR-AU-90: the change of the name in the account settings. FR-AU-03: the
+  // request for a change of the address, and its confirmation by the token of
+  // the link sent to the new address, which is a POST and never the library's
+  // GET (the owner's answer to Q3 of the plan). All three are the
+  // application's own (name-and-address.ts), under the library's paths.
+  'POST /update-user',
+  'POST /change-email',
+  'POST /verify-email',
 ]);
 
 // FR-AU-81, FR-AU-84: the application's sign-in and sign-out. A plugin's
@@ -87,7 +100,7 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
 // sign-in and sign-out are not in the handler and not in `auth().api`.
 const ownSignIn = {
   id: 'ekdotico-sign-in',
-  endpoints: { signInEmail, signOut },
+  endpoints: { signInEmail, signInLink, signOut },
 } satisfies BetterAuthPlugin;
 
 // FR-AU-85, FR-AU-86: the same for the password and the sessions. The
@@ -96,6 +109,13 @@ const ownSignIn = {
 const ownCredentials = {
   id: 'ekdotico-credentials',
   endpoints: { requestPasswordReset, resetPassword, changePassword, revokeSession, revokeOtherSessions },
+} satisfies BetterAuthPlugin;
+
+// FR-AU-03, FR-AU-90: the same for the name and the address. The library's
+// own change of an address stays switched off in its options as well, below.
+const ownAccount = {
+  id: 'ekdotico-account',
+  endpoints: { updateUser, changeEmail, verifyEmail },
 } satisfies BetterAuthPlugin;
 
 // FR-AU-83, NFR-SE-17 (d): two-factor authentication by authenticator
@@ -169,7 +189,7 @@ function create() {
     // endpoints are the application's own (`secondFactor`, above).
     // `admissionSignUp` (FR-AU-90) has one endpoint, without a path: the
     // handler cannot reach it, and only `POST /api/sign-up` calls it.
-    plugins: [secondFactor, surface, ownSignIn, ownCredentials, admissionSignUp],
+    plugins: [secondFactor, surface, ownSignIn, ownCredentials, ownAccount, admissionSignUp],
     // NFR-SE-17 (d): each is off in the library by default but the linking of
     // accounts; all three are written so that a changed default changes nothing.
     account: { accountLinking: { enabled: false } },

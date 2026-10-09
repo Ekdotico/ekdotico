@@ -198,6 +198,10 @@ test('an invitation that is not open shows the fixed statement and nothing to fi
   // 43 characters of the alphabet a token is made of, and no invitation's.
   await page.goto(`/sign-up/${'x'.repeat(43)}`);
   await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_OPEN);
+  // Part of the page as it was served, and not a fault: no alert, and the
+  // package's neutral tone.
+  await expect(alertOn(page)).toHaveCount(0);
+  await expect(page.locator('[data-tone="neutral"]')).toHaveText(NOT_OPEN);
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await expect(page.getByRole('button')).toHaveCount(0);
@@ -217,6 +221,8 @@ test('the sign-up address without a token shows the fixed statement, and not the
   expect(answer?.status()).toBe(200);
   expect(new URL(page.url()).pathname).toBe('/sign-up');
   await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_OPEN);
+  await expect(alertOn(page)).toHaveCount(0);
+  await expect(page.locator('[data-tone="neutral"]')).toHaveText(NOT_OPEN);
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await expect(page.getByRole('button')).toHaveCount(0);
@@ -270,6 +276,8 @@ test('an invitation that was accepted is not open, to its own link or to a secon
   await other.getByRole('button', { name: 'Create account' }).click();
   // The form gives way to the statement, which a screen reader announces.
   await expect(alertOn(other)).toHaveText(NOT_OPEN);
+  // The refusal of what was sent: drawn as a fault, and not in the neutral tone.
+  await expect(other.locator('[data-tone="neutral"]')).toHaveCount(0);
   await expect(other.getByRole('textbox')).toHaveCount(0);
 
   await other.reload();

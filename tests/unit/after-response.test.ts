@@ -38,15 +38,21 @@ describe('afterResponse', () => {
     await collecting(async () => expect(() => assertCollecting()).not.toThrow());
   });
 
-  it('never rejects, and prints the name of what failed and nothing of the fault (NFR-SE-19)', async () => {
+  it('never rejects, and prints the name of what failed with the class and code of the fault, and nothing of its message (NFR-SE-19)', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { tasks } = await collecting(async () =>
+    const { tasks } = await collecting(async () => {
       afterResponse('password notice', async () => {
         throw new Error('could not send to person@example.com');
-      }),
-    );
-    await expect(tasks[0]!()).resolves.toBeUndefined();
-    expect(errors.mock.calls).toEqual([['after response: password notice failed']]);
+      });
+      afterResponse('sign-in lock', async () => {
+        throw Object.assign(new TypeError('no row for person@example.com'), { code: 'P2021' });
+      });
+    });
+    for (const task of tasks) await expect(task()).resolves.toBeUndefined();
+    expect(errors.mock.calls).toEqual([
+      ['after response: password notice failed (Error)'],
+      ['after response: sign-in lock failed (TypeError P2021)'],
+    ]);
   });
 });
 

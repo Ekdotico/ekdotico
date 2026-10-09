@@ -1,6 +1,7 @@
 // Settings read from the environment when a process starts. The web application
 // and the collaboration server both load them through this one module
 // (NFR-SE-17 (f)). Every secret is read here and nowhere else (NFR-SE-19).
+import { acceptedAddress } from './field-text.ts';
 
 /** A limit of NFR-SE-07: at most `max` in any `windowSeconds`. */
 export interface Limit {
@@ -78,6 +79,13 @@ export interface Settings {
    * at the first code of an enrolment, the enrolment.
    */
   secondStepWrongCodes: number;
+  /**
+   * FR-AU-81, NFR-SE-07: how long the twentieth failed sign-in locks an
+   * account, "1 hour", an initial value (register D115: "both figures are
+   * settings"; the other is the limit FAILED_SIGN_IN_PER_EMAIL). The sign-in
+   * link of the lock's email is valid as long.
+   */
+  signInLockSeconds: number;
   /**
    * FR-AU-89: the key of the signed admission requests, or none. Without it
    * every admission request is refused. The name and the form are provisional
@@ -264,6 +272,19 @@ export function loadSettings(env: Env = process.env): Settings {
   if (passwordMinLength > passwordMaxLength) {
     throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
   }
+  const limits = Object.fromEntries(
+    (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
+  ) as Record<LimitName, Limit>;
+  // At least 1: a lock of 0 seconds would be no lock, without a word.
+  const signInLockSeconds = wholeNumber(env, 'SIGN_IN_LOCK_SECONDS', 3600, 1);
+  // FR-AU-81, NFR-SE-07: the failures that caused a lock are still counted when
+  // a shorter lock ends, so the next single failure would be "the twentieth"
+  // again: a lock and an email for each failure, for the rest of the period.
+  if (signInLockSeconds < limits.FAILED_SIGN_IN_PER_EMAIL.windowSeconds) {
+    throw new Error(
+      'SIGN_IN_LOCK_SECONDS must be no less than the seconds of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL.',
+    );
+  }
   // FR-ED-36. At least 1: with 0 a deletion would be permanent at the next run
   // of the timer, and the confirmation would have promised a restore that is
   // not there. At most 3,650, ten years: the days are taken from the present
@@ -277,11 +298,26 @@ export function loadSettings(env: Env = process.env): Settings {
     );
   }
 
+  // The owner's decision of 9 October 2026: an entry that no account can have
+  // as its address (src/lib/field-text.ts) matches none, and the account it
+  // was meant for would be exempt from the gate without a word. The message
+  // says which entry and never repeats it (NFR-SE-19).
+  const foundingTeamEmails = list
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry, index) => {
+      const address = acceptedAddress(entry);
+      if (address === null) {
+        throw new Error(
+          `FOUNDING_TEAM_EMAILS: entry ${index + 1} is not an email address that an account can have. Write it in the form name@example.com, with its domain in plain letters, digits and hyphens.`,
+        );
+      }
+      return address;
+    });
+
   return {
-    foundingTeamEmails: list
-      .split(',')
-      .map((address) => address.trim().toLowerCase())
-      .filter(Boolean),
+    foundingTeamEmails,
     appOrigin,
     databaseUrl: required(env, 'DATABASE_URL', 'Set it to the connection string of the role ekdotico_app.'),
     valkeyUrl: required(env, 'VALKEY_URL', 'Set it to the address of Valkey.'),
@@ -298,6 +334,7 @@ export function loadSettings(env: Env = process.env): Settings {
     // and with 0 wrong codes no count would ever reach the number.
     secondStepSeconds: wholeNumber(env, 'TWO_FACTOR_STEP_SECONDS', 600, 1),
     secondStepWrongCodes: wholeNumber(env, 'TWO_FACTOR_WRONG_CODES', 5, 1),
+    signInLockSeconds,
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
@@ -308,9 +345,7 @@ export function loadSettings(env: Env = process.env): Settings {
     collabStoreDelayMs,
     collabStoreMaxMs,
     collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),
-    limits: Object.fromEntries(
-      (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
-    ) as Record<LimitName, Limit>,
+    limits,
   };
 }
 

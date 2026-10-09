@@ -4,6 +4,10 @@
 // replacing the codes, turning it off; and an account of the founding team,
 // which meets the enrolment before anything else.
 import { randomUUID } from 'node:crypto';
+import { QrCode } from '@ekdotico/domico/components';
+import type { Request } from '@playwright/test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test, type Page } from './fixtures.ts';
 import {
   NOTICE_TITLE,
@@ -46,7 +50,11 @@ const part = (page: Page) => page.getByRole('region', { name: 'Two-factor authen
  * it with an authenticator application: on the settings page, and on the
  * screen an account of the founding team is shown. Returns the secret and the codes.
  */
-async function enrol(page: Page, person: Person, within = page.locator('body')) {
+async function enrol(page: Page, person: Person, within = page.locator('body'), shot?: string) {
+  // All that the browser sends from here on: the secret is in none of it.
+  const sent: string[] = [];
+  const record = (request: Request) => sent.push(`${request.url()}\n${request.postData() ?? ''}`);
+  page.on('request', record);
   await within.getByLabel('Current password', { exact: true }).fill(person.password);
   await within.getByRole('button', { name: 'Continue' }).click();
 
@@ -65,11 +73,35 @@ async function enrol(page: Page, person: Person, within = page.locator('body')) 
   expect(address.searchParams.get('secret')).toBe(secret);
   expect(address.searchParams.get('issuer')).toBe('Ekdotico');
 
+  // "As a QR code": an image with a name, which is the code of the address
+  // the link holds and of no other value. The package's control is asked here
+  // for the code of that address, and the page's is the same, module for
+  // module. It is drawn at its size and is not made smaller to fit.
+  const image = within.getByRole('img', { name: 'QR code for an authenticator application' });
+  await expect(image).toBeVisible();
+  const own = renderToStaticMarkup(createElement(QrCode, { value: address.href, label: 'The same' }));
+  expect(await image.getAttribute('viewBox')).toBe(/ viewBox="([^"]+)"/.exec(own)![1]);
+  expect(await image.locator('path').getAttribute('d')).toBe(/ d="([^"]+)"/.exec(own)![1]);
+  expect((await image.boundingBox())!.width).toBe(256);
+  // The words beside it name it first (FR-AU-83: "as a QR code and as text").
+  await expect(
+    within.getByText('To add this account to one, scan the QR code with the application.'),
+  ).toBeVisible();
+
   // FR-AU-88: the field for a one-time code, with a visible label.
   const code = within.getByLabel('Six-digit code');
   await expect(code).toHaveAttribute('autocomplete', 'one-time-code');
   await expect(code).toHaveAttribute('inputmode', 'numeric');
   await expectNoSidewaysScroll(page);
+  // At 320 CSS pixels the code is still whole, and as wide.
+  const size = page.viewportSize()!;
+  await page.setViewportSize({ width: 320, height: 640 });
+  const box = (await image.boundingBox())!;
+  expect(box.width).toBe(256);
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(320);
+  await page.setViewportSize(size);
+  if (shot) await screens(page, shot);
 
   // "Confirms with one code from it; only then is it on": a wrong code turns
   // nothing on, and is stated at the head of the form and beside the field.
@@ -91,6 +123,11 @@ async function enrol(page: Page, person: Person, within = page.locator('body')) 
   expect(recoveryCodes).toHaveLength(10);
   for (const each of recoveryCodes) expect(each).toMatch(/^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/);
   await expectNoSidewaysScroll(page);
+  // The code was drawn in the browser: the secret went into no request, as
+  // an address or as a body (NFR-SE-19).
+  page.off('request', record);
+  expect(sent.length).toBeGreaterThan(1);
+  expect(sent.filter((each) => each.includes(secret))).toEqual([]);
   return { secret, recoveryCodes };
 }
 
@@ -113,7 +150,7 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   await page.goto('/settings');
   await expect(part(page).getByText('Two-factor authentication is turned off.')).toBeVisible();
   await screens(page, 'two-factor-off');
-  const { secret, recoveryCodes } = await enrol(page, person, part(page));
+  const { secret, recoveryCodes } = await enrol(page, person, part(page), 'two-factor-secret');
   await screens(page, 'two-factor-recovery-codes');
   // FR-AU-87 (f): the notice, with its fixed text.
   await mailFor(person.email, ON_EMAIL);
@@ -337,7 +374,7 @@ test('an account of the founding team meets the enrolment first, then the notice
   });
   expect(acknowledged.status()).toBe(403);
 
-  await enrol(page, person);
+  await enrol(page, person, undefined, 'enrolment-gate-secret');
   await mailFor(person.email, ON_EMAIL);
   await page.getByRole('button', { name: 'Continue' }).click();
   // The notice, after it.
@@ -354,6 +391,15 @@ test('an account of the founding team meets the enrolment first, then the notice
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Turn off two-factor authentication' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Replace recovery codes' })).toBeVisible();
+  // FR-AU-03: nor can its address be changed. The form is not offered, and the
+  // request, made without it, is answered as any other and sends nothing
+  // (tests/integration/name-and-address.test.ts).
+  const address = page.getByRole('region', { name: 'Email address' });
+  await expect(
+    address.getByText('This account belongs to the Ekdotico team, so its email address cannot be changed.'),
+  ).toBeVisible();
+  await expect(address.getByRole('button')).toHaveCount(0);
+  await expect(address.getByRole('textbox')).toHaveCount(0);
   await screens(page, 'two-factor-founding-team');
   expect(elsewhere).toEqual([]);
 });

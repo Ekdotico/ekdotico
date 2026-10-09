@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Button, FormFault, PageHeading, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../../components/ready.ts';
 import { send, type Fault } from '../../../../components/send.ts';
 import styles from '../../../pages.module.css';
 
@@ -50,6 +51,7 @@ export function ResetForm({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
   const [changed, setChanged] = useState(false);
   const statement = useRef<HTMLParagraphElement>(null);
 
@@ -131,7 +133,13 @@ export function ResetForm({
             error={refusal}
           />
           <div>
-            <Button variant="primary" type="submit" pending={pending} pendingLabel="Setting password…">
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!ready}
+              pending={pending}
+              pendingLabel="Setting password…"
+            >
               Set password
             </Button>
           </div>

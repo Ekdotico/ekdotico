@@ -16,13 +16,14 @@ describe('the list of paths without a session', () => {
     expect(SESSIONLESS.map(({ group, methods, path }) => `${group} ${methods.join(',')} ${path}`)).toEqual([
       'a GET /sign-in',
       'a GET /sign-in/two-factor',
-      'a GET,POST /sign-in/link/[token]',
+      'a GET /sign-in/link/[token]',
       'a GET /sign-up',
       'a GET /sign-up/[token]',
       'a GET /reset-password',
       'a GET /reset-password/[token]',
       'a GET /confirm-address/[token]',
       'a POST /api/auth/sign-in/email',
+      'a POST /api/auth/sign-in/link',
       'a POST /api/auth/two-factor/verify-totp',
       'a POST /api/auth/two-factor/verify-backup-code',
       'a POST /api/auth/request-password-reset',
@@ -70,7 +71,7 @@ describe('classify', () => {
     ['GET', '/sign-in', 'a'],
     ['HEAD', '/sign-in', 'a'],
     ['GET', '/sign-in/link/AbC_123-x', 'a'],
-    ['POST', '/sign-in/link/AbC_123-x', 'a'],
+    ['POST', '/api/auth/sign-in/link', 'a'],
     ['GET', '/sign-up', 'a'],
     ['HEAD', '/sign-up', 'a'],
     ['GET', '/sign-up/0123456789abcdef', 'a'],
@@ -117,6 +118,17 @@ describe('classify', () => {
     ['POST', '/sign-in/two-factor'],
     ['GET', '/sign-in/two-factor/x'],
     ['POST', '/api/auth/change-password'],
+    // FR-AU-03, FR-AU-90: the name and the request for a change of the address
+    // need a session, and so does the confirmation (the owner's decision of
+    // 9 October 2026); the page of a confirmation link is read and never
+    // posted to, and its endpoint answers no GET.
+    ['POST', '/api/auth/update-user'],
+    ['POST', '/api/auth/change-email'],
+    ['POST', '/api/auth/verify-email'],
+    ['GET', '/api/auth/verify-email'],
+    ['POST', '/confirm-address/tok'],
+    ['GET', '/confirm-address'],
+    ['GET', '/confirm-address/tok/more'],
     ['POST', '/api/auth/revoke-session'],
     ['POST', '/api/auth/revoke-other-sessions'],
     ['GET', '/api/auth/list-sessions'],
@@ -156,6 +168,9 @@ describe('classify', () => {
     ['GET', '/sign-in/anything'],
     ['GET', '/sign-in/link'],
     ['GET', '/sign-in/link/tok/more'],
+    // The page of a lock's link is read and never posted to: its control is an endpoint.
+    ['POST', '/sign-in/link/AbC_123-x'],
+    ['GET', '/api/auth/sign-in/link'],
     ['POST', '/sign-up'],
     ['GET', '/sign-up/'],
     ['GET', '/Sign-Up'],

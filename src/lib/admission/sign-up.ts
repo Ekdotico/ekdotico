@@ -13,8 +13,9 @@ import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
-import { fieldText } from '../field-text.ts';
+import { acceptedName, NAME_REFUSAL } from '../field-text.ts';
 import { readBytes } from '../http.ts';
+import { orEndSession } from '../auth/sign-in.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
 
@@ -24,9 +25,6 @@ export type SignUpResult =
   /** No token, or the token of an invitation that is accepted, revoked, or expired: never said which. */
   | { outcome: 'not_open' }
   | { outcome: 'invalid'; fields: { name?: string; password?: string } };
-
-// Text for a person (the owner's answer to Q6 of the plan).
-const NAME_REFUSAL = 'A name has 1 to 100 characters. Enter a name of that length.';
 
 // More than any honest request holds: a token of 43 characters, a name of 100
 // and a password of the greatest length (32, as the limit is first set), each
@@ -80,15 +78,13 @@ export const admissionSignUp = {
         // FR-AU-90: "a name, of 1 to 100 characters". Spaces around it are not
         // part of it, and a character is one Unicode code point: the rule a
         // document's title shares (../field-text.ts).
-        const { text: name, characters: length } = fieldText(typeof body.name === 'string' ? body.name : '');
+        const name = acceptedName(body.name);
         const password = typeof body.password === 'string' ? body.password : '';
         const fields: { name?: string; password?: string } = {};
-        // A control character is no character of a name, and PostgreSQL cannot
-        // store the first of them.
-        if (length < 1 || length > 100 || /[\u0000-\u001f\u007f]/.test(name)) fields.name = NAME_REFUSAL;
+        if (!name) fields.name = NAME_REFUSAL;
         const refusal = checkPassword(password, invitation.email);
         if (refusal) fields.password = refusal;
-        if (fields.name || fields.password) return { outcome: 'invalid', fields };
+        if (!name || fields.password) return { outcome: 'invalid', fields };
 
         // NFR-SE-17 (a): the library's own function, scrypt with a salt for each
         // password. Made before the transaction, which it would hold open.
@@ -116,7 +112,11 @@ export const admissionSignUp = {
           const user = await internalAdapter.findUserById(account.userId);
           if (!user) throw new Error('The new account was not found.');
           const session = await internalAdapter.createSession(user.id);
-          await setSessionCookie(ctx, { session, user });
+          // The owner's decision of 9 October 2026, as at a sign-in: a fault
+          // between the making of the session and the answer leaves no session
+          // behind. The browser is given no cookie for it, so no one could use
+          // the row or end it. The account stands, and the answer is as below.
+          await orEndSession(session.token, () => setSessionCookie(ctx, { session, user }));
         } catch (error) {
           console.error(`sign-up: account created, session not started (${faultOf(error)})`);
           if (held) deleteSessionCookie(ctx);

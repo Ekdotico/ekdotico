@@ -14,6 +14,7 @@ const sink = mkdtempSync(join(tmpdir(), 'ekdotico-races-mail-'));
 const database = prepare('races', { TRUSTED_PROXY_COUNT: '1', EMAIL_SINK_DIRECTORY: sink });
 const { auth, db, valkey, validateSessionRow } = await load();
 const { findOpenReset } = await import('../../src/lib/auth/password.ts');
+const { beginLock } = await import('../../src/lib/auth/sign-in-lock.ts');
 
 const UNAUTHENTICATED =
   '{"error":{"code":"unauthenticated","message":"This request needs a signed-in session. Sign in and try again."}}';
@@ -25,6 +26,10 @@ const INTERNAL =
   '{"error":{"code":"internal","message":"The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes."}}';
 const RESET_SUBJECT = 'Set a new password for Ekdotico';
 const NOTICE_SUBJECT = 'The password of your Ekdotico account was changed';
+const LOCK_SUBJECT = 'Sign-in to your Ekdotico account is locked for 1 hour';
+// FR-AU-81, written out here and not imported.
+const LINK_NOT_VALID =
+  '{"error":{"code":"sign_in_link_not_valid","message":"This link is no longer valid. Sign in with your email address and password, or set a new password from the sign-in page."}}';
 
 const THEIRS = 'the password of the attacker';
 const OWNERS = 'the new password of the owner';
@@ -78,6 +83,52 @@ function hold<T extends object>(object: T, method: keyof T & string) {
 const holdHash = async () => hold((await auth().$context).password, 'hash');
 /** The making of a session: the step after a sign-in's check of the password. */
 const holdSession = async () => hold((await auth().$context).internalAdapter, 'createSession');
+
+/**
+ * Holds the next transaction that is opened just after its deletion of
+ * sessions, with everything before it done and nothing after it: where a
+ * reset has ended the sessions and not yet lifted the lock, and a change of
+ * the password has not yet made the sign-in link void.
+ */
+function holdAfterSessionsEnded() {
+  let arrive!: () => void;
+  let open!: () => void;
+  const reached = new Promise<void>((resolve) => (arrive = resolve));
+  const opened = new Promise<void>((resolve) => (open = resolve));
+  type Work = (tx: Record<string, unknown>) => Promise<unknown>;
+  const client = db() as unknown as { $transaction: (work: Work) => Promise<unknown> };
+  const original = client.$transaction.bind(client);
+  vi.spyOn(client, '$transaction').mockImplementationOnce((work) =>
+    original((tx) => {
+      const rows = tx.session as { deleteMany: (...args: unknown[]) => Promise<unknown> };
+      const session = new Proxy(rows, {
+        get: (target, key) =>
+          key === 'deleteMany'
+            ? async (...args: unknown[]) => {
+                const deleted = await target.deleteMany(...args);
+                arrive();
+                await opened;
+                return deleted;
+              }
+            : Reflect.get(target, key),
+      });
+      return work(
+        new Proxy(tx, { get: (target, key) => (key === 'session' ? session : Reflect.get(target, key)) }),
+      );
+    }),
+  );
+  return { reached, open };
+}
+
+/** Locks the account as its twentieth failure would, and reads the token of the link from the email. */
+async function lockLink(email: string): Promise<string> {
+  await beginLock(email);
+  const message = (await sunk(sink)).filter((m) => m.to === email && m.subject === LOCK_SUBJECT).at(-1);
+  return /\/sign-in\/link\/([A-Za-z0-9_-]+)\n/.exec(message!.text)![1]!;
+}
+const confirmLink = (token: string) => post(auth, '/sign-in/link', { token }, fresh());
+/** Long enough for a confirmation that waits for nothing to have completed. */
+const MOMENT_MS = 750;
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -257,6 +308,92 @@ describe('a sign-in with the old password on its way (FR-AU-81, FR-AU-85, FR-AU-
   });
 });
 
+describe('a sign-in by the link of a lock email on its way (FR-AU-81, FR-AU-83, FR-AU-85, FR-AU-86; A104)', () => {
+  it('leaves no session where a reset had ended the sessions and not yet lifted the lock', async () => {
+    const { email, id } = await person();
+    const reset = await linkFor(email);
+    const token = await lockLink(email);
+    const held = holdAfterSessionsEnded();
+
+    const resetting = post(auth, '/reset-password', { token: reset, newPassword: OWNERS });
+    await held.reached;
+    // The sessions are ended, the lock is in force and the link stands: the
+    // confirmation either completes now, or waits for the reset.
+    const confirming = confirmLink(token);
+    await Promise.race([confirming, new Promise((resolve) => setTimeout(resolve, MOMENT_MS))]);
+    held.open();
+    expect((await resetting).response.status).toBe(200);
+    const confirmed = await confirming;
+
+    expect(confirmed.response.status).toBe(409);
+    expect(await confirmed.response.text()).toBe(LINK_NOT_VALID);
+    expect(confirmed.response.headers.getSetCookie()).toEqual([]);
+    expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    // NFR-SE-19: the lock, and a sign-in refused; no sign-in by the link.
+    expect((await entries()).sort()).toEqual([
+      ['sign_in_locked', id],
+      ['sign_in_refused', id],
+    ]);
+    expect(await signsIn(email, OWNERS)).toBe(true);
+  });
+
+  it('leaves no session where a change of the password had ended the others and not yet made the link void', async () => {
+    const { email, id } = await person();
+    const owner = await session(email);
+    // The change has checked the current password when the lock begins: a
+    // prompt under a lock is refused (sign-in-lock.test.ts).
+    const checked = await holdHash();
+    const changing = change(owner, PASSWORD, OWNERS);
+    await checked.reached;
+    const token = await lockLink(email);
+    const held = holdAfterSessionsEnded();
+    checked.open();
+    await held.reached;
+
+    const confirming = confirmLink(token);
+    await Promise.race([confirming, new Promise((resolve) => setTimeout(resolve, MOMENT_MS))]);
+    held.open();
+    expect((await changing).response.status).toBe(200);
+    const confirmed = await confirming;
+
+    expect(confirmed.response.status).toBe(409);
+    expect(await confirmed.response.text()).toBe(LINK_NOT_VALID);
+    expect(confirmed.response.headers.getSetCookie()).toEqual([]);
+    // The session that changed the password, and no other.
+    expect(await db().session.count({ where: { userId: id } })).toBe(1);
+    expect(await stands(owner)).toBe(true);
+  });
+
+  it('makes no session where two-factor authentication was turned on meanwhile, and goes on to the second step', async () => {
+    const { email, id } = await person();
+    const token = await lockLink(email);
+    // Held where the session is made: the account has been read by then.
+    const held = await holdSession();
+
+    const confirming = confirmLink(token);
+    await held.reached;
+    // As the first code of an enrolment commits it (two-factor.ts).
+    await db().user.update({ where: { id }, data: { twoFactorEnabled: true } });
+    held.open();
+    const confirmed = await confirming;
+
+    expect(confirmed.response.status).toBe(200);
+    expect(await confirmed.response.text()).toBe('{"twoFactorRedirect":true}');
+    expect(confirmed.response.headers.getSetCookie().join()).not.toContain('session_token');
+    expect(await db().session.count({ where: { userId: id } })).toBe(0);
+    // Nothing is lifted or spent by the link alone: both wait for the code.
+    expect((await db().user.findUniqueOrThrow({ where: { id } })).lockedUntil).not.toBeNull();
+    expect(
+      await db().verification.count({ where: { value: id, identifier: { startsWith: 'sign-in-link:' } } }),
+    ).toBe(1);
+    expect(
+      await db().verification.count({
+        where: { value: id, identifier: { startsWith: 'second-step:link:' } },
+      }),
+    ).toBe(1);
+  });
+});
+
 describe('an endpoint that leaves work for after its answer, called where none can be left (FR-AU-87)', () => {
   /** Through the handler, and not as the route calls it: nothing collects. */
   const bare = (path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -297,7 +434,8 @@ describe('an endpoint that leaves work for after its answer, called where none c
     const token = await linkFor(email);
     const api = auth().api as unknown as { resetPassword: (input: unknown) => Promise<unknown> };
     await expect(
-      api.resetPassword({ body: { token, newPassword: OWNERS }, headers: new Headers() }),
+      // With the application's own origin: without it the call is refused before this (NFR-SE-17 (c)).
+      api.resetPassword({ body: { token, newPassword: OWNERS }, headers: new Headers({ origin: ORIGIN }) }),
     ).rejects.toThrow('afterResponse: called outside a request that collects.');
     expect(await signsIn(email, PASSWORD)).toBe(true);
     expect((await findOpenReset(token))?.userId).toBe(id);

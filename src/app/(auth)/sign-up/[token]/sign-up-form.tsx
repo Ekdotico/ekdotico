@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button, FormFault, PageHeading, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../components/send.ts';
 import { INVITATION_NOT_OPEN } from '../../../../lib/admission/statements.ts';
 
@@ -11,12 +12,22 @@ import { INVITATION_NOT_OPEN } from '../../../../lib/admission/statements.ts';
  * submission: a screen reader says it, and it takes focus (FR-AU-88). On a
  * page that opens with the statement it is part of the page and no alert,
  * since an alert there from the first paint announces nothing.
+ *
+ * There it is also drawn in the neutral tone: "a statement that is part of a
+ * page and is not a fault", so that the page "does not open on what looks
+ * like an alert" (@ekdotico/domico 0.27.0, `FormFault`). The tone is what is
+ * drawn and no more: the role, the heading, and the words are the same. After
+ * a submission it is the refusal of what the person sent, and is drawn as one.
  */
 export function NotOpen({ announce = false }: { announce?: boolean }) {
   return (
     <>
       <PageHeading>Invitation</PageHeading>
-      <FormFault title={INVITATION_NOT_OPEN} announce={announce ? undefined : 'off'} />
+      {announce ? (
+        <FormFault title={INVITATION_NOT_OPEN} />
+      ) : (
+        <FormFault title={INVITATION_NOT_OPEN} announce="off" tone="neutral" />
+      )}
     </>
   );
 }
@@ -37,6 +48,7 @@ export function SignUp({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -100,7 +112,7 @@ export function SignUp({
             id="name"
             name="name"
             label="Name"
-            hint="1 to 100 characters."
+            hint="1 to 100 characters. At least one of them can be seen."
             autoComplete="name"
             required
             error={fields.name}
@@ -116,7 +128,13 @@ export function SignUp({
             error={fields.password}
           />
           <div>
-            <Button variant="primary" type="submit" pending={pending} pendingLabel="Creating account…">
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!ready}
+              pending={pending}
+              pendingLabel="Creating account…"
+            >
               Create account
             </Button>
           </div>

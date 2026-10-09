@@ -2,11 +2,13 @@
 // layer (src/proxy.ts), which a route does not rest on: each validates the
 // session itself (NFR-SE-02). And the answer to a limit reached, which the
 // proxy gives for its limits and a route for its own (NFR-SE-07).
+import { addressBucket } from '../client-address.ts';
 import { faultOf } from '../fault.ts';
 import { errorResponse, INTERNAL_FAULT } from '../http.ts';
-import { logLimitReached } from '../rate-limit.ts';
+import { isOwnOrigin } from '../origin.ts';
+import { logLimitReached, oncePer } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
-import type { LimitName } from '../settings.ts';
+import { settings, type LimitName } from '../settings.ts';
 import type { Validation } from './session.ts';
 
 /**
@@ -37,6 +39,29 @@ export async function tooManyRequests(
  */
 export const FORBIDDEN =
   'This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again.';
+
+/**
+ * NFR-SE-17 (c): the origin check of an endpoint that changes state without a
+ * session, made by the endpoint itself, since the proxy can be skipped
+ * (docs/operations/deployment.md) and the identity library checks the origin
+ * only of a request that carries a cookie. Null where the `Origin` header is
+ * the application's own; otherwise the proxy's answer, to be returned before
+ * anything of the request is read.
+ *
+ * NFR-SE-19: a 403 has its entry. The proxy writes one for each refusal,
+ * after it has taken the limit for the network address, which bounds them. No
+ * limit was taken where the proxy was skipped, so here it is one entry for
+ * each period of that limit and each network address, by the mark of
+ * rate-limit.ts: a flood from another origin writes to the database no faster.
+ */
+export async function refusedOrigin(headers: Headers | undefined): Promise<Response | null> {
+  if (isOwnOrigin(headers?.get('origin'))) return null;
+  const { windowSeconds } = settings().limits.SESSIONLESS_PER_ADDRESS;
+  if (await oncePer(`foreign-origin:${addressBucket(headers ?? new Headers())}`, windowSeconds)) {
+    await securityLog({ kind: 'forbidden' });
+  }
+  return errorResponse(403, 'forbidden', FORBIDDEN);
+}
 
 /** FR-AU-07: no valid session. */
 export function unauthenticated(): Response {

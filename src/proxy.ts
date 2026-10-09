@@ -40,17 +40,18 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   // (a) The pages a person without a session opens (FR-AU-88).
   { group: 'a', methods: ['GET'], path: '/sign-in' }, // FR-AU-81
   { group: 'a', methods: ['GET'], path: '/sign-in/two-factor' }, // FR-AU-81, FR-AU-83, FR-AU-88: the page of the second step, between the password and the session; the path is this application's
-  { group: 'a', methods: ['GET', 'POST'], path: '/sign-in/link/[token]' }, // FR-AU-81: the link of a lock email; the POST is its one control (register D115; A104, assumed)
+  { group: 'a', methods: ['GET'], path: '/sign-in/link/[token]' }, // FR-AU-81: the page of the link of a lock email (register D115; A104, assumed); its one control is the endpoint below
   { group: 'a', methods: ['GET'], path: '/sign-up' }, // FR-AU-90: "without a token" it shows the fixed statement (the owner's decision of 8 October 2026)
   { group: 'a', methods: ['GET'], path: '/sign-up/[token]' }, // FR-AU-90: the link of an admission invitation
   { group: 'a', methods: ['GET'], path: '/reset-password' }, // FR-AU-86
   { group: 'a', methods: ['GET'], path: '/reset-password/[token]' }, // FR-AU-86
-  { group: 'a', methods: ['GET'], path: '/confirm-address/[token]' }, // FR-AU-03
+  { group: 'a', methods: ['GET'], path: '/confirm-address/[token]' }, // FR-AU-03: the page alone, which tells a browser without a session to sign in; the confirmation itself needs a session of the account (the owner's decision of 9 October 2026)
   // (a) The endpoints of the identity library that a person without a session
   // must reach, one by one and never the prefix: every other endpoint under
   // /api/auth is validated here like any route. Each is also on the list of
   // src/lib/auth/auth.ts, without which the handler does not serve it.
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/sign-in/email` }, // FR-AU-81
+  { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/sign-in/link` }, // FR-AU-81: the confirmation of the link of a lock email, authorised by its token, which the body holds. API design writes it as a POST to the page's own path; Next.js serves no route handler where a page is, so it is an endpoint of the identity handler, as the completion of a reset is
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/two-factor/verify-totp` }, // FR-AU-81, FR-AU-83: the second step, authorised by the cookie of a step that is open; under a session, the first code of an enrolment, whose session the endpoint reads itself
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/two-factor/verify-backup-code` }, // FR-AU-83: the second step, by a recovery code
   { group: 'a', methods: ['POST'], path: `${IDENTITY_BASE_PATH}/request-password-reset` }, // FR-AU-86

@@ -166,6 +166,7 @@ test('the explanation of "Not recorded": by keyboard, by pointer, and to a scree
   // "Shown … when the mark receives keyboard focus, so the mark can be reached
   // by keyboard": after the control that creates a document comes the title,
   // which is the link to the document's page, and then the mark beside it.
+  await expect(page.getByRole('button', { name: 'New document' })).toBeEnabled();
   await page.getByRole('button', { name: 'New document' }).focus();
   await page.keyboard.press('Tab');
   const title = page.getByRole('link', { name: DEFAULT_TITLE });

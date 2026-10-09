@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Button, FormFault, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 
@@ -20,6 +21,7 @@ export function ResetRequestForm() {
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
   const [requested, setRequested] = useState(false);
   const statement = useRef<HTMLParagraphElement>(null);
 
@@ -73,7 +75,13 @@ export function ResetRequestForm() {
           required
         />
         <div>
-          <Button variant="primary" type="submit" pending={pending} pendingLabel="Sending link…">
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Sending link…"
+          >
             Send link
           </Button>
         </div>

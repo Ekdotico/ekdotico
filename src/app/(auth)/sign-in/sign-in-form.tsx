@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../components/send.ts';
 
 /**
@@ -13,6 +14,7 @@ export function SignInForm({ returnTo }: { returnTo: string }) {
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -65,7 +67,13 @@ export function SignInForm({ returnTo }: { returnTo: string }) {
           required
         />
         <div>
-          <Button variant="primary" type="submit" pending={pending} pendingLabel="Signing in…">
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Signing in…"
+          >
             Sign in
           </Button>
         </div>

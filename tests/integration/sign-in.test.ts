@@ -3,7 +3,7 @@
 // database and Valkey. The limits that need a period to pass are in
 // sign-in-period.test.ts.
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { cookiesOf, createAccount, DAY, load, ORIGIN, PASSWORD, prepare } from './identity.ts';
+import { cookiesOf, createAccount, DAY, handle, load, ORIGIN, PASSWORD, prepare } from './identity.ts';
 
 const database = prepare('signin', {
   // One trusted proxy, so that an attempt can come from a network address of its own.
@@ -21,7 +21,8 @@ const REFUSED =
 const WRONG = 'a wrong password, long enough';
 
 function post(body: unknown, headers: Record<string, string> = {}) {
-  return auth().handler(
+  return handle(
+    auth,
     new Request(`${ORIGIN}/api/auth/sign-in/email`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: ORIGIN, ...headers },
@@ -37,6 +38,12 @@ const signIn = (email: string, password = PASSWORD, headers: Record<string, stri
 let people = 0;
 /** A new address, so that each test has counts of its own. */
 const address = () => `person${++people}@example.com`;
+/**
+ * An address that no account can have (the owner's decision of 9 October 2026:
+ * a full-width letter in its domain). Where an address is only looked up it is
+ * not refused for that: it finds no account, as any unknown address.
+ */
+const neverStored = () => `person${++people}@\u{ff45}xample.com`;
 async function person(verified = true) {
   const email = address();
   return { email, id: await createAccount(auth, email, verified) };
@@ -328,6 +335,8 @@ describe('the time a refusal takes (FR-AU-81)', () => {
     const instead = { verified: 0, hashed: 1 };
     expect(await work(() => signIn(address()), 401)).toEqual(instead);
     expect(await work(() => signIn('not an address'), 401)).toEqual(instead);
+    expect(await work(() => signIn(neverStored()), 401)).toEqual(instead);
+    await expectRefused(await signIn(neverStored()));
     expect(await work(() => signIn(unverified.email), 401)).toEqual(instead);
     expect(await work(() => signIn(withoutPassword.email), 401)).toEqual(instead);
     expect(await work(() => signIn(known.email, 'x'.repeat(129)), 401)).toEqual(instead);
@@ -356,19 +365,30 @@ describe('the time a refusal takes (FR-AU-81)', () => {
       expect((await attempt()).status).toBe(401);
       return [users, accounts, entries, asked].map((spy) => spy.mock.calls.length);
     };
-    // The user, its credentials, the entry in the log; the two checks, the two
-    // counts of a failure, and the release of the turn.
-    const failed = [1, 1, 1, 5];
+    // The user and its lock (FR-AU-81), its credentials, the entry in the log; the two checks, the two
+    // counts of a failure, whether that was the twentieth, and the release of the turn.
+    const failed = [2, 1, 1, 6];
     expect(await work(() => signIn(known.email, WRONG))).toEqual(failed);
     expect(await work(() => signIn(address(), WRONG))).toEqual(failed);
+    expect(await work(() => signIn(neverStored(), WRONG))).toEqual(failed);
     expect(await work(() => signIn(unverified.email))).toEqual(failed);
+    // Refused by the lock alone, with both limits open (FR-AU-81): Valkey is
+    // asked as often as for a failure, by checks that count nothing
+    // (sign-in-lock.test.ts, "counts no attempt that it refuses").
+    const locked = await person();
+    await db().user.update({
+      where: { id: locked.id },
+      data: { lockedUntil: new Date(Date.now() + 60 * 60 * 1000) },
+    });
+    expect(await work(() => signIn(locked.email, PASSWORD, from(8)))).toEqual(failed);
+    expect(await work(() => signIn(locked.email, WRONG, from(8)))).toEqual(failed);
     // Refused by a limit: nothing is counted, for an address with an account or
     // without. The first such refusal of a period also writes the entry of a
     // limit reached (NFR-SE-19), so two entries, and each later one writes the
     // one; the same for both addresses, so the numbers tell them apart no more
     // than before.
-    const firstRefused = [1, 1, 2, 3];
-    const refused = [1, 1, 1, 3];
+    const firstRefused = [2, 1, 2, 3];
+    const refused = [2, 1, 1, 3];
     expect(await work(() => signIn(limited.email, PASSWORD, from(7)))).toEqual(firstRefused);
     expect(await work(() => signIn(unknownLimited, PASSWORD, from(7)))).toEqual(firstRefused);
     expect(await work(() => signIn(limited.email, PASSWORD, from(7)))).toEqual(refused);

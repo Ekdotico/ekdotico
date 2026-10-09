@@ -4,7 +4,17 @@
 // application has made of it.
 import net from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cookiesOf, createAccount, DAY, load, ORIGIN, PASSWORD, prepare, signIn } from './identity.ts';
+import {
+  cookiesOf,
+  createAccount,
+  DAY,
+  handle,
+  load,
+  ORIGIN,
+  PASSWORD,
+  prepare,
+  signIn,
+} from './identity.ts';
 
 const database = prepare('authconfig', {
   TRUSTED_PROXY_COUNT: '1',
@@ -17,7 +27,8 @@ const { auth, IDENTITY_ENDPOINTS, db, valkey, validateSessionRow } = await load(
 
 let userId = '';
 const request = (method: string, path: string, headers: Record<string, string> = {}) =>
-  auth().handler(
+  handle(
+    auth,
     new Request(`${ORIGIN}${path}`, {
       method,
       headers: {
@@ -53,16 +64,18 @@ describe('what is configured (NFR-SE-17)', () => {
   });
 
   it('has only two-factor authentication of the plugins, and no social provider (d)', () => {
-    // The other four are the application's own: the gate, tested below; its
+    // The other five are the application's own: the gate, tested below; its
     // sign-in and sign-out (sign-in.test.ts, sign-out.test.ts); its reset and
     // change of a password and its ending of sessions (password-reset.test.ts,
-    // change-password.test.ts, session-list.test.ts); and the acceptance of an
+    // change-password.test.ts, session-list.test.ts); its change of the name
+    // and of the address (name-and-address.test.ts); and the acceptance of an
     // admission invitation, which has no path.
     expect(auth().options.plugins.map((plugin) => plugin.id)).toEqual([
       'two-factor',
       'ekdotico-surface',
       'ekdotico-sign-in',
       'ekdotico-credentials',
+      'ekdotico-account',
       'ekdotico-admission-sign-up',
     ]);
     // FR-AU-83: the plugin is given no option. With one it could send a code
@@ -204,6 +217,7 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
         'sendVerificationEmail',
         'setPassword',
         'signInEmail',
+        'signInLink',
         'signInSocial',
         'signOut',
         'signUpEmail',
@@ -218,9 +232,10 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     );
   });
 
-  it('serves these twelve and no other', () => {
+  it('serves these sixteen and no other', () => {
     expect([...IDENTITY_ENDPOINTS]).toEqual([
       'POST /sign-in/email', // FR-AU-81
+      'POST /sign-in/link', // FR-AU-81: the link of a lock email (register D115; A104)
       'POST /sign-out', // FR-AU-84
       'POST /request-password-reset', // FR-AU-86
       'POST /reset-password', // FR-AU-86
@@ -232,7 +247,24 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
       'POST /two-factor/verify-backup-code', // FR-AU-83
       'POST /two-factor/disable', // FR-AU-83
       'POST /two-factor/generate-backup-codes', // FR-AU-83
+      'POST /update-user', // FR-AU-90: the name
+      'POST /change-email', // FR-AU-03
+      'POST /verify-email', // FR-AU-03: the confirmation, a POST (the owner's answer to Q3)
     ]);
+  });
+
+  // FR-AU-03, FR-AU-90: each of the three is the application's own, and the
+  // library's endpoint of the same name is not in the handler nor in `auth().api`.
+  it('has the application’s own endpoints of the name and the address in place of the library’s', async () => {
+    const own = await import('../../src/lib/auth/name-and-address.ts');
+    const api = auth().api as unknown as Record<string, unknown>;
+    for (const name of ['updateUser', 'changeEmail', 'verifyEmail'] as const) {
+      expect((api[name] as { path: string }).path).toBe(own[name].path);
+      // The library's takes a schema for its body or its query; the application's reads the body by hand.
+      expect((api[name] as { options: { method: unknown } }).options.method).toBe('POST');
+      expect((api[name] as { options: { body?: unknown } }).options.body).toBeUndefined();
+      expect((api[name] as { options: { query?: unknown } }).options.query).toBeUndefined();
+    }
   });
 
   // FR-AU-83: each of the five is the application's own, and the plugin's
@@ -321,15 +353,16 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
       ['POST', '/sign-up/email'], // FR-AU-57
       ['POST', '/link-social'], // account linking
       ['POST', '/unlink-account'],
-      ['POST', '/change-email'], // FR-AU-03 is the application's own, later
-      ['GET', '/verify-email'],
+      ['GET', '/change-email'], // FR-AU-03 is the application's own, a POST
+      ['GET', '/verify-email'], // the library's confirmation by opening a link: the application's is a POST
+      ['GET', '/verify-email?token=x'],
       ['POST', '/send-verification-email'],
       ['GET', '/reset-password/x'], // the library's page of a reset link; FR-AU-86 is the application's own
       ['GET', '/list-sessions'], // returns every session's token; the settings page reads the rows (FR-AU-85)
       ['POST', '/revoke-sessions'], // every session, the one in use included; FR-AU-85 has no such action
       ['POST', '/set-password'],
       ['POST', '/verify-password'],
-      ['POST', '/update-user'], // FR-AU-03, the name: later
+      ['GET', '/update-user'], // FR-AU-90, the name, is the application's own, a POST
       ['GET', '/get-session'],
       ['GET', '/ok'],
       ['GET', '/error'],
@@ -367,10 +400,11 @@ describe('the endpoints (NFR-SE-17 (d), NFR-IC-20)', () => {
     // FR-AU-58: the library's own deletion of a user.
     await expect(auth().api.deleteUser({ body: { password: PASSWORD }, headers })).rejects.toThrow();
     expect(await db().user.count({ where: { id: userId } })).toBe(1);
-    // The change of an address through the library.
-    await expect(
-      auth().api.changeEmail({ body: { newEmail: 'other@example.com' }, headers }),
-    ).rejects.toThrow();
+    // The change of an address through the library: its endpoint is replaced
+    // (name-and-address.ts), and its own stays switched off in the options.
+    // The application's asks for the password, and changes nothing by itself.
+    const changeEmail = auth().api.changeEmail as unknown as (input: unknown) => Promise<unknown>;
+    await expect(changeEmail({ body: { newEmail: 'other@example.com' }, headers })).rejects.toThrow();
     expect((await db().user.findUniqueOrThrow({ where: { id: userId } })).email).toBe('person@example.com');
     // Social sign-in and the linking of an account: there is no provider.
     await expect(auth().api.signInSocial({ body: { provider: 'github' } })).rejects.toThrow();
@@ -479,6 +513,68 @@ describe('signing out (FR-AU-84)', () => {
       expect(response.headers.getSetCookie(), origin).toEqual([]);
     }
     expect(await db().session.count({ where: { id: session.id } })).toBe(1);
+  });
+});
+
+// NFR-SE-17 (c): the library checks the origin only of a request that carries
+// a cookie, and these carry no session. Each endpoint checks it itself, since
+// the proxy can be skipped, and answers as the proxy does.
+describe('the endpoints without a session, from another origin (NFR-SE-17 (c))', () => {
+  const FORBIDDEN =
+    '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}';
+  const TOKEN = 'A'.repeat(43);
+  // Each with a body that the endpoint would act on, or answer in its own words.
+  const ENDPOINTS: [path: string, body: unknown, own: number][] = [
+    ['/sign-in/email', { email: 'person@example.com', password: PASSWORD }, 200],
+    ['/sign-in/link', { token: TOKEN }, 409],
+    ['/request-password-reset', { email: 'person@example.com' }, 200],
+    ['/reset-password', { token: TOKEN, newPassword: 'a new password, long enough' }, 409],
+    ['/two-factor/verify-totp', { code: '123456' }, 401],
+    ['/two-factor/verify-backup-code', { code: 'abcde-fghij' }, 401],
+  ];
+  const send = (path: string, body: unknown, headers: Record<string, string>) =>
+    handle(
+      auth,
+      new Request(`${ORIGIN}/api/auth${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it.each(ENDPOINTS)('%s is refused as the proxy refuses it, and does nothing', async (path, body, own) => {
+    const from = { 'x-forwarded-for': `203.0.113.${ENDPOINTS.findIndex(([each]) => each === path) + 1}` };
+    const sessions = await db().session.count();
+    const tokens = await db().verification.count();
+    const entries = vi.spyOn(db().securityLogEntry, 'create');
+    const asked = vi.spyOn(valkey(), 'eval');
+    const foreign: Record<string, string>[] = [
+      { origin: 'https://evil.example' },
+      { origin: 'null' },
+      { origin: `${ORIGIN}.evil.example` },
+      { origin: ORIGIN.toUpperCase() },
+      // No header at all: not from a page of the application.
+      {},
+    ];
+    for (const headers of foreign) {
+      const response = await send(path, body, { ...headers, ...from });
+      expect(response.status, JSON.stringify(headers)).toBe(403);
+      expect(await response.text()).toBe(FORBIDDEN);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.getSetCookie()).toEqual([]);
+    }
+    // Nothing was read of the request: no limit was asked or counted, no
+    // session and no token was written.
+    expect(asked).not.toHaveBeenCalled();
+    expect(await db().session.count()).toBe(sessions);
+    expect(await db().verification.count()).toBe(tokens);
+    // NFR-SE-19: a 403 has its entry, with no user, and one for the period and
+    // the network address however many requests are refused in it.
+    expect(entries.mock.calls.map(([{ data }]) => data)).toEqual([
+      { kind: 'forbidden', userId: undefined, documentId: undefined },
+    ]);
+    // From the application's own origin the endpoint answers for itself.
+    expect((await send(path, body, { origin: ORIGIN, ...from })).status).toBe(own);
   });
 });
 

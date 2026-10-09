@@ -24,16 +24,19 @@ import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { handOver } from '../email/hand-over.ts';
 import type { EmailMessage } from '../email/index.ts';
+import { enteredAddress } from '../field-text.ts';
 import { errorResponse, textFields } from '../http.ts';
 import { checkPassword } from '../password-rules.ts';
 import { logLimitReached, takeLimit } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
-import { hashToken, newToken, TOKEN } from '../token.ts';
-import { notAdmitted, tooManyRequests, unauthenticated } from './route-answers.ts';
+import { hashToken, newToken, RESET_LINK, TOKEN } from '../token.ts';
+import { voidAddressLinks } from './address-links.ts';
+import { notAdmitted, refusedOrigin, tooManyRequests, unauthenticated } from './route-answers.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
 import { SECOND_STEP } from './second-step.ts';
+import { liftLock, voidSignInLinks } from './sign-in-lock.ts';
 
 /** FR-AU-86: the one answer to every request for a reset, verbatim. */
 export const RESET_REQUESTED =
@@ -56,9 +59,8 @@ const MESSAGES = {
 };
 
 // The reset links of the account are rows of the identity library's table of
-// single-use tokens (Data models, `Verification`): the identifier is this
-// prefix and the hash of the token, and the value is the user.
-const RESET = 'reset-password:';
+// single-use tokens (../token.ts).
+const RESET = RESET_LINK;
 
 // FR-AU-87 (c), verbatim. Plain text; nothing of a person but the address it is sent to.
 function resetEmail(to: string, token: string): EmailMessage {
@@ -89,22 +91,37 @@ function passwordChangedEmail(to: string): EmailMessage {
 async function sendResetLink(email: string, now: Date = new Date()): Promise<void> {
   // No address holds a control character, and the database refuses the first of them.
   if (/[\u0000-\u001f\u007f]/.test(email)) return;
-  const user = await db().user.findUnique({ where: { email }, select: { id: true, emailVerified: true } });
+  const user = await db().user.findUnique({
+    where: { email },
+    select: { id: true, emailVerified: true, updatedAt: true },
+  });
   if (!user?.emailVerified) return;
   const token = newToken();
-  // For the slice that builds the change of address (FR-AU-03): a link is
-  // bound to the user, not to the address it was mailed to, so that slice
-  // deletes the account's `reset-password:` rows in the transaction that
-  // changes the address.
-  await db().verification.create({
-    data: {
-      id: randomUUID(),
-      identifier: RESET + hashToken(token),
-      value: user.id,
-      expiresAt: new Date(now.getTime() + RESET_LINK_MS),
-    },
+  // FR-AU-03: a link is bound to the user, not to the address it is mailed
+  // to, and the old address "no longer signs in to it". So the row of the
+  // account is held first, under the address the reset was asked for, written
+  // with its own value: a change of the address that has not yet committed is
+  // waited for, and one that committed since the read above leaves this
+  // statement nothing, so that no link is written and no email sent. A change
+  // that comes after waits here in its turn, and then deletes the link
+  // (name-and-address.ts).
+  const written = await db().$transaction(async (tx) => {
+    const held = await tx.user.updateMany({
+      where: { id: user.id, email, emailVerified: true },
+      data: { updatedAt: user.updatedAt },
+    });
+    if (held.count !== 1) return false;
+    await tx.verification.create({
+      data: {
+        id: randomUUID(),
+        identifier: RESET + hashToken(token),
+        value: user.id,
+        expiresAt: new Date(now.getTime() + RESET_LINK_MS),
+      },
+    });
+    return true;
   });
-  await handOver(resetEmail(email, token));
+  if (written) await handOver(resetEmail(email, token));
 }
 
 /**
@@ -117,11 +134,14 @@ export const requestPasswordReset = createAuthEndpoint(
   '/request-password-reset',
   { method: 'POST' },
   async (ctx) => {
+    // NFR-SE-17 (c): before anything of the request is read.
+    const foreign = await refusedOrigin(ctx.headers);
+    if (foreign) return foreign;
     assertCollecting();
     const entered = textFields(ctx.body, 'email');
     if (!entered) return errorResponse(422, 'invalid_request', MESSAGES.requestShape);
-    // FR-AU-02: lower case, as an address is stored. Bounded, whatever was sent.
-    const email = entered.email.slice(0, 255).toLowerCase();
+    // FR-AU-02: in its one spelling, as an address is stored. Bounded, whatever was sent.
+    const email = enteredAddress(entered.email);
 
     // NFR-SE-07: 10 in any hour for each network address, answered 429.
     const bucket = addressBucket(ctx.headers ?? new Headers());
@@ -178,6 +198,9 @@ const passwordRefused = (refusal: string) =>
  * no cookie of a session.
  */
 export const resetPassword = createAuthEndpoint('/reset-password', { method: 'POST' }, async (ctx) => {
+  // NFR-SE-17 (c): before anything of the request is read.
+  const foreign = await refusedOrigin(ctx.headers);
+  if (foreign) return foreign;
   // The notice is left for after the answer, which only a request that
   // collects can take: asked now, before anything is written.
   assertCollecting();
@@ -212,6 +235,10 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
     if (changed.count !== 1) throw new Error('password reset: no credential');
     // "The completion of a reset makes void every other reset link of the account."
     await tx.verification.deleteMany({ where: { value: reset.userId, identifier: { startsWith: RESET } } });
+    // FR-AU-03: a change of address that the old password asked for is not
+    // confirmed after it (address-links.ts; its register row is pending).
+    // After the reset links, as the confirmation of an address takes them.
+    await voidAddressLinks(tx, reset.userId);
     // FR-AU-83: a second step that the old password began does not complete.
     // Before the sessions: the second step makes its session first and claims
     // its row after, so one of the two statements here finds what it made.
@@ -220,9 +247,10 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
     });
     // "Setting it ends every session of the account" (FR-AU-85).
     await tx.session.deleteMany({ where: { userId: reset.userId } });
-    // FR-AU-81, FR-AU-86: the slice that builds the lock lifts it here, in
-    // this transaction (`User.lockedUntil`, a column that does not exist
-    // yet), and makes void the sign-in link of its email.
+    // FR-AU-86: it "lifts a lock on the account where one is in force", and
+    // makes void "the sign-in link of a lock email where one is outstanding".
+    // A second step begun from that link went with the steps, above.
+    await liftLock(tx, reset.userId);
     return true;
   });
   if (!completed) return notValid();
@@ -312,6 +340,9 @@ export const changePassword = createAuthEndpoint(
         await tx.verification.deleteMany({
           where: { value: session.userId, identifier: { startsWith: RESET } },
         });
+        // FR-AU-03: and a change of address that the old password asked for,
+        // as at a reset. Undone with the rest where nothing is to change.
+        await voidAddressLinks(tx, session.userId);
         // The password next, as the completion of a reset takes it, so that
         // neither waits for the other in a circle. Written only over the hash
         // that was verified: one set since then is not overwritten (FR-AU-86).
@@ -352,8 +383,11 @@ export const changePassword = createAuthEndpoint(
           where: { value: session.userId, identifier: { startsWith: SECOND_STEP } },
         });
         await tx.session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
-        // FR-AU-81: the slice that builds the lock makes void the sign-in link
-        // of a lock email here ("when the password … of the account is changed").
+        // FR-AU-81: the sign-in link of a lock email is void "when the
+        // password … of the account is changed". The lock itself stays: only
+        // a completed reset and the link lift one. A step begun from the link
+        // went with the steps, above.
+        await voidSignInLinks(tx, session.userId);
         return 'changed';
       })
       .catch((error: unknown) => {
