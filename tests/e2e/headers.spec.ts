@@ -57,6 +57,19 @@ const others = [
   '/robots.txt',
 ];
 
+// The owner's decision of 9 October 2026 on the second review of pull request
+// 20. The one feature granted is the one the copy buttons use.
+const PERMISSIONS = /^clipboard-write=\(self\)(, [a-z-]+=\(\))+$/;
+/** The three headers that keep a response to its own origin. */
+function isolated(headers: Record<string, string>, what: string) {
+  expect(headers['cross-origin-opener-policy'], what).toBe('same-origin');
+  expect(headers['cross-origin-resource-policy'], what).toBe('same-origin');
+  expect(headers['permissions-policy'], what).toMatch(PERMISSIONS);
+  for (const refused of ['camera', 'microphone', 'geolocation', 'clipboard-read', 'payment', 'usb']) {
+    expect(headers['permissions-policy'], what).toContain(`${refused}=()`);
+  }
+}
+
 /**
  * What every response owes, whatever it is. Returns the nonce of a page's
  * policy, or null where the response is no page and admits nothing.
@@ -66,6 +79,7 @@ async function owed(response: APIResponse, what: string, path = ''): Promise<str
   expect(headers['x-content-type-options'], what).toBe('nosniff');
   expect(headers['x-frame-options'], what).toBe('DENY');
   expect(headers['referrer-policy'], what).toMatch(/^(no-referrer|strict-origin-when-cross-origin)$/);
+  isolated(headers, what);
   expect(headers, what).not.toHaveProperty('content-security-policy-report-only');
   const policy = headers['content-security-policy'];
   expect(policy, what).toBeDefined();
@@ -190,6 +204,7 @@ test('a response that did not pass the proxy carries the policy that admits noth
     expect(headers['content-security-policy'], what).toBe(NOTHING);
     expect(headers['x-content-type-options'], what).toBe('nosniff');
     expect(headers['x-frame-options'], what).toBe('DENY');
+    isolated(headers, what);
   }
   // The answers an endpoint makes itself, where the proxy did not refuse
   // first (src/lib/auth/route-answers.ts, `refusedOrigin`): a 403 for a

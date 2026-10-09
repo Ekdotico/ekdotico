@@ -202,6 +202,33 @@ describe('the acknowledgement (FR-AU-56)', () => {
     }
     expect((await recorded(id)).closedAlphaNoticeVersion).toBeNull();
   });
+
+  // What a form of another site can send without the browser asking first
+  // (src/lib/http.ts, `readJson`). The origin here is the application's own.
+  it('refuses the version sent as anything but JSON, or in a body longer than it needs, and records nothing', async () => {
+    const { id, cookie } = await person();
+    const sent = (type: string | null, body = '{"version":1}') => {
+      const request = new Request(`${ORIGIN}${WRITE}`, {
+        method: 'POST',
+        headers: { origin: ORIGIN, cookie },
+        body,
+      });
+      if (type) request.headers.set('content-type', type);
+      else request.headers.delete('content-type');
+      return POST(request);
+    };
+    for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data', null]) {
+      await expectError(await sent(type), 422, 'invalid_request');
+    }
+    await expectError(
+      await sent('application/json', `{"version":1${' '.repeat(2000)}}`),
+      422,
+      'invalid_request',
+    );
+    expect((await recorded(id)).closedAlphaNoticeVersion).toBeNull();
+    expect((await sent('application/json; charset=utf-8')).status).toBe(200);
+    expect((await recorded(id)).closedAlphaNoticeVersion).toBe(1);
+  });
 });
 
 describe('the session of the two routes (NFR-SE-02, FR-AU-07)', () => {

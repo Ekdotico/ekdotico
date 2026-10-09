@@ -11,6 +11,11 @@ const SCHEMES = /^(https?:\/\/[^/?#]|mailto:)/i;
 // U+2028 and U+2029 among it), a control character, and a backslash, which the
 // parser reads as a slash.
 const NEVER = /[\s\u0000-\u001f\u007f-\u009f\\]/;
+// A name, with or without a password, before the host of an `http` or `https`
+// address: `https://app.example@evil.example/` goes to the second host and
+// reads as the first (the owner's decision of 9 October 2026 on the second
+// review of pull request 20). An `@` with nothing before it is refused too.
+const USERINFO = /^https?:\/\/[^/?#]*@/i;
 
 /**
  * The address as a link stores it, or null where it is not one a link may
@@ -28,7 +33,7 @@ const NEVER = /[\s\u0000-\u001f\u007f-\u009f\\]/;
  */
 export function linkAddress(given: unknown): string | null {
   if (typeof given !== 'string' || !SCHEMES.test(given) || NEVER.test(given)) return null;
-  if (!URL.canParse(given)) return null;
+  if (USERINFO.test(given) || !URL.canParse(given)) return null;
   const { protocol, hostname } = new URL(given);
   if (protocol === 'mailto:') return given;
   return (protocol === 'https:' || protocol === 'http:') && hostname !== '' ? given : null;

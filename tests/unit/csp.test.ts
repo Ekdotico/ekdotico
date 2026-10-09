@@ -6,7 +6,14 @@
 import { NextRequest } from 'next/server';
 import { describe, expect, it, vi } from 'vitest';
 import config from '../../next.config.ts';
-import { COMPANION_HEADERS, NONCE_HEADER, STATIC_POLICY, newNonce, pagePolicy } from '../../src/lib/csp.ts';
+import {
+  COMPANION_HEADERS,
+  ISOLATION_HEADERS,
+  NONCE_HEADER,
+  STATIC_POLICY,
+  newNonce,
+  pagePolicy,
+} from '../../src/lib/csp.ts';
 
 /** The directives of a policy, by name. */
 function directives(policy: string): Record<string, string[]> {
@@ -90,13 +97,34 @@ describe('the policy of everything that is no page', () => {
   });
 });
 
+// Written out, and not taken from the code under test.
+const PERMISSIONS =
+  'clipboard-write=(self), accelerometer=(), autoplay=(), bluetooth=(), camera=(), clipboard-read=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), storage-access=(), usb=(), window-management=(), xr-spatial-tracking=()';
+
+describe('the features of the browser a page is granted', () => {
+  it('are the one the application uses, for its own origin, and no other', () => {
+    const granted = PERMISSIONS.split(', ').filter((each) => !each.endsWith('=()'));
+    // The two buttons that copy (`navigator.clipboard.writeText`); nothing reads the clipboard.
+    expect(granted).toEqual(['clipboard-write=(self)']);
+    expect(PERMISSIONS).not.toContain('*');
+    expect(ISOLATION_HEADERS.map(({ key }) => key)).toEqual([
+      'Cross-Origin-Opener-Policy',
+      'Cross-Origin-Resource-Policy',
+      'Permissions-Policy',
+    ]);
+  });
+});
+
 describe('the headers of every response (next.config.ts)', () => {
-  it('are the policy that admits nothing and the three beside it, on every path', async () => {
+  it('are the policy that admits nothing and the six beside it, on every path', async () => {
     const [every] = await config.headers!();
     expect(every).toEqual({
       source: '/:path*',
       headers: [
         { key: 'Content-Security-Policy', value: "default-src 'none'; frame-ancestors 'none'" },
+        { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+        { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
+        { key: 'Permissions-Policy', value: PERMISSIONS },
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         { key: 'X-Frame-Options', value: 'DENY' },
         { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

@@ -84,6 +84,31 @@ describe('the address of a hyperlink (FR-ED-02; NFR-SE-06, A03)', () => {
     expect(linkAddress(address)).toBeNull();
   });
 
+  // The owner's decision of 9 October 2026: a name before the host. A reader
+  // takes the address for the host it begins with, and a browser goes to the
+  // one after the `@`.
+  it.each([
+    'https://app.example@evil.example/x',
+    'http://user:pw@host/',
+    'https://user:@example.com/',
+    'https://:pw@example.com/',
+    'https://@evil.example/x',
+    'HTTPS://App.Example@evil.example',
+    'https://app.example%40x@evil.example/',
+    'https://a@b@evil.example/',
+  ])('refuses %s, which names someone before its host', (address) => {
+    expect(linkAddress(address)).toBeNull();
+  });
+
+  it.each([
+    'mailto:a@b.example',
+    'https://example.com/@user',
+    'https://example.com/a?to=a@b.example#c@d',
+    'https://example.com:8443/path@x',
+  ])('admits %s: an @ that is in no host', (address) => {
+    expect(linkAddress(address)).toBe(address);
+  });
+
   it.each([null, undefined, 1, {}, ['https://example.com'], new URL('https://example.com')])(
     'refuses what is not text (%j)',
     (given) => {

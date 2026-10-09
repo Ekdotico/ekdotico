@@ -208,6 +208,36 @@ describe('creating a document (FR-ED-35, FR-AU-12, FR-ED-45)', () => {
     expect(await db().document.count({ where: { ownerId: { in: [owner.id, other.id] } } })).toBe(0);
   });
 
+  // What a form of another site can send without the browser asking first:
+  // JSON under a content type that is not JSON's. The origin here is the
+  // application's own, so nothing but the content type refuses it.
+  it.each(['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data', 'text/json', null])(
+    'refuses a body that is JSON and is sent as %s, and changes nothing',
+    async (type) => {
+      const owner = await person();
+      const sent = (method: string, path: string, body: string) => {
+        const made = request(method, path, owner.cookie, body);
+        if (type) made.headers.set('content-type', type);
+        else made.headers.delete('content-type');
+        return made;
+      };
+      await expectError(await collection.POST(sent('POST', '/api/documents', '{}')), 422, 'invalid_request');
+      expect(await db().document.count({ where: { ownerId: owner.id } })).toBe(0);
+
+      const id = await documentOf(owner.cookie);
+      await expectError(
+        await one.PATCH(sent('PATCH', `/api/documents/${id}`, '{"title":"Renamed"}'), context(id)),
+        422,
+        'invalid_request',
+      );
+      expect((await row(id)).title).not.toBe('Renamed');
+      // The type as a browser writes it, with its parameter, is JSON's.
+      const kept = request('PATCH', `/api/documents/${id}`, owner.cookie, { title: 'Renamed' });
+      kept.headers.set('content-type', 'Application/JSON; charset=utf-8');
+      expect((await one.PATCH(kept, context(id))).status).toBe(200);
+    },
+  );
+
   it('refuses a body longer than the route expects, and creates nothing', async () => {
     const owner = await person();
     await expectError(

@@ -95,6 +95,27 @@ export function ownDocument(email: string, title: string): string {
 }
 
 /**
+ * Stores, as the state of a document, quotes nested `depth` deep: what no
+ * client can send now, and a document stored before there was a limit could
+ * hold (tests/e2e/stored-state.ts).
+ */
+export function storeNested(documentId: string, depth: number): void {
+  const ran = spawnSync('node', ['tests/e2e/stored-state.ts', documentId, String(depth)], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN,
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(ran.status, ran.stderr).toBe(0);
+}
+
+/**
  * What `pattern` finds in the newest message the local sink holds for an
  * address, once the message is there: the email of the account is handed over
  * after the response has been returned (FR-AU-87). `text` is the whole message.

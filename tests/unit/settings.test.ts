@@ -461,12 +461,22 @@ describe('the development rewrite of /collab, at the start of a process', () => 
     expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{}]))).toThrow(refused);
   });
 
-  it('admits a build without it, and the absence of a build', () => {
+  it('admits a build without it', () => {
     expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([]))).not.toThrow();
     expect(() =>
       refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{ source: '/collaborators', destination: '/x' }])),
     ).not.toThrow();
-    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, null)).not.toThrow();
+  });
+
+  // A build that is not where it is looked for cannot be checked, so it does
+  // not pass: only a development machine starts without one.
+  it('refuses the absence of a build where the origin is not on localhost, and admits it there', () => {
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, null)).toThrow(
+      /routes manifest of the build was not found/,
+    );
+    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:3000']) {
+      expect(() => refuseBuiltCollabRewrite(origin, null)).not.toThrow();
+    }
   });
 
   it.each(['', 'not JSON', '{}', '{"rewrites":null}', '{"rewrites":"none"}'])(

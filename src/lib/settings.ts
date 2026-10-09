@@ -357,11 +357,18 @@ export function loadSettings(env: Env = process.env): Settings {
  * is started, whatever is set there.
  *
  * `manifest` is the text of `.next/routes-manifest.json`, or null where the
- * file is absent, which is no fault: the development server and the tests have
- * no build. A file that is there and cannot be read as a manifest is refused.
+ * file is absent. On localhost that is no fault: the development server has
+ * no build. Anywhere else a build that cannot be checked is refused as one
+ * that fails the check, whether the file is absent or cannot be read as a
+ * manifest: a start from another directory would otherwise pass unchecked.
  */
 export function refuseBuiltCollabRewrite(appOrigin: string, manifest: string | null): void {
-  if (manifest === null || ['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) return;
+  if (['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) return;
+  if (manifest === null) {
+    throw new Error(
+      'The routes manifest of the build was not found at .next/routes-manifest.json: start the application in the directory that holds its build.',
+    );
+  }
   let rewrites: unknown;
   try {
     rewrites = (JSON.parse(manifest) as { rewrites?: unknown }).rewrites;

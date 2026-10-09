@@ -55,6 +55,14 @@ const ENDED: Record<Ending, { title: string; text: string; href: string; link: s
     link: 'Sign in again',
   },
 };
+// A document that this browser cannot build (./extensions.tsx, `holdBinding`).
+// Said as what it is, and not as a fault of the server: nothing was sent.
+const UNSHOWN = {
+  title: 'This document could not be shown',
+  text: 'Ekdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed.',
+  href: '/',
+  link: 'Open the list of documents',
+};
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
 const KEYS =
@@ -79,9 +87,12 @@ function Text({
   document,
   editable,
   onEditor,
+  onUnshown,
 }: {
   document: Y.Doc;
   editable: boolean;
+  /** Told that the document cannot be built here: the text goes, and the page says so. */
+  onUnshown: () => void;
   /** Told of the editor, for the one who copies its text (FR-ED-24). */
   onEditor: (editor: TextEditor | null) => void;
 }) {
@@ -93,7 +104,7 @@ function Text({
   // Whether the focus was last in the surface: the text, the toolbar, a
   // block's controls, the dialog of a link.
   const within = useRef(false);
-  const all = useMemo(() => extensions(document), [document]);
+  const all = useMemo(() => extensions(document, onUnshown), [document, onUnshown]);
 
   const editor = useEditor({
     extensions: all,
@@ -239,6 +250,8 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
     setCheck(null);
   };
   const editor = useRef<TextEditor | null>(null);
+  const [unshown, setUnshown] = useState(false);
+  const fail = useCallback(() => setUnshown(true), []);
   const keep = useCallback((made: TextEditor | null) => {
     editor.current = made;
   }, []);
@@ -249,6 +262,18 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
     // that had the focus are gone, so the statement takes it.
     return (
       <FormFault tone="neutral" announce="polite" autoFocus title={title}>
+        <p>
+          {text} <Link href={href}>{link}</Link>.
+        </p>
+      </FormFault>
+    );
+  }
+
+  if (unshown) {
+    const { title, text, href, link } = UNSHOWN;
+    // The text and whatever had the focus are gone, so the statement takes it.
+    return (
+      <FormFault autoFocus title={title}>
         <p>
           {text} <Link href={href}>{link}</Link>.
         </p>
@@ -279,7 +304,12 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
       )}
       {/* FR-ED-18: read-only in the error state, "until the connection returns". */}
       {state.opened ? (
-        <Text document={connection.document} editable={canEdit && state.phase !== 'lost'} onEditor={keep} />
+        <Text
+          document={connection.document}
+          editable={canEdit && state.phase !== 'lost'}
+          onEditor={keep}
+          onUnshown={fail}
+        />
       ) : null}
       <Dialog open={check !== null} onClose={close} title="Sync status">
         {check ? (

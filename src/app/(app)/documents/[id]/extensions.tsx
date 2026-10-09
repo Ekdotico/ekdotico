@@ -10,13 +10,17 @@
 // raw HTML, and the one attribute that a browser acts on, the address of a
 // link, is held to src/lib/editor/link.ts.
 //
-// The collaboration server does not read content, so every attribute of every
-// node and mark that arrives is hostile, whatever its type. Each attribute the
-// schema defines has one rule in `ATTRIBUTE_RULES` below, a closed list or a
-// bounded number, and the rule is applied where the schema makes a node or a
-// mark (`closeAttributes`): a plugin, a node view and `renderHTML` are all
-// handed the value the rule returned, and never the one that arrived. A value
-// outside its rule becomes the default; nothing throws.
+// The collaboration server holds a document to its size and its depth and
+// reads nothing else of it (src/lib/collab/state.ts), so every attribute of
+// every node and mark that arrives is hostile, whatever its type. Each
+// attribute the schema defines has one rule in `ATTRIBUTE_RULES` below, a
+// closed list or a bounded number, and the rule is applied where the schema
+// makes a node or a mark (`closeSchema`): a plugin, a node view and
+// `renderHTML` are all handed the value the rule returned, and never the one
+// that arrived. A value outside its rule becomes the default; nothing throws.
+// The same of what the cells of a table make together (`closeGrid`), and of a
+// node put where the schema cannot hold it, which is left out alone
+// (`closeSchema`, `holdBinding`).
 //
 // Every control is the design package's (E2), and every name the stylesheet
 // answers to is the one its contract gives (`@ekdotico/domico`, "The document
@@ -33,8 +37,9 @@ import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { Placeholder } from '@tiptap/extensions';
-import type { Schema } from '@tiptap/pm/model';
+import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
 import { Plugin, type Transaction } from '@tiptap/pm/state';
+import type { EditorView } from '@tiptap/pm/view';
 import {
   NodeViewContent,
   NodeViewWrapper,
@@ -44,7 +49,7 @@ import {
   type NodeViewProps,
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import { ySyncPluginKey } from '@tiptap/y-tiptap';
+import { updateYFragment, ySyncPluginKey, type ProsemirrorBinding } from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
 import type * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
@@ -541,15 +546,140 @@ export const ATTRIBUTE_RULES: Record<string, Record<string, Rule>> = {
   link: { href: linkAddress },
 };
 
+const count = (given: unknown): number => (typeof given === 'number' ? given : 1);
+
+/**
+ * The widest row of a table, in columns, as the table library counts it
+ * (prosemirror-tables, `findWidth`): the columns its own cells span, and those
+ * of every cell above that reaches down into it.
+ */
+function widest(rows: readonly PMNode[]): number {
+  let most = 0;
+  // The cells that reach into the row at hand: how many rows further, and how wide.
+  let reaching: [further: number, columns: number][] = [];
+  for (const row of rows) {
+    let width = reaching.reduce((sum, [, columns]) => sum + columns, 0);
+    const next = reaching.flatMap(([further, columns]) =>
+      further > 1 ? [[further - 1, columns] as [number, number]] : [],
+    );
+    row.forEach((cell) => {
+      width += count(cell.attrs.colspan);
+      if (count(cell.attrs.rowspan) > 1)
+        next.push([count(cell.attrs.rowspan) - 1, count(cell.attrs.colspan)]);
+    });
+    most = Math.max(most, width);
+    reaching = next;
+  }
+  return most;
+}
+
+/** A row with the spans of its cells changed, or the row itself where `change` changes none. */
+function respan(row: PMNode, change: (cell: PMNode) => Record<string, number> | null): PMNode {
+  let changed = false;
+  const cells: PMNode[] = [];
+  row.forEach((cell) => {
+    const spans = change(cell);
+    if (spans) changed = true;
+    // Made by the type, so that the widths follow the span (`CELL.colwidth`).
+    cells.push(spans ? cell.type.create({ ...cell.attrs, ...spans }, cell.content, cell.marks) : cell);
+  });
+  return changed ? row.copy(Fragment.from(cells)) : row;
+}
+
+/**
+ * The rows of a table with its GRID inside the bound, and not its cells alone
+ * (the second review of pull request 20). A hundred rows of a hundred cells
+ * that each span a hundred columns and a hundred rows pass every rule of a
+ * cell, and are a grid of ten thousand columns in which every square is
+ * claimed ten thousand times: the table library records each claim, and the
+ * tab that opens the document stops answering.
+ *
+ * So, as an attribute outside its rule becomes the default: a cell that
+ * reaches below the last row spans one row; and where a row, with the cells
+ * that reach down into it, is then still wider than `TABLE_MOST` columns,
+ * every cell of the table spans one row and one column. What is left is at
+ * most `TABLE_MOST` each way, which is laid out and answers.
+ */
+export function closeGrid(table: Fragment): Fragment {
+  const rows: PMNode[] = [];
+  table.forEach((row, _, at) =>
+    rows.push(
+      respan(row, (cell) => (count(cell.attrs.rowspan) > table.childCount - at ? { rowspan: 1 } : null)),
+    ),
+  );
+  if (widest(rows) <= TABLE_MOST) return Fragment.from(rows);
+  return Fragment.from(
+    rows.map((row) =>
+      respan(row, (cell) =>
+        count(cell.attrs.colspan) > 1 || count(cell.attrs.rowspan) > 1 ? { colspan: 1, rowspan: 1 } : null,
+      ),
+    ),
+  );
+}
+
+/** The schemas that have left something out of what they were asked to make, since last asked (`holdBinding`). */
+const MENDED = new WeakSet<Schema>();
+
 /**
  * Has the schema apply the rules wherever it makes a node or a mark: from a
  * change of another client, from a paste, from a command, from JSON. The
- * library has no place to say this, so the one function through which each
- * type computes its attributes is wrapped (`NodeType.computeAttrs`, which
- * prosemirror-model 1.25.12 does not declare, and `MarkType.create`). The
- * test of this file's rules fails if an upgrade moves either.
+ * library has no place to say this, so the functions through which it makes
+ * them are wrapped. The test of this file's rules fails if an upgrade moves one.
+ *
+ * - The attributes: the one function through which each type computes them
+ *   (`NodeType.computeAttrs`, which prosemirror-model 1.25.12 does not
+ *   declare, and `MarkType.create`).
+ * - The grid of a table: the three functions that make a node of the type
+ *   (`closeGrid`).
+ * - What another client sent (`Schema.node`, `Schema.text`, `Schema.mark`,
+ *   which are how the collaboration binding makes everything): a node whose
+ *   content does not fit is made WITHOUT the children that do not fit, and
+ *   with what it must have, and is not refused. The binding deletes from the
+ *   shared document whatever the schema refuses to make, so a refusal here
+ *   deleted the whole node for everyone, for one thing in it that should not
+ *   be there: a member's table, for a paragraph another client put under it
+ *   (the second review of pull request 20). A node or a mark of no type, and
+ *   text that is not text, are nothing.
  */
-export function closeAttributes(schema: Schema): Schema {
+export function closeSchema(schema: Schema): Schema {
+  const table = schema.nodes.table;
+  if (table) {
+    for (const make of ['create', 'createChecked', 'createAndFill'] as const) {
+      const inner = table[make].bind(table) as NodeType['create'];
+      table[make] = ((attrs, content, marks) =>
+        inner(attrs, closeGrid(Fragment.from(content)), marks)) as NodeType['create'];
+    }
+  }
+  const text = schema.text.bind(schema);
+  schema.node = ((type, attrs, content, marks) => {
+    const made = typeof type === 'string' ? schema.nodes[type] : type;
+    const given = Fragment.from(content);
+    if (made?.validContent(given)) return made.create(attrs, given, marks);
+    MENDED.add(schema);
+    if (!made) return null;
+    // The children the content of the type takes, in their order; a mark it does not take is left off.
+    const kept: PMNode[] = [];
+    let match = made.contentMatch;
+    given.forEach((child) => {
+      const next = match.matchType(child.type);
+      if (!next) return;
+      kept.push(child.mark(made.allowedMarks(child.marks)));
+      match = next;
+    });
+    return made.createAndFill(attrs, kept, marks);
+  }) as Schema['node'];
+  schema.mark = ((type, attrs) => {
+    const made = typeof type === 'string' ? schema.marks[type] : type;
+    if (made) return made.create(attrs);
+    MENDED.add(schema);
+    return null;
+  }) as Schema['mark'];
+  schema.text = ((words, marks) => {
+    const known = marks?.filter(Boolean);
+    if (typeof words !== 'string' || known?.length !== marks?.length) MENDED.add(schema);
+    return typeof words === 'string' ? text(words, known) : null;
+  }) as Schema['text'];
+
   const closed = (name: string, spec: Record<string, { default?: unknown }>, made: Record<string, unknown>) =>
     Object.fromEntries(
       Object.keys(spec).map((key) => {
@@ -586,10 +716,63 @@ export function mayApply(transaction: Transaction, editable: boolean): boolean {
   return !transaction.docChanged || editable || binding?.isChangeOrigin === true;
 }
 
+// The origin of a mending of the shared document. Not one the undo manager
+// tracks: what is mended is no one's change to undo.
+const MEND = 'mend';
+
+/**
+ * Holds the collaboration binding to two things, at the three functions
+ * through which the shared document and the text of the editor meet
+ * (`ProsemirrorBinding` of @tiptap/y-tiptap 3.0.9: `_forceRerender` at the
+ * start, `_observeFunction` at each change of the shared document,
+ * `_prosemirrorChanged` at each change of the text).
+ *
+ * A DOCUMENT THAT CANNOT BE BUILT DOES NOT TAKE THE PAGE DOWN. The binding
+ * builds the whole text from the shared document by recursion, and the editor
+ * lays it out, so a document can be one that a browser cannot build: quotes
+ * nested ten thousand deep are enough (the second review of pull request 20).
+ * The fault is caught here, `unshown` is told once, and from then on the
+ * binding does nothing: above all it writes nothing back, since the text it
+ * holds is no longer the document's.
+ *
+ * WHAT THE SCHEMA LEFT OUT IS TAKEN OUT OF THE SHARED DOCUMENT, and nothing
+ * else is (`closeSchema`). The binding counts places in the text by the shared
+ * document, so the two must hold the same; the text is written back by the
+ * library's own comparison, which removes the children that were not made and
+ * leaves the node they were in. It is not this member's change, and is in no
+ * history of undo.
+ */
+export function holdBinding(view: EditorView, unshown: () => void): void {
+  const { binding } = ySyncPluginKey.getState(view.state) as { binding: ProsemirrorBinding };
+  const { schema } = view.state;
+  let failed = false;
+  const held =
+    <Given extends unknown[]>(run: (...given: Given) => void, builds: boolean) =>
+    (...given: Given) => {
+      if (failed) return;
+      try {
+        if (builds) MENDED.delete(schema);
+        run(...given);
+        if (builds && MENDED.delete(schema)) {
+          // A mapping of its own: the binding's says each node is the one it
+          // made, which is what the comparison must not take on trust here.
+          const fresh = { mapping: new Map(), isOMark: new Map() };
+          binding.doc.transact(() => updateYFragment(binding.doc, binding.type, view.state.doc, fresh), MEND);
+        }
+      } catch {
+        failed = true;
+        unshown();
+      }
+    };
+  binding._forceRerender = held(binding._forceRerender.bind(binding), true);
+  binding._observeFunction = held(binding._observeFunction as (...given: unknown[]) => void, true);
+  binding._prosemirrorChanged = held(binding._prosemirrorChanged.bind(binding), false);
+}
+
 const Closed = Extension.create({
   name: 'closed',
   onBeforeCreate() {
-    closeAttributes(this.editor.schema);
+    closeSchema(this.editor.schema);
   },
   addProseMirrorPlugins() {
     return [
@@ -604,8 +787,11 @@ const Closed = Extension.create({
 
 const lowlight = createLowlight(common);
 
-/** The extensions of the editor, bound to the document of one connection. */
-export function extensions(document: Y.Doc) {
+/**
+ * The extensions of the editor, bound to the document of one connection.
+ * `unshown` is told, once, that the document cannot be built here (`holdBinding`).
+ */
+export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
@@ -649,8 +835,9 @@ export function extensions(document: Y.Doc) {
     TableOfContents,
     PageBreak,
     // A table stands only inside its block, with its caption. Bounded, so
-    // that no table a client sends is too large to lay out (`TABLE_MOST`): one
-    // past the bound is not content of this schema, as a node without a type is not.
+    // that no table a client sends is too large to lay out (`TABLE_MOST`): a
+    // row or a cell past the bound is not content of this schema, and is left
+    // out as a node without a type is (`closeSchema`).
     Table.extend({ group: '', content: `tableRow{1,${TABLE_MOST}}` }),
     TableRow.extend({ content: `(tableCell | tableHeader){0,${TABLE_MOST}}` }),
     TableHeader,
@@ -662,7 +849,21 @@ export function extensions(document: Y.Doc) {
       placeholder: ({ node, editor }) =>
         node.type.name === 'tableCaption' ? 'Caption' : editor.isEmpty ? 'Write the document here' : '',
     }),
-    Collaboration.configure({ document, field: FRAGMENT_NAME }),
+    Collaboration.extend({
+      addProseMirrorPlugins() {
+        const plugins = this.parent?.() ?? [];
+        // The binding is held before its plugin starts it, as the library
+        // itself reaches the plugin of undo: by the function that starts it.
+        const sync = plugins.find((plugin) => plugin.spec.key === ySyncPluginKey);
+        const start = sync?.spec.view;
+        if (!sync || !start) throw new Error('editor: the collaboration binding was not found');
+        sync.spec.view = (view) => {
+          holdBinding(view, unshown);
+          return start(view);
+        };
+        return plugins;
+      },
+    }).configure({ document, field: FRAGMENT_NAME }),
     Closed,
   ];
 }

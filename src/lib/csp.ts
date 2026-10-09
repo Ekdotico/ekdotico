@@ -19,8 +19,60 @@ export const NONCE_HEADER = 'x-nonce';
 /** For what is no page: nothing is loaded, nothing runs, and nothing frames it. */
 export const STATIC_POLICY = "default-src 'none'; frame-ancestors 'none'";
 
+// What a page of the application asks of the browser, and so what the policy
+// below grants it: writing to the clipboard, for the two buttons that copy
+// (`navigator.clipboard.writeText`, src/app/(app)/documents/[id]/extensions.tsx).
+// Everything else that is named is granted to no one, this origin included.
+// The names are those Chromium knows: it writes an error for one it does not.
+const FEATURES_REFUSED = [
+  'accelerometer',
+  'autoplay',
+  'bluetooth',
+  'camera',
+  'clipboard-read',
+  'display-capture',
+  'encrypted-media',
+  'fullscreen',
+  'geolocation',
+  'gyroscope',
+  'hid',
+  'idle-detection',
+  'local-fonts',
+  'magnetometer',
+  'microphone',
+  'midi',
+  'payment',
+  'picture-in-picture',
+  'publickey-credentials-create',
+  'publickey-credentials-get',
+  'screen-wake-lock',
+  'serial',
+  'storage-access',
+  'usb',
+  'window-management',
+  'xr-spatial-tracking',
+];
+
+/**
+ * The three headers that keep a response to its own origin (the owner's
+ * decision of 9 October 2026 on the second review of pull request 20), on
+ * every response of the web application and of the collaboration server: no
+ * other origin's window keeps a handle on a page of this one, no other
+ * origin loads a response of this one as a resource, and a page is granted
+ * no feature of the browser that the application does not use.
+ */
+export const ISOLATION_HEADERS: readonly { key: string; value: string }[] = [
+  { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+  { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
+  {
+    key: 'Permissions-Policy',
+    value: ['clipboard-write=(self)', ...FEATURES_REFUSED.map((feature) => `${feature}=()`)].join(', '),
+  },
+];
+
 /** The headers every response carries beside its policy. */
 export const COMPANION_HEADERS: readonly { key: string; value: string }[] = [
+  ...ISOLATION_HEADERS,
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   // For a browser that does not read `frame-ancestors`.
   { key: 'X-Frame-Options', value: 'DENY' },
