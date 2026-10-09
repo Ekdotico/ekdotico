@@ -77,7 +77,7 @@ export function unauthenticated(): Response {
  * owner's answer to Q8). Text for a person (the owner's answer to Q6).
  */
 export const TWO_FACTOR_REQUIRED =
-  'This account belongs to the Ekdotico team, and it cannot be used until two-factor authentication is turned on. Open Ekdotico in the browser and turn it on.';
+  'This account belongs to the Ekdotico team. It cannot be used until two-factor authentication is turned on. Open Ekdotico in the browser and turn it on.';
 
 /**
  * The answer of a route to a request whose validation gave it no session:

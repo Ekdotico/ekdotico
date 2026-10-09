@@ -254,7 +254,7 @@ describe('the session of the two routes (NFR-SE-02, FR-AU-07)', () => {
     for (const response of [await read(cookie), await write(cookie, { version: 1 })]) {
       const message = await expectError(response, 500, 'internal');
       expect(message).toBe(
-        'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+        'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.',
       );
     }
     expect(errors.mock.calls).toEqual([

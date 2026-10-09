@@ -262,7 +262,8 @@ describe('turning two-factor authentication on (FR-AU-83)', () => {
     expect(await refused.response.json()).toEqual({
       error: {
         code: 'two_factor_on',
-        message: 'Two-factor authentication is already turned on for this account.',
+        message:
+          'Two-factor authentication is already turned on for this account. Reload the page to see the current state.',
       },
     });
     expect(await rowOf(id)).toEqual(stored);
@@ -275,7 +276,7 @@ describe('turning two-factor authentication on (FR-AU-83)', () => {
     expect(await refused.response.json()).toEqual({
       error: {
         code: 'two_factor_not_begun',
-        message: 'No secret is waiting for its first code. Enter the password to begin again.',
+        message: 'There is no secret to confirm. Enter the password to begin again.',
       },
     });
     expect(await isOn(id)).toBe(false);
@@ -553,7 +554,7 @@ describe('wrong codes, for each sign-in (NFR-SE-07; FR-AU-83; the owner’s answ
     error: {
       code: 'sign_in_again',
       message:
-        'This sign-in can no longer be completed, because its time has passed or too many codes were not correct. Begin again with the email address and the password.',
+        'This sign-in can no longer complete, because its time has passed or too many codes were not correct. Begin again with the email address and the password.',
     },
   };
 
@@ -951,7 +952,8 @@ describe('replacing the recovery codes (FR-AU-83)', () => {
       expect(await refused.response.json()).toEqual({
         error: {
           code: 'two_factor_not_on',
-          message: 'Two-factor authentication is not turned on for this account.',
+          message:
+            'Two-factor authentication is not turned on for this account. Reload the page to see the current state.',
         },
       });
       expect(refused.left).toBe(0);
@@ -1219,7 +1221,7 @@ describe('the first code of an enrolment, under its two bounds (FR-AU-83; NFR-SE
   const NOT_BEGUN = {
     error: {
       code: 'two_factor_not_begun',
-      message: 'No secret is waiting for its first code. Enter the password to begin again.',
+      message: 'There is no secret to confirm. Enter the password to begin again.',
     },
   };
   const begin = async (cookie: string) =>

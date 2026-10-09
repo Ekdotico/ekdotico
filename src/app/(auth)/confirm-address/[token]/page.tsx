@@ -20,7 +20,7 @@ import { reading } from '../../../page-fault.ts';
 import { ConfirmForm, NotValid, SignInFirst } from './confirm-form.tsx';
 
 // The header is the rule; the element says the same and changes nothing a person sees.
-export const metadata: Metadata = { title: 'Confirm the new email address', referrer: 'no-referrer' };
+export const metadata: Metadata = { title: 'Confirm new address', referrer: 'no-referrer' };
 
 // Never prerendered and never cached: the answer is the link's state now.
 export const dynamic = 'force-dynamic';

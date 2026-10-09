@@ -33,9 +33,9 @@ const NOT_VALID =
 const SIGN_IN_FIRST =
   'To confirm a new email address, sign in to the Ekdotico account that asked for the change, then open the link in the email again.';
 const NAMES = (email: string) =>
-  `This link changes the email address of an Ekdotico account to ${email}. After the change, the account signs in with this address, and every other session of the account ends.`;
+  `This link changes the email address of an Ekdotico account to ${email}. After the change, sign-in uses this address. Every other session of the account ends.`;
 const DONE = (email: string) =>
-  `The email address of the Ekdotico account is now ${email}. Sign-in uses this address from now on, and every other session of the account has ended.`;
+  `The email address of the Ekdotico account is now ${email}. Sign-in uses this address. Every other session of the account has ended.`;
 
 const firstScreen = { level: 1, name: 'Documents' } as const;
 const LINK = /\/confirm-address\/[A-Za-z0-9_-]{43}/;
@@ -61,7 +61,7 @@ async function askFor(page: Page, person: { password: string }, next: string) {
 
 /** All that a browser without a session is shown: one statement and the way to the sign-in page. */
 async function expectSignInFirst(page: Page) {
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm the new email address');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm new address');
   await expect(page.getByRole('main')).toContainText(SIGN_IN_FIRST);
   await expect(page.getByRole('button')).toHaveCount(0);
   await expect(page.getByRole('textbox')).toHaveCount(0);
@@ -94,7 +94,7 @@ test('the name is changed in the account settings, under the rule of the sign-up
   const typed = 'Ada <b>Lovelace</b>';
   await name.fill(typed);
   await name.press('Enter');
-  await expect(part.getByRole('status')).toHaveText('The name is changed.');
+  await expect(part.getByRole('status')).toHaveText('Name changed.');
   await expect(alertOn(page)).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole('region', { name: 'Name' }).getByLabel('Name', { exact: true })).toHaveValue(
@@ -163,7 +163,7 @@ test('the address is changed by a link sent to the new one, which is confirmed u
   const opened = await mailbox.goto(link);
   expect(opened!.status()).toBe(200);
   expect(opened!.headers()['referrer-policy']).toBe('no-referrer');
-  await expect(mailbox).toHaveTitle('Confirm the new email address – Ekdotico');
+  await expect(mailbox).toHaveTitle('Confirm new address – Ekdotico');
   await expect(mailbox.locator('meta[name="referrer"]')).toHaveAttribute('content', 'no-referrer');
   await expectSignInFirst(mailbox);
   await expectNoSidewaysScroll(mailbox);
@@ -183,11 +183,11 @@ test('the address is changed by a link sent to the new one, which is confirmed u
 
   // The link opened again, under a session of the account: a page with one control.
   await mailbox.goto(link);
-  await expect(mailbox.getByRole('heading', { level: 1 })).toHaveText('Confirm the new email address');
+  await expect(mailbox.getByRole('heading', { level: 1 })).toHaveText('Confirm new address');
   await expect(mailbox.getByText(NAMES(next))).toBeVisible();
   // Nothing of the account but the new address: not the old one.
   await expect(mailbox.getByRole('main')).not.toContainText(person.email);
-  await expect(mailbox.getByRole('button')).toHaveText(['Confirm the new address']);
+  await expect(mailbox.getByRole('button')).toHaveText(['Confirm new address']);
   await expect(mailbox.getByRole('textbox')).toHaveCount(0);
   await expectNoSidewaysScroll(mailbox);
   await screens(mailbox, 'confirm-address');
@@ -201,11 +201,11 @@ test('the address is changed by a link sent to the new one, which is confirmed u
 
   // The one control, by the keyboard alone, once the page is ready for it
   // (src/components/ready.ts): a control that is disabled takes no focus.
-  await expect(mailbox.getByRole('button', { name: 'Confirm the new address' })).toBeEnabled();
-  await mailbox.getByRole('button', { name: 'Confirm the new address' }).focus();
+  await expect(mailbox.getByRole('button', { name: 'Confirm new address' })).toBeEnabled();
+  await mailbox.getByRole('button', { name: 'Confirm new address' }).focus();
   await mailbox.keyboard.press('Enter');
   await expect(mailbox.getByText(DONE(next))).toBeVisible();
-  await expect(mailbox.getByRole('status')).toHaveText('The email address is changed.');
+  await expect(mailbox.getByRole('status')).toHaveText('Email address changed.');
   await expect(mailbox.getByRole('button')).toHaveCount(0);
   await screens(mailbox, 'confirm-address-done');
 
@@ -219,7 +219,7 @@ test('the address is changed by a link sent to the new one, which is confirmed u
     expect(refused.status()).toBe(401);
   }
   // The browser that confirmed stays signed in, and shows the new address at once.
-  await mailbox.getByRole('link', { name: 'Open Ekdotico' }).click();
+  await mailbox.getByRole('link', { name: 'Documents', exact: true }).click();
   await expect(mailbox.getByRole('heading', firstScreen)).toBeVisible();
   await mailbox.goto('/settings');
   await expect(
@@ -273,10 +273,10 @@ test('a browser signed in to another account is shown the link as one that is no
 
   // Nothing was spent: the account that asked confirms with the same link.
   await page.goto(link);
-  await page.getByRole('button', { name: 'Confirm the new address' }).click();
+  await page.getByRole('button', { name: 'Confirm new address' }).click();
   await expect(page.getByText(DONE(next))).toBeVisible();
   // Its own session stands, and its signed copy is the new one at once.
-  await page.getByRole('link', { name: 'Open Ekdotico' }).click();
+  await page.getByRole('link', { name: 'Documents', exact: true }).click();
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
   await page.goto('/settings');
   await expect(
@@ -295,7 +295,7 @@ test('a link that is not known shows a browser without a session what a valid on
 
   await ready(page);
   await page.goto(unknown);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm the new email address');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm new address');
   await expect(page.getByText(NOT_VALID)).toBeVisible();
   await expect(page.getByRole('button')).toHaveCount(0);
   await expect(alertOn(page)).toHaveCount(0);

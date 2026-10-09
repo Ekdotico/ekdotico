@@ -8,7 +8,7 @@ import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 
 // Text for a person (the owner's answer to Q6 of the plan).
-const CHANGED = 'The name is changed.';
+const CHANGED = 'Name changed.';
 
 /**
  * FR-AU-90, FR-AU-88: "the user can change it in the account settings". A

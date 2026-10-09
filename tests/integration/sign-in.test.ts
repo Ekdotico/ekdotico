@@ -224,7 +224,7 @@ describe('what the request may say (FR-AU-84; API design: "any other field is re
     // The library's router refuses both, and each is answered in the one shape of an error.
     for (const response of [form, cut]) {
       expect(await response.text()).toBe(
-        '{"error":{"code":"invalid_request","message":"The request could not be read, and nothing was changed. A request to this address holds JSON, sent with the content type application/json."}}',
+        '{"error":{"code":"invalid_request","message":"Ekdotico could not read the request, and nothing was changed. A request to this address holds JSON, sent with the content type application/json."}}',
       );
     }
     expect(await db().session.count({ where: { userId: id } })).toBe(0);
@@ -509,7 +509,7 @@ describe('the limits on failed sign-ins (NFR-SE-07; the owner’s answers to Q1 
       error: {
         code: 'internal',
         message:
-          'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+          'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.',
       },
     });
     expect(response.headers.getSetCookie()).toEqual([]);

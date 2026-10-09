@@ -78,7 +78,7 @@ export function ChangeAddressForm({ email, foundingTeam }: { email: string; foun
           id="address-email"
           type="email"
           label="Current email address"
-          hint="This address signs in to the account until a new one is confirmed."
+          hint="Sign-in uses this address until you confirm a new address."
           autoComplete="username"
           value={email}
           readOnly
@@ -88,7 +88,7 @@ export function ChangeAddressForm({ email, foundingTeam }: { email: string; foun
           name="newEmail"
           type="email"
           label="New email address"
-          hint="The change is made when a link sent to this address is opened."
+          hint="Ekdotico sends a link to this address. The change takes effect when you open the link and confirm the new address."
           autoComplete="off"
           autoCapitalize="none"
           spellCheck={false}

@@ -18,7 +18,7 @@ const { auth, db, valkey } = await load();
 const { beginLock } = await import('../../src/lib/auth/sign-in-lock.ts');
 
 const INTERNAL =
-  '{"error":{"code":"internal","message":"The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes."}}';
+  '{"error":{"code":"internal","message":"The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes."}}';
 const LOST = 'the connection was lost';
 
 let addresses = 0;

@@ -84,10 +84,14 @@ const MESSAGES = {
   eitherCode:
     'The code is not correct. Enter the code that the authenticator application shows now, or a recovery code that has not been used.',
   again:
-    'This sign-in can no longer be completed, because its time has passed or too many codes were not correct. Begin again with the email address and the password.',
-  on: 'Two-factor authentication is already turned on for this account.',
-  notOn: 'Two-factor authentication is not turned on for this account.',
-  notBegun: 'No secret is waiting for its first code. Enter the password to begin again.',
+    'This sign-in can no longer complete, because its time has passed or too many codes were not correct. Begin again with the email address and the password.',
+  // Both end alike. `on` is also shown on the screen that stands in place of
+  // every page (FR-AU-83), where a reload shows the page that was asked for and
+  // not the settings: so "the current state".
+  on: 'Two-factor authentication is already turned on for this account. Reload the page to see the current state.',
+  notOn:
+    'Two-factor authentication is not turned on for this account. Reload the page to see the current state.',
+  notBegun: 'There is no secret to confirm. Enter the password to begin again.',
   foundingTeam:
     'This account belongs to the Ekdotico team, so two-factor authentication cannot be turned off for it.',
 };

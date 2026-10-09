@@ -410,7 +410,7 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
   async function expectClosed(response: Response, errors: ReturnType<typeof quiet>, ...lines: string[]) {
     const message = await expectError(response, 500, 'internal');
     expect(message).toBe(
-      'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+      'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.',
     );
     expect(errors.mock.calls).toEqual(lines.map((line) => [line]));
   }

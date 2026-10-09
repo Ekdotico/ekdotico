@@ -7,7 +7,7 @@ import { useReady } from '../../../../components/ready.ts';
 import { send, type Fault } from '../../../../components/send.ts';
 import styles from '../../../pages.module.css';
 
-const TITLE = 'Confirm the new email address';
+const TITLE = 'Confirm new address';
 // Text for a person (the owner's answer to Q6 of the plan): FR-AU-03 fixes no
 // statement for a link that no longer works. The same words as the server's
 // (src/lib/auth/name-and-address.ts).
@@ -88,12 +88,12 @@ export function ConfirmForm({ token, newEmail }: { token: string; newEmail: stri
         <>
           {/* FR-AU-03: what the change did, and what follows from it. */}
           <p className={styles.text}>
-            The email address of the Ekdotico account is now {newEmail}. Sign-in uses this address from now
-            on, and every other session of the account has ended.
+            The email address of the Ekdotico account is now {newEmail}. Sign-in uses this address. Every
+            other session of the account has ended.
           </p>
           <p className={styles.text}>
             <Link href="/" prefetch={false}>
-              Open Ekdotico
+              Documents
             </Link>
           </p>
         </>
@@ -102,8 +102,8 @@ export function ConfirmForm({ token, newEmail }: { token: string; newEmail: stri
           <Stack gap={5}>
             {fault ? <FormFault title={fault.message} focusKey={attempt} /> : null}
             <p className={styles.text}>
-              This link changes the email address of an Ekdotico account to {newEmail}. After the change, the
-              account signs in with this address, and every other session of the account ends.
+              This link changes the email address of an Ekdotico account to {newEmail}. After the change,
+              sign-in uses this address. Every other session of the account ends.
             </p>
             <div>
               <Button
@@ -113,7 +113,7 @@ export function ConfirmForm({ token, newEmail }: { token: string; newEmail: stri
                 pending={pending}
                 pendingLabel="Confirming…"
               >
-                Confirm the new address
+                Confirm new address
               </Button>
             </div>
           </Stack>
@@ -122,7 +122,7 @@ export function ConfirmForm({ token, newEmail }: { token: string; newEmail: stri
       {/* Present from the first paint and empty until the change: a status
           that arrives with its text is not announced (FR-AU-88). */}
       <p role="status" className={styles.text}>
-        {done ? 'The email address is changed.' : null}
+        {done ? 'Email address changed.' : null}
       </p>
     </>
   );

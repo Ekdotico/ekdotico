@@ -23,7 +23,7 @@ const PASSWORD_REFUSED =
 const SIGN_IN_REFUSED =
   '{"error":{"code":"sign_in_refused","message":"The email address or the password is not correct."}}';
 const INTERNAL =
-  '{"error":{"code":"internal","message":"The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes."}}';
+  '{"error":{"code":"internal","message":"The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes."}}';
 const RESET_SUBJECT = 'Set a new password for Ekdotico';
 const NOTICE_SUBJECT = 'The password of your Ekdotico account was changed';
 const LOCK_SUBJECT = 'Sign-in to your Ekdotico account is locked for 1 hour';
