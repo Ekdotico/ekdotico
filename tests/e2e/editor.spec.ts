@@ -564,7 +564,7 @@ test('the Markdown input of the requirement converts as it is typed, and nothing
   await lines('```');
   await page.keyboard.type('# not **converted** `here`');
   await expect(doc.locator('pre code')).toHaveText('# not **converted** `here`');
-  await expect(doc.getByRole('combobox', { name: 'Language' })).toHaveValue('plaintext');
+  await expect(doc.getByRole('combobox', { name: 'Code language' })).toHaveValue('plaintext');
   await converted();
 
   // A caption is plain text (FR-ED-09, Build phases): it takes no mark, and keeps its signs.
@@ -675,7 +675,7 @@ async function inserted(doc: Locator) {
   await expect(doc.locator('figure table td')).toHaveCount(9);
   await expect(doc.locator('figure table th')).toHaveCount(0);
   await expect(doc.locator('figcaption')).toHaveCount(1);
-  await expect(doc.getByRole('combobox', { name: 'Language' })).toHaveValue('plaintext');
+  await expect(doc.getByRole('combobox', { name: 'Code language' })).toHaveValue('plaintext');
   // What was typed to ask for a block is not in the document.
   for (const [command] of SLASH_ROWS)
     await expect(doc.getByText(`/${command}`, { exact: true })).toHaveCount(0);
