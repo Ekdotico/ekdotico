@@ -2596,6 +2596,190 @@ test('a key typed in a table whose cells hold tables, ten thousand cells in all,
   await expect(noRoom).toHaveCount(0);
 });
 
+// The re-review of pull request 28, finding d: the words of a refusal stayed
+// through another client's change and the writer's own undo, and a second
+// refusal in the same words was not heard.
+test('the words of a refusal are heard at each refusal, and go when the document next changes, whoever changes it', async ({
+  page,
+}) => {
+  test.slow();
+  // Written out here, and not taken from the code under test.
+  const WORDS =
+    'The table has no room for this. A table and the tables in its cells hold 10,000 cells, two levels deep.';
+  const figure =
+    '<figure class="ekd-table"><table><tbody><tr><td><p>PASTED</p></td></tr></tbody></table><figcaption class="ekd-table-caption">pasted caption</figcaption></figure>';
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  await doc.focus();
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('table')).toHaveCount(2);
+  await place(doc.locator('figure figure td').first());
+  // Everything the region a screen reader hears is given, from here on.
+  await page.evaluate(() => {
+    const region = [...document.querySelectorAll('[role="status"]')].find(
+      (each) => !each.closest('[role="textbox"]') && each.classList.contains('sr-only'),
+    )!;
+    const heard = ((window as unknown as { heard: string[] }).heard = [] as string[]);
+    new MutationObserver(() => heard.push(region.textContent ?? '')).observe(region, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+  });
+  const heard = () => page.evaluate(() => (window as unknown as { heard: string[] }).heard);
+  // Seen, in the page, and heard, in the region: the same words in both.
+  const said = page.getByText(WORDS, { exact: true });
+  await expect(said).toHaveCount(0);
+
+  // A table a level too deep is not pasted, twice: the words are given to the
+  // region twice, with the region empty between, so that the second is heard.
+  await paste(page, figure);
+  await expect(said).toHaveCount(2);
+  await expect(page.getByRole('status').filter({ hasText: WORDS })).toHaveCount(1);
+  await expect(doc).toBeFocused();
+  await paste(page, figure);
+  await expect.poll(heard).toEqual([WORDS, '', WORDS]);
+  await expect(said).toHaveCount(2);
+  await expect(doc.locator('table')).toHaveCount(2);
+
+  // A move of the cursor is no change to the document: the words stay.
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowLeft');
+  await expect(said).toHaveCount(2);
+  // Another client's change takes them away.
+  const other = await connectAs(page.context(), id);
+  other.provider.document.getXmlFragment('default').push([paragraph('theirs')]);
+  await expect(doc).toContainText('theirs');
+  await expect(said).toHaveCount(0);
+  other.close();
+  // And so does the writer's own undo, which arrives as the binding's change.
+  await paste(page, figure);
+  await expect(said).toHaveCount(2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(doc.locator('table')).toHaveCount(1);
+  await expect(said).toHaveCount(0);
+  expect((await heard()).filter(Boolean)).toEqual([WORDS, WORDS, WORDS]);
+});
+
+// The re-review of pull request 28 (WCAG 2.1.1): a cell that holds a table and
+// nothing else, as another client or a stored document makes one, had no place
+// the keyboard reached beside the table.
+test('from a table that is all a cell holds, the arrow keys reach the place beside it, where a letter makes the paragraph', async ({
+  page,
+}) => {
+  test.slow();
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const other = await connectAs(page.context(), id);
+  const fragment = other.provider.document.getXmlFragment('default');
+  fragment.insert(0, [
+    gridOf(
+      1,
+      2,
+      (_, column) =>
+        column === 0 ? [gridOf(2, 2, () => [paragraph('in')], 'inner caption')] : [paragraph('second')],
+      'outer caption',
+    ),
+  ]);
+  await expect(doc.locator('table')).toHaveCount(2);
+  const cell = doc.locator('table').first().locator(':scope > tbody > tr > td').first();
+  const shared = () =>
+    ((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlElement)
+      .get(0)
+      .toString()
+      .replace(/ (col|row)span="1"/g, '');
+  const before = shared();
+  /** Where the editor holds the cursor: the kind of selection, and the blocks round it. */
+  const cursor = () =>
+    doc.evaluate((element) => {
+      const { editor } = element as unknown as {
+        editor: {
+          state: {
+            selection: {
+              toJSON(): { type: string };
+              $from: {
+                depth: number;
+                node(depth: number): { type: { name: string } };
+                index(depth: number): number;
+              };
+            };
+          };
+        };
+      };
+      const { $from } = editor.state.selection;
+      const round = Array.from({ length: $from.depth + 1 }, (_, depth) => $from.node(depth).type.name);
+      return `${editor.state.selection.toJSON().type} in ${round.at(-1)} at ${$from.index($from.depth)}, ${round.filter((name) => name === 'table').length} deep`;
+    });
+
+  // Down from the caption of the inner table: the cursor between blocks, after the table, in the cell.
+  await place(cell.locator('figcaption'));
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 1, 1 deep');
+  // A selection and no content: the shared document holds what it held.
+  expect(shared()).toBe(before);
+  // From there the menu of the table round the cell is reached, and acts on it.
+  await page.keyboard.press('Alt+F10');
+  await expect(
+    doc
+      .locator('figure')
+      .first()
+      .locator(':scope > [data-block-controls]')
+      .getByRole('button', { name: 'Table' }),
+  ).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(doc).toBeFocused();
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 1, 1 deep');
+  // The first letter makes the paragraph, as the writer's own change.
+  await page.keyboard.type('beside');
+  await expect(cell.locator(':scope > p')).toHaveText('beside');
+  await expect(cell.locator(':scope > :last-child')).toHaveJSProperty('tagName', 'P');
+  await expect.poll(shared).toContain('<paragraph>beside</paragraph></tablecell>');
+  await expect(cell.locator('table td')).toHaveCount(4);
+  await expect(cell.locator('figcaption')).toHaveText('inner caption');
+  // One undo takes the paragraph away, and the cell is as the other client made it.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(cell.locator(':scope > p')).toHaveCount(0);
+  await expect.poll(shared).toBe(before);
+
+  // Right at the end of the caption does the same.
+  await placeAtEnd(cell.locator('figcaption'));
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 1, 1 deep');
+  // Up from the first row of the inner table, and Left at the start of its
+  // first cell: the cursor before the table, in the cell.
+  await place(cell.locator('table td').nth(1));
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 0, 1 deep');
+  await place(cell.locator('table td').first());
+  // Left through the two letters of the cell, and once more at its start: a
+  // key is pressed only once the editor holds the cursor where the last put it.
+  await expect(async () => {
+    if ((await held(cell.locator('table td').first())).inside) await page.keyboard.press('ArrowLeft');
+    expect(await cursor()).toBe('gapcursor in tableCell at 0, 1 deep');
+  }).toPass({ intervals: [20, 50] });
+  await page.keyboard.type('before');
+  await expect(cell.locator(':scope > :first-child')).toHaveText('before');
+  // With text of its own before the table, the keys are the library's again:
+  // Up from the first row goes to that text.
+  await place(cell.locator('table td').first());
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(cursor).toMatch(/^text in paragraph at \d, 1 deep$/);
+  // And in the second row of the inner table, Up stays in that table.
+  await place(cell.locator('table td').nth(2));
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(cursor).toMatch(/^text in paragraph at \d, 2 deep$/);
+  await screens(page, 'editor-beside-table');
+  other.close();
+  expect(faults).toEqual([]);
+});
+
 // The third review: the library makes the document itself without asking the
 // schema. Text directly in it closed the document in every tab, and a row was
 // shown as a table that the next keystroke wrote over it as the member's own.
