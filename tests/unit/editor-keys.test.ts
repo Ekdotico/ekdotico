@@ -318,12 +318,11 @@ describe('the keyboard shortcuts (FR-ED-13)', () => {
   // What a person edits text with, beside the list: the library's keys for
   // deleting, for a line break, for selecting everything, the ones macOS adds
   // for the caret, and redo as Windows writes it.
-  const EDITING = [
-    'Mod-Enter',
-    'Mod-Backspace',
-    'Mod-Delete',
-    'Mod-a',
-    'Mod-y',
+  const EDITING = ['Mod-Enter', 'Mod-Backspace', 'Mod-Delete', 'Mod-a', 'Mod-y'];
+  // The keys macOS adds for the caret. The library binds them on macOS alone,
+  // by the platform the process reports, so the editor answers to them there
+  // and nowhere else: CI runs on Linux.
+  const MAC_EDITING = [
     'Ctrl-h',
     'Alt-Backspace',
     'Ctrl-d',
@@ -354,7 +353,7 @@ describe('the keyboard shortcuts (FR-ED-13)', () => {
   });
 
   it('removes no key of the list, and none a person edits text with', () => {
-    for (const chord of [...LIST, ...EDITING])
+    for (const chord of [...LIST, ...EDITING, ...MAC_EDITING])
       expect(REMOVED.map(normal), chord).not.toContain(normal(chord));
   });
 
@@ -365,7 +364,9 @@ describe('the keyboard shortcuts (FR-ED-13)', () => {
     const left = bound()
       .filter(modified)
       .filter((chord) => !REMOVED.map(normal).includes(chord));
-    expect(left.sort()).toEqual([...LIST.filter(modified), ...EDITING].map(normal).sort());
+    const mac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+    const editing = mac ? [...EDITING, ...MAC_EDITING] : EDITING;
+    expect(left.sort()).toEqual([...LIST.filter(modified), ...editing].map(normal).sort());
   });
 
   it('removes only keys that the library binds', () => {
