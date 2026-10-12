@@ -39,7 +39,7 @@ import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table
 import { Placeholder } from '@tiptap/extensions';
 import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
 import { Plugin, type Transaction } from '@tiptap/pm/state';
-import type { EditorView } from '@tiptap/pm/view';
+import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import {
   NodeViewContent,
   NodeViewWrapper,
@@ -837,6 +837,52 @@ const Closed = Extension.create({
   },
 });
 
+/**
+ * What tells a writer of the slash palette (FR-ED-10): the owner's sentence
+ * of 12 October 2026, word for word. It is said in two places: in the
+ * description of the text (./editor.tsx), and as the prompt of an empty
+ * document, below.
+ */
+export const SLASH_HINT = 'Type / for a list of blocks.';
+
+/**
+ * The prompt of an empty document: one whose only block is an empty
+ * paragraph, while it can be edited. It is drawn by the design package's rule
+ * for `data-placeholder` and by nothing of the application's.
+ *
+ * It is a decoration, so it is no content: not in the document, not sent to
+ * another client, not copied. It is an element of its own, hidden from a
+ * screen reader, and not the attribute on the paragraph: the description of
+ * the text says the same sentence, and text that a stylesheet generates
+ * cannot be hidden, so a screen reader would read it twice, the second time
+ * as the first line of the document (NFR-IC-19).
+ */
+const EmptyPrompt = Extension.create({
+  name: 'emptyPrompt',
+  addProseMirrorPlugins() {
+    const { editor } = this;
+    const prompt = (view: EditorView) => {
+      const element = view.dom.ownerDocument.createElement('span');
+      element.setAttribute('aria-hidden', 'true');
+      element.setAttribute('data-placeholder', SLASH_HINT);
+      return element;
+    };
+    return [
+      new Plugin({
+        props: {
+          decorations({ doc }) {
+            const only = doc.firstChild;
+            const empty = doc.childCount === 1 && only?.type.name === 'paragraph' && !only.content.size;
+            return empty && editor.isEditable
+              ? DecorationSet.create(doc, [Decoration.widget(1, prompt, { key: 'empty-prompt' })])
+              : null;
+          },
+        },
+      }),
+    ];
+  },
+});
+
 // ── The whole schema ────────────────────────────────────────────────────────
 
 const lowlight = createLowlight(common);
@@ -931,9 +977,9 @@ export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
     TableCaption,
     Placeholder.configure({
       showOnlyCurrent: false,
-      placeholder: ({ node, editor }) =>
-        node.type.name === 'tableCaption' ? 'Caption' : editor.isEmpty ? 'Write the document here' : '',
+      placeholder: ({ node }) => (node.type.name === 'tableCaption' ? 'Caption' : ''),
     }),
+    EmptyPrompt,
     Collaboration.extend({
       addProseMirrorPlugins() {
         const plugins = this.parent?.() ?? [];
