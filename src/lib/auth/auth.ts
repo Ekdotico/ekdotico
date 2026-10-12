@@ -27,8 +27,9 @@ import {
 } from './two-factor.ts';
 
 // Text for a person, for the owner's approval: the statement of the router's
-// 400 and 415, which the library words in its own way.
-const NOT_JSON =
+// 400 and 415, which the library words in its own way, and of the route's own
+// 415 in front of it (src/app/api/auth/[...all]/route.ts).
+export const NOT_JSON =
   'Ekdotico could not read the request, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
 
 /** Where the library's handler is mounted (API design, "Sign-in and identity"). */

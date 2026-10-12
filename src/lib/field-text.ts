@@ -107,9 +107,15 @@ const ADDRESS = new RegExp(`^${PART}@${PART}\\.${PART}$`, 'u');
 //
 // The shape of a label: 1 to 63 letters, marks, digits and hyphens, with no
 // hyphen first or last. The letters of ASCII are among them, in lower case by
-// the time this is asked, so a label in punycode (`xn--…`) passes as it was
-// typed: it is not decoded, and not compared with its Unicode form.
+// the time this is asked.
 const LABEL = /^(?!-)[\p{L}\p{M}\p{N}-]{1,63}(?<!-)$/u;
+// The owner's decision of 12 October 2026 (its register row is pending): a
+// domain with a label in punycode is refused too. A label `xn--…` is decoded
+// by a mail system into a Unicode label that it is not compared with here, so
+// the two spellings of one domain would be two addresses, and a decoded label
+// can look like another script's letters. Any label, not only the first or the
+// last; a label that merely holds `xn--` further in is an ordinary label.
+const PUNYCODE = /^xn--/i;
 
 /** Whether the domain of a spelt address is one that is stored. It changes nothing. */
 function domainAccepted(domain: string): boolean {
@@ -118,6 +124,7 @@ function domainAccepted(domain: string): boolean {
     domain.split('.').every(
       (label) =>
         LABEL.test(label) &&
+        !PUNYCODE.test(label) &&
         // No compatibility form: full-width, superscript, ligature, and every
         // capital that has no lower case of its own.
         label.normalize('NFKC') === label &&

@@ -64,6 +64,18 @@ export const REFUSAL = {
   ACCESS_ENDED: 'access-ended',
   /** Reserved for the end of the session the connection was opened under (NFR-SE-03 (b), (e)); not sent yet. */
   SESSION_ENDED: 'session-ended',
+  /**
+   * What this client sent would take the document past one of its two limits
+   * (src/lib/collab/state.ts): the 5 MB of its state, or the 50 levels of its
+   * elements. The owner's decision of 12 October 2026 (its register row is
+   * pending). It is the reason of the close of an open connection. Nothing of
+   * what was sent was applied, stored, or sent on. The client does not try
+   * again, since it would send the same and be refused the same: it keeps the
+   * text in the tab, read-only, says which limit, and offers to copy the text
+   * before the document is loaded again.
+   */
+  TOO_LARGE: 'too-large',
+  TOO_DEEP: 'too-deep',
 } as const;
 
 export type Refusal = (typeof REFUSAL)[keyof typeof REFUSAL];

@@ -32,8 +32,11 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
       CAPACITY: 'capacity',
       ACCESS_ENDED: 'access-ended',
       SESSION_ENDED: 'session-ended',
+      // The owner's decision of 12 October 2026: one for each limit of a document.
+      TOO_LARGE: 'too-large',
+      TOO_DEEP: 'too-deep',
     });
-    expect(new Set(Object.values(REFUSAL)).size).toBe(6);
+    expect(new Set(Object.values(REFUSAL)).size).toBe(8);
   });
 });
 

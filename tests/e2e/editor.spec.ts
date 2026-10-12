@@ -909,6 +909,192 @@ test('what another client puts where it cannot stand is taken out alone: the tab
   await expect(text(page)).toContainText('three');
 });
 
+// The third review: the library makes the document itself without asking the
+// schema. Text directly in it closed the document in every tab, and a row was
+// shown as a table that the next keystroke wrote over it as the member's own.
+test('what another client puts directly in the document where it cannot stand is taken out alone, and is not the member’s to undo', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const hostile = await connectAs(page.context(), id);
+  const fragment = hostile.provider.document.getXmlFragment('default');
+  const held = () => fragment.toArray().map((each) => (each as Y.XmlElement).nodeName ?? 'text');
+  await expect.poll(held).toEqual(['paragraph']);
+  hostile.provider.document.transact(() => {
+    fragment.push([paragraph('KEEP-THIS')]);
+    fragment.insert(1, [
+      element('tableRow', {}, [cellWith({}, 'stray-row')]),
+      words('stray-text'),
+      cellWith({}, 'stray-cell'),
+    ]);
+  });
+  // The three are gone from the shared document, and their neighbours stand.
+  await expect.poll(held).toEqual(['paragraph', 'paragraph']);
+  await expect(text(page)).toContainText('Written before.');
+  await expect(text(page)).toContainText('KEEP-THIS');
+  await expect(text(page)).not.toContainText('stray');
+  await expect(text(page).locator('table')).toHaveCount(0);
+  await expect(page.getByText('This document could not be shown')).toHaveCount(0);
+
+  // Undo is the member's own: it takes back what the member typed, and brings no stray back.
+  await placeAtEnd(text(page).getByText('KEEP-THIS'));
+  await page.keyboard.type(' typed');
+  await expect(text(page)).toContainText('KEEP-THIS typed');
+  for (let presses = 0; presses < 4; presses += 1) await page.keyboard.press('ControlOrMeta+z');
+  await expect(text(page)).not.toContainText('typed');
+  await expect(text(page)).toContainText('KEEP-THIS');
+  await expect(text(page)).not.toContainText('stray');
+  await expect(status(page, 'In sync')).toBeVisible();
+  // Four presses took back everything the member wrote, the first paragraph
+  // among it: what is left is the other client's paragraph, and nothing else.
+  await expect.poll(held).toEqual(['paragraph']);
+  expect(fragment.toString()).not.toContain('stray');
+  expect(fragment.toString()).toContain('KEEP-THIS');
+  expect(faults).toEqual([]);
+  hostile.close();
+  await page.reload();
+  await expect(text(page)).toContainText('KEEP-THIS');
+  await expect(text(page)).not.toContainText('stray');
+});
+
+// The third review: a megabyte of code was a second and a half at each keystroke.
+test('a code block past the bound is shown without the colours of its language, and is the same block otherwise', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await enter(page);
+  const id = await openNew(page);
+  const peer = await connectAs(page.context(), id);
+  const line = 'const a = "b" + 1; // c\n';
+  const long = line.repeat(Math.ceil(50_001 / line.length));
+  peer.provider.document
+    .getXmlFragment('default')
+    .push([
+      element('codeBlock', { language: 'javascript' }, [words(line.repeat(3))]),
+      element('codeBlock', { language: 'javascript' }, [words(long)]),
+      paragraph('END-OF-DOCUMENT'),
+    ]);
+  await expect(text(page)).toContainText('END-OF-DOCUMENT', { timeout: 30_000 });
+  const blocks = text(page).locator('pre code');
+  await expect(blocks).toHaveCount(2);
+  // The short one has its colours, and the long one none; both say their language.
+  await expect.poll(() => blocks.nth(0).locator('span').count()).toBeGreaterThan(5);
+  expect(await blocks.nth(1).locator('span').count()).toBe(0);
+  await expect(page.getByLabel('Language')).toHaveCount(2);
+  for (const at of [0, 1]) await expect(page.getByLabel('Language').nth(at)).toHaveValue('javascript');
+  // Every character of it is there, and it is written in as any block is.
+  expect(await blocks.nth(1).evaluate((element) => element.textContent!.length)).toBe(long.length);
+  await blocks.nth(1).click({ position: { x: 5, y: 5 } });
+  await page.keyboard.type('typed-in ');
+  await expect(blocks.nth(1)).toContainText('typed-in ');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const stored = peer.provider.document
+    .getXmlFragment('default')
+    .toArray()
+    .filter((each) => (each as Y.XmlElement).nodeName === 'codeBlock')[1] as Y.XmlElement;
+  await expect.poll(() => stored.toString().length).toBeGreaterThan(long.length + 'typed-in '.length);
+  expect(stored.getAttribute('language')).toBe('javascript');
+  peer.close();
+});
+
+// The owner's decision of 12 October 2026. Before it the member was told
+// nothing: the connection closed, the page asked again and was refused again,
+// and the change was lost at the next load.
+test('a change that would take the document past a limit is said in words that name the limit; the text can be copied, nothing of it is stored, and no one else sees it', async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(240_000);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const other = await connectAs(page.context(), id);
+  const seen = () => other.provider.document.getXmlFragment('default').toString();
+  await expect.poll(seen).toContain('Written before.');
+  const BODY =
+    'The server did not take the change, and the document is read-only in this tab. The changes that were not sent are shown here and nowhere else. Copy the text to keep it, then reload the document from the server. Reloading discards the changes that were not sent.';
+
+  // An honest paste: a list from another page, 26 levels deep.
+  const nested = (levels: number): string =>
+    levels === 0 ? '' : `<ul><li><p>level ${levels}</p>${nested(levels - 1)}</li></ul>`;
+  await placeAtEnd(text(page).getByText('Written before.'));
+  await page.keyboard.press('Enter');
+  await paste(page, nested(26));
+  const deep = page.getByRole('alert').filter({ hasText: 'A change in this tab would nest the content' });
+  await expect(deep).toBeVisible({ timeout: 30_000 });
+  await expect(deep.getByRole('heading')).toHaveText(
+    'A change in this tab would nest the content more than 50 levels deep',
+  );
+  await expect(deep).toContainText(BODY);
+  await expect(deep.getByRole('button')).toHaveText(['Copy text', 'Reload document']);
+  // The text is still there to read and to select, and is not written in.
+  await expect(text(page)).toContainText('level 1');
+  await expect(text(page)).toHaveAttribute('aria-readonly', 'true');
+  // The statement stands where the indicator stood: no state of the connection is shown.
+  await expect(status(page, /In sync|Syncing|Restoring|Not connected|Opening/)).toHaveCount(0);
+  // It is copied whole.
+  await deep.getByRole('button', { name: 'Copy text' }).click();
+  await expect(deep.getByRole('status')).toHaveText('Text copied.');
+  const copied = await clipboardText(page);
+  expect(copied).toContain('Written before.');
+  expect(copied).toContain('level 26');
+  expect(copied).toContain('level 1');
+  // At 320 CSS pixels the statement and its two buttons are inside the page.
+  // Asked of the statement and not of the page: 26 levels of a list are wider
+  // than that by themselves.
+  const size = page.viewportSize()!;
+  await page.setViewportSize({ width: 320, height: size.height });
+  for (const part of [deep, ...(await deep.getByRole('button').all())]) {
+    const box = (await part.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(320);
+  }
+  await page.setViewportSize(size);
+  // No further try: the page opens no socket and asks for nothing again.
+  const sockets = countSockets(page);
+  await page.waitForTimeout(5000);
+  expect(sockets.count).toBe(0);
+  await expect(deep).toBeVisible();
+  // No one else saw any of it, and the document is as it was, for them and after a load.
+  expect(seen()).not.toContain('level');
+  other.provider.document.getXmlFragment('default').push([paragraph('Written by another.')]);
+  await deep.getByRole('button', { name: 'Reload document' }).click();
+  await expect(text(page)).toContainText('Written by another.');
+  await expect(text(page)).toContainText('Written before.');
+  await expect(text(page)).not.toContainText('level');
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  // And by its size: a paste of five megabytes and a little.
+  await placeAtEnd(text(page).getByText('Written by another.'));
+  await paste(page, `<p>${'lorem ipsum '.repeat(Math.ceil((5 * 1024 * 1024 + 4096) / 12))}</p>`);
+  const large = page.getByRole('alert').filter({ hasText: 'A change in this tab would make the document' });
+  await expect(large).toBeVisible({ timeout: 120_000 });
+  await expect(large.getByRole('heading')).toHaveText(
+    'A change in this tab would make the document larger than 5 MB',
+  );
+  await expect(large).toContainText(BODY);
+  expect(seen()).not.toContain('lorem');
+  await large.getByRole('button', { name: 'Reload document' }).click();
+  await expect(text(page)).toContainText('Written by another.');
+  await expect(text(page)).not.toContainText('lorem');
+  // The document is written in as before.
+  await placeAtEnd(text(page).getByText('Written by another.'));
+  await page.keyboard.type(' And after.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  await expect.poll(seen).toContain('And after.');
+  other.close();
+});
+
 // Finding B, in the browser's half. The collaboration server refuses such a
 // document now (src/lib/collab/state.ts), so this one is as a document stored
 // before there was a limit: written into its row.

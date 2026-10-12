@@ -1,10 +1,12 @@
 // The parts of the editor that need no browser and no server: the addresses a
 // link may hold, what the client does about each refusal, the words of the
 // sync status indicator, and the development rewrite that serves `/collab`.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { collabRewrites } from '../../next.config.ts';
 import { CAPACITY_RETRY_MS, retryDelay, syncStatus } from '../../src/lib/collab/client.ts';
 import { REFUSAL } from '../../src/lib/collab/protocol.ts';
+import { MAX_ELEMENT_DEPTH, MAX_STATE_BYTES } from '../../src/lib/collab/state.ts';
 import { linkAddress } from '../../src/lib/editor/link.ts';
 
 describe('the address of a hyperlink (FR-ED-02; NFR-SE-06, A03)', () => {
@@ -125,6 +127,18 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
       for (const attempt of [1, 2, 50]) expect(retryDelay(reason, attempt)).toBeNull();
     },
   );
+
+  // The owner's decision of 12 October 2026: the same change would be sent and refused again.
+  it.each([REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP])('never tries again after %s', (reason) => {
+    for (const attempt of [1, 2, 50]) expect(retryDelay(reason, attempt)).toBeNull();
+  });
+
+  it('names, in what it says of such a refusal, the limits the server keeps', () => {
+    // The page cannot import the server's module, so its words carry the numbers.
+    const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
+    expect(page).toContain(`would make the document larger than ${MAX_STATE_BYTES / 1024 / 1024} MB'`);
+    expect(page).toContain(`would nest the content more than ${MAX_ELEMENT_DEPTH} levels deep'`);
+  });
 
   it('tries again no more often than once in 30 seconds at the limit of connections', () => {
     expect(CAPACITY_RETRY_MS).toBe(30_000);

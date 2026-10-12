@@ -44,9 +44,10 @@ import { ISOLATION_HEADERS, STATIC_POLICY } from '../lib/csp.ts';
 import {
   applyState,
   assertUpdate,
+  limitsOf,
   loadState,
   MAX_MESSAGE_BYTES,
-  pastLimits,
+  type Limit,
   storeFinalState,
   storeState,
 } from '../lib/collab/state.ts';
@@ -206,6 +207,8 @@ export function createCollabServer(store: StoreSettings) {
   // instance holds changes that are stored nowhere.
   const changes = new WeakMap<Document, number>();
   const storedChanges = new WeakMap<Document, number>();
+  // What asks the limits of each document in memory (`limitsOf`), made at its first update.
+  const keepers = new WeakMap<Document, ReturnType<typeof limitsOf>>();
 
   /** One store, by either of the two of src/lib/collab/state.ts, which notes what it stored. */
   async function storeNow(write: typeof storeState, documentName: string, document: Document) {
@@ -606,23 +609,32 @@ export function createCollabServer(store: StoreSettings) {
      */
     async beforeSync({ type, payload, document, documentName, context }) {
       if (type === messageYjsSyncStep1) return;
-      let past: boolean;
+      let past: Limit | null;
       try {
         assertUpdate(payload);
         // The limits of a document (src/lib/collab/state.ts): an update that
-        // would take it past one is refused as one that cannot be stored is.
-        past = pastLimits(document, payload);
+        // would take it past one is not applied either. Asked of the keeper of
+        // this document, which copies the document only when it must; nothing
+        // is awaited between its answer and the library's applying the update.
+        let limits = keepers.get(document);
+        if (!limits) keepers.set(document, (limits = limitsOf(document)));
+        past = limits(payload);
       } catch {
         // An object, which the library reads a close code from, and with no
         // message for it to print: what Yjs throws can quote the update.
         throw {};
       }
       if (past) {
-        // NFR-SE-19: a refusal of what an account may not do, as a 403 is, with
-        // the user and the document and nothing of the update. ASSUMED: the
-        // requirement lists no kind for it (reported for the register).
-        await securityLog({ kind: 'forbidden', userId: context.userId, documentId: documentName });
-        throw {};
+        // NFR-SE-19, as the owner amended it on 12 October 2026: a kind of its
+        // own, with the user and the document and nothing of the update.
+        await securityLog({
+          kind: 'document_limit_refused',
+          userId: context.userId,
+          documentId: documentName,
+        });
+        // The client is told which limit, and does not send the same again
+        // (src/lib/collab/protocol.ts).
+        throw refuse(past === 'size' ? REFUSAL.TOO_LARGE : REFUSAL.TOO_DEEP);
       }
     },
 

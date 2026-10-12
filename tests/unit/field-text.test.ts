@@ -157,20 +157,30 @@ describe('the domain of an email address (FR-AU-02, FR-AU-03, FR-AU-89)', () => 
     ['letters with marks, composed', 'b\u{fc}cher.example'],
     ['a letter with a mark that has no composed form', 'x\u{301}y.example'],
     ['Chinese', `${of('4f8b 5b50')}.${of('4e2d 56fd')}`],
-    ['a punycode domain, as it was typed', 'xn--bcher-kva.example'],
-    ['a punycode last label', 'example.xn--qxam'],
+    ['a label that holds xn-- but does not begin with it', 'axn--b.example'],
+    ['a label that begins xn- with one hyphen', 'xn-b.example'],
   ])('accepts %s', (_what, domain) => {
     expect(acceptedAddress(`ada@${domain}`)).toBe(`ada@${domain}`);
   });
 
   it('accepts a domain typed in capitals as its lower case, which is one address (FR-AU-02)', () => {
     expect(acceptedAddress('Ada@Example.COM')).toBe('ada@example.com');
-    expect(acceptedAddress('ada@XN--BCHER-KVA.example')).toBe('ada@xn--bcher-kva.example');
+    expect(acceptedAddress('Ada@AXN--B.example')).toBe('ada@axn--b.example');
     expect(acceptedAddress(`ada@${GREEK.toUpperCase()}`)).toBe(`ada@${GREEK}`);
   });
 
-  it('does not make a punycode label and its Unicode form one address', () => {
-    expect(acceptedAddress('ada@xn--bcher-kva.example')).not.toBe(acceptedAddress('ada@b\u{fc}cher.example'));
+  // The owner's decision of 12 October 2026 (its register row is pending): a
+  // domain with a label in punycode is refused, in any case and in any place.
+  it.each([
+    ['a first label', 'a@xn--e1afmkfd.example'],
+    ['a last label in capitals', 'a@mail.XN--p1ai'],
+    ['a middle label', 'a@sub.xn--80ak6aa92e.example.com'],
+    ['a label in mixed case', 'a@Xn--bcher-kva.example'],
+    ['a label in capitals', 'ada@XN--BCHER-KVA.example'],
+    ['the last label of a domain', 'ada@example.xn--qxam'],
+    ['two labels', 'a@xn--b.xn--c'],
+  ])('refuses a domain with %s in punycode', (_what, address) => {
+    expect(acceptedAddress(address)).toBeNull();
   });
 
   // Each of these is changed by the compatibility normalisation (NFKC).

@@ -16,18 +16,34 @@ export type Ending = typeof REFUSAL.NO_ACCESS | typeof REFUSAL.ACCESS_ENDED | ty
 const ENDINGS: readonly string[] = [REFUSAL.NO_ACCESS, REFUSAL.ACCESS_ENDED, REFUSAL.SESSION_ENDED];
 
 /**
+ * The refusals of what this client sent, for a limit of the document (the
+ * owner's decision of 12 October 2026; src/lib/collab/protocol.ts). The client
+ * does not try again either, since it would send the same; but the text stays.
+ */
+export type Held = typeof REFUSAL.TOO_LARGE | typeof REFUSAL.TOO_DEEP;
+
+const HELD: readonly string[] = [REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP];
+// The code a socket is closed with for a message longer than it takes (RFC
+// 6455, "Message Too Big"; `MAX_MESSAGE_BYTES` of src/lib/collab/state.ts):
+// what this client sent was longer than the largest document.
+const MESSAGE_TOO_BIG = 1009;
+
+/**
  * - `opening`: no state of the document has arrived yet.
  * - `connected`: the socket is open and the document has been synchronised.
  * - `restoring`: the connection was lost or refused for now, and is being tried again (FR-ED-18).
  * - `lost`: it has not come back within the period of FR-ED-23; the editor is read-only.
  * - `capacity`: refused at the limit of ten connections (FR-ED-18), tried again every 30 seconds.
  * - `ended`: refused for good; `ending` says why. The connection is gone.
+ * - `held`: the server refused what this tab sent, for a limit of the document; `held` says
+ *   which. The connection is gone and is not tried again; the text stays, read-only.
  */
-export type Phase = 'opening' | 'connected' | 'restoring' | 'lost' | 'capacity' | 'ended';
+export type Phase = 'opening' | 'connected' | 'restoring' | 'lost' | 'capacity' | 'ended' | 'held';
 
 export interface ConnectionState {
   phase: Phase;
   ending?: Ending;
+  held?: Held;
   /** The document's state has arrived at least once: there is something to edit. */
   opened: boolean;
   /** Changes the server has not acknowledged, which are lost if the tab is closed (FR-ED-18). */
@@ -48,6 +64,7 @@ const SILENCE_MS = 45_000;
  * where the refusal will not change and the client does not try again.
  *
  * - no access, access ended, session ended: never (FR-ED-41).
+ * - too large, too deep: never. The client would send the same and be refused the same.
  * - capacity: every 30 seconds (FR-ED-18).
  * - limited: "after a pause, never at once", longer each time "up to a
  *   minute, which is the period of the limit" (src/lib/collab/protocol.ts).
@@ -55,7 +72,7 @@ const SILENCE_MS = 45_000;
  *   then twice as long each time, and at least every 30 seconds.
  */
 export function retryDelay(reason: string, attempt: number): number | null {
-  if (ENDINGS.includes(reason)) return null;
+  if (ENDINGS.includes(reason) || HELD.includes(reason)) return null;
   if (reason === REFUSAL.CAPACITY) return CAPACITY_RETRY_MS;
   const [first, most] = reason === REFUSAL.LIMITED ? [5000, 60_000] : [1000, 30_000];
   return Math.min(first * 2 ** (attempt - 1), most);
@@ -112,6 +129,11 @@ export class DocumentConnection {
       onStatus: ({ status }) => {
         if (status === WebSocketStatus.Disconnected) this.dropped();
       },
+      // The socket was closed for the length of a message: a change longer
+      // than the largest document, which the next socket would be sent again.
+      onClose: ({ event }) => {
+        if (event.code === MESSAGE_TOO_BIG) this.hold(REFUSAL.TOO_LARGE);
+      },
     });
     this.provider = new HocuspocusProvider({
       websocketProvider: this.socket,
@@ -139,8 +161,13 @@ export class DocumentConnection {
 
   getState = (): ConnectionState => this.state;
 
+  /** Nothing further is tried or shown as changing: the connection is put away. */
+  private over(): boolean {
+    return this.state.phase === 'ended' || this.state.phase === 'held';
+  }
+
   private set(change: Partial<ConnectionState>): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
     this.state = { ...this.state, ...change };
     for (const listener of this.listeners) listener();
   }
@@ -168,7 +195,8 @@ export class DocumentConnection {
 
   /** The server refused this document, or closed its connection, with a reason. */
   private refused(reason: string): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
+    if (HELD.includes(reason)) return this.hold(reason as Held);
     const delay = retryDelay(reason, ++this.refusals);
     if (delay === null) return this.end(reason as Ending);
     clearTimeout(this.retryTimer);
@@ -190,7 +218,7 @@ export class DocumentConnection {
 
   /** The socket closed, or could not be opened. The library opens it again. */
   private dropped(): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
     clearTimeout(this.retryTimer);
     if (this.state.phase !== 'lost') this.set({ phase: 'restoring' });
     this.expectConnection();
@@ -214,8 +242,20 @@ export class DocumentConnection {
 
   /** FR-ED-41: no further try, and nothing kept of what the server had not acknowledged. */
   private end(ending: Ending): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
     this.set({ phase: 'ended', ending, unsent: false });
+    this.stop();
+  }
+
+  /**
+   * The server refused what this tab sent, for a limit of the document. No
+   * further try: the same would be sent and refused, a minute's worth of
+   * handshakes at a time. The document stays in the tab with the change in
+   * it, for the text to be copied, and nothing of it is sent again.
+   */
+  private hold(held: Held): void {
+    if (this.over()) return;
+    this.set({ phase: 'held', held });
     this.stop();
   }
 
@@ -271,8 +311,8 @@ const UNSENT = 'Changes that are not yet sent are lost if this tab is closed.';
  * states, and its words. A connection that is being restored is the syncing
  * state, "with words that say the connection is being restored"; and while
  * there are changes the server has not acknowledged, the words say that they
- * are lost if the tab is closed (FR-ED-18). `capacity` and `ended` are shown
- * by a statement and not by the indicator.
+ * are lost if the tab is closed (FR-ED-18). `capacity`, `ended` and `held` are
+ * shown by a statement and not by the indicator.
  */
 export function syncStatus({ phase, unsent }: ConnectionState): {
   state: 'synced' | 'syncing' | 'error';

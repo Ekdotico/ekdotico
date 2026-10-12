@@ -106,24 +106,164 @@ export function elementDepth(document: Y.Doc): number {
  * not closed to every change: an update is refused for the limit it takes the
  * document FURTHER past, so what is too deep can still be deleted.
  *
- * ponytail: the whole state is copied and encoded for every update, which is
- * the time of a store for each change received. A count of what the updates
- * since the last measure can have added, and the copy only near a limit, if a
- * large document ever shows in a profile.
+ * The whole state is copied and encoded, which is the time of a store: 65 ms
+ * for 4.9 MB of prose and 250 ms for 4.9 MB of the smallest pieces (measured
+ * 12 October 2026). The server asks `limitsOf` instead, which comes here only
+ * when it must.
  */
 export function pastLimits(document: Y.Doc, update: Uint8Array): boolean {
+  return measured(document, update).past !== null;
+}
+
+/** Which of the two limits: the bytes of the state, or the depth of the elements. */
+export type Limit = 'size' | 'depth';
+
+function measured(document: Y.Doc, update: Uint8Array) {
   const after = new Y.Doc();
   try {
     const before = encodeState(document);
     applyState(after, before);
     applyState(after, update);
     const bytes = encodeState(after).byteLength;
-    if (bytes > MAX_STATE_BYTES && bytes > before.byteLength) return true;
     const depth = elementDepth(after);
-    return depth > MAX_ELEMENT_DEPTH && depth > elementDepth(document);
+    let past: Limit | null = null;
+    if (bytes > MAX_STATE_BYTES && bytes > before.byteLength) past = 'size';
+    else if (depth > MAX_ELEMENT_DEPTH && depth > elementDepth(document)) past = 'depth';
+    return { past, before: before.byteLength, depth };
   } finally {
     after.destroy();
   }
+}
+
+// What one struct or one deleted range of an update can add to the encoded
+// state beyond its own bytes (Yjs 13.6.33, update encoding 1; an identifier is
+// a client and a clock, up to 8 bytes each, because `assertUpdate` lets
+// through no number past 2^53):
+// - a struct cuts at most two structs that are there in two, at its origin
+//   and at its right origin (`Item.getMissing`), and a range at most two, at
+//   its ends (`readAndApplyDeleteSet`). The second half of a cut is a struct
+//   of its own: 1 byte, two identifiers, the length of its content (5), 2
+//   where the cut fell inside a surrogate pair (`ContentString.splice`), and 1
+//   where the count of structs gains a byte: 41, twice;
+// - a struct of which the document holds the beginning is written with an
+//   origin it did not carry (`Item.integrate`, `offset`): 16;
+// - a struct that waits for another is kept as it came, behind a gap that is
+//   written as a struct (`Skip`, in `mergeUpdates`): 9;
+// - a struct deletes without a range of the update: itself, under a parent
+//   that is deleted, or the entry of a map that it replaces. The range is
+//   written into the state, with a client where it is the client's first: 27;
+// - a struct is deleted later, without a range of any update: Yjs itself
+//   deletes the marks of formatting that no longer change anything, in every
+//   document that takes another client's change (`cleanupYTextAfterTransaction`),
+//   and one small deletion can leave any number of them so. A struct is
+//   deleted once, so it is counted when it arrives: 27 again (`DELETED_BYTES`).
+// 161 for a struct and 108 for a range; a round number above both.
+const PART_BYTES = 200;
+const DELETED_BYTES = 27;
+// And once for an update: the bytes the two counts of clients can gain.
+const UPDATE_BYTES = 16;
+const NO_STATE = new Uint8Array([0]);
+
+/**
+ * The most an update can add to a document that waits for nothing
+ * (`store.pendingStructs`, `store.pendingDs`): `bytes` to its encoded state
+ * and `levels` to the depth of its elements. In the bytes of each struct is
+ * what its own deletion by Yjs can cost later; for the marks of formatting
+ * that a document held before anything was counted, `limitsOf` holds back.
+ *
+ * The bytes are not the length of the update as it came. What Yjs stores is
+ * what it read, written again, and that can be longer: `1e20` in an embed is
+ * written back as 21 digits, and an integer past 31 bits as 8 bytes. So the
+ * update is written again first (`diffUpdate` against no state reads every
+ * struct and writes it with the encoder the state is written with), and to
+ * its length is added what each of its parts can cost the structs that are
+ * there. The levels are its shared types that are not text, which is what
+ * `elementDepth` counts: nothing but a new type adds a level, and each adds
+ * at most one. tests/unit/collab-limits.test.ts holds both to what Yjs does.
+ */
+export function growthBound(update: Uint8Array): { bytes: number; levels: number } {
+  const { structs, ds } = Y.decodeUpdate(update);
+  let parts = structs.length;
+  for (const ranges of ds.clients.values()) parts += ranges.length;
+  let levels = 0;
+  for (const struct of structs) {
+    if (!(struct instanceof Y.Item) || !(struct.content instanceof Y.ContentType)) continue;
+    if (!(struct.content.type instanceof Y.Text)) levels += 1;
+  }
+  const bytes = Y.diffUpdate(update, NO_STATE).byteLength + parts * PART_BYTES + UPDATE_BYTES;
+  return { bytes, levels };
+}
+
+/** How many marks of formatting a document holds that are not deleted: what Yjs may yet delete by itself. */
+function liveFormats(document: Y.Doc): number {
+  let found = 0;
+  for (const structs of document.store.clients.values()) {
+    for (const struct of structs) {
+      if (struct instanceof Y.Item && !struct.deleted && struct.content instanceof Y.ContentFormat)
+        found += 1;
+    }
+  }
+  return found;
+}
+
+/**
+ * `pastLimits` for one document in memory, asked of every update before it is
+ * applied, without the copy where the answer is known without it: the limit
+ * the update would take the document past, or null. It keeps a
+ * number of bytes and a depth that the document is not past, adds to them
+ * what each update it lets through can add (`growthBound`), and measures
+ * again, by `pastLimits`, only when the sum would pass a limit, when the
+ * document waits for a struct it has not been sent, or the first time. At a
+ * measure the bytes are those of the document and 27 for each mark of
+ * formatting in it, which Yjs may yet delete by itself (`PART_BYTES`).
+ *
+ * WHAT THIS RESTS ON is a reading of Yjs 13.6.33 and not a promise of the
+ * library's: that nothing but the cases counted in `PART_BYTES` makes the
+ * state of a document grow. tests/unit/collab-limits.test.ts holds each case
+ * to the library and a run of three members to the whole; an upgrade of Yjs
+ * is read against them. Where the reading is wrong the limit of 5 MB is
+ * passed by what it missed, until the next measure, and never the limit of
+ * the socket or of the depth.
+ *
+ * It holds where every change to the document is asked of it first and is
+ * applied, or not, before the next is asked: the collaboration server's
+ * `beforeSync`, which awaits nothing between the answer and the library's
+ * applying the update. A change it let through that was then not applied
+ * leaves the numbers too high, which costs a measure and nothing else.
+ *
+ * What it does not bound: a member who fills a document to within a few bytes
+ * of the limit makes every update a measure again. That takes a limit of
+ * messages for each connection, whose number is the owner's (reported for the
+ * register, with the measurements).
+ */
+export function limitsOf(document: Y.Doc): (update: Uint8Array) => Limit | null {
+  let bytes = Infinity;
+  let depth = Infinity;
+  return (update) => {
+    const waiting = document.store.pendingStructs !== null || document.store.pendingDs !== null;
+    // An update longer than the room that is left is measured without being read twice.
+    const growth = !waiting && update.byteLength <= MAX_STATE_BYTES - bytes ? growthBound(update) : null;
+    if (growth && bytes + growth.bytes <= MAX_STATE_BYTES && depth + growth.levels <= MAX_ELEMENT_DEPTH) {
+      bytes += growth.bytes;
+      depth += growth.levels;
+      return null;
+    }
+    const exact = measured(document, update);
+    // The bytes are those of this document and not of the copy, and with them
+    // what the marks of formatting that are in it can still cost when Yjs
+    // deletes them: those arrived before this measure, and were counted by none.
+    const held = exact.before + liveFormats(document) * DELETED_BYTES;
+    if (exact.past) {
+      // Refused, and so not applied: the document is as it was measured.
+      bytes = held;
+      return exact.past;
+    }
+    // Where it was waiting, what waited may now be in it, and has cut what it
+    // will: the next update measures.
+    bytes = waiting ? Infinity : held + (growth ?? growthBound(update)).bytes;
+    depth = exact.depth;
+    return null;
+  };
 }
 
 /**

@@ -780,8 +780,14 @@ describe('the connections to a deleted document (FR-ED-40 (c), NFR-SE-03 (b))', 
         const lost = Object.assign(new Error(`connection lost ${TITLE}`), { code: 'P1001' });
         const find = db().document.findUnique.bind(db().document) as (query: unknown) => Promise<unknown>;
         // The one query of a notice, and no other: it selects `deletedAt` alone.
-        vi.spyOn(db().document, 'findUnique').mockImplementation(((query: { select?: object }) =>
-          Object.keys(query.select ?? {}).join() === 'deletedAt'
+        // And of THIS document's notice. The channel has one name in the
+        // Valkey that every run on a machine shares, so this server also hears
+        // the notices of whatever else is running, and of the test before
+        // this one: were their query to fail too, each would print its line,
+        // and the line counted below would not be the only one.
+        type Query = { select?: object; where?: { id?: string } };
+        vi.spyOn(db().document, 'findUnique').mockImplementation(((query: Query) =>
+          Object.keys(query.select ?? {}).join() === 'deletedAt' && query.where?.id === id
             ? Promise.reject(lost)
             : find(query)) as never);
         // A notice for a document that is NOT deleted, which nothing can tell here.

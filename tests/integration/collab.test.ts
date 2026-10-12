@@ -170,6 +170,10 @@ const UPDATE = 2;
 /** The rest of the frame that refuses a document: "permission denied", and the reason. */
 const denied = (reason: string) => Buffer.from([1, reason.length, ...Buffer.from(reason)]).toString('hex');
 
+/** The rest of the frame that closes a document's connection: the reason. */
+const closedBecause = (reason: string) =>
+  Buffer.from([reason.length, ...Buffer.from(reason)]).toString('hex');
+
 /** A number as the frames write one. */
 function varint(value: number): number[] {
   const bytes = [];
@@ -964,14 +968,18 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
   async function expectRefusedUpdate(
     { owner, id, watching }: Awaited<ReturnType<typeof opened>>,
     change: (document: Y.Doc) => void,
+    reason: string,
   ) {
     const { client, provider, acknowledged, before } = await sending(owner, id);
     change(provider.document);
-    await until(() => client.framesFor(id).some((each) => each.type === CLOSE), 20_000);
+    const closed = await until(() => client.framesFor(id).find((each) => each.type === CLOSE), 20_000);
+    // The reason says which limit, and is all the close says (src/lib/collab/protocol.ts).
+    expect(closed.rest).toBe(closedBecause(reason));
     expect(acknowledged()).toBe(before);
-    // NFR-SE-19: one entry, with the user and the document and nothing else.
+    // NFR-SE-19, as amended on 12 October 2026: one entry, of a kind of its
+    // own, with the user and the document and nothing else.
     await until(async () => (await logged()).length > 0);
-    expect(await logged()).toEqual([{ kind: 'forbidden', userId: owner.id, documentId: id }]);
+    expect(await logged()).toEqual([{ kind: 'document_limit_refused', userId: owner.id, documentId: id }]);
     // Longer than the 2 seconds of a store (NFR-RE-07): nothing of it is stored or sent on.
     await sleep(2500);
     expect(await held(id)).toMatchObject({ changes: ['before'], depth: 0 });
@@ -992,8 +1000,10 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
     { timeout: 60_000 },
     async () => {
       const open = await opened();
-      await expectRefusedUpdate(open, (document) =>
-        nest(document.getXmlFragment('default'), 10_000, CONTENT),
+      await expectRefusedUpdate(
+        open,
+        (document) => nest(document.getXmlFragment('default'), 10_000, CONTENT),
+        REFUSAL.TOO_DEEP,
       );
     },
   );
@@ -1004,8 +1014,10 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
     async () => {
       expect(MAX_ELEMENT_DEPTH).toBe(50);
       const open = await opened();
-      await expectRefusedUpdate(open, (document) =>
-        nest(document.getXmlFragment('default'), MAX_ELEMENT_DEPTH + 1, 'too deep'),
+      await expectRefusedUpdate(
+        open,
+        (document) => nest(document.getXmlFragment('default'), MAX_ELEMENT_DEPTH + 1, 'too deep'),
+        'too-deep',
       );
       await db().securityLogEntry.deleteMany();
 
@@ -1042,7 +1054,11 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       const open = await opened();
       const over = 'x'.repeat(MAX_STATE_BYTES + 1024);
       expect(over.length).toBeLessThan(MAX_MESSAGE_BYTES - 1024);
-      await expectRefusedUpdate(open, (document) => document.getArray<string>('changes').push([over]));
+      await expectRefusedUpdate(
+        open,
+        (document) => document.getArray<string>('changes').push([over]),
+        'too-large',
+      );
       await db().securityLogEntry.deleteMany();
 
       // Three megabytes are taken, and stored; three more are not.
@@ -1053,9 +1069,13 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       await until(async () => (await held(id)).bytes > 3 * 1024 * 1024, 5000);
       const second = await sending(owner, id);
       second.provider.document.getMap('large').set('two', 'z'.repeat(3 * 1024 * 1024));
-      await until(() => second.client.framesFor(id).some((each) => each.type === CLOSE), 20_000);
+      const closed = await until(
+        () => second.client.framesFor(id).find((each) => each.type === CLOSE),
+        20_000,
+      );
+      expect(closed.rest).toBe(closedBecause(REFUSAL.TOO_LARGE));
       await until(async () => (await logged()).length > 0);
-      expect(await logged()).toEqual([{ kind: 'forbidden', userId: owner.id, documentId: id }]);
+      expect(await logged()).toEqual([{ kind: 'document_limit_refused', userId: owner.id, documentId: id }]);
       await sleep(2500);
       const now = await held(id);
       expect(now.bytes).toBeLessThanOrEqual(MAX_STATE_BYTES);
@@ -1063,6 +1083,82 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       const later = connect(server.port, await owner.signedIn()).open(id);
       await later.synced;
       expect([...later.provider.document.getMap('large').keys()]).toEqual(['one']);
+    },
+  );
+
+  // The owner's decision of 12 October 2026, with the editor's own connection
+  // (src/lib/collab/client.ts): before it the client was told nothing, asked
+  // for the document again, sent the same, and was refused again, for as long
+  // as the tab was open.
+  it(
+    'tells the client which limit, and the client keeps the text and does not send it again',
+    { timeout: 90_000 },
+    async () => {
+      const { DocumentConnection } = await import('../../src/lib/collab/client.ts');
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const { cookie } = owner;
+      // What the client has asked of the server: the sockets it opened and the frames it sent.
+      const asked = { sockets: 0, frames: 0 };
+      class Socket extends WebSocket {
+        constructor(url: string) {
+          super(url, { headers: { cookie, origin: ORIGIN } } as never);
+          asked.sockets += 1;
+        }
+        send(data: Parameters<WebSocket['send']>[0]) {
+          asked.frames += 1;
+          super.send(data);
+        }
+      }
+      const connections: InstanceType<typeof DocumentConnection>[] = [];
+      const opening = async () => {
+        const connection = new DocumentConnection({
+          url: `ws://127.0.0.1:${server.port}${COLLAB_PATH}`,
+          documentId: id,
+          errorAfterMs: 60_000,
+          probe: async () => 200,
+          WebSocketPolyfill: Socket,
+        });
+        connections.push(connection);
+        connection.start();
+        await until(() => connection.getState().phase === 'connected');
+        return connection;
+      };
+      try {
+        const deep = await opening();
+        nest(deep.document.getXmlFragment('default'), MAX_ELEMENT_DEPTH + 1, 'too deep');
+        await until(() => deep.getState().phase === 'held');
+        expect(deep.getState()).toMatchObject({ phase: 'held', held: REFUSAL.TOO_DEEP, opened: true });
+        // Longer than the first new try after any refusal: one refusal, and
+        // nothing asked of the server since, on this socket or another.
+        const then = { ...asked };
+        await sleep(3000);
+        expect(asked).toEqual(then);
+        expect(await logged()).toEqual([
+          { kind: 'document_limit_refused', userId: owner.id, documentId: id },
+        ]);
+        expect(deep.getState().phase).toBe('held');
+        // The text is still in the tab, to be copied; the document holds none of it.
+        expect(limits.elementDepth(deep.document)).toBe(MAX_ELEMENT_DEPTH + 1);
+        expect((await held(id)).depth).toBe(0);
+
+        // Longer than the socket takes: it is the socket that is closed, and
+        // the library would open another and send the same on it.
+        await db().securityLogEntry.deleteMany();
+        const long = await opening();
+        long.document.getArray<string>('changes').push(['x'.repeat(MAX_MESSAGE_BYTES + 1024)]);
+        await until(() => long.getState().phase === 'held', 30_000);
+        expect(long.getState()).toMatchObject({ phase: 'held', held: REFUSAL.TOO_LARGE });
+        const after = { ...asked };
+        await sleep(3000);
+        expect(asked).toEqual(after);
+        expect(long.getState().phase).toBe('held');
+        expect(await logged()).toEqual([]);
+        expect((await held(id)).changes).toEqual([]);
+        expect(server.child.exitCode).toBeNull();
+      } finally {
+        for (const connection of connections) connection.stop();
+      }
     },
   );
 
