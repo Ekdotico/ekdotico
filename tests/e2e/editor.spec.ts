@@ -1059,6 +1059,52 @@ test('the slash palette stays open through another client’s change elsewhere, 
     await page.waitForTimeout(300);
     await expect(palette(page)).toBeHidden();
     await expect(doc.locator(':scope > p').last()).toHaveText('/to');
+
+    // The review of pull request 25. The other client rewrites the command in
+    // one change with a block that the editor answers by a change of its own:
+    // a rule put last, which the editor follows with a paragraph. The list
+    // closes as for any rewrite; it opened again on "/code", and Enter put a
+    // code block in place of it and of the writer's "de".
+    const fragment = shared.getXmlFragment('default');
+    await newLastLine(page);
+    await page.keyboard.type('see  de mine');
+    for (let press = 0; press < ' de mine'.length; press += 1) await page.keyboard.press('ArrowLeft');
+    await page.keyboard.type('/co');
+    await expect(rows(page)).toHaveText(['Code block/code', 'Table of contents/toc']);
+    await expect.poll(() => fragment.toString()).toContain('see /co de mine');
+    shared.transact(() => {
+      sharedText(shared, 'see /co de mine').delete('see /co'.length, 1);
+      fragment.push([element('horizontalRule')]);
+    });
+    await expect(doc.locator(':scope > p').filter({ hasText: 'see /code mine' })).toHaveCount(1);
+    // The editor did answer: the rule is there, and a paragraph after it.
+    await expect(doc.locator(':scope > hr + p:last-child')).toHaveCount(1);
+    await page.waitForTimeout(300);
+    await expect(palette(page)).toBeHidden();
+    await expect(page.getByText(NO_BLOCK).first()).toBeHidden();
+    await expect(doc).not.toHaveAttribute('aria-controls');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    await expect(doc.locator('pre')).toHaveCount(0);
+    // Enter was the text's key: it broke the line at the cursor, and the writer's words are whole.
+    await expect(doc.getByText('see /co', { exact: true })).toHaveCount(1);
+    await expect(doc.getByText('de mine', { exact: true })).toHaveCount(1);
+
+    // And an open list stays, at the row the writer moved to, through such a change elsewhere.
+    await newLastLine(page);
+    await page.keyboard.type('/q');
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await expect.poll(() => fragment.toString()).toContain('/q');
+    shared.transact(() => {
+      fragment.insert(0, [paragraph('Elsewhere.')]);
+      fragment.push([element('pageBreak')]);
+    });
+    await expect(doc.locator(':scope > p').first()).toHaveText('Elsewhere.');
+    await expect(doc.locator(':scope > .ekd-page-break + p:last-child')).toHaveCount(1);
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await expect(doc).toHaveAttribute('aria-controls', LIST_ID);
+    await page.keyboard.press('Enter');
+    await expect(doc.locator('blockquote')).toHaveCount(1);
   } finally {
     other.close();
   }

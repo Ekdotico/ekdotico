@@ -83,11 +83,15 @@ interface Suggesting {
 }
 const SLASH = new PluginKey<Suggesting>('slashPalette');
 
-/** A command as it stood: where its `/` was, and its text. */
+/** A command as it stood: where its `/` was, its text, and the blocks it stood in. */
 interface Command {
   from: number;
   text: string;
+  within: string;
 }
+/** The blocks round a place, from the document inwards, by the names of their types. */
+const within = ($at: ResolvedPos) =>
+  Array.from({ length: $at.depth + 1 }, (_, depth) => $at.node(depth).type.name).join(' ');
 
 /**
  * What this file holds beside the library's plugin: the row the writer has
@@ -134,12 +138,15 @@ export function slashQuery($cursor: ResolvedPos): { range: Range; query: string;
  * collaboration binding applies every change of another client, and every
  * undo, as one replacement of the whole document, through which no place
  * maps, and puts the cursor back where it was: there the command is known by
- * its text, so a change elsewhere in the document leaves it, and a change to
- * the command itself does not.
+ * its text and by the kinds of block it stands in, so a change elsewhere in
+ * the document leaves it, and a change to the command itself, or one that
+ * puts it in another kind of block, does not. (Another client that takes the
+ * command away and writes the same text in the same kind of block is not
+ * told apart: the list the writer opened stays open on that text.)
  */
 function same(transaction: Transaction, was: Command, range: Range, text: string): boolean {
   return transaction.getMeta(ySyncPluginKey)
-    ? was.text === text
+    ? was.text === text && was.within === within(transaction.doc.resolve(range.from))
     : transaction.mapping.map(was.from) === range.from;
 }
 
@@ -334,7 +341,32 @@ export const SlashPalette = Extension.create({
   priority: 1000,
   addProseMirrorPlugins() {
     const { editor } = this;
+    // The command the list was open on in the state a transaction is applied
+    // to, set by the first plugin below for the library's plugin, which is
+    // handed the transaction and not that state. `editor.state` is not it:
+    // through a dispatch it stays the state before the first transaction, so
+    // for a transaction that a plugin appends (the paragraph kept at the end
+    // of a document, the repair of a table) it still said "open" after
+    // another client's change to the command had closed the list, and the
+    // list opened again on what that client wrote.
+    let open: Command | null = null;
     return [
+      new Plugin({
+        state: {
+          init: () => null,
+          apply(_transaction, _value, before) {
+            const was = SLASH.getState(before);
+            open = was?.active
+              ? {
+                  from: was.range.from,
+                  text: was.text ?? '',
+                  within: within(before.doc.resolve(was.range.from)),
+                }
+              : null;
+            return null;
+          },
+        },
+      }),
       // Inactive while the document cannot be edited (FR-ED-18): the library reads `isEditable` itself.
       Suggestion({
         pluginKey: SLASH,
@@ -347,18 +379,10 @@ export const SlashPalette = Extension.create({
         // Open already, on this `/`; or its `/` is typed now (`typesSlash`).
         // So a list that is closed stays closed for its `/`, however it was
         // closed: by Escape, by Tab, by a press outside, by the cursor
-        // leaving, or by another client's change to the command. The states
-        // read here are those before the whole dispatch, so a transaction a
-        // plugin appends to one that opened the list would close it; nothing
-        // appends one to typing in a command.
-        shouldShow: ({ range, text, transaction }) => {
-          const was = SLASH.getState(editor.state);
-          return (
-            (was?.active === true &&
-              same(transaction, { from: was.range.from, text: was.text ?? '' }, range, text)) ||
-            typesSlash(transaction, range, editor.view.composing)
-          );
-        },
+        // leaving, or by another client's change to the command.
+        shouldShow: ({ range, text, transaction }) =>
+          (open !== null && same(transaction, open, range, text)) ||
+          typesSlash(transaction, range, editor.view.composing),
         // The library remembers a closed list too, by the place of its `/`,
         // which after another client's change is a place no command has. The
         // rule above is the whole rule: a `/` typed now is a new request.
@@ -374,8 +398,9 @@ export const SlashPalette = Extension.create({
             if (moved) return moved;
             // Text arrived or the cursor moved, with a key or without one: the
             // move in the list is over, and a new filter starts at its first
-            // match. Another client's change is neither.
-            const own = !transaction.getMeta(ySyncPluginKey);
+            // match. Another client's change is neither, and nor is what a
+            // plugin appends to it.
+            const own = !transaction.getMeta(ySyncPluginKey) && !transaction.getMeta('appendedTransaction');
             return own && (transaction.docChanged || transaction.selectionSet) ? STILL : was;
           },
         },

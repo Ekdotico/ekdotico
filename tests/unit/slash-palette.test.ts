@@ -345,6 +345,134 @@ describe('where the palette opens (FR-ED-10)', () => {
     expect(json(gone)).toEqual([paragraph(words('above'))]);
   });
 
+  // The review of pull request 25. A plugin appends a transaction to another
+  // client's change: the paragraph kept at the end of a document, the repair
+  // of a table. The rule read the state before the whole dispatch for it, in
+  // which the list was still open, and opened the list again on what the
+  // other client wrote: Enter then put a code block in place of "/code", and
+  // the writer's "de" with it.
+  const RULE: Json = { type: 'horizontalRule' };
+  /** A table whose second row is a cell short, which the library's own plugin repairs. */
+  const ragged = (): Json => {
+    const block = structuredClone(SLASH_COMMANDS.find(({ name }) => name === 'table')!.inserts) as Json;
+    block.content!.find(({ type }) => type === 'table')!.content![1]!.content!.pop();
+    return block;
+  };
+  const cellsOfRows = (editor: Editor) => {
+    const rows: number[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'tableRow') rows.push(node.childCount);
+    });
+    return rows;
+  };
+  /** The place after the first text that is `written`, in a document of these blocks. */
+  const after = (editor: Editor, content: Json[], written: string) => {
+    let end = -1;
+    editor.schema.nodeFromJSON({ type: 'doc', content }).descendants((node, pos) => {
+      if (end < 0 && node.isText && node.text === written) end = pos + written.length;
+    });
+    expect(end, written).toBeGreaterThan(0);
+    return end;
+  };
+
+  it('closes when another client rewrites the command in a change that a plugin appends a transaction to', () => {
+    for (const [name, last] of [
+      ['a rule put last', RULE],
+      ['a page break put last', { type: 'pageBreak' }],
+      ['a table a cell short', ragged()],
+    ] as const) {
+      const editor = editorOf(paragraph(words('see  de mine')));
+      editor.commands.setTextSelection(5);
+      type(editor, '/co');
+      expect(listed(editor), name).toEqual(['code', 'toc']);
+      // The other client takes away the space after the command, and adds a block.
+      peer(editor, [paragraph(words('see /code mine')), last], 8);
+      // The plugin did append: a paragraph ends the document, and the table has whole rows.
+      expect(editor.state.doc.lastChild!.type.name, name).toBe('paragraph');
+      expect(editor.state.doc.childCount, name).toBe(3);
+      expect(new Set(cellsOfRows(editor)).size, name).toBeLessThanOrEqual(1);
+      expect(slashPalette(editor.state).open, name).toBe(false);
+      expect(slashAttributes(editor.state), name).toStrictEqual({});
+      // Enter is the text's key: no block is put in place of the writer's words.
+      expect(press(editor, 'Enter'), name).toBe(false);
+      expect(editor.state.doc.firstChild!.textContent, name).toBe('see /code mine');
+    }
+
+    // The rows of an open list changed under it: "/h" made "/hr", whose first row is the divider.
+    const editor = editorOf();
+    type(editor, '/h');
+    expect(slashPalette(editor.state).activeId).toBe('h1');
+    peer(editor, [paragraph(words('/hr')), RULE], 3);
+    expect(editor.state.doc.childCount).toBe(3);
+    expect(slashPalette(editor.state).open).toBe(false);
+    expect(press(editor, 'Enter')).toBe(false);
+
+    // Closed with Escape, then such a change, then the writer's own letter.
+    const escaped = editorOf();
+    type(escaped, '/h');
+    press(escaped, 'Escape');
+    peer(escaped, [paragraph(words('/h')), RULE], 3);
+    expect(slashPalette(escaped.state).open).toBe(false);
+    type(escaped, '1');
+    expect(escaped.state.doc.firstChild!.textContent).toBe('/h1');
+    expect(slashPalette(escaped.state).open).toBe(false);
+  });
+
+  it('stays as it is through another client’s change elsewhere that a plugin appends a transaction to', () => {
+    const editor = editorOf(paragraph(words('above')), paragraph());
+    editor.commands.setTextSelection(8);
+    type(editor, '/h');
+    press(editor, 'ArrowDown');
+    for (const last of [RULE, ragged()]) {
+      const content = [paragraph(words('More above')), paragraph(words('/h')), last];
+      peer(editor, content, after(editor, content, '/h'));
+      expect(editor.state.doc.childCount).toBe(4);
+      expect(new Set(cellsOfRows(editor)).size).toBeLessThanOrEqual(1);
+      expect(slashPalette(editor.state)).toMatchObject({
+        open: true,
+        activeId: 'h2',
+        navigating: true,
+        range: { from: 13, to: 15 },
+      });
+    }
+    expect(press(editor, 'Enter')).toBe(true);
+    expect(json(editor)[1]).toEqual({ type: 'heading', attrs: { level: 2 } });
+  });
+
+  it('closes when another client puts the same text in another kind of block, with an appended transaction or without', () => {
+    const table = (cell: string, caption: string): Json => {
+      const block = structuredClone(SLASH_COMMANDS.find(({ name }) => name === 'table')!.inserts) as Json;
+      const first = block.content!.find(({ type }) => type === 'table')!.content![0]!.content![0]!;
+      first.content = [paragraph(...(cell ? [words(cell)] : []))];
+      const under = block.content!.find(({ type }) => type === 'tableCaption')!;
+      if (caption) under.content = [words(caption)];
+      return block;
+    };
+    for (const [name, content] of [
+      ['a callout', [{ type: 'callout', attrs: { type: 'note' }, content: [paragraph(words('/h'))] }]],
+      [
+        'a list item',
+        [{ type: 'bulletList', content: [{ type: 'listItem', content: [paragraph(words('/h'))] }] }],
+      ],
+      ['a heading', [{ type: 'heading', attrs: { level: 1 }, content: [words('/h')] }]],
+      ['a quotation', [{ type: 'blockquote', content: [paragraph(words('/h'))] }]],
+      ['a code block', [{ type: 'codeBlock', attrs: { language: 'plaintext' }, content: [words('/h')] }]],
+      ['a cell of a table', [table('/h', '')]],
+      ['the caption of a table', [table('', '/h')]],
+    ] as [string, Json[]][]) {
+      for (const tail of [[paragraph()], []]) {
+        const editor = editorOf();
+        type(editor, '/h');
+        expect(slashPalette(editor.state).open, name).toBe(true);
+        const all = [...content, ...tail];
+        peer(editor, all, after(editor, all, '/h'));
+        expect(editor.state.selection.$from.parent.textContent, name).toBe('/h');
+        expect(slashPalette(editor.state).open, `${name}, ${tail.length} after`).toBe(false);
+        expect(press(editor, 'Enter'), name).toBe(false);
+      }
+    }
+  });
+
   it('stays closed after Escape through another client’s change, and when that client rewrites the command', () => {
     const editor = editorOf(paragraph(words('above')), paragraph());
     editor.commands.setTextSelection(8);
