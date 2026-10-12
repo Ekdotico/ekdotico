@@ -1123,6 +1123,13 @@ describe('Tab, and a table in a table', () => {
       theirs.view.dispatch(theirs.state.tr.insertText('pasted ').setMeta('paste', true));
       expect(text(theirs)).toContain('pasted second');
       expect(held(theirs)).toEqual(['tableBlock', 'paragraph']);
+      // But what the writer pastes INSIDE that table changes the table, and
+      // the cell is then given its paragraph: the writer's own change, in that
+      // cell (the re-review of pull request 28; kept, and said in the comment).
+      at(theirs, 'theirs');
+      theirs.view.dispatch(theirs.state.tr.insertText('pasted in ').setMeta('paste', true));
+      expect(text(theirs)).toContain('pasted in theirs');
+      expect(held(theirs)).toEqual(['tableBlock paragraph', 'paragraph']);
     });
   });
 });

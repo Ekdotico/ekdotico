@@ -978,9 +978,12 @@ const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
         },
         // R32: a table that a paste or a drop of this writer's leaves at the
         // end of a cell is followed by an empty paragraph, as one from the
-        // palette is (./slash-palette.tsx), and in the same step of undo.
-        // Never for a cell as another client or a stored document made it:
-        // that would be an addition every browser writes for itself.
+        // palette is (./slash-palette.tsx), and in the same step of undo. So
+        // is a table that already ended its cell, where the paste changed
+        // anything inside that table (`tablesEndingCells` says why). Never
+        // for a cell as another client or a stored document made it, in whose
+        // table this writer pasted nothing: that would be an addition every
+        // browser writes for itself.
         appendTransaction: (transactions, before, state) => {
           const pasted = transactions.some(
             (each) => each.docChanged && (each.getMeta('paste') || each.getMeta('uiEvent') === 'drop'),
