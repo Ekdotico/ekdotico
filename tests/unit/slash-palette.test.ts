@@ -928,6 +928,46 @@ describe('Tab, and a table in a table', () => {
     expect(listed(full)).toEqual(OTHERS);
   });
 
+  // The owner's decision R58 of 12 October 2026: fifty tables in a document, one in a cell counted.
+  it('lists no table in a document that holds as many tables as it may, and puts none there', () => {
+    const holding = (tables: number, first: Json[] = [paragraph()]) =>
+      editorOf(
+        paragraph(),
+        ...Array.from({ length: tables }, (_, at) => cells(1, 1, at ? undefined : first)),
+      );
+    const room = holding(49);
+    type(room, '/');
+    expect(listed(room)).toEqual(ALL);
+    type(room, 'table');
+    press(room, 'Enter');
+    expect(rowsOf(room)).toHaveLength(50);
+    // Fifty: nowhere, in the text or in a cell.
+    const full = holding(50);
+    type(full, '/');
+    expect(listed(full)).toEqual(OTHERS);
+    chooseSlashCommand(full, 'table');
+    type(full, 'table');
+    expect(press(full, 'Enter')).toBe(false);
+    expect(rowsOf(full)).toHaveLength(50);
+    const inCell = holding(50);
+    let first = -1;
+    inCell.state.doc.descendants((node, pos) => {
+      if (first < 0 && node.type.name === 'tableCell') first = pos + 2;
+    });
+    inCell.commands.setTextSelection(first);
+    type(inCell, '/');
+    expect(listed(inCell)).toEqual(OTHERS);
+    // A table in a cell is one of the fifty: forty-eight and one in a cell of the first leave room for one.
+    const nested = holding(48, [paragraph(), cells(1, 1), paragraph()]);
+    expect(rowsOf(nested)).toHaveLength(49);
+    type(nested, '/table');
+    press(nested, 'Enter');
+    expect(rowsOf(nested)).toHaveLength(50);
+    nested.commands.setTextSelection(nested.state.doc.content.size);
+    type(nested, '/');
+    expect(listed(nested)).toEqual(OTHERS);
+  });
+
   describe('the keys and the commands of a table in a cell', () => {
     /** Two by two in the first cell of two by two, and the cursor in the first cell of the inner one. */
     const nested = () => {

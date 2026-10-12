@@ -65,6 +65,40 @@ export const TABLE_CELLS_MOST = TABLE_MOST * TABLE_MOST;
  * bound, which it does not.
  */
 export const TABLE_DEPTH_MOST = 2;
+/**
+ * The most tables in one document, a table in a cell counted as one more.
+ *
+ * The owner's decision R58 of 12 October 2026: "A bound on tables per
+ * document, the number set from a measurement of where a key passes the
+ * budget" (specification rows D173 and P17, pending). THE NUMBER AWAITS THE
+ * OWNER: it is the one proposed with the measurement, which is reported with
+ * the pull request.
+ *
+ * The budget is the row "Editor keystroke to character render" of §2.4: under
+ * 16 ms at P50, for the reference document of 5,000 words. Measured on 12
+ * October 2026 in Chromium on an Apple M2 Pro, from the key to the frame in
+ * which the letter is drawn, in the reference document with N tables of five
+ * rows by four of text after it: 8 ms with none, 12 at 25, 14 at 50, 18 at
+ * 75, 23 at 100, 39 at 150. With the processor slowed four times: 14 at 25,
+ * 19 at 50, 25 at 75. So 50 is the most at which a key is inside the budget on
+ * that machine, by 2 ms; a slower machine passes it sooner.
+ *
+ * It is the number of tables and not what a table costs. A table of one cell
+ * costs a third of one of twenty, and a code block and a callout cost as a
+ * small table does: each block with controls of its own is drawn by a
+ * component that is asked at every key. So a document of 50 small tables has
+ * room to spare, and one of 500 callouts is past the budget with no table in
+ * it; that is reported too.
+ *
+ * Held where the cells are, in the browser: what is past the bound is left
+ * out in the order of the document and taken out of the shared document
+ * (`tablesPast` of ./extensions.tsx), and a change of this writer's that adds
+ * a table past it is not applied (`tableRefusal`, there). The collaboration
+ * server does not hold it: that work is paused. And as for the depth, a
+ * bound that is changed is not safe while a tab of another release has a
+ * document open.
+ */
+export const TABLE_COUNT_MOST = 50;
 
 /** The tables in a node: their cells, how deep they stand, and whether one of them is past a bound. */
 interface Held {
@@ -110,6 +144,19 @@ export function tablesIn(node: PMNode): Held {
     COUNTED.set(node, held);
   }
   return held;
+}
+
+const TABLES = new WeakMap<PMNode, number>();
+/** How many tables a node holds, itself among them where it is one, and those in cells among them. */
+export function tableCount(node: PMNode): number {
+  if (node.isLeaf || node.isTextblock) return 0;
+  let count = TABLES.get(node);
+  if (count === undefined) {
+    count = role(node) === 'table' ? 1 : 0;
+    for (const child of node.children) count += tableCount(child);
+    TABLES.set(node, count);
+  }
+  return count;
 }
 
 /**

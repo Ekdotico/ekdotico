@@ -64,10 +64,12 @@ import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
 import {
   TABLE_CELLS_MOST,
+  TABLE_COUNT_MOST,
   TABLE_DEPTH_MOST,
   TABLE_MOST,
   closeNested,
   tableRoom,
+  tableCount,
   tablesEndingCells,
   tablesIn,
 } from './table-bounds.ts';
@@ -802,9 +804,24 @@ export function mayApply(transaction: Transaction, editable: boolean): boolean {
  * should be; if one is, it can still be written in, and deleted from.
  */
 export function holdsTables(transaction: Transaction, before: PMNode): boolean {
+  return tableRefusal(transaction, before) === null;
+}
+
+/**
+ * Why a transaction is not applied, where it is for a bound on tables, and
+ * null where it is applied: `room`, where it would take a table past the
+ * bounds it shares with the tables in its cells (R32); `count`, where it
+ * would add a table to a document that then holds more than
+ * `TABLE_COUNT_MOST` (R58). One that adds none is applied whatever the
+ * document holds, so that a document past the bound can be written in, and
+ * deleted from.
+ */
+export function tableRefusal(transaction: Transaction, before: PMNode): 'room' | 'count' | null {
   const binding = transaction.getMeta(ySyncPluginKey) as { isChangeOrigin?: boolean } | undefined;
-  if (!transaction.docChanged || binding?.isChangeOrigin === true) return true;
-  return !tablesIn(transaction.doc).past || tablesIn(before).past;
+  if (!transaction.docChanged || binding?.isChangeOrigin === true) return null;
+  if (tablesIn(transaction.doc).past && !tablesIn(before).past) return 'room';
+  const count = tableCount(transaction.doc);
+  return count > TABLE_COUNT_MOST && count > tableCount(before) ? 'count' : null;
 }
 
 // The origin of a mending of the shared document. Not one the undo manager
@@ -828,6 +845,47 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
     else found.push(at);
   });
   return found;
+}
+
+/**
+ * The tables of the shared document that are past `TABLE_COUNT_MOST` (R58),
+ * each as the element that holds its block and the block's place in it: every
+ * block of a table after the first `TABLE_COUNT_MOST`, in the order of the
+ * document, one in a cell counted in its place. A block that is past the
+ * bound is not looked into: it goes with what it holds.
+ *
+ * In the order of the document, and not the newest, as everything that is
+ * left out is (`closeSchema`). Read from the shared document, before the text
+ * is built, and not from the text, because the text is what must not be
+ * built: sixty thousand tables are a page that does not answer.
+ *
+ * ponytail: every element of the shared document is visited at each change
+ * that arrives, which is a few milliseconds for the largest document there
+ * is. A count kept by the changes, if that ever shows in a profile.
+ */
+function tablesPast(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFragment, at: number][] {
+  type Element = Y.XmlFragment & { nodeName?: unknown };
+  const block = Object.values(schema.nodes).find(
+    (type) => type.contentMatch.defaultType?.spec.tableRole === 'table',
+  )?.name;
+  const past: [Y.XmlFragment, number][] = [];
+  let count = 0;
+  // What is still to be looked at, the first on top: never a function that
+  // calls itself, on a document that may be any depth.
+  const waiting: [parent: Y.XmlFragment, at: number, child: Element][] = [];
+  const open = (parent: Y.XmlFragment) => {
+    const children = parent.toArray() as Element[];
+    for (let at = children.length - 1; at >= 0; at -= 1) waiting.push([parent, at, children[at]!]);
+  };
+  open(shared);
+  for (let next = waiting.pop(); next; next = waiting.pop()) {
+    const [parent, at, child] = next;
+    // Text has no name, and holds no table.
+    if (typeof child.nodeName !== 'string') continue;
+    if (child.nodeName === block && (count += 1) > TABLE_COUNT_MOST) past.push([parent, at]);
+    else open(child);
+  }
+  return past;
 }
 
 /**
@@ -875,6 +933,24 @@ export function holdBinding(view: EditorView, unshown: () => void): void {
           if (stray.length > 0) {
             binding.doc.transact(() => {
               for (const at of stray.reverse()) binding.type.delete(at, 1);
+            }, MEND);
+          }
+          // R58, and before the text is built for the same reason: the text
+          // of a document with more tables than the bound is not to be built.
+          const past = tablesPast(binding.type, schema);
+          if (past.length > 0) {
+            binding.doc.transact(() => {
+              // From the last, so that no place moves before it is used; and
+              // those that stand side by side in one deletion, since each
+              // deletion counts its way to its place.
+              let end = past.length;
+              for (let at = past.length - 1; at >= 0; at -= 1) {
+                const [parent, place] = past[at]!;
+                const before = past[at - 1];
+                if (before && before[0] === parent && before[1] === place - 1) continue;
+                parent.delete(place, end - at);
+                end = at;
+              }
             }, MEND);
           }
         }
@@ -999,6 +1075,13 @@ function besideTable(editor: Editor, direction: 'up' | 'down' | 'left' | 'right'
  */
 const COUNTS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 export const TABLE_NO_ROOM = `The table has no room for this. A table and the tables in its cells hold ${TABLE_CELLS_MOST.toLocaleString('en-GB')} cells, ${COUNTS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep.`;
+/**
+ * The words for a table that was not added because the document holds as many
+ * as it may (R58). The requirements give none: written under the Expression
+ * Guidelines, in the manner of the sentence above. AWAITS THE OWNER, with the
+ * number it states.
+ */
+export const TABLE_NO_MORE = `The document has no room for another table. A document holds ${TABLE_COUNT_MOST.toLocaleString('en-GB')} tables.`;
 
 const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
   name: 'closed',
@@ -1020,7 +1103,8 @@ const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
       new Plugin({
         filterTransaction: (transaction, state) => {
           if (!mayApply(transaction, this.editor.isEditable)) return false;
-          const held = holdsTables(transaction, state.doc);
+          const refusal = tableRefusal(transaction, state.doc);
+          const held = refusal === null;
           // NFR-IC-19 (WCAG 3.3.1, 4.1.3): a change that is not made is said
           // to be so. Of this writer's own asking only: not what the binding
           // brings, and not what a plugin appends, which is the table
@@ -1031,7 +1115,7 @@ const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
             transaction.getMeta('appendedTransaction') === undefined;
           if (!held && asked) {
             said = true;
-            this.options.noRoom(TABLE_NO_ROOM);
+            this.options.noRoom(refusal === 'count' ? TABLE_NO_MORE : TABLE_NO_ROOM);
           } else if (held && transaction.docChanged && said) {
             said = false;
             this.options.noRoom(null);

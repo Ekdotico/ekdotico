@@ -25,9 +25,16 @@ import {
   holdBinding,
   mayApply,
 } from '../../src/app/(app)/documents/[id]/extensions.tsx';
-import { TABLE_NO_ROOM, holdsTables } from '../../src/app/(app)/documents/[id]/extensions.tsx';
+import {
+  TABLE_NO_MORE,
+  TABLE_NO_ROOM,
+  holdsTables,
+  tableRefusal,
+} from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import {
   TABLE_CELLS_MOST,
+  TABLE_COUNT_MOST,
+  tableCount,
   TABLE_DEPTH_MOST,
   closeNested,
   tableRoom,
@@ -776,22 +783,23 @@ describe('the tables in the cells of a table (R32)', () => {
     it('is made inside the bounds, and what is past them is taken out of the shared document: the writer’s text stays', () => {
       const editor = open(writers());
       const peer = peerOf(editor.fragment.doc!);
-      // Four by four in each cell of the writer's sixty by sixty: 3,600 + 57,600.
+      // Forty by forty in each of the first ten cells of the writer's sixty by
+      // sixty: 3,600 + 16,000, in eleven tables. There is room for four of them.
       peer.fragment.doc!.transact(() => {
-        for (let row = 0; row < 60; row += 1)
-          for (let column = 0; column < 60; column += 1)
-            cellAt(peer.fragment, row, column).push([
-              blockOf(
-                yGrid(4, 4, () => yCell(paragraph('x'))),
-                words(''),
-              ),
-            ]);
+        for (let column = 0; column < 10; column += 1)
+          cellAt(peer.fragment, 0, column).push([
+            blockOf(
+              yGrid(40, 40, () => yCell(paragraph('x'))),
+              words(''),
+            ),
+          ]);
       });
-      expect(yCells(peer.fragment)).toBe(61_200);
+      expect(yCells(peer.fragment)).toBe(19_600);
       peer.send();
 
       expect(editor.unshown).not.toHaveBeenCalled();
       expect(tablesIn(editor.text())).toEqual({ cells: 10_000, levels: 2, past: false });
+      expect(tableCount(editor.text())).toBe(5);
       expect(yCells(editor.fragment)).toBe(10_000);
       // Every word the writer wrote, in the text and in the shared document.
       for (const written of ['KEEP-THIS', 'w0.1', 'w30.30', 'w59.59', 'after']) {
@@ -827,6 +835,170 @@ describe('the tables in the cells of a table (R32)', () => {
         expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
       }
       expect(one.fragment.toString()).toBe(two.fragment.toString());
+    });
+  });
+
+  // The owner's decision R58 of 12 October 2026: a bound on the tables of one
+  // document. The number awaits the owner; it is the one the measurement gave.
+  describe('and the tables of one document (R58)', () => {
+    const small = (written: string) => blockOf([rowOf(written)], words(''));
+    const holding = (tables: number) => {
+      const document = new Y.Doc();
+      document
+        .getXmlFragment('default')
+        .push([
+          paragraph('KEEP-THIS'),
+          ...Array.from({ length: tables }, (_, at) => small(`t${at}`)),
+          paragraph('after'),
+        ]);
+      return document;
+    };
+    const yTables = (fragment: Y.XmlFragment) => fragment.toString().split('<tableblock').length - 1;
+    const texts = (editor: ReturnType<typeof open>) =>
+      editor
+        .text()
+        .textBetween(0, editor.text().content.size, ' ')
+        .split(' ')
+        .filter((word) => /^(t\d+|put-.*|in-.*)$/.test(word));
+
+    it('are fifty at most', () => {
+      expect(TABLE_COUNT_MOST).toBe(50);
+    });
+
+    it('keeps a document that holds fifty, and writes nothing to it', () => {
+      const document = holding(50);
+      const before = Buffer.from(Y.encodeStateAsUpdate(document)).toString('base64');
+      const editor = open(document);
+      expect(tableCount(editor.text())).toBe(50);
+      expect(Buffer.from(Y.encodeStateAsUpdate(document)).toString('base64')).toBe(before);
+      expect(editor.unshown).not.toHaveBeenCalled();
+    });
+
+    it('leaves out the tables past the bound, the last in the order of the document, one in a cell counted in its place; the writer’s text stays', () => {
+      const editor = open(holding(50));
+      const peer = peerOf(editor.fragment.doc!);
+      peer.fragment.doc!.transact(() => {
+        // One at the end, one at the top, and one in the cell of the eleventh.
+        peer.fragment.insert(peer.fragment.length - 1, [small('put-last')]);
+        (
+          (((peer.fragment.get(11) as Y.XmlElement).get(0) as Y.XmlElement).get(0) as Y.XmlElement).get(
+            0,
+          ) as Y.XmlElement
+        ).push([small('in-a-cell')]);
+        peer.fragment.insert(1, [small('put-first')]);
+      });
+      expect(yTables(peer.fragment)).toBe(53);
+      peer.send();
+
+      expect(editor.unshown).not.toHaveBeenCalled();
+      expect(tableCount(editor.text())).toBe(50);
+      expect(yTables(editor.fragment)).toBe(50);
+      // The first fifty as they stand: the one put first, eleven of the
+      // writer's, the one in the cell of the eleventh, and thirty-seven more.
+      expect(texts(editor)).toEqual([
+        'put-first',
+        ...Array.from({ length: 11 }, (_, at) => `t${at}`),
+        'in-a-cell',
+        ...Array.from({ length: 37 }, (_, at) => `t${at + 11}`),
+      ]);
+      for (const written of ['KEEP-THIS', 'after']) {
+        expect(editor.text().textContent).toContain(written);
+        expect(editor.fragment.toString()).toContain(written);
+      }
+      expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+      editor.text().check();
+      // Not this member's change.
+      expect(editor.undo.undoStack).toEqual([]);
+    });
+
+    it('is taken out the same by every client, of a document that is opened with more', () => {
+      const document = holding(60);
+      const second = new Y.Doc();
+      Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+      const [one, two] = [open(document), open(second)];
+      Y.applyUpdate(document, Y.encodeStateAsUpdate(second));
+      Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+      for (const editor of [one, two]) {
+        expect(editor.unshown).not.toHaveBeenCalled();
+        expect(tableCount(editor.text())).toBe(50);
+        expect(texts(editor).at(-1)).toBe('t49');
+        expect(editor.text().textContent).toContain('after');
+      }
+      expect(one.fragment.toString()).toBe(two.fragment.toString());
+    });
+
+    it('does not open a document of sixty thousand tables as sixty thousand', () => {
+      const document = holding(60_000);
+      const started = performance.now();
+      const editor = open(document);
+      expect(tableCount(editor.text())).toBe(50);
+      expect(yTables(editor.fragment)).toBe(50);
+      expect(editor.text().textContent).toContain('after');
+      expect(performance.now() - started).toBeLessThan(5000);
+    });
+
+    describe('and a change of this writer’s', () => {
+      const p = (written = '') => schema.node('paragraph', null, written ? [schema.text(written)] : []);
+      const table = () =>
+        schema.node('tableBlock', null, [
+          schema.node('table', null, [
+            schema.node('tableRow', null, [schema.node('tableCell', null, [p()])]),
+          ]),
+          schema.node('tableCaption'),
+        ]);
+      const state = (tables: number) =>
+        EditorState.create({
+          schema,
+          doc: schema.node('doc', null, [p('first'), ...Array.from({ length: tables }, table)]),
+        });
+
+      it('is not applied where it adds a table past the bound, wherever it adds it, and is applied at the bound', () => {
+        const room = state(49);
+        expect(tableRefusal(room.tr.insert(0, table()), room.doc)).toBeNull();
+        const full = state(50);
+        expect(tableRefusal(full.tr.insert(0, table()), full.doc)).toBe('count');
+        // In a cell of a table: one more all the same. After the paragraph of the first cell.
+        expect(full.doc.resolve(13).parent.type.name).toBe('tableCell');
+        expect(tableRefusal(full.tr.insert(13, table()), full.doc)).toBe('count');
+        expect(holdsTables(full.tr.insert(0, table()), full.doc)).toBe(false);
+        // What adds none is applied, and so is what takes one away, and what the binding brings.
+        expect(tableRefusal(full.tr.insertText('typed', 1), full.doc)).toBeNull();
+        expect(tableRefusal(full.tr.delete(7, 7 + table().nodeSize), full.doc)).toBeNull();
+        expect(
+          tableRefusal(
+            full.tr.insert(0, table()).setMeta(ySyncPluginKey, { isChangeOrigin: true }),
+            full.doc,
+          ),
+        ).toBeNull();
+      });
+
+      it('is applied in a document that is past the bound already, unless it adds a table', () => {
+        const past = state(60);
+        expect(tableRefusal(past.tr.insertText('typed', 1), past.doc)).toBeNull();
+        expect(tableRefusal(past.tr.delete(7, 7 + table().nodeSize), past.doc)).toBeNull();
+        expect(tableRefusal(past.tr.insert(0, table()), past.doc)).toBe('count');
+      });
+
+      it('is said in its own words, with the bound as it is', () => {
+        // Written out here, and not taken from the code under test.
+        expect(TABLE_NO_MORE).toBe('The document has no room for another table. A document holds 50 tables.');
+        const closed = all.find((each) => each.name === 'closed') as unknown as {
+          config: {
+            addProseMirrorPlugins(this: {
+              editor: { isEditable: boolean };
+              options: { noRoom(words: string | null): void };
+            }): Plugin[];
+          };
+        };
+        const noRoom = vi.fn();
+        const [plugin] = closed.config.addProseMirrorPlugins.call({
+          editor: { isEditable: true },
+          options: { noRoom },
+        });
+        const full = EditorState.create({ schema, doc: state(50).doc, plugins: [plugin!] });
+        expect(full.applyTransaction(full.tr.insert(0, table())).transactions).toEqual([]);
+        expect(noRoom.mock.calls).toEqual([[TABLE_NO_MORE]]);
+      });
     });
   });
 });
