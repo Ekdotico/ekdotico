@@ -197,6 +197,108 @@ describe('the Markdown input (FR-ED-14)', () => {
     expect(rules.map(({ name }) => name)).toContain(MARKDOWN_INPUT);
     expect(rules.find(({ name }) => name === MARKDOWN_INPUT)!.value).toHaveLength(10);
   });
+
+  // The rules as the editor runs them: the last key of a row handed to the
+  // library's plugin, in an editor that has turned on these rules alone.
+  function typing(content: object[], at: string) {
+    const made = new Editor({
+      element: null,
+      content: { type: 'doc', content },
+      extensions: extensions(new Y.Doc()),
+      enableInputRules: [MARKDOWN_INPUT],
+      enablePasteRules: false,
+    });
+    made.view.updateState(made.state.reconfigure({ plugins: made.extensionManager.plugins }));
+    let end = -1;
+    made.state.doc.descendants((node, pos) => {
+      if (end < 0 && node.type.name === at) end = pos + node.nodeSize - 1;
+    });
+    made.commands.setTextSelection(end);
+    const rules = made.state.plugins.find((plugin) => plugin.props.handleTextInput)!;
+    /** Types one character at the cursor. True where a rule took it. */
+    const key = (character: string) => {
+      const { from, to } = made.state.selection;
+      const taken = rules.props.handleTextInput!.call(rules, made.view, from, to, character, () =>
+        made.state.tr.insertText(character, from, to),
+      );
+      if (!taken) made.view.dispatch(made.state.tr.insertText(character, from, to));
+      return taken === true;
+    };
+    return { made, key };
+  }
+  const text = (written: string) => ({ type: 'text', text: written });
+  const SIGNS: [string, string, string][] = [
+    ['bold', '**kept*', '*'],
+    ['italic', '*kept', '*'],
+    ['strike', '~~kept~', '~'],
+    ['code', '`kept', '`'],
+  ];
+
+  it.each(SIGNS)('%s: the closing sign converts in a paragraph', (mark, before, last) => {
+    const { made, key } = typing([{ type: 'paragraph', content: [text(before)] }], 'paragraph');
+    expect(key(last)).toBe(true);
+    expect(made.state.doc.textContent).toBe('kept');
+    expect(made.state.doc.firstChild!.firstChild!.marks.map(({ type }) => type.name)).toEqual([mark]);
+  });
+
+  // FR-ED-09, Build phases: "the caption is plain text". It takes no mark, so
+  // a conversion there would take the signs and give nothing for them.
+  it.each(SIGNS)(
+    '%s: the closing sign converts nothing in a caption, which keeps its signs',
+    (_, before, last) => {
+      const table = {
+        type: 'tableBlock',
+        content: [
+          {
+            type: 'table',
+            content: [
+              { type: 'tableRow', content: [{ type: 'tableCell', content: [{ type: 'paragraph' }] }] },
+            ],
+          },
+          { type: 'tableCaption', content: [text(before)] },
+        ],
+      };
+      const { made, key } = typing([table], 'tableCaption');
+      expect(key(last)).toBe(false);
+      expect(made.state.doc.textContent).toBe(before + last);
+      made.state.doc.descendants((node) => expect(node.marks).toEqual([]));
+    },
+  );
+
+  // Every pattern is tried at every key, on the text of the block before the
+  // cursor. Each is linear in that text today. A later pattern with a
+  // quantifier inside a quantifier would take seconds on these lines.
+  it.each(Object.entries(MARKDOWN))('%s reads a line of 100 KB in a few milliseconds', (_, pattern) => {
+    const LINES = [
+      ...[
+        '*',
+        '`',
+        '~',
+        '#',
+        '-',
+        '_',
+        ' ',
+        'a',
+        '> ',
+        '1. ',
+        '* ',
+        '** ',
+        '**a ',
+        ' *a',
+        'a*',
+        '~~a ',
+        '`a ',
+      ].map((unit) => unit.repeat(Math.ceil(100_000 / unit.length))),
+      `**${'a '.repeat(50_000)}`,
+      `*${'a'.repeat(100_000)}`,
+      `${'a '.repeat(50_000)}**`,
+      `~~${'a~ '.repeat(33_000)}`,
+    ];
+    const at = performance.now();
+    for (const line of LINES)
+      for (const end of ['', '*', '**', '~~', '`', ' ', '\n', 'z']) pattern.test(line + end);
+    expect(performance.now() - at).toBeLessThan(500);
+  });
 });
 
 describe('the keyboard shortcuts (FR-ED-13)', () => {

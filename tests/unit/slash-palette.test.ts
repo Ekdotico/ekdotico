@@ -3,6 +3,8 @@
 // to the document. tests/e2e/editor.spec.ts presses the keys in a browser,
 // where the list is drawn and undo has a document to undo in.
 import { Editor, type JSONContent } from '@tiptap/core';
+import { Slice } from '@tiptap/pm/model';
+import { TextSelection } from '@tiptap/pm/state';
 import { ySyncPluginKey } from '@tiptap/y-tiptap';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
@@ -15,6 +17,7 @@ import {
   SLASH_LIST_ID,
   SLASH_NAMES,
   slashPalette,
+  slashQuery,
 } from '../../src/app/(app)/documents/[id]/slash-palette.tsx';
 import { SLASH_COMMANDS } from '../../src/lib/editor/slash-commands.ts';
 
@@ -58,6 +61,19 @@ function into(editor: Editor, type: string) {
 /** Types as a person does: one transaction for each character. */
 function type(editor: Editor, text: string) {
   for (const character of text) editor.view.dispatch(editor.state.tr.insertText(character));
+}
+
+/**
+ * A change of another client, as the collaboration binding applies it
+ * (`ProsemirrorBinding._typeChanged` of @tiptap/y-tiptap 3.0.9): the whole
+ * document replaced in one step, the cursor put back where it was, and the
+ * binding's mark on the transaction. No place maps through it.
+ */
+function peer(editor: Editor, content: Json[], cursor: number) {
+  const next = editor.schema.nodeFromJSON({ type: 'doc', content });
+  const tr = editor.state.tr.replace(0, editor.state.doc.content.size, new Slice(next.content, 0, 0));
+  tr.setSelection(TextSelection.create(tr.doc, cursor));
+  editor.view.dispatch(tr.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: false }));
 }
 
 /** A key pressed in the text, as ProseMirror hands it to the palette. True where the palette took it. */
@@ -184,16 +200,64 @@ describe('where the palette opens (FR-ED-10)', () => {
     type(editor, '/h');
     press(editor, 'ArrowDown');
     expect(slashPalette(editor.state).activeId).toBe('h2');
-    editor.view.dispatch(
-      editor.state.tr.insertText('More ', 1).setMeta(ySyncPluginKey, { isChangeOrigin: true }),
-    );
-    const shown = slashPalette(editor.state);
-    expect(shown).toMatchObject({
+    // Elsewhere in the document: the list stays, and Enter chooses the row.
+    peer(editor, [paragraph(words('More above')), paragraph(words('/h'))], 15);
+    expect(slashPalette(editor.state)).toMatchObject({
       open: true,
       activeId: 'h2',
       navigating: true,
       range: { from: 13, to: 15 },
     });
+    peer(editor, [paragraph(words('More')), paragraph(words('/h')), paragraph(words('Below'))], 9);
+    expect(slashPalette(editor.state)).toMatchObject({
+      open: true,
+      activeId: 'h2',
+      range: { from: 7, to: 9 },
+    });
+    expect(press(editor, 'Enter')).toBe(true);
+    expect(json(editor)).toEqual([
+      paragraph(words('More')),
+      { type: 'heading', attrs: { level: 2 } },
+      paragraph(words('Below')),
+    ]);
+  });
+
+  it('closes when another client rewrites the command, or takes its block away, and nothing is inserted', () => {
+    const rewritten = editorOf(paragraph(words('above')), paragraph());
+    rewritten.commands.setTextSelection(8);
+    type(rewritten, '/h');
+    peer(rewritten, [paragraph(words('above')), paragraph(words('/ta'))], 11);
+    expect(slashPalette(rewritten.state).open).toBe(false);
+    expect(slashAttributes(rewritten.state)).toStrictEqual({});
+    expect(press(rewritten, 'Enter')).toBe(false);
+    expect(json(rewritten)).toEqual([paragraph(words('above')), paragraph(words('/ta'))]);
+
+    const gone = editorOf(paragraph(words('above')), paragraph());
+    gone.commands.setTextSelection(8);
+    type(gone, '/h');
+    peer(gone, [paragraph(words('above'))], 6);
+    expect(slashPalette(gone.state).open).toBe(false);
+    expect(press(gone, 'Enter')).toBe(false);
+    expect(json(gone)).toEqual([paragraph(words('above'))]);
+  });
+
+  it('stays closed after Escape through another client’s change, until that client rewrites the command', () => {
+    const editor = editorOf(paragraph(words('above')), paragraph());
+    editor.commands.setTextSelection(8);
+    type(editor, '/h');
+    press(editor, 'Escape');
+    peer(editor, [paragraph(words('More above')), paragraph(words('/h'))], 15);
+    type(editor, '1');
+    expect(text(editor)).toBe('More above/h1');
+    expect(slashPalette(editor.state).open).toBe(false);
+    peer(editor, [paragraph(words('Yet more above')), paragraph(words('/h1'))], 20);
+    type(editor, '2');
+    expect(slashPalette(editor.state).open).toBe(false);
+    // Another command now, by another's hand: what the writer closed is gone, and typing in it asks anew.
+    peer(editor, [paragraph(words('above')), paragraph(words('/he'))], 11);
+    expect(slashPalette(editor.state).open).toBe(false);
+    type(editor, 'a');
+    expect(listed(editor)).toEqual(['h1', 'h2', 'h3']);
   });
 
   it('closes when the text loses the focus, and when the document can no longer be edited (FR-ED-18)', () => {
@@ -296,7 +360,7 @@ describe('the keys of the palette, and what the text says of it (NFR-IC-19)', ()
   it('leaves the keys of the text to the text, and every key to an input method that is composing', () => {
     const editor = editorOf();
     type(editor, '/h');
-    for (const each of ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Tab', 'Backspace', 'a']) {
+    for (const each of ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Backspace', 'a']) {
       expect(press(editor, each), each).toBe(false);
     }
     for (const each of ['Enter', 'ArrowDown', 'ArrowUp']) {
@@ -434,5 +498,127 @@ describe('a choice (FR-ED-12)', () => {
     press(editor, 'Enter');
     chooseSlashCommand(editor, 'h1');
     expect(json(editor)).toEqual([paragraph(words('/h1'))]);
+  });
+});
+
+describe('the command is the whole word the slash begins, wherever the cursor stands in it', () => {
+  it('filters on what the writer sees, and a choice replaces all of it', () => {
+    const editor = editorOf();
+    type(editor, '/h1');
+    editor.commands.setTextSelection(3);
+    // The cursor is between the h and the 1: the query is still h1.
+    expect(slashPalette(editor.state)).toMatchObject({ open: true, range: { from: 1, to: 4 } });
+    expect(listed(editor)).toEqual(['h1']);
+    editor.commands.setTextSelection(2);
+    expect(listed(editor)).toEqual(['h1']);
+    press(editor, 'Enter');
+    expect(json(editor)).toEqual([{ type: 'heading', attrs: { level: 1 } }, paragraph()]);
+  });
+
+  it('takes the word to the next white space, after a space as at the beginning', () => {
+    const editor = editorOf(paragraph(words('before  after')));
+    editor.commands.setTextSelection(8);
+    type(editor, '/quote');
+    editor.commands.setTextSelection(10);
+    expect(slashPalette(editor.state)).toMatchObject({ open: true, range: { from: 8, to: 14 } });
+    expect(listed(editor)).toEqual(['quote']);
+    // A letter typed inside the word is part of the query.
+    type(editor, 'x');
+    expect(slashPalette(editor.state)).toMatchObject({ open: true, options: [], range: { from: 8, to: 15 } });
+    editor.view.dispatch(editor.state.tr.delete(10, 11));
+    press(editor, 'Enter');
+    expect(json(editor)).toEqual([
+      paragraph(words('before ')),
+      { type: 'blockquote', content: [paragraph()] },
+      paragraph(words(' after')),
+    ]);
+  });
+
+  it('closes when the cursor is before the slash, past the word, or a range', () => {
+    const editor = editorOf(paragraph(words('a ')));
+    into(editor, 'paragraph');
+    type(editor, '/h');
+    for (const [anchor, head] of [
+      [3, 3],
+      [1, 1],
+      [4, 5],
+      [3, 5],
+    ] as const) {
+      editor.commands.setTextSelection(5);
+      type(editor, 'x');
+      editor.view.dispatch(editor.state.tr.delete(5, 6));
+      expect(slashPalette(editor.state).open, `${anchor}`).toBe(true);
+      editor.commands.setTextSelection({ from: anchor, to: head });
+      expect(slashPalette(editor.state).open, `${anchor} to ${head}`).toBe(false);
+      expect(slashAttributes(editor.state)).toStrictEqual({});
+    }
+  });
+
+  it('is no command where the word holds a second slash, on either side of the cursor', () => {
+    const editor = editorOf(paragraph(words('see /usr/bin')));
+    editor.commands.setTextSelection(7);
+    type(editor, 'x');
+    expect(text(editor)).toBe('see /uxsr/bin');
+    expect(slashPalette(editor.state).open).toBe(false);
+  });
+});
+
+describe('Tab, and a table in a table', () => {
+  it('closes on Tab and on Shift+Tab, and leaves the key to the text', () => {
+    for (const more of [{}, { shiftKey: true }]) {
+      const editor = editorOf();
+      type(editor, '/');
+      // False: the key is not taken, so it leaves the text, or indents a list item, as it does.
+      expect(press(editor, 'Tab', more)).toBe(false);
+      expect(slashPalette(editor.state).open).toBe(false);
+      expect(slashAttributes(editor.state)).toStrictEqual({});
+      expect(text(editor)).toBe('/');
+      // As after Escape: that slash opens nothing again.
+      type(editor, 'h');
+      expect(slashPalette(editor.state).open).toBe(false);
+    }
+  });
+
+  it('lists no table inside a table, in a cell or in a block in a cell (FR-ED-09 provides for none)', () => {
+    const table = SLASH_COMMANDS.find(({ name }) => name === 'table')!.inserts;
+    const editor = editorOf(table);
+    const others = ALL.filter((name) => name !== 'table');
+    type(editor, '/');
+    expect(listed(editor)).toEqual(others);
+    chooseSlashCommand(editor, 'table');
+    expect(text(editor)).toBe('/');
+    type(editor, 'table');
+    expect(slashPalette(editor.state)).toMatchObject({ open: true, options: [] });
+    expect(press(editor, 'Enter')).toBe(false);
+    // In a quotation in the cell.
+    editor.view.dispatch(editor.state.tr.delete(2, 7));
+    type(editor, 'quote');
+    press(editor, 'Enter');
+    type(editor, 'Quoted /');
+    expect(listed(editor)).toEqual(others);
+    let tables = 0;
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'table') tables += 1;
+    });
+    expect(tables).toBe(1);
+  });
+});
+
+describe('the time the matcher takes', () => {
+  // The pattern is linear in the line. A pattern with a quantifier inside a
+  // quantifier would take seconds on these: this fails long before that.
+  it.each([
+    ['slashes', '/'.repeat(100_000)],
+    ['a slash after each space', ' /'.repeat(50_000)],
+    ['one long command', `/${'a'.repeat(100_000)}`],
+    ['spaces, then a command', `${' '.repeat(100_000)}/h`],
+    ['a command, then letters and a slash', `x /h${'a'.repeat(100_000)}/`],
+  ])('reads a line of 100 KB of %s in a few milliseconds', (_, line) => {
+    const editor = editorOf(paragraph(words(line)));
+    const at = performance.now();
+    for (const cursor of [1, 5, 50_000, line.length + 1]) {
+      slashQuery(editor.state.doc.resolve(cursor));
+    }
+    expect(performance.now() - at).toBeLessThan(250);
   });
 });

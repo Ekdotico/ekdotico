@@ -78,22 +78,37 @@ interface Suggesting {
   active: boolean;
   range: Range;
   query: string | null;
+  text: string | null;
 }
 const SLASH = new PluginKey<Suggesting>('slashPalette');
 
-/** The row the writer has moved to, and whether the last key was a move in the list. */
-interface Moving {
+/** A command as it stood: where its `/` was, and its text. */
+interface Command {
+  from: number;
+  text: string;
+}
+
+/**
+ * What this file holds beside the library's plugin: the row the writer has
+ * moved to, whether the last key was a move in the list, and the command the
+ * writer closed the list on, for as long as the cursor stays in it.
+ */
+interface Held {
   activeId: string | null;
   navigating: boolean;
+  dismissed: Command | null;
 }
-const MOVING = new PluginKey<Moving>('slashPaletteMoving');
+const HELD = new PluginKey<Held>('slashPaletteHeld');
+type Moving = Pick<Held, 'activeId' | 'navigating'>;
 const STILL: Moving = { activeId: null, navigating: false };
 
 /**
  * FR-ED-10: the command at the cursor, where there is one: a `/` "at the
- * beginning of an empty block or following a space character", and what
- * stands between it and the cursor. At the beginning, the command is all the
- * block holds. Never in code, which is text as it is typed.
+ * beginning of an empty block or following a space character", and the whole
+ * word it begins, to the next white space or the end of the block, wherever
+ * in that word the cursor stands. So the filter is what the writer sees after
+ * the slash, and a choice replaces all of it. At the beginning, the command is
+ * all the block holds. Never in code, which is text as it is typed.
  *
  * The block's own text is read, and not the one run of text before the
  * cursor, which is what the library's own function reads: a `/` typed after
@@ -104,12 +119,30 @@ export function slashQuery($cursor: ResolvedPos): { range: Range; query: string;
   if (!block.isTextblock || block.type.spec.code) return null;
   // A node that is not text, a line break, stands as one character that is neither a space nor a letter.
   const before = block.textBetween(0, $cursor.parentOffset, undefined, '\n');
-  // A second slash ends the command: an address or a path is not one.
-  const found = /(^| )\/([^\s/]*)$/.exec(before);
+  const found = /(^| )\/(\S*)$/.exec(before);
   if (!found) return null;
-  const query = found[2]!;
+  const after = /^\S*/.exec(block.textBetween($cursor.parentOffset, block.content.size, undefined, '\n'))![0];
+  const query = found[2]! + after;
+  // A second slash ends the command: an address or a path is not one.
+  if (query.includes('/')) return null;
   if (found[1] === '' && block.content.size !== query.length + 1) return null;
-  return { range: { from: $cursor.pos - query.length - 1, to: $cursor.pos }, query, text: `/${query}` };
+  const from = $cursor.pos - found[2]!.length - 1;
+  return { range: { from, to: from + query.length + 1 }, query, text: `/${query}` };
+}
+
+/**
+ * Whether the command a transaction leaves at the cursor is the one that
+ * stood before it. By where its `/` is, for a change of this writer's. The
+ * collaboration binding applies every change of another client, and every
+ * undo, as one replacement of the whole document, through which no place
+ * maps, and puts the cursor back where it was: there the command is known by
+ * its text, so a change elsewhere in the document leaves it, and a change to
+ * the command itself does not.
+ */
+function same(transaction: Transaction, was: Command, range: Range, text: string): boolean {
+  return transaction.getMeta(ySyncPluginKey)
+    ? was.text === text
+    : transaction.mapping.map(was.from) === range.from;
 }
 
 /** Whether the command is all its block holds: the block is then replaced, and otherwise the new block follows it. */
@@ -120,9 +153,18 @@ const alone = ($from: ResolvedPos, range: Range) => range.from === $from.start()
  * block the command is alone in, or after the block it was typed in. A row
  * whose block cannot stand there is not listed, and where no row can, as in
  * the caption of a table, the palette does not open.
+ *
+ * A table does not stand inside a table: no requirement provides for one in
+ * a cell (FR-ED-09), though the schema would hold it. Reported for the
+ * register.
  */
 function stands(state: EditorState, range: Range, type: NodeType): boolean {
   const $from = state.doc.resolve(range.from);
+  if (type.name === 'tableBlock') {
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      if ($from.node(depth).type.name === 'tableBlock') return false;
+    }
+  }
   const index = $from.index(-1);
   return alone($from, range)
     ? $from.node(-1).canReplaceWith(index, index + 1, type)
@@ -169,7 +211,7 @@ export function slashPalette(state: EditorState): typeof CLOSED {
     label: SLASH_NAMES[name]!,
     detail: `/${name}`,
   }));
-  const moving = MOVING.getState(state) ?? STILL;
+  const moving = HELD.getState(state) ?? STILL;
   // The first match is marked unless the writer has moved to another that is still listed.
   const activeId = options.some(({ id }) => id === moving.activeId)
     ? moving.activeId
@@ -237,6 +279,15 @@ export function chooseSlashCommand(editor: Editor, name: string): void {
  * on Escape itself, after this.
  */
 function key(editor: Editor, view: EditorView, event: OptionListKeyEvent): boolean {
+  // Tab closes the list and then does what it does in the text: it leaves the
+  // text, or indents a list item. A list of more than eight rows scrolls, and
+  // Chromium makes a scroller a stop of Tab; the focus would go into the list,
+  // which goes when the text loses the focus, and be left on nothing. (A
+  // stopgap: the list itself should be no stop, which is the package's to say.)
+  if (event.key === 'Tab') {
+    closeSlashPalette(editor);
+    return false;
+  }
   const shown = slashPalette(view.state);
   const result = optionListKey(event, { ...shown, maxVisible: MOST_SHOWN });
   const navigating = optionListNavigating(event, result, shown.navigating);
@@ -246,7 +297,7 @@ function key(editor: Editor, view: EditorView, event: OptionListKeyEvent): boole
   }
   const activeId = result && 'activeId' in result ? result.activeId : shown.activeId;
   if (activeId !== shown.activeId || navigating !== shown.navigating) {
-    view.dispatch(view.state.tr.setMeta(MOVING, { activeId, navigating } satisfies Moving));
+    view.dispatch(view.state.tr.setMeta(HELD, { activeId, navigating } satisfies Moving));
   }
   return result !== null;
 }
@@ -277,28 +328,52 @@ export const SlashPalette = Extension.create({
         decorationClass: 'slash-command',
         findSuggestionMatch: ({ $position }) => slashQuery($position),
         allow: ({ state, range }) => offered(state, range, SLASH_COMMANDS).length > 0,
-        // Open already, on this `/`; or asked for now.
-        shouldShow: ({ range, transaction }) => {
+        // Not on the `/` the writer closed the list on. Otherwise: open
+        // already, on this `/`; or asked for now. The states read here are
+        // those before the whole dispatch, so a transaction a plugin appends
+        // to one that opened the list would close it; nothing appends one to
+        // typing in a command. (The library remembers a closed list too, by
+        // the place of its `/`: it agrees with this for the writer's own
+        // changes, and after another client's it holds a place no command has.)
+        shouldShow: ({ range, text, transaction }) => {
           const was = SLASH.getState(editor.state);
+          const dismissed = HELD.getState(editor.state)?.dismissed;
+          if (dismissed && same(transaction, dismissed, range, text)) return false;
           return (
-            (was?.active === true && transaction.mapping.map(was.range.from) === range.from) ||
+            (was?.active === true &&
+              same(transaction, { from: was.range.from, text: was.text ?? '' }, range, text)) ||
             opens(transaction, range, editor.view.composing)
           );
         },
         render: () => ({ onKeyDown: ({ view, event }) => key(editor, view, event) }),
       }),
-      new Plugin<Moving>({
-        key: MOVING,
+      new Plugin<Held>({
+        key: HELD,
         state: {
-          init: () => STILL,
-          apply(transaction, was) {
-            const moved = transaction.getMeta(MOVING) as Moving | undefined;
-            if (moved) return moved;
+          init: () => ({ ...STILL, dismissed: null }),
+          apply(transaction, was, before, state) {
+            let { dismissed } = was;
+            const suggesting = SLASH.getState(before);
+            if ((transaction.getMeta(SLASH) as { exit?: boolean } | undefined)?.exit) {
+              // Closed by the writer: by Escape, a press outside, Tab, or the loss of the focus.
+              if (suggesting?.active)
+                dismissed = { from: suggesting.range.from, text: suggesting.text ?? '' };
+            } else if (dismissed) {
+              // Until the cursor leaves the command, or the command is another.
+              const now = state.selection.empty ? slashQuery(state.selection.$from) : null;
+              dismissed =
+                now && same(transaction, dismissed, now.range, now.text)
+                  ? { from: now.range.from, text: now.text }
+                  : null;
+            }
+            const moved = transaction.getMeta(HELD) as Moving | undefined;
+            if (moved) return { ...moved, dismissed };
             // Text arrived or the cursor moved, with a key or without one: the
             // move in the list is over, and a new filter starts at its first
             // match. Another client's change is neither.
             const own = !transaction.getMeta(ySyncPluginKey);
-            return own && (transaction.docChanged || transaction.selectionSet) ? STILL : was;
+            const moving = own && (transaction.docChanged || transaction.selectionSet) ? STILL : was;
+            return { activeId: moving.activeId, navigating: moving.navigating, dismissed };
           },
         },
         props: { attributes: slashAttributes },
@@ -330,7 +405,7 @@ export function SlashPaletteList({ editor }: { editor: Editor }) {
       // The pointer moved onto a row: marked, and no move by key.
       onActiveChange={(activeId) =>
         editor.view.dispatch(
-          editor.state.tr.setMeta(MOVING, { activeId, navigating: shown.navigating } satisfies Moving),
+          editor.state.tr.setMeta(HELD, { activeId, navigating: shown.navigating } satisfies Moving),
         )
       }
       onSelect={(name) => chooseSlashCommand(editor, name)}

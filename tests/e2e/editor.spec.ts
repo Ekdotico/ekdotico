@@ -800,12 +800,27 @@ test('the slash palette opens where the requirement says, filters by name and al
   await expect(list).toBeHidden();
   await expect(page.getByText(NO_BLOCK).first()).toBeVisible();
   await expect(doc).not.toHaveAttribute('aria-controls');
+  // What a screen reader is told of it: the same words, once.
+  await expect(page.getByRole('status').filter({ hasText: NO_BLOCK })).toHaveText(NO_BLOCK);
   await page.keyboard.press('Backspace');
   await expect(rows(page)).toHaveText(['Numbered list/numbered']);
 
   // FR-ED-10: Escape. The text stays as typed, the focus stays, and that slash opens nothing again.
+  // The key is the palette's while it is open, and nothing else on the page is to act on it.
+  await page.evaluate(() => {
+    const seen = window as unknown as { escapes: boolean[] };
+    seen.escapes = [];
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') seen.escapes.push(event.defaultPrevented);
+    });
+  });
   await page.keyboard.press('Escape');
   await expect(list).toBeHidden();
+  // The default of the key was prevented, which is what a dialog round the
+  // text reads. (The editor prevents it with the list closed as well, which is
+  // not the palette's doing: tests/unit/slash-palette.test.ts holds the
+  // palette to taking the key only while it is open.)
+  expect(await page.evaluate(() => (window as unknown as { escapes: boolean[] }).escapes)).toEqual([true]);
   await expect(doc).toHaveText('/OL');
   await expect(doc).toBeFocused();
   await page.keyboard.type('q');
@@ -900,6 +915,229 @@ test('the slash palette opens where the requirement says, filters by name and al
   expect(box.y + box.height).toBeLessThanOrEqual(640);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   await page.keyboard.press('Escape');
+
+  // In a short viewport, at the foot of a long document, the list does not cover the line being typed in.
+  await page.setViewportSize({ width: 640, height: 360 });
+  await newLastLine(page);
+  await page.keyboard.type('/');
+  await expect(rows(page)).toHaveCount(13);
+  const drawn = (await list.locator('xpath=..').boundingBox())!;
+  const line = (await doc.locator('.slash-command').boundingBox())!;
+  expect(line.y).toBeGreaterThanOrEqual(0);
+  expect(line.y + line.height).toBeLessThanOrEqual(360);
+  expect(drawn.y).toBeGreaterThanOrEqual(0);
+  expect(drawn.y + drawn.height).toBeLessThanOrEqual(360);
+  expect(drawn.y >= line.y + line.height || drawn.y + drawn.height <= line.y).toBe(true);
+  await page.keyboard.press('Escape');
+});
+
+/** The text of the paragraph of the shared document that holds `written` and nothing else. */
+function sharedText(shared: Y.Doc, written: string): Y.XmlText {
+  const found = shared
+    .getXmlFragment('default')
+    .toArray()
+    .flatMap((block) => (block instanceof Y.XmlElement ? block.toArray() : []))
+    .find((each) => each instanceof Y.XmlText && each.toString() === written);
+  if (!(found instanceof Y.XmlText))
+    throw new Error('the test found no such paragraph in the shared document');
+  return found;
+}
+
+test('the slash palette stays open through another client’s change elsewhere, and closes when that client rewrites the command', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const other = await connectAs(page.context(), id);
+  const shared = other.provider.document;
+  let sent = 0;
+  /** Another client writes a paragraph at the head of the document, and this page shows it. */
+  const elsewhere = async () => {
+    sent += 1;
+    shared.getXmlFragment('default').insert(0, [paragraph(`From another client, ${sent}.`)]);
+    await expect(doc.locator(':scope > p').first()).toHaveText(`From another client, ${sent}.`);
+  };
+  try {
+    await doc.focus();
+    await page.keyboard.type('Above');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('/h');
+    await page.keyboard.press('ArrowDown');
+    await expect(rows(page).nth(1)).toHaveAttribute('aria-selected', 'true');
+    const moved = (await rows(page).nth(1).getAttribute('id'))!;
+
+    // The collaboration binding replaces the whole document for every change of another client.
+    await elsewhere();
+    await elsewhere();
+    await expect(rows(page)).toHaveText(['Heading 1/h1', 'Heading 2/h2', 'Heading 3/h3', 'Divider/divider']);
+    await expect(rows(page).nth(1)).toHaveAttribute('aria-selected', 'true');
+    await expect(doc).toHaveAttribute('aria-activedescendant', moved);
+    await expect(doc).toBeFocused();
+    // And Enter chooses the row the writer moved to.
+    await page.keyboard.press('Enter');
+    await expect(doc.locator('h2')).toHaveCount(1);
+    await expect(doc.getByText('/h', { exact: true })).toHaveCount(0);
+    await page.keyboard.type('Chosen');
+    await expect(doc.locator('h2')).toHaveText('Chosen');
+
+    // The other client rewrites the command itself: the list goes, and Enter inserts nothing.
+    await newLastLine(page);
+    await page.keyboard.type('/h');
+    await expect(rows(page)).toHaveCount(4);
+    sharedText(shared, '/h').insert(2, 'zz');
+    await expect(doc.locator(':scope > p').filter({ hasText: '/hzz' })).toHaveCount(1);
+    await expect(palette(page)).toBeHidden();
+    await expect(page.getByText(NO_BLOCK).first()).toBeHidden();
+    await expect(doc).not.toHaveAttribute('aria-controls');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    await expect(doc.locator('h1, h3, hr')).toHaveCount(0);
+    await expect(doc.locator('h2')).toHaveCount(1);
+    // Enter was the text's key: it broke the line at the cursor, and the command is still text.
+    await expect(doc.getByText('/h', { exact: true })).toHaveCount(1);
+    await expect(doc.getByText('zz', { exact: true })).toHaveCount(1);
+
+    // Closed with Escape, the list stays closed for that slash through another client's change.
+    await newLastLine(page);
+    await page.keyboard.type('/t');
+    await expect(rows(page)).toHaveCount(3);
+    await page.keyboard.press('Escape');
+    await elsewhere();
+    await page.keyboard.type('o');
+    await page.waitForTimeout(300);
+    await expect(palette(page)).toBeHidden();
+    await expect(doc.locator(':scope > p').last()).toHaveText('/to');
+  } finally {
+    other.close();
+  }
+});
+
+test('the slash palette: Tab, the cursor inside the command and out of it, and one undo of a Markdown conversion', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  const list = palette(page);
+  const closed = async (why: string) => {
+    await expect(list, why).toBeHidden();
+    await expect(doc, why).not.toHaveAttribute('aria-controls');
+  };
+  /** Where the focus is: in the text, in the list, or the element that has it. */
+  const focus = () =>
+    page.evaluate(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body) return 'nothing';
+      if (active.closest('[role="listbox"]')) return 'the list';
+      if (active.closest('[role="textbox"]')) return 'the text';
+      // The words of a control may change (the sync status): its place among its kind does not.
+      return `${active.tagName} ${[...document.querySelectorAll(active.tagName)].indexOf(active)}`;
+    });
+  // Every element the focus comes to, from here on.
+  await page.evaluate(() => {
+    const seen = window as unknown as { inList: boolean };
+    seen.inList = false;
+    document.addEventListener('focusin', (event) => {
+      if ((event.target as Element).closest('[role="listbox"]')) seen.inList = true;
+    });
+  });
+  await doc.focus();
+
+  // Where Tab and Shift+Tab take the focus from the text with no list open.
+  await page.keyboard.press('Tab');
+  const next = await focus();
+  await page.keyboard.press('Shift+Tab');
+  expect(await focus()).toBe('the text');
+  await page.keyboard.press('Shift+Tab');
+  const previous = await focus();
+  await page.keyboard.press('Tab');
+  expect(await focus()).toBe('the text');
+  expect(previous).not.toBe('nothing');
+
+  // Tab, with the whole list open: thirteen rows, so the list scrolls, and a
+  // scroller is a stop of Tab in Chromium. The list closes before the browser
+  // looks for the next stop: the focus goes where it goes with no list, comes
+  // back to the text, and is never in the list.
+  await page.keyboard.type('/');
+  await expect(rows(page)).toHaveCount(13);
+  await page.keyboard.press('Tab');
+  await closed('after Tab');
+  expect(await focus()).toBe(next);
+  await page.keyboard.press('Shift+Tab');
+  expect(await focus()).toBe('the text');
+  await expect(doc).toBeFocused();
+  await expect(doc).toHaveText('/');
+  // And Shift+Tab, back and forth.
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type('/');
+  await expect(rows(page)).toHaveCount(13);
+  await page.keyboard.press('Shift+Tab');
+  await closed('after Shift+Tab');
+  expect(await focus()).toBe(previous);
+  await page.keyboard.press('Tab');
+  await expect(doc).toBeFocused();
+  expect(await page.evaluate(() => (window as unknown as { inList: boolean }).inList)).toBe(false);
+  // In a list item Tab is the text's key and indents: the list closes there too.
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type('- one');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('two /');
+  await expect(rows(page)).toHaveCount(13);
+  await page.keyboard.press('Tab');
+  await closed('after Tab in a list item');
+  await expect(doc).toBeFocused();
+  await expect(doc.locator('ul ul > li')).toHaveText('two /');
+
+  // The command is the whole word the slash begins: with the cursor inside
+  // it, the filter is still what stands on the page, and a choice replaces all of it.
+  await newLastLine(page);
+  await page.keyboard.type('a /he');
+  await expect(rows(page)).toHaveText(['Heading 1/h1', 'Heading 2/h2', 'Heading 3/h3']);
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(200);
+  await expect(rows(page)).toHaveText(['Heading 1/h1', 'Heading 2/h2', 'Heading 3/h3']);
+  await expect(doc).toHaveAttribute('aria-controls', LIST_ID);
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('h1')).toHaveCount(1);
+  await expect(doc.locator(':scope > p').filter({ hasText: /^a $/ })).toHaveCount(1);
+  // Nothing of the command is left: no "e" in a paragraph of its own.
+  await expect(doc.getByText('e', { exact: true })).toHaveCount(0);
+  await expect(doc.getByText('/he')).toHaveCount(0);
+
+  // The cursor leaves the command: before the slash, by Home, or as a range. The list goes.
+  for (const [leave, how] of [
+    [['ArrowLeft', 'ArrowLeft', 'ArrowLeft'], 'Left, to before the slash'],
+    [['Home'], 'Home'],
+    [['Shift+ArrowLeft'], 'a range'],
+  ] as const) {
+    await newLastLine(page);
+    await page.keyboard.type('b /q');
+    await expect(rows(page), how).toHaveText(['Quote/quote']);
+    for (const each of leave) await page.keyboard.press(each);
+    await closed(how);
+    await expect(doc.locator(':scope > p').last(), how).toHaveText('b /q');
+    await expect(doc, how).toBeFocused();
+    // Enter is then the text's, and inserts no block.
+    await expect(doc.locator('blockquote'), how).toHaveCount(0);
+  }
+
+  // FR-ED-14 and FR-ED-16: one undo after a Markdown conversion takes back
+  // the conversion alone, and leaves what was typed as it was typed.
+  await newLastLine(page);
+  await page.waitForTimeout(700);
+  await page.keyboard.type('## ');
+  await expect(doc.locator('h2')).toHaveCount(1);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(doc.locator('h2')).toHaveCount(0);
+  expect(
+    await doc
+      .locator(':scope > p')
+      .last()
+      .evaluate((element) => element.textContent),
+  ).toBe('## ');
 });
 
 test('the slash palette does not open in the read-only state, and one that is open closes', async ({
