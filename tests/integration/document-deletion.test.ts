@@ -37,7 +37,7 @@ const { createDocument, renameDocument } = await import('../../src/lib/documents
 const { CLAIM_STALE_MS, deleteDocument, deleteExpiredDocuments, listDeletedDocuments, restoreDocument } =
   await import('../../src/lib/documents/deletion.ts');
 const { istorico } = await import('../../src/lib/istorico/index.ts');
-const { securityLogIn } = await import('../../src/lib/security-log.ts');
+const { deleteExpiredSecurityLog, securityLogIn } = await import('../../src/lib/security-log.ts');
 const { applyState } = await import('../../src/lib/collab/state.ts');
 const { COLLAB_PATH, REFUSAL } = await import('../../src/lib/collab/protocol.ts');
 const { COLLAB_EVENTS_CHANNEL, publishCollabEvent, readEvent, subscribeCollabEvents } =
@@ -1184,10 +1184,81 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
     expect((await restore(owner.cookie, recent)).status).toBe(200);
     // The no-op adapter reports no erasure capability: no request is made.
     expect(erase).not.toHaveBeenCalled();
-    // No entry is written here: NFR-SE-19 names no kind for it (reported).
-    expect(await logged()).toEqual([]);
-    // Idempotent: a second run finds nothing, and fails nothing.
+    // NFR-SE-19; R47 (register row D161, pending): "An entry of its own, with
+    // the document's identifier and no user, written with the deletion."
+    const entry = { kind: 'document_deleted_permanently', userId: null, documentId: ended };
+    expect(await logged()).toEqual([entry]);
+    // Idempotent: a second run finds nothing, fails nothing, and writes nothing.
     expect(await deleteExpiredDocuments()).toEqual({ deleted: 0, kept: 0 });
+    expect(await logged()).toEqual([entry]);
+  });
+
+  it('leaves the entry when the document is gone, beside the entry of the Owner’s deletion, until the log’s own retention', async () => {
+    const id = await documentOf(owner.id);
+    expect((await remove(owner.cookie, id)).status).toBe(204);
+    await deletedAgo(id, owner.id, 30 * DAY_MS + MINUTE_MS);
+    expect(await deleteExpiredDocuments()).toEqual({ deleted: 1, kept: 0 });
+    expect(await exists(id)).toBe(false);
+    // The column refers to no row: nothing of the log went with the document.
+    const both = [
+      { kind: 'document_deleted', userId: owner.id, documentId: id },
+      { kind: 'document_deleted_permanently', userId: null, documentId: id },
+    ];
+    expect(await logged()).toEqual(both);
+    // The log deletes by the time alone (NFR-RE-15): nothing yet.
+    expect(await deleteExpiredSecurityLog()).toBe(0);
+    expect(await logged()).toEqual(both);
+  });
+
+  /**
+   * Makes the next transaction fail where it writes its entry: before the
+   * entry is written, or, with `written`, after it. Either way everything the
+   * transaction did must be undone, the deletion of the row and the entry.
+   */
+  function faultAtEntry(written: boolean) {
+    type Work = (tx: Record<string, unknown>) => Promise<unknown>;
+    const client = db() as unknown as { $transaction: (work: Work) => Promise<unknown> };
+    const original = client.$transaction.bind(client);
+    vi.spyOn(client, '$transaction').mockImplementationOnce((work) =>
+      original((tx) => {
+        const entries = tx.securityLogEntry as { create: (...args: unknown[]) => Promise<unknown> };
+        const failing = new Proxy(entries, {
+          get: (target, key) =>
+            key === 'create'
+              ? async (...args: unknown[]) => {
+                  if (written) await target.create(...args);
+                  throw new Error('the transaction failed at its entry');
+                }
+              : Reflect.get(target, key),
+        });
+        return work(
+          new Proxy(tx, {
+            get: (target, key) => (key === 'securityLogEntry' ? failing : Reflect.get(target, key)),
+          }),
+        );
+      }),
+    );
+  }
+
+  it.each([
+    ['where the entry cannot be written, the document is not deleted', false],
+    ['where the transaction fails after the entry, neither the deletion nor the entry stands', true],
+  ])('writes the entry in the transaction of the deletion: %s', async (_name, written) => {
+    const id = await due();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    faultAtEntry(written);
+    expect(await deleteExpiredDocuments()).toEqual({ deleted: 0, kept: 1 });
+    expect(errors.mock.calls).toEqual([[`permanent deletion: document ${id} kept (Error)`]]);
+    // The row stands, with its state and its claim, and there is no entry.
+    expect((await row(id))!.deletionClaimedAt).not.toBeNull();
+    expect(await logged()).toEqual([]);
+    // The run that finds the claim an hour old deletes it, and writes the one entry.
+    expect(await deleteExpiredDocuments(new Date(Date.now() + CLAIM_STALE_MS + MINUTE_MS))).toEqual({
+      deleted: 1,
+      kept: 0,
+    });
+    expect(await exists(id)).toBe(false);
+    expect(await logged()).toEqual([{ kind: 'document_deleted_permanently', userId: null, documentId: id }]);
   });
 
   it('makes no request to Istorico for a recorded document either, while the adapter reports no erasure', async () => {
@@ -1314,6 +1385,29 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
     for (const id of ids) expect(await exists(id)).toBe(false);
     // The claim: each document was one run's, so Istorico was asked once for each.
     expect(erase.mock.calls.map(([input]) => input.requestId).sort()).toEqual([...ids].sort());
+    // And one entry for each, whichever run deleted it.
+    expect((await logged()).map((each) => each.documentId).sort()).toEqual([...ids].sort());
+  });
+
+  it('writes one entry where two runs reach the deletion of one document together', async () => {
+    const id = await due('RECORDED');
+    // Both hold the claim: the second took it over while the first waited for Istorico.
+    const erase = erasing();
+    let second: Promise<{ deleted: number; kept: number }> | undefined;
+    erase.mockImplementation(async (input) => {
+      const answer = {
+        ok: true as const,
+        value: [{ documentId: input.documents[0]!.documentId, outcome: 'erased' as const }],
+      };
+      if (second) return answer;
+      second = deleteExpiredDocuments(new Date(Date.now() + CLAIM_STALE_MS + MINUTE_MS));
+      await second;
+      return answer;
+    });
+    const first = await deleteExpiredDocuments();
+    expect(first.deleted + (await second!).deleted).toBe(1);
+    expect(await exists(id)).toBe(false);
+    expect(await logged()).toEqual([{ kind: 'document_deleted_permanently', userId: null, documentId: id }]);
   });
 
   it('deletes each document once under two processes, and neither fails', { timeout: 30_000 }, async () => {
@@ -1333,6 +1427,9 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
     expect(outcomes[0]!.deleted + outcomes[1]!.deleted).toBe(ids.length);
     expect(outcomes[0]!.kept + outcomes[1]!.kept).toBe(0);
     for (const id of ids) expect(await exists(id)).toBe(false);
+    // One entry for each document, whichever process deleted it.
+    expect(await logged()).toHaveLength(ids.length);
+    expect((await logged()).map((each) => each.documentId).sort()).toEqual([...ids].sort());
   });
 
   it('leaves a document another run has claimed, and takes over a claim that was never finished', async () => {
@@ -1366,7 +1463,8 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
     const erase = erasing();
     // The database fails at the last step, with an error that quotes a row.
     const lost = Object.assign(new Error(`connection lost ${TITLE}`), { code: 'P1001' });
-    vi.spyOn(db().document, 'deleteMany').mockRejectedValueOnce(lost);
+    // The last step is a transaction since it writes its entry with the deletion.
+    vi.spyOn(db(), '$transaction').mockRejectedValueOnce(lost);
 
     const from = Date.now();
     expect(await deleteExpiredDocuments()).toEqual({ deleted: 0, kept: 1 });

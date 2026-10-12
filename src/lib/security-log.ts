@@ -39,6 +39,11 @@ const KINDS = [
   'permission_set_changed',
   'owner_changed',
   'document_deleted',
+  // The owner's decision R47 of 12 October 2026 (register row D161, pending):
+  // the permanent deletion of a document (FR-ED-36) has an entry of its own,
+  // with the document and no user, written with the deletion
+  // (src/lib/documents/deletion.ts).
+  'document_deleted_permanently',
   'account_deletion_connections_closed',
   'account_deletion_istorico_pseudonymised',
   'account_deletion_feedback_pseudonymised',
@@ -72,6 +77,7 @@ export type ChangeKind = Extract<
   | 'permission_set_changed'
   | 'owner_changed'
   | 'document_deleted'
+  | 'document_deleted_permanently'
   | 'account_deletion_connections_closed'
   | 'account_deletion_istorico_pseudonymised'
   | 'account_deletion_feedback_pseudonymised'
