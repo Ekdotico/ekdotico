@@ -22,7 +22,7 @@
 'use client';
 
 import { Extension, type Editor, type Range } from '@tiptap/core';
-import type { NodeType, ResolvedPos } from '@tiptap/pm/model';
+import type { ResolvedPos } from '@tiptap/pm/model';
 import { Plugin, PluginKey, Selection, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { ReplaceStep } from '@tiptap/pm/transform';
 import type { EditorView } from '@tiptap/pm/view';
@@ -40,8 +40,10 @@ import {
 import {
   matchSlashCommands,
   SLASH_COMMANDS,
+  type Block,
   type SlashCommand,
 } from '../../../../lib/editor/slash-commands.ts';
+import { tableRoom, tablesIn } from './table-bounds.ts';
 
 /** The id of the list, which the text names while the list shows a row. */
 export const SLASH_LIST_ID = 'slash-commands';
@@ -171,16 +173,18 @@ const alone = ($from: ResolvedPos, range: Range) => range.from === $from.start()
  * whose block cannot stand there is not listed, and where no row can, as in
  * the caption of a table, the palette does not open.
  *
- * A table does not stand inside a table: no requirement provides for one in
- * a cell (FR-ED-09), though the schema would hold it. Reported for the
- * register.
+ * A table stands in a cell of a table (the owner's decision R32 of 12 October
+ * 2026), for as long as the tables are inside the bounds they share: the row
+ * is not listed in a cell of the deepest table there may be, nor where the
+ * outermost table has no room for the cells of a new one (./table-bounds.ts).
  */
-function stands(state: EditorState, range: Range, type: NodeType): boolean {
+function stands(state: EditorState, range: Range, block: Block): boolean {
   const $from = state.doc.resolve(range.from);
+  const type = state.schema.nodes[block.type]!;
   if (type.name === 'tableBlock') {
-    for (let depth = $from.depth; depth > 0; depth -= 1) {
-      if ($from.node(depth).type.name === 'tableBlock') return false;
-    }
+    const room = tableRoom($from);
+    const brings = tablesIn(state.schema.nodeFromJSON(block));
+    if (brings.levels > room.levels || brings.cells > room.cells) return false;
   }
   const index = $from.index(-1);
   return alone($from, range)
@@ -189,7 +193,7 @@ function stands(state: EditorState, range: Range, type: NodeType): boolean {
 }
 
 const offered = (state: EditorState, range: Range, commands: readonly SlashCommand[]) =>
-  commands.filter(({ inserts }) => stands(state, range, state.schema.nodes[inserts.type]!));
+  commands.filter(({ inserts }) => stands(state, range, inserts));
 
 /**
  * Whether a transaction is a request for the palette: this writer typed the
@@ -288,19 +292,26 @@ export function chooseSlashCommand(editor: Editor, name: string): void {
     tr.insert(at, node);
   }
   let cursor = at + 1;
-  if (node.isLeaf) {
-    // A block that holds no text. The cursor goes after it, into text: a
-    // block that is selected whole is replaced by the next letter typed. So
-    // where no text follows, an empty paragraph does, as after the library's
-    // own horizontal rule.
-    cursor = at + node.nodeSize;
-    const $after = tr.doc.resolve(cursor);
-    const paragraph = state.schema.nodes.paragraph!;
-    const next = $after.nodeAfter;
-    if ((!next || next.isLeaf) && $after.parent.canReplaceWith($after.index(), $after.index(), paragraph)) {
-      tr.insert(cursor, paragraph.create());
-    }
+  const $after = tr.doc.resolve(at + node.nodeSize);
+  const paragraph = state.schema.nodes.paragraph!;
+  const next = $after.nodeAfter;
+  // A block that holds no text. The cursor goes after it, into text: a
+  // block that is selected whole is replaced by the next letter typed. So
+  // where no text follows, an empty paragraph does, as after the library's
+  // own horizontal rule.
+  //
+  // And a table that ends the block it was put in is followed by one too
+  // (R32): the arrow keys step from a table to the nearest text, so a cell
+  // that held a table and nothing else could not be written in, and the menu
+  // of the table round it could not be reached from that cell, by keyboard.
+  // (At the end of the document the library puts the same paragraph itself.)
+  if (
+    (node.isLeaf ? !next || next.isLeaf : !next && tablesIn(node).levels > 0) &&
+    $after.parent.canReplaceWith($after.index(), $after.index(), paragraph)
+  ) {
+    tr.insert($after.pos, paragraph.create());
   }
+  if (node.isLeaf) cursor = $after.pos;
   tr.setSelection(Selection.near(tr.doc.resolve(cursor), 1)).scrollIntoView();
   // Undo joins what is typed within half a second into one step (FR-ED-16,
   // over Yjs). The choice begins a step of its own, so that undoing it leaves
