@@ -76,26 +76,67 @@ async function paste(page: Page, html: string) {
 }
 
 /**
- * Puts the cursor in a block by a press on it. The editor reads where a press
- * put the cursor a few milliseconds after it, sooner than a person can type
- * and later than a test does: so the test waits.
+ * Where the editor holds the cursor, which is not always where the browser
+ * draws it. A press, an arrow key and a range set by a script move the
+ * browser's cursor, and the editor reads the move when the browser tells of
+ * it, some milliseconds later: sooner than a person can type, and later than
+ * a test does. And for 20 ms after the text takes the focus the editor's
+ * library may put the browser's cursor back where the editor holds it
+ * (prosemirror-view, the handler of `focus`), on a timer that a busy machine
+ * runs late: 76 ms was measured. A move made before it is then taken back.
+ *
+ * So a test that moves the cursor waits for this, and not for a time, and
+ * moves it again where the move was taken back.
  */
+function held(block: Locator) {
+  return block.evaluate((element) => {
+    const { editor } = element.closest('.ekd-editor') as unknown as {
+      editor: {
+        state: { selection: { empty: boolean; anchor: number; head: number } };
+        view: {
+          dom: HTMLElement;
+          domAtPos(pos: number): { node: Node };
+          posAtDOM(node: Node, offset: number): number;
+        };
+      };
+    };
+    const { selection } = editor.state;
+    const drawn = element.ownerDocument.getSelection()!;
+    const at = (node: Node | null, offset: number) =>
+      node && editor.view.dom.contains(node) ? editor.view.posAtDOM(node, offset) : -1;
+    return {
+      /** The editor holds the cursor in the block, and where the browser draws it: it has read the move. */
+      inside:
+        element.contains(editor.view.domAtPos(selection.head).node) &&
+        at(drawn.anchorNode, drawn.anchorOffset) === selection.anchor &&
+        at(drawn.focusNode, drawn.focusOffset) === selection.head,
+      /** It is a cursor, after the last of the block's text. */
+      atEnd: selection.empty && selection.head === editor.view.posAtDOM(element, element.childNodes.length),
+    };
+  });
+}
+
+/** Puts the cursor in a block by a press on it, and waits for the editor to hold it there. */
 async function place(block: Locator) {
+  // One press: a second one soon after it would be the second of two, and select a word.
   await block.click();
-  await block.page().waitForTimeout(100);
+  await expect.poll(async () => (await held(block)).inside).toBe(true);
 }
 
 /** Puts the cursor at the end of a block's text, whatever the keys of the platform do. */
 async function placeAtEnd(block: Locator) {
   await place(block);
-  await block.evaluate((element) => {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    range.collapse(false);
-    window.getSelection()!.removeAllRanges();
-    window.getSelection()!.addRange(range);
-  });
-  await block.page().waitForTimeout(100);
+  await expect(async () => {
+    await block.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    // The browser tells of the range in a task of its own: the first look is often too soon.
+    expect((await held(block)).atEnd).toBe(true);
+  }).toPass({ intervals: [20, 50] });
 }
 
 /** Counts the sockets a page opens from now on. */
@@ -640,10 +681,19 @@ const rows = (page: Page) => palette(page).getByRole('option');
  * the caption, and the paragraph.
  */
 async function newLastLine(page: Page) {
-  for (let press = 0; press < 6; press += 1) await page.keyboard.press('ArrowDown');
-  // The editor reads where a key of the browser's put the cursor a few milliseconds after it (`place`).
-  await page.waitForTimeout(100);
+  const blocks = text(page).locator(':scope > *');
+  // Down until the editor holds the cursor at the end of the last block, and
+  // not for a count of keys and a time: a key that the editor's library took
+  // back is pressed again (`held`).
+  await expect(async () => {
+    await page.keyboard.press('ArrowDown');
+    expect((await held(blocks.last())).atEnd).toBe(true);
+  }).toPass({ intervals: [20, 50] });
+  const before = await blocks.count();
   await page.keyboard.press('Enter');
+  // Enter is the editor's own key, and its paragraph is there when the key has been answered.
+  await expect(blocks).toHaveCount(before + 1);
+  await expect.poll(async () => (await held(blocks.last())).atEnd).toBe(true);
 }
 
 // FR-ED-12, the rows for the blocks of the cut: the command, the name of its
