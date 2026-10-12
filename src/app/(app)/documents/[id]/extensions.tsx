@@ -38,6 +38,7 @@ import Superscript from '@tiptap/extension-superscript';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { Placeholder } from '@tiptap/extensions';
 import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
+import { GapCursor } from '@tiptap/pm/gapcursor';
 import { Plugin, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 import { TableMap } from '@tiptap/pm/tables';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
@@ -930,6 +931,67 @@ function settleInCell(editor: Editor): void {
 }
 
 /**
+ * An arrow key out of a table that begins or ends a cell (R32; the re-review
+ * of pull request 28, WCAG 2.1.1). True where the key was taken.
+ *
+ * A cell that holds a table and nothing after it has no text of its own to
+ * put the cursor in, and the arrow keys step from a table to the nearest
+ * text, which is in the next cell: so no key reached the place beside the
+ * table, and nothing could be written there. Such a cell is made by another
+ * client or a stored document; a table from the palette or a paste is
+ * followed by a paragraph. Nothing is added for it, since every browser would
+ * add its own. The key puts the library's own cursor between blocks there
+ * instead, which is a selection and no content: the first letter typed at it
+ * makes the paragraph, as this writer's change.
+ *
+ * AWAITS THE OWNER (new behaviour of four keys; reported with the pull
+ * request). As at the top of a document, where the arrow up from a table that
+ * begins it gives the same cursor before the table:
+ *
+ * - Down in the caption of a table that is the last thing in a cell, and
+ *   Right at the end of that caption: the cursor after the table, in the cell.
+ * - Up in the first line of a cell of the first row of a table that is the
+ *   first thing in a cell, and Left at the start of its first cell: the cursor
+ *   before the table, in the cell.
+ *
+ * Asked before the table library's own arrows, which would take the key.
+ */
+function besideTable(editor: Editor, direction: 'up' | 'down' | 'left' | 'right'): boolean {
+  const { selection, tr } = editor.state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return false;
+  const { $head } = selection;
+  const role = (node: PMNode | null | undefined) => String(node?.type.spec.tableRole);
+  const forward = direction === 'down' || direction === 'right';
+  // The innermost block of a table round the cursor that stands in a cell.
+  let depth = $head.depth - 1;
+  while (
+    depth > 1 &&
+    !(role($head.node(depth).firstChild) === 'table' && /cell$/.test(role($head.node(depth - 1))))
+  )
+    depth -= 1;
+  if (depth <= 1) return false;
+  // Nothing after it in the cell, or nothing before it.
+  if (forward ? $head.indexAfter(depth - 1) !== $head.node(depth - 1).childCount : $head.index(depth - 1) > 0)
+    return false;
+  if (forward) {
+    // In the caption, which is the last line of the block.
+    if ($head.depth !== depth + 1 || role($head.parent) === 'table') return false;
+  } else {
+    // In the first row of the table, at the first text of a cell; for Left, of the first cell.
+    for (let inner = depth; inner < $head.depth; inner += 1) {
+      const row = inner === depth + 2;
+      if ($head.index(inner) > 0 && !(row && direction === 'up')) return false;
+    }
+    if (role($head.node(depth + 1)) !== 'table') return false;
+  }
+  if (!editor.view.endOfTextblock(direction)) return false;
+  const $beside = tr.doc.resolve(forward ? $head.after(depth) : $head.before(depth));
+  if (!(GapCursor as unknown as { valid($pos: typeof $beside): boolean }).valid($beside)) return false;
+  editor.view.dispatch(tr.setSelection(new GapCursor($beside)).scrollIntoView());
+  return true;
+}
+
+/**
  * The words for a change that was not made because a table has no room for it
  * (`holdsTables`). The requirements give none: the sentence is the one the
  * owner approved (R63 of 12 October 2026; its register row is pending). The
@@ -1161,7 +1223,16 @@ export function extensions(
             if (taken) settleInCell(this.editor);
             return taken;
           };
-        return { ...keys, Tab: settled('Tab'), 'Shift-Tab': settled('Shift-Tab') };
+        return {
+          ...keys,
+          Tab: settled('Tab'),
+          'Shift-Tab': settled('Shift-Tab'),
+          // Out of a table that begins or ends a cell (`besideTable`).
+          ArrowDown: () => besideTable(this.editor, 'down'),
+          ArrowRight: () => besideTable(this.editor, 'right'),
+          ArrowUp: () => besideTable(this.editor, 'up'),
+          ArrowLeft: () => besideTable(this.editor, 'left'),
+        };
       },
     }),
     TableRow.extend({ content: `(tableCell | tableHeader){0,${TABLE_MOST}}` }),
