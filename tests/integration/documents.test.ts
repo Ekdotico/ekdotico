@@ -19,6 +19,8 @@ const one = await import('../../src/app/api/documents/[id]/route.ts');
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const UNKNOWN = '3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b';
+const NOT_JSON =
+  'Ekdotico could not read the request, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
 const NOT_FOUND =
   'No document was found for this account. Reload the list of documents to see the documents that exist.';
 
@@ -210,26 +212,39 @@ describe('creating a document (FR-ED-35, FR-AU-12, FR-ED-45)', () => {
 
   // What a form of another site can send without the browser asking first:
   // JSON under a content type that is not JSON's. The origin here is the
-  // application's own, so nothing but the content type refuses it.
+  // application's own, so nothing but the content type refuses it. The owner's
+  // answer to R28 of 12 October 2026: a 415, as the identity routes give, in
+  // the body of every other refusal (it was a 422).
   it.each(['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data', 'text/json', null])(
-    'refuses a body that is JSON and is sent as %s, and changes nothing',
+    'refuses a body that is JSON and is sent as %s with a 415, and changes nothing',
     async (type) => {
       const owner = await person();
       const sent = (method: string, path: string, body: string) => {
         const made = request(method, path, owner.cookie, body);
         if (type) made.headers.set('content-type', type);
         else made.headers.delete('content-type');
+        // A browser states the length of a body, which is how a body is told from none.
+        made.headers.set('content-length', String(Buffer.byteLength(body)));
         return made;
       };
-      await expectError(await collection.POST(sent('POST', '/api/documents', '{}')), 422, 'invalid_request');
+      const message = await expectError(
+        await collection.POST(sent('POST', '/api/documents', '{}')),
+        415,
+        'invalid_request',
+      );
+      expect(message.message).toBe(NOT_JSON);
       expect(await db().document.count({ where: { ownerId: owner.id } })).toBe(0);
 
       const id = await documentOf(owner.cookie);
-      await expectError(
-        await one.PATCH(sent('PATCH', `/api/documents/${id}`, '{"title":"Renamed"}'), context(id)),
-        422,
-        'invalid_request',
-      );
+      expect(
+        (
+          await expectError(
+            await one.PATCH(sent('PATCH', `/api/documents/${id}`, '{"title":"Renamed"}'), context(id)),
+            415,
+            'invalid_request',
+          )
+        ).message,
+      ).toBe(NOT_JSON);
       expect((await row(id)).title).not.toBe('Renamed');
       // The type as a browser writes it, with its parameter, is JSON's.
       const kept = request('PATCH', `/api/documents/${id}`, owner.cookie, { title: 'Renamed' });
@@ -237,6 +252,53 @@ describe('creating a document (FR-ED-35, FR-AU-12, FR-ED-45)', () => {
       expect((await one.PATCH(kept, context(id))).status).toBe(200);
     },
   );
+
+  it('answers 415 only after the authorisation, and not to a request that has no body at all', async () => {
+    const owner = await person();
+    const other = await person();
+    const id = await documentOf(owner.cookie);
+    const asText = (method: string, path: string, cookie: string | undefined) => {
+      const made = request(method, path, cookie, '{"title":"x"}');
+      made.headers.set('content-type', 'text/plain');
+      made.headers.set('content-length', '13');
+      return made;
+    };
+    // 401 without a session, 404 for a document of someone else: before the body is looked at.
+    expect((await collection.POST(asText('POST', '/api/documents', undefined))).status).toBe(401);
+    expect((await one.PATCH(asText('PATCH', `/api/documents/${id}`, other.cookie), context(id))).status).toBe(
+      404,
+    );
+    // No body at all is no body of another type: it goes on to the checks of the route, as it did.
+    const bare = (method: string, path: string, cookie: string) => {
+      const made = request(method, path, cookie);
+      made.headers.delete('content-type');
+      return made;
+    };
+    await expectError(
+      await collection.POST(bare('POST', '/api/documents', owner.cookie)),
+      422,
+      'invalid_request',
+    );
+    await expectError(
+      await one.PATCH(bare('PATCH', `/api/documents/${id}`, owner.cookie), context(id)),
+      422,
+      'invalid_request',
+    );
+    expect((await row(id)).title).toBe('Untitled document');
+  });
+
+  // R28 holds the routes that read a JSON body. A route that reads none is not
+  // answered 415 for the type of a body it never looks at, and a route that
+  // takes another kind of body (an upload of an image, when there is one) is
+  // not held to this rule at all: `notJson` is called by the routes that read JSON.
+  it('does not answer 415 to a route that reads no body', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const made = request('DELETE', `/api/documents/${id}`, owner.cookie, 'free text');
+    made.headers.set('content-type', 'text/plain');
+    made.headers.set('content-length', '9');
+    expect((await one.DELETE(made, context(id))).status).toBe(204);
+  });
 
   it('refuses a body longer than the route expects, and creates nothing', async () => {
     const owner = await person();

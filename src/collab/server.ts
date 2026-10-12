@@ -44,9 +44,10 @@ import { ISOLATION_HEADERS, STATIC_POLICY } from '../lib/csp.ts';
 import {
   applyState,
   assertUpdate,
+  limitsOf,
   loadState,
   MAX_MESSAGE_BYTES,
-  pastLimits,
+  type Limit,
   storeFinalState,
   storeState,
 } from '../lib/collab/state.ts';
@@ -55,7 +56,7 @@ import { authorise } from '../lib/documents/access.ts';
 import { faultOf } from '../lib/fault.ts';
 import { assertContractVersion } from '../lib/istorico/index.ts';
 import { isOwnOrigin } from '../lib/origin.ts';
-import { logLimitReached, markKey, oncePer, takeLimit } from '../lib/rate-limit.ts';
+import { limitHere, logLimitReached, markKey, oncePer, takeLimit } from '../lib/rate-limit.ts';
 import { securityLog } from '../lib/security-log.ts';
 import { settings, type Settings } from '../lib/settings.ts';
 
@@ -72,6 +73,7 @@ const ANSWER_HEADERS = {
 };
 
 type StoreSettings = Pick<Settings, 'collabStoreDelayMs' | 'collabStoreMaxMs'>;
+type ServerSettings = StoreSettings & { limits: Pick<Settings['limits'], 'COLLAB_MESSAGES_PER_USER'> };
 
 // What the write itself may take and still be inside the period.
 const STORE_WRITE_MARGIN_MS = 500;
@@ -106,6 +108,9 @@ const NOTICE_READ_MS = 2000;
 const FINAL_STORE_MS = 2500;
 // The mark of that period for a refused origin, kept as every such mark is (src/lib/rate-limit.ts).
 const ORIGIN_REFUSED = 'collab:origin-refused';
+// And for an update refused for a limit of its document, one for each document and user.
+const documentLimitRefused = (documentId: string, userId: string) =>
+  `collab:document-limit-refused:${documentId}:${userId}`;
 
 /** How long after the `failures`-th failure in a row a store is tried again: 1 s, 2 s, 4 s … 60 s. */
 export function storeRetryDelay(failures: number): number {
@@ -117,13 +122,20 @@ export function originRefusalMark(): string {
   return markKey(ORIGIN_REFUSED);
 }
 
-/** True once for each period, by this process's own clock. */
-function oncePerHere(seconds: number): () => boolean {
-  let last = -Infinity;
-  return () => {
+/** The Valkey key that marks the period in which a refused update of a document was logged for a user (see `logDocumentLimitRefused`). */
+export function documentLimitRefusalMark(documentId: string, userId: string): string {
+  return markKey(documentLimitRefused(documentId, userId));
+}
+
+/** True once for each period (and each `key`, where there is one), by this process's own clock. */
+function oncePerHere(seconds: number): (key?: string) => boolean {
+  const last = new Map<string, number>();
+  return (key = '') => {
     const now = Date.now();
-    if (now - last < seconds * 1000) return false;
-    last = now;
+    if (now - (last.get(key) ?? -Infinity) < seconds * 1000) return false;
+    // Forget the keys whose period is over, so that the map holds only this period's.
+    for (const [each, at] of last) if (now - at >= seconds * 1000) last.delete(each);
+    last.set(key, now);
     return true;
   };
 }
@@ -183,7 +195,11 @@ type Refused = { status: number; headers?: Record<string, string> };
 // which overwrites whatever a client sent under the name and names no one.
 const HANDLE_HEADER = 'x-ekdotico-handshake';
 
-export function createCollabServer(store: StoreSettings) {
+export function createCollabServer(store: ServerSettings) {
+  const messages = store.limits.COLLAB_MESSAGES_PER_USER;
+  // The messages each user has sent this instance (see `beforeSync`).
+  const takeMessage = limitHere(messages);
+  const messageLogDueHere = oncePerHere(messages.windowSeconds);
   // The session each accepted handshake presented, by its handle, for as long
   // as its socket lives.
   const admitted = new Map<string, ValidSession>();
@@ -194,6 +210,7 @@ export function createCollabServer(store: StoreSettings) {
   const halt = new AbortController();
   const socketFaultDue = oncePerHere(LOG_PERIOD_SECONDS);
   const originLogDueHere = oncePerHere(LOG_PERIOD_SECONDS);
+  const documentLimitLogDueHere = oncePerHere(LOG_PERIOD_SECONDS);
   let stopping = false;
   let unstored = false;
   let stopped: Promise<boolean> | undefined;
@@ -206,6 +223,8 @@ export function createCollabServer(store: StoreSettings) {
   // instance holds changes that are stored nowhere.
   const changes = new WeakMap<Document, number>();
   const storedChanges = new WeakMap<Document, number>();
+  // What asks the limits of each document in memory (`limitsOf`), made at its first update.
+  const keepers = new WeakMap<Document, ReturnType<typeof limitsOf>>();
 
   /** One store, by either of the two of src/lib/collab/state.ts, which notes what it stored. */
   async function storeNow(write: typeof storeState, documentName: string, document: Document) {
@@ -342,6 +361,43 @@ export function createCollabServer(store: StoreSettings) {
       first = originLogDueHere();
     }
     if (first) await securityLog({ kind: 'forbidden' });
+  }
+
+  /**
+   * NFR-SE-19, as the owner amended it on 12 October 2026: an entry for an
+   * update refused for a limit of its document, with the user and the
+   * document and nothing of the update. A client whose connection is closed
+   * can reconnect and send it again, so one entry for each period for a
+   * document and a user and not one for each refusal, as for a refused origin
+   * (`logRefusedOrigin`): the same fallback without Valkey, the entry written
+   * and the bound held by this process. It never rejects, and the refusal does
+   * not wait for it.
+   */
+  async function logDocumentLimitRefused(userId: string, documentId: string): Promise<void> {
+    let first: boolean;
+    try {
+      first = await oncePer(documentLimitRefused(documentId, userId), LOG_PERIOD_SECONDS);
+    } catch {
+      first = documentLimitLogDueHere(`${documentId}:${userId}`);
+    }
+    if (first) await securityLog({ kind: 'document_limit_refused', userId, documentId });
+  }
+
+  /**
+   * NFR-SE-19: the entry for the limit of messages reached, with the user. One
+   * for each period of the limit and each user, whatever number of connections
+   * is closed in it, as for every limit (`logLimitReached`); and, as for a
+   * refused update (`logDocumentLimitRefused`), written without Valkey too,
+   * the bound held by this process. It never rejects, and the refusal does not
+   * wait for it.
+   */
+  async function logMessageLimitReached(userId: string): Promise<void> {
+    try {
+      await logLimitReached('COLLAB_MESSAGES_PER_USER', userId, messages.windowSeconds, userId);
+    } catch {
+      // Valkey did not answer for the mark: nothing was written.
+      if (messageLogDueHere(userId)) await securityLog({ kind: 'rate_limit_reached', userId });
+    }
   }
 
   /**
@@ -603,26 +659,64 @@ export function createCollabServer(store: StoreSettings) {
      * not pass closes the connection to the document, and is neither applied,
      * nor acknowledged, nor sent to anyone. The first step of a
      * synchronisation carries no update.
+     *
+     * THE LIMIT OF MESSAGES (the owner's decision of 12 October 2026; a row to
+     * be added to NFR-SE-07) is taken first, so that a message past it costs
+     * neither the reading of its update nor the check of the document's
+     * limits, which copies a document that is at its limit for every message
+     * (src/lib/collab/state.ts). The library calls this hook for the two
+     * messages that carry an update and for the first step, and for nothing
+     * else (@hocuspocus/server 4.7.0, MessageReceiver.ts, `readSyncMessage`):
+     * awareness, which a cursor sends many times a second, never comes here.
+     * A read-only connection is counted too: the hook runs before the library
+     * looks at the flag.
+     *
+     * AND NOTHING MORE IS DONE FOR A READ-ONLY CONNECTION. The library applies
+     * nothing it sends (MessageReceiver.ts tests the flag before each of the
+     * two), so there is nothing to check; and a check of what is never applied
+     * would let a Viewer cost the copy of a document at its limit, and leave
+     * the keeper's numbers higher than the document with every message.
+     *
+     * Counted for the user and not for the connection: a count on the
+     * connection begins again with the next one, and a user may hold as many
+     * as the limit of handshakes lets through, 30 more each minute. Past the
+     * limit the connection that sent the message is closed with the reason of
+     * a limit; the client waits before it asks for the document again
+     * (src/lib/collab/protocol.ts).
      */
-    async beforeSync({ type, payload, document, documentName, context }) {
+    async beforeSync({ type, payload, document, documentName, context, connection }) {
       if (type === messageYjsSyncStep1) return;
-      let past: boolean;
+      if (!takeMessage(context.userId).ok) {
+        void logMessageLimitReached(context.userId);
+        throw refuse(REFUSAL.LIMITED);
+      }
+      if (connection.readOnly) return;
+      let past: Limit | null;
       try {
         assertUpdate(payload);
         // The limits of a document (src/lib/collab/state.ts): an update that
-        // would take it past one is refused as one that cannot be stored is.
-        past = pastLimits(document, payload);
+        // would take it past one is not applied either. Asked of the keeper of
+        // this document, which copies the document only when it must; nothing
+        // is awaited between its answer and the library's applying the update.
+        let limits = keepers.get(document);
+        if (!limits) keepers.set(document, (limits = limitsOf(document)));
+        past = limits(payload);
       } catch {
         // An object, which the library reads a close code from, and with no
         // message for it to print: what Yjs throws can quote the update.
         throw {};
       }
       if (past) {
-        // NFR-SE-19: a refusal of what an account may not do, as a 403 is, with
-        // the user and the document and nothing of the update. ASSUMED: the
-        // requirement lists no kind for it (reported for the register).
-        await securityLog({ kind: 'forbidden', userId: context.userId, documentId: documentName });
-        throw {};
+        // NFR-SE-19, as the owner amended it on 12 October 2026: a kind of its
+        // own, with the user and the document and nothing of the update. One
+        // for each period, not for each refusal: the client can send it again.
+        void logDocumentLimitRefused(context.userId, documentName);
+        // The client is told which limit, and does not send the same again
+        // (src/lib/collab/protocol.ts).
+        // One reason for each limit, so that the words the page shows are true.
+        throw refuse(
+          { size: REFUSAL.TOO_LARGE, depth: REFUSAL.TOO_DEEP, waiting: REFUSAL.TOO_DANGLING }[past],
+        );
       }
     },
 
