@@ -1323,7 +1323,8 @@ test('an empty document says how the list of blocks is opened: in the descriptio
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme });
     const seen = await drawn();
-    expect(seen.content, colorScheme).toBe(`"${PROMPT}"`);
+    // The sentence, with the empty alternative text the package gives it from 0.29.0, which this browser parses.
+    expect(seen.content, colorScheme).toBe(`"${PROMPT}" / ""`);
     expect(seen.inkAlpha, colorScheme).toBe(255);
     expect(seen.groundAlpha, colorScheme).toBe(255);
     expect(seen.contrast, colorScheme).toBeGreaterThanOrEqual(4.5);
@@ -1564,6 +1565,67 @@ test('the slash palette does not open in the read-only state, and one that is op
   await page.keyboard.press('Enter');
   await expect(doc.locator('h1')).toHaveCount(1);
   await expect(doc.locator('p').first()).toHaveText('/h ');
+});
+
+test('the closing of the slash palette is said after a dismissal, and nothing is said after a choice', async ({
+  page,
+}) => {
+  // The owner's decision R44 of 12 October 2026 (FR-ED-10; NFR-IC-19). What a
+  // screen reader is given is read from the region; none is run here.
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  // The status region of the list (the package, 0.29.0): one element, in the page open and closed.
+  const region = page.locator('.ekd-option-list-announce[role="status"]');
+  const COUNT = '4 blocks. Heading 1 first.';
+  /** The list open and its count said: a list whose opening was not said closes unsaid. */
+  const opened = async (typed: string) => {
+    await page.keyboard.type(typed);
+    // Open, the region is the element that follows the list.
+    await expect(page.locator('.ekd-option-list + [role="status"]')).toHaveText(COUNT);
+    await expect(region).toHaveCount(1);
+  };
+  /** What the region holds once the 150 milliseconds of a closing are well over. */
+  const afterClosing = async () => {
+    await expect(palette(page)).toBeHidden();
+    await page.waitForTimeout(600);
+    await expect(region).toHaveCount(1);
+    return region.textContent();
+  };
+  await doc.focus();
+  await expect(region).toHaveCount(1);
+  expect(await region.textContent()).toBe('');
+
+  // Escape: the package's own words.
+  await opened('/h');
+  await page.keyboard.press('Escape');
+  await expect(region).toHaveText('List closed.');
+  expect(await afterClosing()).toBe('List closed.');
+
+  // Enter on a row: nothing.
+  await opened(' /h');
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('h1')).toHaveCount(1);
+  expect(await afterClosing()).toBe('');
+
+  // A click on a row: nothing.
+  await opened('/h');
+  await rows(page).nth(1).click();
+  await expect(doc.locator('h2')).toHaveCount(1);
+  expect(await afterClosing()).toBe('');
+
+  // The choice is not remembered: the cursor leaving the command of the next list is said.
+  await opened('/h');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  expect(await afterClosing()).toBe('List closed.');
+
+  // Tab, which closes the list and leaves the text.
+  await page.keyboard.press('End');
+  await opened(' /h');
+  await page.keyboard.press('Tab');
+  expect(await afterClosing()).toBe('List closed.');
 });
 
 test('an account without a role on a document reaches neither its page nor its connection', async ({

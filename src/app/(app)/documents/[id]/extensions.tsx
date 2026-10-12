@@ -813,9 +813,12 @@ const EMPTY_PROMPT = 'Write here, or type / for a list of blocks.';
  * It is a decoration, so it is no content: not in the document, not sent to
  * another client, not copied. It is an element of its own, hidden from a
  * screen reader, and not the attribute on the paragraph: the description of
- * the text gives the instruction already, and text that a stylesheet generates
- * cannot be hidden, so a screen reader would read it twice, the second time
- * as the first line of the document (NFR-IC-19).
+ * the text gives the instruction already, and a screen reader would read it
+ * twice, the second time as the first line of the document (NFR-IC-19).
+ * From 0.29.0 the package's rule gives the text it generates an empty
+ * alternative text, which takes it out of what is read, but only where the
+ * browser parses one (`content: … / ""`). Elsewhere generated text cannot be
+ * hidden, so the element and its `aria-hidden` stay.
  */
 const EmptyPrompt = Extension.create({
   name: 'emptyPrompt',
