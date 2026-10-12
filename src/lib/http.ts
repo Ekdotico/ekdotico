@@ -79,10 +79,46 @@ export async function readBytes(request: Request, maxBytes: number): Promise<Buf
  * of another site can post text that reads as JSON under the three types a
  * browser sends without asking first (`text/plain` among them), and cannot
  * send this one. The origin check is the proxy's (NFR-SE-17 (c)); this does
- * not rest on it.
+ * not rest on it. A body that is sent as anything else is answered with a 415
+ * (`notJson`) by the identity routes, the document routes, and the
+ * acknowledgement of the notice (the owner's answer to R28, 12 October 2026);
+ * the sign-up route answers it with its own 422 (`readSignUpBody`).
  */
 export function sentAsJson(request: Request): boolean {
   return request.headers.get('content-type')?.split(';')[0]!.trim().toLowerCase() === 'application/json';
+}
+
+/**
+ * Text for a person, for the owner's approval: the statement of a body that is
+ * not sent as JSON, for the identity routes (the router's 400 and 415 and the
+ * route's own) and, since the owner's answer to R28 of 12 October 2026, for
+ * the application's own routes too.
+ */
+export const NOT_JSON =
+  'Ekdotico could not read the request, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
+
+/**
+ * A request that holds no body, by its headers: the sign-out and the ending
+ * of the other sessions are sent so (src/components/send.ts). A body sent
+ * without a type has a length that is not 0, or is sent in chunks.
+ */
+export function holdsNoBody({ headers }: Request): boolean {
+  return (
+    !headers.has('content-type') &&
+    !headers.has('transfer-encoding') &&
+    (headers.get('content-length') ?? '0') === '0'
+  );
+}
+
+/**
+ * The answer to a request whose body is not sent as `application/json`, or
+ * null where it is, or where there is no body at all (R28: 415 everywhere,
+ * in the body of every other refusal, `errorResponse`). A route that reads a
+ * body calls it after the authorisation of the request and before it reads
+ * anything, so that a caller who may not do the thing is told nothing of the body.
+ */
+export function notJson(request: Request): Response | null {
+  return sentAsJson(request) || holdsNoBody(request) ? null : errorResponse(415, 'invalid_request', NOT_JSON);
 }
 
 /**

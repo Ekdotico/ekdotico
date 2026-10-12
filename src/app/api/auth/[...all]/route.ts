@@ -4,26 +4,12 @@
 // is a GET, so no GET is mounted.
 import { after } from 'next/server';
 import { collecting } from '../../../../lib/after-response.ts';
-import { auth, NOT_JSON } from '../../../../lib/auth/auth.ts';
+import { auth } from '../../../../lib/auth/auth.ts';
 import { refusedOrigin } from '../../../../lib/auth/route-answers.ts';
 import { faultOf } from '../../../../lib/fault.ts';
-import { errorResponse, INTERNAL_FAULT, sentAsJson } from '../../../../lib/http.ts';
+import { errorResponse, INTERNAL_FAULT, notJson } from '../../../../lib/http.ts';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * A request that holds no body, by its headers: the sign-out and the ending
- * of the other sessions are sent so (src/components/send.ts), and their
- * endpoints read none. A body sent without a type has a length that is not 0,
- * or is sent in chunks.
- */
-function holdsNoBody({ headers }: Request): boolean {
-  return (
-    !headers.has('content-type') &&
-    !headers.has('transfer-encoding') &&
-    (headers.get('content-length') ?? '0') === '0'
-  );
-}
 
 /**
  * What is refused before the library reads anything. Its router holds a body
@@ -43,8 +29,7 @@ async function refusal(request: Request): Promise<Response | null> {
     console.error(`identity: request failed (${faultOf(error)})`);
     return errorResponse(500, 'internal', INTERNAL_FAULT);
   }
-  if (sentAsJson(request) || holdsNoBody(request)) return null;
-  return errorResponse(415, 'invalid_request', NOT_JSON);
+  return notJson(request);
 }
 
 export async function POST(request: Request) {
