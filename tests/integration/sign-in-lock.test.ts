@@ -20,7 +20,7 @@ import {
   signIn,
   sunk,
 } from './identity.ts';
-import { codeAt, enrol, nextCode, passwordStep, secondStep, withCookies } from './second-factor.ts';
+import { codeAt, enrol, midStep, nextCode, passwordStep, secondStep, withCookies } from './second-factor.ts';
 
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-lock-mail-'));
 // Not the initial values: the limits are configuration. The fourth failure
@@ -104,9 +104,10 @@ const entriesOf = (kind: string) => db().securityLogEntry.count({ where: { kind 
 /**
  * Makes the next transaction that is opened fail where it creates a row of
  * `table`, with everything before it done: what the transaction wrote until
- * then must be undone with it.
+ * then must be undone with it. With `written`, the row is created first and
+ * the transaction fails after it: the row itself must be undone too.
  */
-function failCreateIn(table: 'verification' | 'securityLogEntry', message: string) {
+function failCreateIn(table: 'verification' | 'securityLogEntry', message: string, written = false) {
   type Work = (tx: Record<string, unknown>) => Promise<unknown>;
   const client = db() as unknown as { $transaction: (work: Work) => Promise<unknown> };
   const original = client.$transaction.bind(client);
@@ -114,7 +115,17 @@ function failCreateIn(table: 'verification' | 'securityLogEntry', message: strin
     original((tx) => {
       const rows = new Proxy(tx[table] as object, {
         get: (target, key) =>
-          key === 'create' ? () => Promise.reject(new Error(message)) : Reflect.get(target, key),
+          key === 'create'
+            ? async (...args: unknown[]) => {
+                if (written) {
+                  await (Reflect.get(target, key) as (...all: unknown[]) => Promise<unknown>).apply(
+                    target,
+                    args,
+                  );
+                }
+                throw new Error(message);
+              }
+            : Reflect.get(target, key),
       });
       return work(new Proxy(tx, { get: (target, key) => (key === table ? rows : Reflect.get(target, key)) }));
     }),
@@ -577,6 +588,22 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     expect(await entries('sign_in_by_link', id)).toBe(1);
   });
 
+  it('leaves no entry of a sign-in that did not complete: a transaction that fails after the entry undoes it', async () => {
+    const { email, id } = await person();
+    const token = await lock(email);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    failCreateIn('securityLogEntry', 'not committed', true);
+    const failed = await confirm(token);
+    expect(failed.response.status).toBe(500);
+    expect(failed.response.headers.getSetCookie()).toEqual([]);
+    expect(await sessions(id)).toEqual([]);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    // An entry written outside the transaction would be here (the owner's
+    // decision of 12 October 2026: R38; register row D153, pending).
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
+  });
+
   it('works once: a second confirmation is answered with the fixed statement and signs no one in', async () => {
     const { email, id } = await person();
     const token = await lock(email);
@@ -857,6 +884,46 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect(await refused.text()).toBe(NOT_VALID);
     expect(await sessions(id)).toEqual([]);
     expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
+  });
+
+  // NFR-SE-19; the owner's decision of 12 October 2026 (R38; register row
+  // D153, pending): the second place a sign-in by the link completes
+  // (two-factor.ts), which had no test of its entry's transaction.
+  it('writes the entry in the transaction that completes the step: where it cannot be written, no one is signed in and nothing is spent', async () => {
+    const { email, id, secret } = await enrolled();
+    const cookie = withCookies('', (await confirm(await lock(email))).response);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    failCreateIn('securityLogEntry', 'the entry was not written');
+    const failed = await secondStep(auth, cookie, nextCode(secret), 'totp', fresh());
+    expect(failed.status).toBe(500);
+    expect(failed.headers.getSetCookie().join()).not.toContain('session_token');
+    expect(errors.mock.calls).toEqual([['identity: request failed (Error)']]);
+    expect(await sessions(id)).toEqual([]);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    expect(await steps(id)).toHaveLength(1);
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
+    // Neither the step nor the link was spent by the fault. The code is the
+    // third of this secret, that of the step before: asked for with time left
+    // in this step, or it would be two steps old when the server reads it.
+    await midStep();
+    expect((await secondStep(auth, cookie, nextCode(secret), 'totp', fresh())).status).toBe(200);
+    expect(await entries('sign_in_by_link', id)).toBe(1);
+  });
+
+  it('leaves no entry of a step that did not complete: a transaction that fails after the entry undoes it', async () => {
+    const { email, id, secret } = await enrolled();
+    const cookie = withCookies('', (await confirm(await lock(email))).response);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    failCreateIn('securityLogEntry', 'not committed', true);
+    expect((await secondStep(auth, cookie, nextCode(secret), 'totp', fresh())).status).toBe(500);
+    expect(await sessions(id)).toEqual([]);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    expect(await steps(id)).toHaveLength(1);
+    // An entry written outside the transaction would be here (the owner's
+    // decision of 12 October 2026: R38; register row D153, pending).
     expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 

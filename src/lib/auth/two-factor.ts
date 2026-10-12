@@ -139,7 +139,8 @@ function same(a: string, b: string): boolean {
  * names that document. The mark is kept in Valkey for as long as the step can
  * be accepted, under a keyed digest of the secret and the step (rate-limit.ts),
  * so Valkey holds nothing of either. A code used again is answered as a wrong
- * one.
+ * one. The mark is set before the transaction of whatever the code allows, on
+ * purpose: no replay first, so a fault after a right code costs that code.
  */
 async function acceptCode(secret: string, entered: string): Promise<boolean> {
   const code = digitsOf(entered);
@@ -542,6 +543,14 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   // The link "is spent … when its second step is abandoned after five wrong
   // codes; after that, the person signs in when the lock has ended or after a
   // password reset": the answer is the statement of a link that is spent.
+  //
+  // NFR-SE-19; the owner's decision of 12 October 2026 (R38; register row
+  // D153, pending): the entries beside it (a limit reached, a sign-in refused)
+  // record refusals, and are on purpose in no transaction with the deletion
+  // of the step and of the link: a refused attempt keeps its entry whatever
+  // becomes of those rows. A fault between the statements repairs itself: the
+  // count of codes is past its number, so the next request with the step or
+  // with the link is abandoned here again.
   const abandoned = async () => {
     await end();
     if (!link) return refused('sign_in_again', MESSAGES.again);

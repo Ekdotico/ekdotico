@@ -49,6 +49,38 @@ const KINDS = [
 
 export type SecurityLogKind = (typeof KINDS)[number];
 
+/**
+ * The kinds that record a change. The owner's decision of 12 October 2026
+ * (R38; register row D153, pending): the entry of a change is written by
+ * `securityLogIn` alone, in the transaction of its change. Every other kind
+ * records a refusal, which either changed nothing or must be kept when what
+ * was attempted is undone, and is written by `securityLog` alone. The two
+ * types make the wrong writer a fault of the type check
+ * (tests/unit/security-log-kinds.test.ts).
+ *
+ * Each kind is named, and none by a pattern: a kind added later is a refusal
+ * until it is written here. The six of an account deletion are the steps (a)
+ * to (f) of FR-AU-58; NFR-SE-19 says "each step" and gives them no names, so
+ * the names are this file's own (`KINDS`).
+ */
+export type ChangeKind = Extract<
+  SecurityLogKind,
+  | 'sign_in_locked'
+  | 'sign_in_by_link'
+  | 'address_changed'
+  | 'collaborators_changed'
+  | 'permission_set_changed'
+  | 'owner_changed'
+  | 'document_deleted'
+  | 'account_deletion_connections_closed'
+  | 'account_deletion_istorico_pseudonymised'
+  | 'account_deletion_feedback_pseudonymised'
+  | 'account_deletion_credentials_deleted'
+  | 'account_deletion_user_pseudonymised'
+  | 'account_deletion_roles_ended'
+>;
+export type RefusalKind = Exclude<SecurityLogKind, ChangeKind>;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -64,7 +96,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * can quote the values of the row.
  */
 export async function securityLog(entry: {
-  kind: SecurityLogKind;
+  kind: RefusalKind;
   userId?: string;
   documentId?: string;
 }): Promise<void> {
@@ -90,12 +122,15 @@ export async function securityLog(entry: {
  * does not stand without its entry (NFR-SE-19), as the entry cannot stand
  * without the change. The opposite of `securityLog`, on purpose.
  *
- * `transaction` is the client Prisma hands the callback of `$transaction`.
+ * `transaction` is the client Prisma hands the callback of `$transaction`,
+ * and never `db()` itself, which would write outside any transaction: the
+ * type refuses it by `$disconnect`, which the client of a transaction does
+ * not have. (Not by `$transaction`: Prisma 7.10.0 leaves that one on it.)
  * What is thrown for a kind outside the list names no kind: see `securityLog`.
  */
 export async function securityLogIn(
-  transaction: Pick<ReturnType<typeof db>, 'securityLogEntry'>,
-  entry: { kind: SecurityLogKind; userId?: string; documentId?: string },
+  transaction: Pick<ReturnType<typeof db>, 'securityLogEntry'> & { $disconnect?: never },
+  entry: { kind: ChangeKind; userId?: string; documentId?: string },
 ): Promise<void> {
   if (!KINDS.includes(entry.kind)) throw new Error('security log: unknown kind');
   await transaction.securityLogEntry.create({
