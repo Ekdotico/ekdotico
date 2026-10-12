@@ -1237,7 +1237,10 @@ test('a lost connection is restored: the words say so, the error state follows, 
     await screens(page, 'editor-reconnecting');
 
     // FR-ED-23: the error state after the period (6 seconds in these tests), and read-only (FR-ED-18).
-    const lost = status(page, /^Not connected\. The document is read-only until the connection returns\./);
+    const lost = status(
+      page,
+      /^Not connected\. The document is read-only until the connection returns\. Check the connection\. Ekdotico tries again automatically\./,
+    );
     await expect(lost).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.ekd-sync')).toHaveAttribute('data-state', 'error');
     await expect(text(page)).toHaveAttribute('aria-readonly', 'true');

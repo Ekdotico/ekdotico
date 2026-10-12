@@ -40,7 +40,9 @@ const ENDED: Record<Ending, { title: string; text: string; href: string; link: s
     href: '/',
     link: 'Documents',
   },
-  // The words of the 404 of a document's routes (src/lib/documents/access.ts).
+  // A person followed an address here, so the title names it; the 404 of a
+  // document's routes answers the actions of a list and names none
+  // (src/lib/documents/access.ts).
   [REFUSAL.NO_ACCESS]: {
     title: 'No document was found at this address for this account',
     text: 'Check the address.',
