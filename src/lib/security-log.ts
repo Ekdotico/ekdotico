@@ -44,6 +44,27 @@ const KINDS = [
 
 export type SecurityLogKind = (typeof KINDS)[number];
 
+/**
+ * The kinds that record a change. R38 (the owner's decision of 12 October
+ * 2026): the entry of a change is written by `securityLogIn` alone, in the
+ * transaction of its change. Every other kind records a refusal, which either
+ * changed nothing or must be kept when what was attempted is undone, and is
+ * written by `securityLog` alone. The two types make the wrong writer a fault
+ * of the type check (tests/unit/security-log-kinds.test.ts).
+ */
+export type ChangeKind = Extract<
+  SecurityLogKind,
+  | 'sign_in_locked'
+  | 'sign_in_by_link'
+  | 'address_changed'
+  | 'collaborators_changed'
+  | 'permission_set_changed'
+  | 'owner_changed'
+  | 'document_deleted'
+  | `account_deletion_${string}`
+>;
+export type RefusalKind = Exclude<SecurityLogKind, ChangeKind>;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -59,7 +80,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * can quote the values of the row.
  */
 export async function securityLog(entry: {
-  kind: SecurityLogKind;
+  kind: RefusalKind;
   userId?: string;
   documentId?: string;
 }): Promise<void> {
@@ -90,7 +111,7 @@ export async function securityLog(entry: {
  */
 export async function securityLogIn(
   transaction: Pick<ReturnType<typeof db>, 'securityLogEntry'>,
-  entry: { kind: SecurityLogKind; userId?: string; documentId?: string },
+  entry: { kind: ChangeKind; userId?: string; documentId?: string },
 ): Promise<void> {
   if (!KINDS.includes(entry.kind)) throw new Error('security log: unknown kind');
   await transaction.securityLogEntry.create({
