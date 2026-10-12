@@ -6,18 +6,45 @@
 // the same (content-type.test.ts, sign-up.test.ts); the signed admission
 // routes make no such check (tests/unit/route-origin.test.ts says why).
 import { NextRequest } from 'next/server';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { mustCheckOrigin } from '../routes.ts';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
+
+// Every reading of a session by a route, counted: none is made for a request
+// of another origin. The functions themselves are the application's own.
+const sessionReads = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../../src/lib/auth/session.ts', async (original) => {
+  const actual = await original<typeof import('../../src/lib/auth/session.ts')>();
+  const counted =
+    <Call extends (...given: never[]) => unknown>(call: Call) =>
+    (...given: Parameters<Call>) => {
+      sessionReads.count += 1;
+      return call(...given) as ReturnType<Call>;
+    };
+  return {
+    ...actual,
+    validateSession: counted(actual.validateSession),
+    validateSessionRow: counted(actual.validateSessionRow),
+  };
+});
 
 const database = prepare('route_origin');
 const { auth, db, valkey } = await load();
 const { proxy } = await import('../../src/proxy.ts');
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/onboarding.ts');
-const collection = await import('../../src/app/api/documents/route.ts');
-const one = await import('../../src/app/api/documents/[id]/route.ts');
-const restoring = await import('../../src/app/api/documents/[id]/restore/route.ts');
-const acknowledgement = await import('../../src/app/api/account/onboarding/acknowledgement/route.ts');
+// Every handler that changes state and must check the origin, by `route METHOD`,
+// read from the route files (tests/routes.ts): a new one has no case below, and fails.
+const handlers = new Map(await mustCheckOrigin());
+type Handler = (request: Request, context: { params: Promise<{ id: string }> }) => Promise<Response>;
+
+// Those of them that are called, with a request of another origin, by a test of their own.
+const ELSEWHERE: Record<string, string> = {
+  'src/app/api/auth/[...all]/route.ts POST':
+    'tests/integration/content-type.test.ts: every endpoint of the identity handler, "the origin is looked at first"',
+  'src/app/api/sign-up/route.ts POST':
+    'tests/integration/sign-up.test.ts: "a request from another origin (NFR-SE-17 (c))"',
+};
 
 // The proxy's answer, byte for byte (src/lib/auth/route-answers.ts).
 const FORBIDDEN =
@@ -53,13 +80,12 @@ const entries = (where: object = {}) => db().securityLogEntry.count({ where });
 
 /** One route that changes state: its request, the state it would change, and its answer where it may. */
 interface Case {
-  name: string;
-  method: string;
+  /** The handler, as tests/routes.ts names it: the route file and the method it is exported under. */
+  handler: string;
   body?: unknown;
   /** What exists before the request; the identifier of the document, where there is one. */
   arrange: (owner: Person) => Promise<string>;
   path: (id: string) => string;
-  call: (request: Request, id: string) => Promise<Response>;
   /** The state the request would change, read from the database. */
   state: (owner: Person, id: string) => Promise<unknown>;
   status: number;
@@ -69,56 +95,46 @@ const live = async (owner: Person) => (await createDocument(owner.id)).id;
 
 const CASES: Case[] = [
   {
-    name: 'POST /api/documents',
-    method: 'POST',
+    handler: 'src/app/api/documents/route.ts POST',
     body: {},
     arrange: async () => '',
     path: () => '/api/documents',
-    call: (request) => collection.POST(request),
     state: (owner) => db().document.count({ where: { ownerId: owner.id } }),
     status: 201,
   },
   {
-    name: 'PATCH /api/documents/[id]',
-    method: 'PATCH',
+    handler: 'src/app/api/documents/[id]/route.ts PATCH',
     body: { title: 'Another' },
     arrange: live,
     path: (id) => `/api/documents/${id}`,
-    call: (request, id) => one.PATCH(request, context(id)),
     state: async (_, id) => (await row(id)).title,
     status: 200,
   },
   {
     // It reads no body: nothing but the origin tells this request from another site's.
-    name: 'DELETE /api/documents/[id]',
-    method: 'DELETE',
+    handler: 'src/app/api/documents/[id]/route.ts DELETE',
     arrange: live,
     path: (id) => `/api/documents/${id}`,
-    call: (request, id) => one.DELETE(request, context(id)),
     state: async (_, id) => (await row(id)).deletedAt,
     status: 204,
   },
   {
     // Nor does this.
-    name: 'POST /api/documents/[id]/restore',
-    method: 'POST',
+    handler: 'src/app/api/documents/[id]/restore/route.ts POST',
     arrange: async (owner) => {
       const id = await live(owner);
       await db().document.update({ where: { id }, data: { deletedAt: new Date(), deletedById: owner.id } });
       return id;
     },
     path: (id) => `/api/documents/${id}/restore`,
-    call: (request, id) => restoring.POST(request, context(id)),
     state: async (_, id) => (await row(id)).deletedAt,
     status: 200,
   },
   {
-    name: 'POST /api/account/onboarding/acknowledgement',
-    method: 'POST',
+    handler: 'src/app/api/account/onboarding/acknowledgement/route.ts POST',
     body: { version: CLOSED_ALPHA_NOTICE_VERSION },
     arrange: async () => '',
     path: () => '/api/account/onboarding/acknowledgement',
-    call: (request) => acknowledgement.POST(request),
     state: (owner) =>
       db().user.findUniqueOrThrow({
         where: { id: owner.id },
@@ -135,9 +151,18 @@ afterAll(async () => {
 });
 
 describe('a request of another origin, made to the handler itself (NFR-SE-17 (c))', () => {
-  it.each(CASES.map((each, index) => [each.name, each, index] as const))(
+  it('has a case for every handler that changes state, here or in a test of its own', () => {
+    expect([...CASES.map((each) => each.handler), ...Object.keys(ELSEWHERE)].sort()).toEqual(
+      [...handlers.keys()].sort(),
+    );
+  });
+
+  it.each(CASES.map((each, index) => [each.handler, each, index] as const))(
     '%s refuses it as the proxy does and changes nothing, and answers the application’s own origin',
     async (_, each, index) => {
+      // The handler the route file exports, called as Next.js calls it.
+      const call = handlers.get(each.handler) as Handler;
+      const method = each.handler.split(' ')[1]!;
       const owner = await person();
       const id = await each.arrange(owner);
       // An address of its own for each route: the entry is one for each period and address.
@@ -147,14 +172,12 @@ describe('a request of another origin, made to the handler itself (NFR-SE-17 (c)
         if (each.body !== undefined) sent.set('content-type', 'application/json');
         for (const [name, value] of Object.entries(headers)) if (value !== undefined) sent.set(name, value);
         const body = each.body === undefined ? undefined : JSON.stringify(each.body);
-        return each.call(
-          new Request(ORIGIN + each.path(id), { method: each.method, headers: sent, body }),
-          id,
-        );
+        return call(new Request(ORIGIN + each.path(id), { method, headers: sent, body }), context(id));
       };
       const before = await each.state(owner, id);
       const logged = await entries();
       const unnamed = await entries({ kind: 'forbidden', userId: null });
+      const read = sessionReads.count;
 
       for (const foreign of FOREIGN) {
         const response = await send({ ...foreign, cookie: owner.cookie });
@@ -166,7 +189,11 @@ describe('a request of another origin, made to the handler itself (NFR-SE-17 (c)
       // The origin comes first, as in the identity routes: without a session
       // the answer is the same 403, and not the 401 that would follow it.
       expect((await send({ origin: 'https://evil.example' })).status).toBe(403);
+      // And no session was read for any of them: nothing of a request of
+      // another origin is looked at, not even whose it is.
+      expect(sessionReads.count).toBe(read);
       expect((await send({ origin: ORIGIN })).status).toBe(401);
+      expect(sessionReads.count).toBe(read + 1);
 
       // NFR-SE-19: a 403 has its entry, one for the period and the network
       // address, however many requests were refused in it, and nothing else
@@ -199,7 +226,8 @@ describe('the proxy and the route together', () => {
       const answer = await proxy(new NextRequest(path, init));
       // Next.js calls the route only where the proxy answered "next".
       if (answer.headers.get('x-middleware-next') !== '1') return answer;
-      return one.DELETE(new Request(path, init), context(id));
+      const remove = handlers.get('src/app/api/documents/[id]/route.ts DELETE') as Handler;
+      return remove(new Request(path, init), context(id));
     };
     const logged = await entries();
     const forbidden = await entries({ kind: 'forbidden' });

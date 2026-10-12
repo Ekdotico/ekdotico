@@ -61,6 +61,11 @@ function make(state: DocumentState, permission: Permission, handler: Handler): D
       // which can be skipped (the owner's decision R50 of 12 October 2026). A
       // deletion and a restore read no body, so nothing else of the request
       // would tell another site's from the application's own.
+      //
+      // It is asked by the method of the request, so a handler exported as a
+      // GET is asked for none: a test holds every such handler to a
+      // permission that only reads (tests/unit/route-origin.test.ts,
+      // `READS_A_DOCUMENT`).
       if (!onlyReads(request.method)) {
         const foreign = await refusedOrigin(request.headers);
         if (foreign) return foreign;

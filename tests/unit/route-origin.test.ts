@@ -6,11 +6,11 @@
 // rest on it. A handler that changes state and is added without the check
 // fails here; tests/integration/route-origin.test.ts calls each one.
 import { globSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { deletedDocumentRoute, documentRoute, permissionOf } from '../../src/lib/documents/route.ts';
-import { routes, SESSIONLESS } from '../routes.ts';
+import type { Permission } from '../../src/lib/documents/permissions.ts';
+import { deletedDocumentRoute, documentRoute, permissionOf, stateOf } from '../../src/lib/documents/route.ts';
+import { handlersOf, mustCheckOrigin, reads, routes, SESSIONLESS, SIGNED } from '../routes.ts';
 
 const refusedOrigin = vi.hoisted(() => vi.fn());
 const validateSession = vi.hoisted(() => vi.fn());
@@ -23,51 +23,126 @@ vi.mock('../../src/lib/auth/session.ts', async (original) => ({
   validateSession,
 }));
 
-// The handlers that change state and make no origin check, each with why. They
-// carry no cookie, so there is nothing of a person's for another site to ride
-// on: each is authorised by the signature of the request, made with a secret
-// that no browser holds, and is called by a command and never from a page,
-// which sends no `Origin` at all (NFR-SE-05 (b); API design, "Admission": "None
-// carries a session, and none is ever called from a browser"). The proxy
-// excepts them for the same reason (src/proxy.ts, group (b)).
-const SIGNED: Record<string, string> = {
-  'src/app/api/admission/invitations/route.ts POST': 'FR-AU-89 (a): the signature is verified first',
-  'src/app/api/admission/invitations/[id]/route.ts DELETE': 'FR-AU-89 (c): the signature is verified first',
-};
+// ── The one form of the check in a handler ──────────────────────────────────
+//
+// A handler that is not made by `documentRoute` opens with these two
+// statements, and nothing before them but a `try {`:
+//
+//   const foreign = await refusedOrigin(request.headers);
+//   if (foreign) return foreign;
+//
+// where `request` is its first parameter and `foreign` any one name. The file
+// is parsed, so a comment is nothing, the handler is its own body, and no
+// statement, no read of the body and no promise started comes before the
+// check. One step aside is read: the first statement may call a function of
+// the same file on the request, `const refused = await refusal(request);`,
+// where that function opens with the two statements itself (the identity
+// handler). What a `catch` does with a fault of the check is not read here.
 
-const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
-// Every method but those that only read (src/lib/http.ts, `onlyReads`). An
-// OPTIONS is taken to change state too, and no route exports one.
-const READS = ['GET', 'HEAD'];
+const parse = (text: string) => ts.createSourceFile('route.ts', text, ts.ScriptTarget.Latest, true);
 
-/** What a route file exports under the name of a method that changes state. */
-async function changing(route: string): Promise<[method: string, handler: unknown][]> {
-  const exported: Record<string, unknown> = await import(
-    /* @vite-ignore */ pathToFileURL(resolve(route)).href
+/** Whether the file imports `refusedOrigin` under its own name from src/lib/auth/route-answers.ts. */
+function importsTheCheck(file: ts.SourceFile): boolean {
+  return file.statements.some(
+    (statement) =>
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text.endsWith('lib/auth/route-answers.ts') &&
+      statement.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(statement.importClause.namedBindings) &&
+      statement.importClause.namedBindings.elements.some(
+        (element) => element.name.text === 'refusedOrigin' && element.propertyName === undefined,
+      ),
   );
-  return Object.entries(exported).filter(([name]) => METHODS.includes(name) && !READS.includes(name));
 }
 
-/** The source of a handler written as a function in a route file, from its method to the next. */
-function sourceOf(text: string, method: string): string | undefined {
-  return text
-    .split(/^export (?:async )?function (?=(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)\()/m)
-    .slice(1)
-    .find((source) => source.startsWith(`${method}(`));
+const functionNamed = (file: ts.SourceFile, name: string) =>
+  file.statements.find(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+  );
+
+/** Whether a function opens with the two statements; `aside` allows the one step through a function of the file. */
+function opensWithTheCheck(file: ts.SourceFile, made: ts.FunctionDeclaration, aside = true): boolean {
+  // Plain parameters: a default value would run before the first statement.
+  const names = made.parameters.map((parameter) =>
+    ts.isIdentifier(parameter.name) && !parameter.initializer ? parameter.name.text : undefined,
+  );
+  const request = names[0];
+  if (request === undefined || names.includes(undefined) || names.includes('refusedOrigin')) return false;
+
+  let statements: readonly ts.Statement[] = made.body?.statements ?? [];
+  if (statements[0] && ts.isTryStatement(statements[0])) statements = statements[0].tryBlock.statements;
+  const [declared, returned] = statements;
+
+  // const foreign = await refusedOrigin(request.headers);
+  if (!declared || !ts.isVariableStatement(declared)) return false;
+  const { declarations, flags } = declared.declarationList;
+  const declaration = declarations[0]!;
+  const awaited = declaration.initializer;
+  if (!(flags & ts.NodeFlags.Const) || declarations.length !== 1 || !ts.isIdentifier(declaration.name)) {
+    return false;
+  }
+  if (!awaited || !ts.isAwaitExpression(awaited) || !ts.isCallExpression(awaited.expression)) return false;
+  const call = awaited.expression;
+  const argument = call.arguments[0];
+  if (!ts.isIdentifier(call.expression) || call.questionDotToken || call.arguments.length !== 1) return false;
+  if (call.expression.text === 'refusedOrigin') {
+    const ofTheRequest =
+      ts.isPropertyAccessExpression(argument!) &&
+      !argument.questionDotToken &&
+      ts.isIdentifier(argument.expression) &&
+      argument.expression.text === request &&
+      argument.name.text === 'headers';
+    if (!ofTheRequest || !importsTheCheck(file)) return false;
+  } else {
+    const own = aside ? functionNamed(file, call.expression.text) : undefined;
+    const onTheRequest = ts.isIdentifier(argument!) && argument.text === request;
+    if (!own || !onTheRequest || !opensWithTheCheck(file, own, false)) return false;
+  }
+
+  // if (foreign) return foreign;
+  const foreign = declaration.name.text;
+  const named = (node: ts.Node | undefined) =>
+    node !== undefined && ts.isIdentifier(node) && node.text === foreign;
+  return (
+    returned !== undefined &&
+    ts.isIfStatement(returned) &&
+    returned.elseStatement === undefined &&
+    named(returned.expression) &&
+    ts.isReturnStatement(returned.thenStatement) &&
+    named(returned.thenStatement.expression)
+  );
 }
 
 /**
- * Whether the first thing a handler waits on is the origin check: a call of
- * `refusedOrigin`, or of a function of the same file whose own first wait is
- * that call (the identity handler's `refusal`). Nothing of the request is read
- * before it, the session included.
+ * Whether the handler a route file exports under `method` is written as
+ * `export async function METHOD(…)` and opens with the check. Exported any
+ * other way, a handler is not read here, and so does not pass.
  */
-function checksFirst(text: string, source: string): boolean {
-  const first = /\bawait\s+(\w+)\(/.exec(source)?.[1];
-  if (first === undefined || first === 'refusedOrigin') return first !== undefined;
-  const own = new RegExp(`^(?:async )?function ${first}\\([^]*?^}`, 'm').exec(text)?.[0];
-  return own !== undefined && /\bawait\s+(\w+)\(/.exec(own)?.[1] === 'refusedOrigin';
+function checksFirst(text: string, method: string): boolean {
+  const file = parse(text);
+  const made = functionNamed(file, method);
+  const exported = made && (ts.getCombinedModifierFlags(made) & ts.ModifierFlags.Export) !== 0;
+  return exported === true && opensWithTheCheck(file, made!);
 }
+
+// ── A request that only reads, about a document ─────────────────────────────
+//
+// `documentRoute` asks the origin of every request but a GET and a HEAD, by
+// the method of the request. A GET made for a permission that changes the
+// document would change state with no origin asked. The permissions under
+// which a handler may be a GET or a HEAD are these, which only read; every
+// other name of FR-ED-44 changes something or leaves the document. The two
+// exports are not here: no route of theirs exists yet, and whoever adds one
+// under a GET decides it here, on purpose. A GET that is not made by
+// `documentRoute` and changes state is beyond a test to see: it is a matter
+// for the review of the route (CLAUDE.md, "Process").
+const READS_A_DOCUMENT: Permission[] = ['document.view', 'document.collaborators.view'];
+
+/** Whether a handler made by `documentRoute` may be exported under a method that only reads. */
+const mayRead = (handler: unknown) =>
+  READS_A_DOCUMENT.includes(permissionOf(handler)!) && stateOf(handler) === 'live';
 
 beforeEach(() => {
   refusedOrigin.mockReset();
@@ -80,17 +155,14 @@ describe('the origin check of a handler that changes state (NFR-SE-17 (c))', () 
     for (const route of routes) expect(route).toMatch(/^src\/app\/api\//);
   });
 
-  it.each(routes)('%s: every handler that changes state checks the origin first', async (route) => {
-    const text = readFileSync(route, 'utf8');
-    for (const [method, handler] of await changing(route)) {
-      const row = `${route} ${method}`;
-      if (row in SIGNED) continue;
+  it('finds every handler that changes state, and each opens with the check', async () => {
+    const found = await mustCheckOrigin();
+    expect(found.length).toBeGreaterThan(0);
+    for (const [row, handler] of found) {
       // Made by `documentRoute` or `deletedDocumentRoute`, which check (below).
       if (permissionOf(handler) !== undefined) continue;
-      const source = sourceOf(text, method);
-      // Written any other way, a handler is not read here, and so does not pass.
-      expect(source, `${row} is neither made by documentRoute nor written as a function`).toBeDefined();
-      expect(checksFirst(text, source!), `${row} does not call refusedOrigin before anything else`).toBe(
+      const [route, method] = row.split(' ') as [string, string];
+      expect(checksFirst(readFileSync(route, 'utf8'), method), `${row} does not open with the check`).toBe(
         true,
       );
     }
@@ -100,24 +172,9 @@ describe('the origin check of a handler that changes state (NFR-SE-17 (c))', () 
     for (const row of Object.keys(SIGNED)) {
       const [route, method] = row.split(' ') as [string, string];
       expect(SESSIONLESS[route], row).toMatch(/NFR-SE-05 \(b\)/);
-      expect((await changing(route)).map(([name]) => name)).toContain(method);
+      expect(reads(method), row).toBe(false);
+      expect((await handlersOf(route)).map(([name]) => name)).toContain(method);
     }
-  });
-
-  it('knows a handler that does not check first', () => {
-    const file = (body: string) => `export async function POST(request: Request) {\n${body}\n}\n`;
-    const read = (text: string) => checksFirst(text, sourceOf(text, 'POST')!);
-    expect(read(file('  const foreign = await refusedOrigin(request.headers);'))).toBe(true);
-    expect(read(file('  return new Response();'))).toBe(false);
-    expect(
-      read(file('  await validateSessionRow(request.headers);\n  await refusedOrigin(request.headers);')),
-    ).toBe(false);
-    // Through a function of the file, which must itself check first.
-    const through = (own: string) => `async function refusal(request: Request) {\n${own}\n}\n\n`;
-    const called = file('  const refused = await refusal(request);');
-    expect(read(through('  return await refusedOrigin(request.headers);') + called)).toBe(true);
-    expect(read(through('  return await somethingElse(request);') + called)).toBe(false);
-    expect(read(called)).toBe(false);
   });
 
   // A server action is a POST to a page, which no route file shows and this
@@ -127,6 +184,129 @@ describe('the origin check of a handler that changes state (NFR-SE-17 (c))', () 
     for (const file of globSync('src/**/*.{ts,tsx}')) {
       expect(readFileSync(file, 'utf8'), file).not.toMatch(/^\s*['"]use server['"]/m);
     }
+  });
+});
+
+describe('the form of the check', () => {
+  const IMPORT = "import { refusedOrigin } from '../../../lib/auth/route-answers.ts';\n";
+  const post = (body: string, parameters = 'request: Request') =>
+    `export async function POST(${parameters}) {\n${body}\n}\n`;
+  const CHECK = '  const foreign = await refusedOrigin(request.headers);\n  if (foreign) return foreign;\n';
+  const CHANGE = '  await change(request);';
+
+  it.each([
+    ['as the routes write it', IMPORT + post(CHECK + CHANGE)],
+    ['inside the try of the handler', IMPORT + post(`  try {\n${CHECK}${CHANGE}\n  } catch {}`)],
+    [
+      'under other names',
+      IMPORT + post(CHECK.replaceAll('foreign', 'no').replaceAll('request', 'r'), 'r: Request'),
+    ],
+    [
+      'through a function of the file that opens with it, as the identity handler has it',
+      `${IMPORT}async function refusal(request: Request) {\n  try {\n${CHECK}  } catch {}\n  return notJson(request);\n}\n` +
+        post(`  const refused = await refusal(request);\n  if (refused) return refused;\n${CHANGE}`),
+    ],
+  ])('passes the check %s', (_, text) => {
+    expect(checksFirst(text, 'POST')).toBe(true);
+  });
+
+  // The first seven are the shapes the security review of pull request 31
+  // found the first walk to pass; the rest are what else it should not.
+  it.each([
+    ['the result of the check ignored', IMPORT + post(`  await refusedOrigin(request.headers);\n${CHANGE}`)],
+    [
+      'the check on other headers',
+      IMPORT + post(CHECK.replace('request.headers', 'new Headers({ origin: APP_ORIGIN })') + CHANGE),
+    ],
+    [
+      'the body read by a method call before the check',
+      IMPORT + post(`  const body = await request.json();\n${CHECK}`),
+    ],
+    [
+      'state changed by a method call before the check',
+      IMPORT + post(`  await prisma.document.deleteMany({});\n${CHECK}`),
+    ],
+    [
+      'a promise started before the check and awaited after',
+      IMPORT + post(`  const deleting = removeEverything(request);\n${CHECK}  await deleting;`),
+    ],
+    [
+      'no check in the handler, and a later function of the file that makes it',
+      `${IMPORT + post('  return change(request);')}\nasync function unused(request: Request) {\n${CHECK}}\n`,
+    ],
+    [
+      'the words in a comment',
+      IMPORT +
+        post(
+          `  // const foreign = await refusedOrigin(request.headers);\n  // if (foreign) return foreign;\n${CHANGE}`,
+        ),
+    ],
+    [
+      'the check on one branch only',
+      IMPORT + post(`  if (request.headers.has("x-check")) await refusedOrigin(request.headers);\n${CHANGE}`),
+    ],
+    [
+      'the session read first',
+      IMPORT + post(`  const validation = await validateSessionRow(request.headers);\n${CHECK}`),
+    ],
+    ['no check at all', IMPORT + post(CHANGE)],
+    [
+      'the refusal not returned',
+      IMPORT +
+        post(
+          `  const foreign = await refusedOrigin(request.headers);\n  if (foreign) console.log(foreign);\n${CHANGE}`,
+        ),
+    ],
+    ['another value returned', IMPORT + post(CHECK.replace('return foreign', 'return undefined') + CHANGE)],
+    [
+      'the refusal returned only on another condition',
+      IMPORT + post(CHECK.replace('if (foreign)', 'if (foreign && strict)') + CHANGE),
+    ],
+    [
+      'an else beside the return',
+      IMPORT + post(CHECK.replace('foreign;\n', 'foreign;\n  else await change(request);\n')),
+    ],
+    ['the check not awaited', IMPORT + post(CHECK.replace('await ', '') + CHANGE)],
+    [
+      'a parameter with a default that runs first',
+      IMPORT + post(CHECK, 'request: Request, done = change(request)'),
+    ],
+    ['a check of another name’s making', post(CHECK + CHANGE)],
+    [
+      'a check imported under the name from elsewhere',
+      "import { refusedOrigin } from './mine.ts';\n" + post(CHECK + CHANGE),
+    ],
+    [
+      'another function imported under the name',
+      "import { fault as refusedOrigin } from '../../../lib/auth/route-answers.ts';\n" + post(CHECK + CHANGE),
+    ],
+    [
+      'a handler exported as a constant',
+      `${IMPORT}export const POST = async (request: Request) => {\n${CHECK}};\n`,
+    ],
+    [
+      'a handler exported under another name',
+      `${IMPORT}async function handle(request: Request) {\n${CHECK}}\nexport { handle as POST };\n`,
+    ],
+    ['a function of the name that is not exported', IMPORT + post(CHECK).replace('export ', '')],
+    [
+      'a function of the file that does not open with the check',
+      `${IMPORT}async function refusal(request: Request) {\n  await change(request);\n${CHECK}}\n` +
+        post('  const refused = await refusal(request);\n  if (refused) return refused;'),
+    ],
+    [
+      'a function of the file given something other than the request',
+      `${IMPORT}async function refusal(request: Request) {\n${CHECK}}\n` +
+        post('  const refused = await refusal(own());\n  if (refused) return refused;'),
+    ],
+    [
+      'two steps aside',
+      `${IMPORT}async function inner(request: Request) {\n${CHECK}}\n` +
+        'async function outer(request: Request) {\n  const refused = await inner(request);\n  if (refused) return refused;\n}\n' +
+        post('  const refused = await outer(request);\n  if (refused) return refused;'),
+    ],
+  ])('fails %s', (_, text) => {
+    expect(checksFirst(text, 'POST')).toBe(false);
   });
 });
 
@@ -167,5 +347,28 @@ describe('a handler made by documentRoute or deletedDocumentRoute', () => {
     expect((await call(route, 'GET')).status).toBe(401);
     expect((await call(route, 'HEAD')).status).toBe(401);
     expect(refusedOrigin).not.toHaveBeenCalled();
+  });
+
+  // So no handler is a GET or a HEAD for a permission that changes the document.
+  it('is exported under a method that only reads for a permission that only reads', async () => {
+    let seen = 0;
+    for (const route of routes) {
+      for (const [method, exported] of await handlersOf(route)) {
+        if (!reads(method) || permissionOf(exported) === undefined) continue;
+        seen += 1;
+        expect(mayRead(exported), `${route} ${method} is made for ${permissionOf(exported)}`).toBe(true);
+      }
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it('knows a handler that may not be a GET', () => {
+    const noop = () => new Response();
+    expect(mayRead(documentRoute('document.view', noop))).toBe(true);
+    expect(mayRead(documentRoute('document.delete', noop))).toBe(false);
+    expect(mayRead(documentRoute('document.rename', noop))).toBe(false);
+    expect(mayRead(documentRoute('document.export.draft', noop))).toBe(false);
+    expect(mayRead(deletedDocumentRoute(noop))).toBe(false);
+    expect(mayRead(noop)).toBe(false);
   });
 });
