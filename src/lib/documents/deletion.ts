@@ -238,7 +238,8 @@ async function deletePermanently(
     // its entry where the Owner deletes it (`deleteDocument`); whether the
     // permanent deletion is one too is not decided (reported for the
     // register). Were it, the entry and the statement below are one
-    // transaction (R38).
+    // transaction (the owner's decision of 12 October 2026: R38; register
+    // row D153, pending).
     // The row, and with it the document's state. Only while this claim is the
     // one it holds: a claim taken over belongs to the run that took it.
     const { count } = await db().document.deleteMany({ where: claim });

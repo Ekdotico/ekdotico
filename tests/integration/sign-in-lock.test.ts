@@ -20,7 +20,7 @@ import {
   signIn,
   sunk,
 } from './identity.ts';
-import { codeAt, enrol, nextCode, passwordStep, secondStep, withCookies } from './second-factor.ts';
+import { codeAt, enrol, midStep, nextCode, passwordStep, secondStep, withCookies } from './second-factor.ts';
 
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-lock-mail-'));
 // Not the initial values: the limits are configuration. The fourth failure
@@ -589,7 +589,8 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     expect(await sessions(id)).toEqual([]);
     expect((await account(id)).lockedUntil).not.toBeNull();
     expect(await links(id)).toHaveLength(1);
-    // An entry written outside the transaction would be here (R38).
+    // An entry written outside the transaction would be here (the owner's
+    // decision of 12 October 2026: R38; register row D153, pending).
     expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 
@@ -876,7 +877,8 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 
-  // NFR-SE-19; R38: the second place a sign-in by the link completes
+  // NFR-SE-19; the owner's decision of 12 October 2026 (R38; register row
+  // D153, pending): the second place a sign-in by the link completes
   // (two-factor.ts), which had no test of its entry's transaction.
   it('writes the entry in the transaction that completes the step: where it cannot be written, no one is signed in and nothing is spent', async () => {
     const { email, id, secret } = await enrolled();
@@ -892,7 +894,10 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect(await links(id)).toHaveLength(1);
     expect(await steps(id)).toHaveLength(1);
     expect(await entriesOf('sign_in_by_link')).toBe(0);
-    // Neither the step nor the link was spent by the fault.
+    // Neither the step nor the link was spent by the fault. The code is the
+    // third of this secret, that of the step before: asked for with time left
+    // in this step, or it would be two steps old when the server reads it.
+    await midStep();
     expect((await secondStep(auth, cookie, nextCode(secret), 'totp', fresh())).status).toBe(200);
     expect(await entries('sign_in_by_link', id)).toBe(1);
   });
@@ -907,7 +912,8 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect((await account(id)).lockedUntil).not.toBeNull();
     expect(await links(id)).toHaveLength(1);
     expect(await steps(id)).toHaveLength(1);
-    // An entry written outside the transaction would be here (R38).
+    // An entry written outside the transaction would be here (the owner's
+    // decision of 12 October 2026: R38; register row D153, pending).
     expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 

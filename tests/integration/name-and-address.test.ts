@@ -1481,7 +1481,8 @@ describe('the entry of a change of the address in the security log (NFR-SE-19; t
     });
     expect((await confirm(token, { cookie })).response.status).toBe(500);
     expect((await rowOf(id)).email).toBe(email);
-    // An entry written outside the transaction would be here (R38).
+    // An entry written outside the transaction would be here (the owner's
+    // decision of 12 October 2026: R38; register row D153, pending).
     expect(await entries()).toEqual([]);
   });
 });
