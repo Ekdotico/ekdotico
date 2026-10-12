@@ -3,7 +3,7 @@
 // neither can ask src/lib/documents/access.ts: the list is the session's own
 // account's and takes no identifier from the request, and a creation is
 // authorised by the workspace, which must be that account's own (FR-AU-12).
-import { fault, notAdmitted } from '../../../lib/auth/route-answers.ts';
+import { fault, notAdmitted, refusedOrigin } from '../../../lib/auth/route-answers.ts';
 import { validateSession, validateSessionRow } from '../../../lib/auth/session.ts';
 import { createDocument, listDocuments } from '../../../lib/documents/documents.ts';
 import { errorResponse, notJson, readJson } from '../../../lib/http.ts';
@@ -37,7 +37,8 @@ export async function GET(request: Request): Promise<Response> {
 
 /**
  * It changes state, so it reads the session's row (NFR-SE-17 (c)); the origin
- * check is the proxy's.
+ * check is the proxy's and, since the proxy can be skipped, this route's own
+ * as well (the owner's decision R50 of 12 October 2026).
  *
  * The body: `{}`, or `{ "workspaceId": "…" }`. Any other field is refused: the
  * Owner is the session's account, the title is the default, and whether the
@@ -46,6 +47,10 @@ export async function GET(request: Request): Promise<Response> {
  */
 export async function POST(request: Request): Promise<Response> {
   try {
+    // NFR-SE-17 (c): the origin first, before anything of the request is read.
+    const foreign = await refusedOrigin(request.headers);
+    if (foreign) return foreign;
+
     const validation = await validateSessionRow(request.headers);
     const { session } = validation;
     if (!session) return await notAdmitted(validation);
