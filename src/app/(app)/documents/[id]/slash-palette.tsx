@@ -24,6 +24,7 @@
 import { Extension, type Editor, type Range } from '@tiptap/core';
 import type { NodeType, ResolvedPos } from '@tiptap/pm/model';
 import { Plugin, PluginKey, Selection, type EditorState, type Transaction } from '@tiptap/pm/state';
+import { ReplaceStep } from '@tiptap/pm/transform';
 import type { EditorView } from '@tiptap/pm/view';
 import { useEditorState } from '@tiptap/react';
 import { exitSuggestion, Suggestion } from '@tiptap/suggestion';
@@ -90,17 +91,14 @@ interface Command {
 
 /**
  * What this file holds beside the library's plugin: the row the writer has
- * moved to, whether the last key was a move in the list, and the command the
- * writer closed the list on, for as long as the cursor stays in it.
+ * moved to, and whether the last key was a move in the list.
  */
 interface Held {
   activeId: string | null;
   navigating: boolean;
-  dismissed: Command | null;
 }
 const HELD = new PluginKey<Held>('slashPaletteHeld');
-type Moving = Pick<Held, 'activeId' | 'navigating'>;
-const STILL: Moving = { activeId: null, navigating: false };
+const STILL: Held = { activeId: null, navigating: false };
 
 /**
  * FR-ED-10: the command at the cursor, where there is one: a `/` "at the
@@ -175,21 +173,39 @@ const offered = (state: EditorState, range: Range, commands: readonly SlashComma
   commands.filter(({ inserts }) => stands(state, range, state.schema.nodes[inserts.type]!));
 
 /**
- * Whether a transaction is a request for the palette: this writer's own
- * change to the text of the command, and not while an input method is
- * composing. A cursor that arrives after a `/` already in the text is no
- * request, and neither is another client's change, nor an undo.
+ * Whether a transaction is a request for the palette: this writer typed the
+ * `/` of the command in it, and nothing else asks (the owner's decision of
+ * 12 October 2026). The transaction is the writer's own, puts in the one
+ * character `/` and nothing with it, where the command now begins, and is
+ * not a paste or a drop, nor made while an input method is composing.
+ * Another client's change and an undo or a redo arrive from the collaboration
+ * binding, and are none of these.
+ *
+ * So a `/` that was pasted, that another client put in, that an undo brought
+ * back, or that was in the text already opens nothing, whatever is typed
+ * after it: another client could otherwise put a `/` before the word a writer
+ * is typing, and the writer's next letter would open the list on a row that
+ * Enter then puts in place of the word. The package's README reads typing in
+ * a word that begins with a `/` as a request ("typing in that word is"); the
+ * decision overrides it here.
+ *
+ * Nothing remembers whose a `/` is but the open list itself: the list stays
+ * open for as long as the cursor stays in the command it was opened on
+ * (`same`), and once closed, by any means, that `/` does not open it again.
+ * To ask again the writer types a `/` again.
  */
-export function opens(transaction: Transaction, range: Range, composing: boolean): boolean {
+export function typesSlash(transaction: Transaction, range: Range, composing: boolean): boolean {
   if (!transaction.docChanged || composing || transaction.getMeta(ySyncPluginKey)) return false;
-  const { maps } = transaction.mapping;
-  return maps.some((map, index) => {
-    let touched = false;
-    const later = transaction.mapping.slice(index + 1);
-    map.forEach((_from, _to, start, end) => {
-      if (later.map(start, -1) <= range.to && later.map(end, 1) >= range.from) touched = true;
-    });
-    return touched;
+  // ProseMirror marks what it pastes and what it drops.
+  if (transaction.getMeta('paste') || transaction.getMeta('uiEvent')) return false;
+  return transaction.steps.some((step, index) => {
+    if (!(step instanceof ReplaceStep)) return false;
+    const { content } = step.slice;
+    return (
+      content.childCount === 1 &&
+      content.firstChild!.text === '/' &&
+      transaction.mapping.slice(index + 1).map(step.from) === range.from
+    );
   });
 }
 
@@ -297,7 +313,7 @@ function key(editor: Editor, view: EditorView, event: OptionListKeyEvent): boole
   }
   const activeId = result && 'activeId' in result ? result.activeId : shown.activeId;
   if (activeId !== shown.activeId || navigating !== shown.navigating) {
-    view.dispatch(view.state.tr.setMeta(HELD, { activeId, navigating } satisfies Moving));
+    view.dispatch(view.state.tr.setMeta(HELD, { activeId, navigating } satisfies Held));
   }
   return result !== null;
 }
@@ -328,52 +344,39 @@ export const SlashPalette = Extension.create({
         decorationClass: 'slash-command',
         findSuggestionMatch: ({ $position }) => slashQuery($position),
         allow: ({ state, range }) => offered(state, range, SLASH_COMMANDS).length > 0,
-        // Not on the `/` the writer closed the list on. Otherwise: open
-        // already, on this `/`; or asked for now. The states read here are
-        // those before the whole dispatch, so a transaction a plugin appends
-        // to one that opened the list would close it; nothing appends one to
-        // typing in a command. (The library remembers a closed list too, by
-        // the place of its `/`: it agrees with this for the writer's own
-        // changes, and after another client's it holds a place no command has.)
+        // Open already, on this `/`; or its `/` is typed now (`typesSlash`).
+        // So a list that is closed stays closed for its `/`, however it was
+        // closed: by Escape, by Tab, by a press outside, by the cursor
+        // leaving, or by another client's change to the command. The states
+        // read here are those before the whole dispatch, so a transaction a
+        // plugin appends to one that opened the list would close it; nothing
+        // appends one to typing in a command.
         shouldShow: ({ range, text, transaction }) => {
           const was = SLASH.getState(editor.state);
-          const dismissed = HELD.getState(editor.state)?.dismissed;
-          if (dismissed && same(transaction, dismissed, range, text)) return false;
           return (
             (was?.active === true &&
               same(transaction, { from: was.range.from, text: was.text ?? '' }, range, text)) ||
-            opens(transaction, range, editor.view.composing)
+            typesSlash(transaction, range, editor.view.composing)
           );
         },
+        // The library remembers a closed list too, by the place of its `/`,
+        // which after another client's change is a place no command has. The
+        // rule above is the whole rule: a `/` typed now is a new request.
+        shouldResetDismissed: () => true,
         render: () => ({ onKeyDown: ({ view, event }) => key(editor, view, event) }),
       }),
       new Plugin<Held>({
         key: HELD,
         state: {
-          init: () => ({ ...STILL, dismissed: null }),
-          apply(transaction, was, before, state) {
-            let { dismissed } = was;
-            const suggesting = SLASH.getState(before);
-            if ((transaction.getMeta(SLASH) as { exit?: boolean } | undefined)?.exit) {
-              // Closed by the writer: by Escape, a press outside, Tab, or the loss of the focus.
-              if (suggesting?.active)
-                dismissed = { from: suggesting.range.from, text: suggesting.text ?? '' };
-            } else if (dismissed) {
-              // Until the cursor leaves the command, or the command is another.
-              const now = state.selection.empty ? slashQuery(state.selection.$from) : null;
-              dismissed =
-                now && same(transaction, dismissed, now.range, now.text)
-                  ? { from: now.range.from, text: now.text }
-                  : null;
-            }
-            const moved = transaction.getMeta(HELD) as Moving | undefined;
-            if (moved) return { ...moved, dismissed };
+          init: () => STILL,
+          apply(transaction, was) {
+            const moved = transaction.getMeta(HELD) as Held | undefined;
+            if (moved) return moved;
             // Text arrived or the cursor moved, with a key or without one: the
             // move in the list is over, and a new filter starts at its first
             // match. Another client's change is neither.
             const own = !transaction.getMeta(ySyncPluginKey);
-            const moving = own && (transaction.docChanged || transaction.selectionSet) ? STILL : was;
-            return { activeId: moving.activeId, navigating: moving.navigating, dismissed };
+            return own && (transaction.docChanged || transaction.selectionSet) ? STILL : was;
           },
         },
         props: { attributes: slashAttributes },
@@ -405,7 +408,7 @@ export function SlashPaletteList({ editor }: { editor: Editor }) {
       // The pointer moved onto a row: marked, and no move by key.
       onActiveChange={(activeId) =>
         editor.view.dispatch(
-          editor.state.tr.setMeta(HELD, { activeId, navigating: shown.navigating } satisfies Moving),
+          editor.state.tr.setMeta(HELD, { activeId, navigating: shown.navigating } satisfies Held),
         )
       }
       onSelect={(name) => chooseSlashCommand(editor, name)}

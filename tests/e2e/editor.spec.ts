@@ -1014,6 +1014,108 @@ test('the slash palette stays open through another client’s change elsewhere, 
   }
 });
 
+// The owner's decision of 12 October 2026: the palette opens only when the
+// writer themself typed the slash. Before it, the writer's own change to a
+// command opened the list, so another client could put a slash before the
+// word a writer was typing: the next letter opened the list on a row, and
+// Enter put that row's block in place of the word.
+test('the slash palette opens only on a slash the writer typed: not on another client’s, a pasted one, one an undo brought back, or one the cursor left', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const blocks = doc.locator(':scope > p');
+  const other = await connectAs(page.context(), id);
+  const shared = other.provider.document;
+  /** Nothing opens within the time a list takes to. */
+  const staysClosed = async (why: string) => {
+    await page.waitForTimeout(300);
+    await expect(palette(page), why).toBeHidden();
+    await expect(page.getByText(NO_BLOCK).first(), why).toBeHidden();
+    await expect(doc, why).not.toHaveAttribute('aria-controls');
+  };
+  try {
+    await doc.focus();
+
+    // The writer has typed "cod" of a word. Another client puts a slash before it.
+    await page.keyboard.type('cod');
+    await expect.poll(() => shared.getXmlFragment('default').toString()).toContain('cod');
+    sharedText(shared, 'cod').insert(0, '/');
+    await expect(blocks).toHaveText(['/cod']);
+    await staysClosed('after another client’s slash');
+    // The writer types on: no list. Enter is the text's key, and the word stays.
+    await page.keyboard.type('e');
+    await expect(blocks).toHaveText(['/code']);
+    await staysClosed('after the writer’s next letter');
+    await page.keyboard.press('Enter');
+    await staysClosed('after Enter');
+    await expect(doc.locator('pre')).toHaveCount(0);
+    await expect(blocks).toHaveText(['/code', '']);
+
+    // The writer's own slash, which the cursor left: the list went then, and
+    // typing in the word does not bring it back. Not when another client has
+    // joined the writer's next words to the command either.
+    await page.keyboard.type('see /c');
+    await expect(rows(page)).toHaveText(['Code block/code', 'Callout/callout', 'Table of contents/toc']);
+    await page.keyboard.type(' de mine');
+    await staysClosed('past the command');
+    for (let press = 0; press < ' de mine'.length; press += 1) await page.keyboard.press('ArrowLeft');
+    await staysClosed('back in the command');
+    await expect.poll(() => shared.getXmlFragment('default').toString()).toContain('see /c de mine');
+    sharedText(shared, 'see /c de mine').delete('see /c'.length, 1);
+    await expect(blocks).toHaveText(['/code', 'see /cde mine']);
+    await staysClosed('after another client joined the words');
+    await page.keyboard.type('o');
+    await expect(blocks).toHaveText(['/code', 'see /code mine']);
+    await staysClosed('after a letter typed in the joined word');
+    await page.keyboard.press('Enter');
+    await staysClosed('after Enter in the joined word');
+    await expect(doc.locator('pre')).toHaveCount(0);
+    await expect(blocks).toHaveText(['/code', 'see /co', 'de mine']);
+
+    // A pasted slash.
+    await newLastLine(page);
+    await paste(page, '<p>/h</p>');
+    await expect(blocks.last()).toHaveText('/h');
+    await staysClosed('after a paste');
+    await page.keyboard.type('1');
+    await expect(blocks.last()).toHaveText('/h1');
+    await staysClosed('after a letter typed in what was pasted');
+
+    // A slash that an undo brought back. Each part is a step of undo of its own.
+    await newLastLine(page);
+    await page.waitForTimeout(700);
+    await page.keyboard.type('/q');
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await page.waitForTimeout(700);
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
+    await expect(blocks.last()).toHaveText('');
+    await page.waitForTimeout(700);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(blocks.last()).toHaveText('/q');
+    await staysClosed('after an undo');
+    // The undo leaves the cursor before the slash: to the end of the command, which asks for nothing.
+    await placeAtEnd(blocks.last());
+    await staysClosed('a cursor that arrives after an undo');
+    await page.keyboard.type('u');
+    await expect(blocks.last()).toHaveText('/qu');
+    await staysClosed('after a letter typed in what the undo brought back');
+    await page.keyboard.press('Enter');
+    await expect(doc.locator('blockquote')).toHaveCount(0);
+
+    // The writer asks again by typing a slash.
+    await page.keyboard.type('/q');
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await page.keyboard.press('Enter');
+    await expect(doc.locator('blockquote')).toHaveCount(1);
+  } finally {
+    other.close();
+  }
+});
+
 // A long run of one character that no line can break at was laid out again,
 // whole, at every key: with kerning on, the cost grew with the square of its
 // length, about 430 ms a key at 32,000 characters. The design package turns

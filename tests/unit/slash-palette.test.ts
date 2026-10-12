@@ -12,12 +12,12 @@ import { optionListOptionId } from '@ekdotico/domico/components';
 import { extensions } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import {
   chooseSlashCommand,
-  opens,
   slashAttributes,
   SLASH_LIST_ID,
   SLASH_NAMES,
   slashPalette,
   slashQuery,
+  typesSlash,
 } from '../../src/app/(app)/documents/[id]/slash-palette.tsx';
 import { SLASH_COMMANDS } from '../../src/lib/editor/slash-commands.ts';
 
@@ -167,31 +167,135 @@ describe('where the palette opens (FR-ED-10)', () => {
     expect(listed(item)).toEqual(ALL);
   });
 
-  it('does not open for a cursor that arrives after a slash already in the text, and does once that word is typed in', () => {
+  // The owner's decision of 12 October 2026: the palette opens only when the
+  // writer themself typed the slash. Each of the tests to the end of this
+  // group that says "does not open" opened the list before that decision.
+  it('does not open for a slash already in the text, whatever is typed after it', () => {
     const editor = editorOf(paragraph(words('/h')), paragraph());
     editor.commands.setTextSelection(3);
     expect(slashPalette(editor.state).open).toBe(false);
     type(editor, '1');
-    expect(listed(editor)).toEqual(['h1']);
-    // And it closes when the cursor leaves the command.
-    editor.commands.setTextSelection(6);
+    expect(text(editor)).toBe('/h1');
+    expect(slashPalette(editor.state).open).toBe(false);
+    // Enter is the text's key, and the word stays.
+    expect(press(editor, 'Enter')).toBe(false);
+    editor.view.dispatch(editor.state.tr.delete(3, 4));
+    expect(slashPalette(editor.state).open).toBe(false);
+    // Nor for a slash typed elsewhere, while the cursor stays in that word.
+    editor.view.dispatch(editor.state.tr.insertText('/', 5));
+    expect(editor.state.selection.from).toBe(3);
     expect(slashPalette(editor.state).open).toBe(false);
   });
 
-  it('is asked for by this writer’s own change to the command, and by nothing else', () => {
-    const editor = editorOf(paragraph(words('/h')), paragraph(words('far')));
-    const range = { from: 1, to: 3 };
-    const typed = () => editor.state.tr.insertText('1', 3);
-    expect(opens(typed(), { from: 1, to: 4 }, false)).toBe(true);
-    // An input method that is composing has not committed what it shows.
-    expect(opens(typed(), { from: 1, to: 4 }, true)).toBe(false);
-    // Another client's change, and an undo, arrive from the collaboration binding.
-    expect(opens(typed().setMeta(ySyncPluginKey, { isChangeOrigin: true }), { from: 1, to: 4 }, false)).toBe(
-      false,
+  it('is asked for by the transaction in which this writer types the slash, and by nothing else', () => {
+    const editor = editorOf(paragraph(words('a ')), paragraph(words('far')));
+    const range = { from: 3, to: 4 };
+    const typed = () => editor.state.tr.insertText('/', 3);
+    expect(typesSlash(typed(), range, false)).toBe(true);
+    // Typed over a selection, and with a change before it in the same transaction.
+    expect(typesSlash(editor.state.tr.insertText('/', 2, 3), { from: 2, to: 3 }, false)).toBe(true);
+    expect(typesSlash(editor.state.tr.insertText('/', 3).insertText('b', 1), { from: 4, to: 5 }, false)).toBe(
+      true,
     );
-    // A change elsewhere in the document, and a move of the cursor.
-    expect(opens(editor.state.tr.insertText('!', 8), range, false)).toBe(false);
-    expect(opens(editor.state.tr.setMeta('moved', true), range, false)).toBe(false);
+    // An input method that is composing has not committed what it shows.
+    expect(typesSlash(typed(), range, true)).toBe(false);
+    // Another client's change, an undo and a redo arrive from the collaboration binding.
+    for (const isUndoRedoOperation of [false, true]) {
+      const arrived = typed().setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation });
+      expect(typesSlash(arrived, range, false)).toBe(false);
+    }
+    // A paste and a drop, as ProseMirror marks them: of a slash alone too.
+    expect(typesSlash(typed().setMeta('paste', true).setMeta('uiEvent', 'paste'), range, false)).toBe(false);
+    expect(typesSlash(typed().setMeta('uiEvent', 'drop'), range, false)).toBe(false);
+    // A slash that arrives with other text: a paste that carries no mark, an input rule.
+    expect(typesSlash(editor.state.tr.insertText('/h', 3), { from: 3, to: 5 }, false)).toBe(false);
+    expect(typesSlash(editor.state.tr.insertText(' /', 3), { from: 4, to: 5 }, false)).toBe(false);
+    // Another character typed in the command, a slash typed elsewhere, a change elsewhere, a move.
+    expect(typesSlash(editor.state.tr.insertText('h', 3), range, false)).toBe(false);
+    expect(typesSlash(editor.state.tr.insertText('/', 8), range, false)).toBe(false);
+    expect(typesSlash(editor.state.tr.insertText('!', 8), range, false)).toBe(false);
+    expect(typesSlash(editor.state.tr.setMeta('moved', true), range, false)).toBe(false);
+  });
+
+  it('does not open on a slash that another client puts before the word the writer is typing', () => {
+    const editor = editorOf();
+    type(editor, 'cod');
+    peer(editor, [paragraph(words('/cod'))], 5);
+    expect(slashPalette(editor.state).open).toBe(false);
+    type(editor, 'e');
+    expect(text(editor)).toBe('/code');
+    expect(slashPalette(editor.state).open).toBe(false);
+    expect(slashAttributes(editor.state)).toStrictEqual({});
+    // Enter is the text's key: no block is put in place of the word.
+    expect(press(editor, 'Enter')).toBe(false);
+    expect(json(editor)).toEqual([paragraph(words('/code'))]);
+    // After a space too, and when the other client joins the writer's own words into a command.
+    const joined = editorOf(paragraph(words('see /c de mine')));
+    joined.commands.setTextSelection(7);
+    peer(joined, [paragraph(words('see /cde mine'))], 7);
+    type(joined, 'o');
+    expect(text(joined)).toBe('see /code mine');
+    expect(slashPalette(joined.state).open).toBe(false);
+    expect(press(joined, 'Enter')).toBe(false);
+  });
+
+  it('does not open on a slash that was pasted, nor on one that an undo or a redo brought back', () => {
+    const pasted = editorOf();
+    pasted.view.dispatch(pasted.state.tr.insertText('/h').setMeta('paste', true).setMeta('uiEvent', 'paste'));
+    expect(slashPalette(pasted.state).open).toBe(false);
+    type(pasted, '1');
+    expect(text(pasted)).toBe('/h1');
+    expect(slashPalette(pasted.state).open).toBe(false);
+
+    const alone = editorOf();
+    alone.view.dispatch(alone.state.tr.insertText('/').setMeta('paste', true).setMeta('uiEvent', 'paste'));
+    type(alone, 'h');
+    expect(text(alone)).toBe('/h');
+    expect(slashPalette(alone.state).open).toBe(false);
+
+    // The binding applies an undo as it applies another client's change, and says which it is.
+    const undone = editorOf();
+    type(undone, '/h');
+    undone.view.dispatch(undone.state.tr.delete(1, 3));
+    const back = undone.schema.nodeFromJSON({ type: 'doc', content: [paragraph(words('/h'))] });
+    const tr = undone.state.tr.replace(0, undone.state.doc.content.size, new Slice(back.content, 0, 0));
+    tr.setSelection(TextSelection.create(tr.doc, 3));
+    undone.view.dispatch(tr.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: true }));
+    expect(text(undone)).toBe('/h');
+    expect(slashPalette(undone.state).open).toBe(false);
+    type(undone, '1');
+    expect(slashPalette(undone.state).open).toBe(false);
+  });
+
+  it('does not open again on the writer’s own slash once the cursor has left the command and come back', () => {
+    const editor = editorOf(paragraph(), paragraph(words('below')));
+    type(editor, '/h');
+    expect(slashPalette(editor.state).open).toBe(true);
+    editor.commands.setTextSelection(6);
+    expect(slashPalette(editor.state).open).toBe(false);
+    editor.commands.setTextSelection(3);
+    expect(slashPalette(editor.state).open).toBe(false);
+    type(editor, '1');
+    expect(text(editor)).toBe('/h1below');
+    expect(slashPalette(editor.state).open).toBe(false);
+    // The writer asks again by typing a slash again.
+    editor.view.dispatch(editor.state.tr.delete(1, 4));
+    type(editor, '/');
+    expect(slashPalette(editor.state).open).toBe(true);
+  });
+
+  it('opens on a slash the writer types before a word, and on one typed over the command it was closed on', () => {
+    const before = editorOf(paragraph(words('cod')));
+    type(before, '/');
+    expect(text(before)).toBe('/cod');
+    expect(listed(before)).toEqual(['code']);
+
+    const over = editorOf();
+    type(over, '/h');
+    press(over, 'Escape');
+    over.view.dispatch(over.state.tr.insertText('/', 1, 3));
+    expect(text(over)).toBe('/');
+    expect(slashPalette(over.state).open).toBe(true);
   });
 
   it('stays as it is through another client’s change, at the row the writer moved to', () => {
@@ -241,7 +345,7 @@ describe('where the palette opens (FR-ED-10)', () => {
     expect(json(gone)).toEqual([paragraph(words('above'))]);
   });
 
-  it('stays closed after Escape through another client’s change, until that client rewrites the command', () => {
+  it('stays closed after Escape through another client’s change, and when that client rewrites the command', () => {
     const editor = editorOf(paragraph(words('above')), paragraph());
     editor.commands.setTextSelection(8);
     type(editor, '/h');
@@ -253,11 +357,12 @@ describe('where the palette opens (FR-ED-10)', () => {
     peer(editor, [paragraph(words('Yet more above')), paragraph(words('/h1'))], 20);
     type(editor, '2');
     expect(slashPalette(editor.state).open).toBe(false);
-    // Another command now, by another's hand: what the writer closed is gone, and typing in it asks anew.
+    // Another command now, by another's hand: its slash is not the writer's, and typing in it asks for nothing.
     peer(editor, [paragraph(words('above')), paragraph(words('/he'))], 11);
     expect(slashPalette(editor.state).open).toBe(false);
     type(editor, 'a');
-    expect(listed(editor)).toEqual(['h1', 'h2', 'h3']);
+    expect(text(editor)).toBe('above/hea');
+    expect(slashPalette(editor.state).open).toBe(false);
   });
 
   it('closes when the text loses the focus, and when the document can no longer be edited (FR-ED-18)', () => {
@@ -535,18 +640,15 @@ describe('the command is the whole word the slash begins, wherever the cursor st
   });
 
   it('closes when the cursor is before the slash, past the word, or a range', () => {
-    const editor = editorOf(paragraph(words('a ')));
-    into(editor, 'paragraph');
-    type(editor, '/h');
     for (const [anchor, head] of [
       [3, 3],
       [1, 1],
       [4, 5],
       [3, 5],
     ] as const) {
-      editor.commands.setTextSelection(5);
-      type(editor, 'x');
-      editor.view.dispatch(editor.state.tr.delete(5, 6));
+      const editor = editorOf(paragraph(words('a ')));
+      into(editor, 'paragraph');
+      type(editor, '/h');
       expect(slashPalette(editor.state).open, `${anchor}`).toBe(true);
       editor.commands.setTextSelection({ from: anchor, to: head });
       expect(slashPalette(editor.state).open, `${anchor} to ${head}`).toBe(false);
