@@ -59,6 +59,7 @@ import { linkAddress } from '../../../../lib/editor/link.ts';
 import styles from './editor.module.css';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
+import { SlashPalette } from './slash-palette.tsx';
 
 /** Whether the document can be edited now: the role, and the connection (FR-ED-18). Node views read it. */
 export const Editable = createContext(false);
@@ -869,5 +870,6 @@ export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
     Closed,
     Shortcuts,
     MarkdownInput,
+    SlashPalette,
   ];
 }

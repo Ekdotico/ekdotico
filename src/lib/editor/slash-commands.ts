@@ -3,12 +3,8 @@
 // the block it inserts, as the document's schema holds it
 // (../../app/(app)/documents/[id]/extensions.tsx).
 //
-// NOT YET REACHED BY ANY PAGE. The palette itself waits for a control of
-// `@ekdotico/domico`: a list of options shown at the cursor and filtered as
-// the person types, with the focus kept in the text. The package has none at
-// 0.27.0, and one is not drawn in the application (FR-AU-88; the owner's
-// decision E1). When the control is released, the palette is this list behind
-// it.
+// The palette itself, on the control of `@ekdotico/domico` 0.28.0, is
+// ../../app/(app)/documents/[id]/slash-palette.tsx.
 //
 // The rows are the block types of α 0.1.0 that the editor holds today, in the
 // order of the requirement. The image and the footnote join with the slices
@@ -55,7 +51,9 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
     name: 'table',
     aliases: [],
-    // "3×3 default": three rows of three cells, in its block, with its caption (FR-ED-09).
+    // "3×3 default": three rows of three cells, in its block, with its caption
+    // (FR-ED-09). Three plain rows and no header row (the owner's decision of
+    // 9 October 2026).
     inserts: {
       type: 'tableBlock',
       content: [{ type: 'table', content: [row, row, row] }, { type: 'tableCaption' }],
@@ -77,10 +75,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
  * FR-ED-11: "The filter shall match against command name and aliases." What
  * was typed after the slash is compared, without regard to case, with the
  * start of the name and of each alias; nothing typed lists every command. The
- * order is the requirement's.
- *
- * PROVISIONAL: the requirement does not say whether the match is from the
- * start or anywhere, nor how case is read. Reported as a row for the register.
+ * order is the requirement's. From the start, and without regard to case, by
+ * the owner's decision of 9 October 2026.
  */
 export function matchSlashCommands(typed: string): readonly SlashCommand[] {
   const query = typed.toLowerCase();

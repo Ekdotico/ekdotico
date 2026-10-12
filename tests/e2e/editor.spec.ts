@@ -625,6 +625,324 @@ test('in the read-only state no shortcut changes the document', async ({ page })
   await expect(doc.locator('strong')).toHaveText('Kept as it is.');
 });
 
+// ── The slash command palette (FR-ED-10 to FR-ED-12) ────────────────────────
+
+// The texts of the palette, written out here. No requirement gives them.
+const LIST_ID = 'slash-commands';
+const NO_BLOCK = 'No block matches. Delete a letter to see more.';
+const palette = (page: Page) => page.getByRole('listbox', { name: 'Blocks' });
+const rows = (page: Page) => palette(page).getByRole('option');
+
+/**
+ * The cursor out of the last block of the document, which it is in, down to
+ * the paragraph that ends the document, and a new empty paragraph there. By
+ * the arrow key alone: from the first cell of a new table that is two rows,
+ * the caption, and the paragraph.
+ */
+async function newLastLine(page: Page) {
+  for (let press = 0; press < 6; press += 1) await page.keyboard.press('ArrowDown');
+  // The editor reads where a key of the browser's put the cursor a few milliseconds after it (`place`).
+  await page.waitForTimeout(100);
+  await page.keyboard.press('Enter');
+}
+
+// FR-ED-12, the rows for the blocks of the cut: the command, the name of its
+// row, the element its block is drawn as, and what is then typed into it.
+const SLASH_ROWS: [command: string, row: string, made: string, words?: string][] = [
+  ['text', 'Text', ':scope > p', 'A paragraph.'],
+  ['h1', 'Heading 1', 'h1', 'First heading'],
+  ['h2', 'Heading 2', 'h2', 'Second heading'],
+  ['h3', 'Heading 3', 'h3', 'Third heading'],
+  ['bullet', 'Bulleted list', 'ul > li', 'A point'],
+  ['numbered', 'Numbered list', 'ol > li', 'A step'],
+  ['quote', 'Quote', 'blockquote', 'A quotation'],
+  ['table', 'Table', 'figure table tr:first-child > td:first-child', 'A cell'],
+  ['code', 'Code block', 'pre code', 'a = 1'],
+  ['callout', 'Callout', 'aside.callout[data-type="note"]', 'A note'],
+  ['toc', 'Table of contents', 'nav.ekd-toc'],
+  ['divider', 'Divider', 'hr'],
+  ['page-break', 'Page break', '.ekd-page-break'],
+];
+
+/** Every block of the rows above, once, as it was inserted. */
+async function inserted(doc: Locator) {
+  for (const [command, , made, words] of SLASH_ROWS) {
+    const block = words ? doc.locator(made).filter({ hasText: words }) : doc.locator(made);
+    await expect(block, command).toHaveCount(1);
+  }
+  // "3×3 default", and three plain rows: no header row (the owner's decision of 9 October 2026).
+  await expect(doc.locator('figure table tr')).toHaveCount(3);
+  await expect(doc.locator('figure table td')).toHaveCount(9);
+  await expect(doc.locator('figure table th')).toHaveCount(0);
+  await expect(doc.locator('figcaption')).toHaveCount(1);
+  await expect(doc.getByRole('combobox', { name: 'Language' })).toHaveValue('plaintext');
+  // What was typed to ask for a block is not in the document.
+  for (const [command] of SLASH_ROWS)
+    await expect(doc.getByText(`/${command}`, { exact: true })).toHaveCount(0);
+}
+
+test('every row of the slash palette is inserted by keyboard alone, and a second browser sees each block', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  const person = await enter(page);
+  await openNew(page);
+  const second = await browser.newContext();
+  const other = await second.newPage();
+  await other.goto('/sign-in');
+  await signIn(other, person);
+  await expect(other.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  await other.goto(page.url());
+  await expect(status(other, 'In sync')).toBeVisible();
+
+  const doc = text(page);
+  // No press of a pointer from here on.
+  await doc.focus();
+  for (const [command, row, made, words] of SLASH_ROWS) {
+    await newLastLine(page);
+    await page.keyboard.type(`/${command}`);
+    // The row Enter chooses is the first, and is the one the command names.
+    await expect(rows(page).first(), command).toContainText(row);
+    await expect(rows(page).first(), command).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Enter');
+    await expect(palette(page), command).toBeHidden();
+    // The focus is in the text, and the cursor where the block takes text.
+    await expect(doc, command).toBeFocused();
+    if (words) await page.keyboard.type(words);
+    const block = words ? doc.locator(made).filter({ hasText: words }) : doc.locator(made);
+    await expect(block, command).toHaveCount(1);
+  }
+  await inserted(doc);
+  await inserted(text(other));
+
+  // Each block reached the server as the block it is (the plan's criterion: "survives a reload").
+  await expect(status(page, 'In sync')).toBeVisible();
+  await page.reload();
+  await inserted(text(page));
+  await second.close();
+});
+
+test('the slash palette opens where the requirement says, filters by name and alias, and closes without losing what was typed', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  const list = palette(page);
+  const last = doc.locator(':scope > p').last();
+  /** Nothing opens within the time a list takes to. */
+  const staysClosed = async (why: string) => {
+    await page.waitForTimeout(300);
+    await expect(list, why).toBeHidden();
+    await expect(page.getByText(NO_BLOCK).first(), why).toBeHidden();
+    await expect(doc, why).not.toHaveAttribute('aria-controls');
+  };
+  await doc.focus();
+  await expect(doc).not.toHaveAttribute('aria-controls');
+
+  // FR-ED-10: a slash at the beginning of an empty block. FR-ED-12: the thirteen rows of the cut.
+  await page.keyboard.type('/');
+  await expect(rows(page)).toHaveText(SLASH_ROWS.map(([command, row]) => `${row}/${command}`));
+  await expect(rows(page).first()).toHaveAttribute('aria-selected', 'true');
+  await expect(rows(page).and(page.locator('[aria-selected="true"]'))).toHaveCount(1);
+  // NFR-IC-19: the focus stays in the text, which names the list, and no row while the query is typed.
+  await expect(doc).toBeFocused();
+  await expect(doc).toHaveAttribute('aria-controls', LIST_ID);
+  await expect(list).toHaveAttribute('id', LIST_ID);
+  await expect(doc).not.toHaveAttribute('aria-activedescendant');
+  // What a screen reader is told once the count has settled: the count, and the row Enter chooses.
+  await expect(page.getByRole('status').filter({ hasText: '13 blocks. Text first.' })).toBeAttached();
+
+  // FR-ED-11: "a maximum of eight results at a time and shall be scrollable".
+  const whole = () =>
+    list.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return [...element.querySelectorAll('[role="option"]')].filter((row) => {
+        const each = row.getBoundingClientRect();
+        return each.top >= box.top - 1 && each.bottom <= box.bottom + 1;
+      }).length;
+    });
+  expect(await whole()).toBe(8);
+  expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await expect(rows(page).nth(12)).not.toBeInViewport();
+
+  // The arrow keys move in the list, and the text then names the row; the cursor does not move.
+  await page.keyboard.press('ArrowDown');
+  await expect(rows(page).nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expect(rows(page).and(page.locator('[aria-selected="true"]'))).toHaveCount(1);
+  await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(1).getAttribute('id'))!);
+  await page.keyboard.press('ArrowUp');
+  await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(0).getAttribute('id'))!);
+  // To the last row, which is scrolled into view; Down stops there.
+  for (let press = 0; press < 14; press += 1) await page.keyboard.press('ArrowDown');
+  await expect(rows(page).nth(12)).toHaveAttribute('aria-selected', 'true');
+  await expect(rows(page).nth(12)).toBeInViewport();
+  await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(12).getAttribute('id'))!);
+  await expect(doc).toBeFocused();
+  await expect(doc).toHaveText('/');
+
+  // FR-ED-11: filtered as the query is typed, by name. A letter ends the move in the list.
+  await page.keyboard.type('h');
+  await expect(rows(page)).toHaveText(['Heading 1/h1', 'Heading 2/h2', 'Heading 3/h3', 'Divider/divider']);
+  await expect(rows(page).first()).toHaveAttribute('aria-selected', 'true');
+  await expect(doc).not.toHaveAttribute('aria-activedescendant');
+  await expect(doc).toHaveAttribute('aria-controls', LIST_ID);
+  await expect(page.getByRole('status').filter({ hasText: '4 blocks. Heading 1 first.' })).toBeAttached();
+  // By alias, and without regard to case (the owner's decision of 9 October 2026): from the start of the word.
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type('OL');
+  await expect(rows(page)).toHaveText(['Numbered list/numbered']);
+  await expect(page.getByRole('status').filter({ hasText: '1 block. Numbered list first.' })).toBeAttached();
+  // Nothing matches: the empty text, in place of the list, and the text names no list.
+  await page.keyboard.type('x');
+  await expect(list).toBeHidden();
+  await expect(page.getByText(NO_BLOCK).first()).toBeVisible();
+  await expect(doc).not.toHaveAttribute('aria-controls');
+  await page.keyboard.press('Backspace');
+  await expect(rows(page)).toHaveText(['Numbered list/numbered']);
+
+  // FR-ED-10: Escape. The text stays as typed, the focus stays, and that slash opens nothing again.
+  await page.keyboard.press('Escape');
+  await expect(list).toBeHidden();
+  await expect(doc).toHaveText('/OL');
+  await expect(doc).toBeFocused();
+  await page.keyboard.type('q');
+  await staysClosed('after Escape');
+  await expect(doc).toHaveText('/OLq');
+  // A slash that follows a space is a new request; one that follows a letter is none.
+  await page.keyboard.type(' /');
+  await expect(rows(page)).toHaveCount(13);
+  // FR-ED-10: "or clicks outside it".
+  await page.getByRole('heading', { level: 1 }).click();
+  await expect(list).toBeHidden();
+  await expect(doc).toHaveText('/OLq /');
+  await placeAtEnd(last);
+  // A cursor that arrives after a slash is no request.
+  await staysClosed('a cursor that arrives');
+  await page.keyboard.type('x/');
+  await staysClosed('a slash after a letter');
+  await expect(doc).toHaveText('/OLq /x/');
+
+  // A row is chosen by a press as well, which leaves the focus in the text.
+  await newLastLine(page);
+  await page.keyboard.type('/q');
+  await rows(page).filter({ hasText: 'Quote' }).click();
+  await expect(list).toBeHidden();
+  await expect(doc).toBeFocused();
+  await page.keyboard.type('Quoted');
+  await expect(doc.locator('blockquote')).toHaveText('Quoted');
+
+  // One step of undo (the owner's decision of 9 October 2026): the choice
+  // alone is undone, and what was typed to ask for it is back as it was
+  // typed. Typed and chosen at once, well inside the half second that undo
+  // joins into one step.
+  await newLastLine(page);
+  await page.keyboard.type('/h2');
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('h2')).toHaveCount(1);
+  await page.waitForTimeout(700);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(doc.locator('h2')).toHaveCount(0);
+  await expect(doc.locator(':scope > p').filter({ hasText: '/h2' })).toHaveText('/h2');
+  await expect(doc.locator('blockquote')).toHaveText('Quoted');
+  // An undo is no request.
+  await staysClosed('after undo');
+  await page.keyboard.press('ControlOrMeta+Shift+Z');
+  await expect(doc.locator('h2')).toHaveCount(1);
+  await expect(doc.getByText('/h2', { exact: true })).toHaveCount(0);
+
+  // Not in a code block, which is text as it is typed.
+  await newLastLine(page);
+  await page.keyboard.type('```');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/');
+  await staysClosed('in a code block');
+  await page.keyboard.type('usr /h');
+  await staysClosed('in a code block, after a space');
+  await expect(doc.locator('pre code')).toHaveText('/usr /h');
+  // Not where no block can stand: the caption of a table.
+  await newLastLine(page);
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await place(doc.locator('figcaption'));
+  await page.keyboard.type('/');
+  await staysClosed('in a caption');
+  await page.keyboard.type('h /');
+  await staysClosed('in a caption, after a space');
+  await expect(doc.locator('figcaption')).toHaveText('/h /');
+
+  // An input method that is composing asks for nothing. Chromium's own
+  // protocol stands in for one: no input method was run. What it shows is
+  // then withdrawn, and a slash that is typed is a request again.
+  const method = await page.context().newCDPSession(page);
+  await newLastLine(page);
+  await method.send('Input.imeSetComposition', { text: '/', selectionStart: 1, selectionEnd: 1 });
+  await expect(doc.locator(':scope > p').last()).toHaveText('/');
+  await staysClosed('while an input method composes');
+  await method.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 });
+  await method.detach();
+  await page.keyboard.type('/h');
+  await expect(rows(page)).toHaveCount(4);
+  await page.keyboard.press('Escape');
+
+  // NFR-IC-19: at 320 CSS pixels the list is inside the viewport, wherever the slash is on its line.
+  await page.setViewportSize({ width: 320, height: 640 });
+  await newLastLine(page);
+  await page.keyboard.type('A line that runs on to the far edge of it /');
+  await expect(rows(page)).toHaveCount(13);
+  await expect(list).toBeInViewport({ ratio: 1 });
+  const box = (await list.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(320);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(640);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await page.keyboard.press('Escape');
+});
+
+test('the slash palette does not open in the read-only state, and one that is open closes', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  await doc.focus();
+  await page.keyboard.type('/h');
+  await expect(rows(page)).toHaveCount(4);
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  await stopCollab();
+  try {
+    // FR-ED-18: read-only in the error state. The list goes with the editing.
+    await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
+    await expect.soft(palette(page)).toBeHidden();
+    await expect.soft(doc).not.toHaveAttribute('aria-controls');
+    await expect.soft(doc).toBeFocused();
+    // No key of the palette, and no slash, does anything.
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.type('1 /');
+    await page.waitForTimeout(300);
+    await expect.soft(palette(page)).toBeHidden();
+    await expect.soft(doc.locator(FORMATTED)).toHaveCount(0);
+    await expect.soft(doc).toHaveText('/h');
+  } finally {
+    await startCollab();
+  }
+
+  // The connection returns, and so does the palette, on a new slash.
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  await placeAtEnd(doc.locator('p'));
+  await page.keyboard.type(' /h1');
+  await expect(rows(page)).toHaveText(['Heading 1/h1']);
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('h1')).toHaveCount(1);
+  await expect(doc.locator('p').first()).toHaveText('/h ');
+});
+
 test('an account without a role on a document reaches neither its page nor its connection', async ({
   page,
   browser,

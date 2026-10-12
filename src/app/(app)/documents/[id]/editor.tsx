@@ -21,6 +21,7 @@ import styles from './editor.module.css';
 import { BLOCK_CONTROLS, Editable, copyText, extensions } from './extensions.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
+import { SlashPaletteList } from './slash-palette.tsx';
 
 // The fixed texts, word for word.
 const IN_SYNC = 'Document autosaves — working version is in sync.'; // FR-ED-24
@@ -183,6 +184,7 @@ function Text({
       >
         {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
         <EditorContent editor={editor} />
+        {editor ? <SlashPaletteList editor={editor} /> : null}
       </div>
     </Editable.Provider>
   );
