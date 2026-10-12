@@ -43,7 +43,7 @@ import {
   type Block,
   type SlashCommand,
 } from '../../../../lib/editor/slash-commands.ts';
-import { TABLE_COUNT_MOST, tableCount, tableRoom, tablesIn } from './table-bounds.ts';
+import { tableRoom, tablesIn } from './table-bounds.ts';
 
 /** The id of the list, which the text names while the list shows a row. */
 export const SLASH_LIST_ID = 'slash-commands';
@@ -177,17 +177,14 @@ const alone = ($from: ResolvedPos, range: Range) => range.from === $from.start()
  * 2026), for as long as the tables are inside the bounds they share: the row
  * is not listed in a cell of the deepest table there may be, nor where the
  * outermost table has no room for the cells of a new one (./table-bounds.ts).
- * Nor anywhere in a document that holds as many tables as it may (R58).
  */
 function stands(state: EditorState, range: Range, block: Block): boolean {
   const $from = state.doc.resolve(range.from);
   const type = state.schema.nodes[block.type]!;
   if (type.name === 'tableBlock') {
     const room = tableRoom($from);
-    const made = state.schema.nodeFromJSON(block);
-    const brings = tablesIn(made);
+    const brings = tablesIn(state.schema.nodeFromJSON(block));
     if (brings.levels > room.levels || brings.cells > room.cells) return false;
-    if (tableCount(state.doc) + tableCount(made) > TABLE_COUNT_MOST) return false;
   }
   const index = $from.index(-1);
   return alone($from, range)
