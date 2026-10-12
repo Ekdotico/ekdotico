@@ -871,7 +871,11 @@ describe('a recovery code (FR-AU-83)', () => {
     const step = await passwordStep(auth, email, fresh());
     expect((await secondStep(auth, step, recoveryCodes[0])).status).toBe(401);
     expect((await secondStep(auth, step, nextCode(secret), 'backup-code')).status).toBe(401);
-    expect((await secondStep(auth, step, recoveryCodes[0]!.toUpperCase(), 'backup-code')).status).toBe(401);
+    // A code with no lower-case letter is its own upper case, and one code in
+    // about 230 has none: the case is tested with a code that has one.
+    const cased = recoveryCodes.find((code) => code !== code.toUpperCase());
+    expect(cased).toBeDefined();
+    expect((await secondStep(auth, step, cased!.toUpperCase(), 'backup-code')).status).toBe(401);
     expect((await secondStep(auth, step, ` ${recoveryCodes[0]} `, 'backup-code')).status).toBe(200);
   });
 

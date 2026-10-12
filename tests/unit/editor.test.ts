@@ -191,7 +191,7 @@ describe('the sync status indicator (FR-ED-22, FR-ED-23, FR-ED-18)', () => {
     expect(state('restoring')).toEqual({
       state: 'syncing',
       label:
-        'Restoring the connection. Changes are kept in this tab and are sent when the connection returns.',
+        'Restoring the connection. Ekdotico keeps changes in this tab and sends them when the connection returns.',
     });
     expect(state('restoring', true).label).toMatch(
       /^Restoring the connection\..* lost if this tab is closed\.$/,
@@ -201,7 +201,8 @@ describe('the sync status indicator (FR-ED-22, FR-ED-23, FR-ED-18)', () => {
   it('is the error state once the connection is lost for the period, and says the document is read-only', () => {
     expect(state('lost')).toEqual({
       state: 'error',
-      label: 'Not connected. The document is read-only until the connection returns.',
+      label:
+        'Not connected. The document is read-only until the connection returns. Check the connection. Ekdotico tries again automatically.',
     });
     expect(state('lost', true).label).toMatch(/lost if this tab is closed\.$/);
     for (const phase of ['opening', 'connected', 'restoring', 'capacity'] as const) {

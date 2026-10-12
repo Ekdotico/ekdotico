@@ -192,7 +192,7 @@ test('every block and every mark, the controls inside each block, and the toolba
   }
 
   // FR-ED-03: the language selector and the copy button are in the block, and the code is highlighted.
-  const language = doc.getByRole('combobox', { name: 'Language' });
+  const language = doc.getByRole('combobox', { name: 'Code language' });
   await expect(language).toHaveValue('typescript');
   await expect(doc.locator('pre .hljs-keyword')).toHaveText('const');
   await expect(doc.locator('pre')).toHaveAttribute('spellcheck', 'false');
@@ -211,7 +211,7 @@ test('every block and every mark, the controls inside each block, and the toolba
   // FR-ED-06: the entries follow the headings and the depth, and each goes to its heading.
   const contents = doc.getByRole('navigation', { name: 'Table of contents' });
   await expect(contents.getByRole('link')).toHaveText(['Heading one', 'Heading two']);
-  await contents.getByRole('radio', { name: 'Levels 1 to 3' }).check();
+  await contents.getByRole('radio', { name: 'Levels 1–3' }).check();
   await expect(contents.getByRole('link')).toHaveText(['Heading one', 'Heading two', 'Heading three']);
   await placeAtEnd(doc.locator('h2'));
   await page.keyboard.type(' renamed');
@@ -293,7 +293,7 @@ test('every block and every mark, the controls inside each block, and the toolba
   await link.getByRole('button', { name: 'Save' }).click();
   await expect(link.getByRole('alert')).toContainText('The link was not saved');
   await expect(link.getByRole('alert')).toContainText(
-    'Enter an address that begins with https://, http://, or mailto:',
+    'Enter an address that begins with https://, http://, or mailto: — for example, https://example.org.',
   );
   await expect(doc.locator('p a')).toHaveCount(1);
   await link.getByLabel('Link address').fill('https://example.org/page');
@@ -324,7 +324,7 @@ test('every block and every mark, the controls inside each block, and the toolba
     await expect(doc.locator(tag), tag).toHaveCount(1);
   }
   await expect(doc.getByRole('note', { name: 'Tip' })).toBeVisible();
-  await expect(doc.getByRole('combobox', { name: 'Language' })).toHaveValue('python');
+  await expect(doc.getByRole('combobox', { name: 'Code language' })).toHaveValue('python');
   await expect(contents.getByRole('link')).toHaveCount(3);
   await expect(doc.locator('figcaption')).toHaveText('Table 1: a caption');
   await expect(doc.locator('tr')).toHaveCount(3);
@@ -504,7 +504,7 @@ test('hostile content, pasted or sent by another client, stays inert', async ({ 
     { words: 'sent link', href: '', target: '_blank', rel: 'noopener noreferrer nofollow', class: null },
   ]);
   expect(found.callouts).toEqual(['note', 'note']);
-  const languages = text(page).getByRole('combobox', { name: 'Language' });
+  const languages = text(page).getByRole('combobox', { name: 'Code language' });
   await expect(languages).toHaveCount(2);
   await expect(languages.first()).toHaveValue('plaintext');
   await expect(languages.last()).toHaveValue('plaintext');
@@ -629,7 +629,7 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
       await expect(text(page), written).toContainText(written);
     }
     // Finding 1: the selector and the highlighter read one value, and no grammar is guessed.
-    const languages = text(page).getByRole('combobox', { name: 'Language' });
+    const languages = text(page).getByRole('combobox', { name: 'Code language' });
     await expect(languages).toHaveCount(6);
     for (const each of await languages.all()) await expect(each).toHaveValue('plaintext');
     await expect(text(page).locator('pre code:not(.language-plaintext)')).toHaveCount(0);
@@ -1379,12 +1379,9 @@ test('a document deleted while it is open closes with its words, and the page do
   const statement = page.getByRole('status').filter({ hasText: 'Access to this document has ended' });
   await expect(statement).toBeVisible();
   await expect(statement).toContainText(
-    'The document is closed in this tab. Changes that were not yet sent were discarded.',
+    'Ekdotico closed the document in this tab. Ekdotico discarded the changes that it had not yet sent.',
   );
-  await expect(statement.getByRole('link', { name: 'Open the list of documents' })).toHaveAttribute(
-    'href',
-    '/',
-  );
+  await expect(statement.getByRole('link', { name: 'Documents', exact: true })).toHaveAttribute('href', '/');
   await expect(text(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
   await expect(page.getByRole('alert').and(page.locator(':not(#__next-route-announcer__)'))).toHaveCount(0);
@@ -1411,7 +1408,7 @@ test('a lost connection is restored: the words say so, the error state follows, 
   await stopCollab();
   try {
     // FR-ED-18, E3: the syncing state, with words that say the connection is being restored.
-    const restoring = status(page, /^Restoring the connection\. Changes are kept in this tab/);
+    const restoring = status(page, /^Restoring the connection\. Ekdotico keeps changes in this tab/);
     await expect(restoring).toBeVisible();
     await expect(page.locator('.ekd-sync')).toHaveAttribute('data-state', 'syncing');
     // The editor still takes input, and the focus is where it was.
@@ -1426,7 +1423,10 @@ test('a lost connection is restored: the words say so, the error state follows, 
     await screens(page, 'editor-reconnecting');
 
     // FR-ED-23: the error state after the period (6 seconds in these tests), and read-only (FR-ED-18).
-    const lost = status(page, /^Not connected\. The document is read-only until the connection returns\./);
+    const lost = status(
+      page,
+      /^Not connected\. The document is read-only until the connection returns\. Check the connection\. Ekdotico tries again automatically\./,
+    );
     await expect(lost).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.ekd-sync')).toHaveAttribute('data-state', 'error');
     await expect(text(page)).toHaveAttribute('aria-readonly', 'true');
