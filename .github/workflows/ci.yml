@@ -21,7 +21,9 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The whole run took 17 to 19 minutes before the tests of October 2026 that hold a key
+    # for 30 seconds; at 20 it was cut off in the last step with every step before it passed.
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:17
