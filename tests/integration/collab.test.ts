@@ -1047,6 +1047,62 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
     },
   );
 
+  // The third review of pull request 24 (S1'): what a document waits with is
+  // bounded, since parts that wait for content no one sends cost every later
+  // update a copy (src/lib/collab/state.ts, `MAX_WAITING_PARTS`).
+  it(
+    'takes 2,000 parts that wait, refuses the 2,001st with the reason of a limit, and logs it once',
+    { timeout: 60_000 },
+    async () => {
+      expect(limits.MAX_WAITING_PARTS).toBe(2000);
+      const open = await opened();
+      const { client, provider, acknowledged, before } = await sending(open.owner, open.id);
+      provider.document.getText('text').insert(0, 'x'.repeat(10_000));
+      await until(() => acknowledged() > before);
+      /** An update of `count` structs that wait for the first change of a member, which is never sent. */
+      const withheld = (count: number, member: number) => {
+        const peer = new Y.Doc();
+        peer.clientID = member;
+        applyState(peer, Y.encodeStateAsUpdate(provider.document));
+        const own: Uint8Array[] = [];
+        peer.on('update', (update: Uint8Array) => own.push(update));
+        peer.getText('text').insert(0, 'z');
+        own.length = 0;
+        peer.transact(() => {
+          for (let n = 0; n < count; n += 1) peer.getText('text').insert(10 + 3 * n, 'y');
+        });
+        return own[0]!;
+      };
+      const send = (update: Uint8Array) => client.socket.send(sent(open.id, SYNC, UPDATE, update));
+
+      // 2,000 wait, and are acknowledged.
+      const acknowledgedBefore = acknowledged();
+      send(withheld(limits.MAX_WAITING_PARTS, 4_000_001));
+      await until(() => acknowledged() > acknowledgedBefore);
+      expect(client.framesFor(open.id).some((each) => each.type === CLOSE)).toBe(false);
+      expect(await logged()).toEqual([]);
+
+      // One more struct that waits: refused, as a limit of the document is.
+      const another = await sending(open.owner, open.id);
+      another.client.socket.send(sent(open.id, SYNC, UPDATE, withheld(1, 4_000_002)));
+      const closed = await until(() => another.client.framesFor(open.id).find((each) => each.type === CLOSE));
+      expect(closed.rest).toBe(closedBecause(REFUSAL.TOO_LARGE));
+      expect(another.acknowledged()).toBe(another.before);
+      await until(async () => (await logged()).length > 0);
+      // And again, from a new connection, in the same period: still one entry.
+      const third = await sending(open.owner, open.id);
+      third.client.socket.send(sent(open.id, SYNC, UPDATE, withheld(1, 4_000_003)));
+      await until(() => third.client.framesFor(open.id).some((each) => each.type === CLOSE));
+      await sleep(500);
+      expect(await logged()).toEqual([
+        { kind: 'document_limit_refused', userId: open.owner.id, documentId: open.id },
+      ]);
+      // The document still opens and is written to.
+      open.watching.changes.push(['after']);
+      await until(async () => (await stored(open.id))?.length === 2, 4000);
+    },
+  );
+
   it(
     'refuses the update that takes the state past 5 MB, by itself or on top of what is there',
     { timeout: 120_000 },

@@ -64,6 +64,19 @@ export const MAX_STATE_BYTES = 5 * 1024 * 1024;
  */
 export const MAX_ELEMENT_DEPTH = 50;
 /**
+ * The most parts a document may wait with: the structs and the deleted ranges
+ * that name content it was never sent (`store.pendingStructs`,
+ * `store.pendingDs`), which Yjs keeps for ever, in the stored state too (the
+ * owner's decision of 12 October 2026, on the third review of pull request 24).
+ * At `PART_BYTES` each, 2,000 owe 400 KB of the 5 MB, which leaves the room
+ * for the cheap answer of `limitsOf`; without a limit one update of some 18
+ * KB, with thousands of structs, fills the room, and every later update of
+ * every member is a copy (443 to 599 ms), across restarts. An honest client
+ * leaves a few parts waiting for the moment of an update that arrives out of
+ * order. Counted as `waitingParts` counts.
+ */
+export const MAX_WAITING_PARTS = 2_000;
+/**
  * The longest message the socket takes: an update that is the whole of the
  * largest document, and the frame around it. Without it the socket library
  * takes 100 MiB (`ws` 8, as crossws 0.4.15 carries it: `maxPayload: 104857600`).
@@ -115,8 +128,8 @@ export function pastLimits(document: Y.Doc, update: Uint8Array): boolean {
   return measured(document, update).past !== null;
 }
 
-/** Which of the two limits: the bytes of the state, or the depth of the elements. */
-export type Limit = 'size' | 'depth';
+/** Which of the limits: the bytes of the state, the depth of the elements, or the parts that wait. */
+export type Limit = 'size' | 'depth' | 'waiting';
 
 function measured(document: Y.Doc, update: Uint8Array) {
   const after = new Y.Doc();
@@ -126,11 +139,14 @@ function measured(document: Y.Doc, update: Uint8Array) {
     applyState(after, update);
     const bytes = encodeState(after).byteLength;
     const depth = elementDepth(after);
+    // The copy waits, after the update, with what the document will wait with.
+    const owed = owedBy(after);
     let past: Limit | null = null;
     if (bytes > MAX_STATE_BYTES && bytes > before.byteLength) past = 'size';
     else if (depth > MAX_ELEMENT_DEPTH && depth > elementDepth(document)) past = 'depth';
-    // The copy waits, after the update, with what the document will wait with.
-    return { past, before: before.byteLength, depth, owedLevels: owedBy(after).levels };
+    // A document that waits with more already, from before the limit, is refused only what adds to it.
+    else if (owed.parts > MAX_WAITING_PARTS && owed.parts > waitingParts(document)) past = 'waiting';
+    return { past, before: before.byteLength, depth, owedLevels: owed.levels, waiting: owed.parts };
   } finally {
     after.destroy();
   }
@@ -189,15 +205,24 @@ export function growthBound(update: Uint8Array): { bytes: number; levels: number
 
 /** `growthBound`, and the clients whose structs the update holds. */
 function boundOf(update: Uint8Array) {
-  const { parts, levels, clients } = partsOf(Y.decodeUpdate(update));
+  const { parts, held, levels, clients } = partsOf(Y.decodeUpdate(update));
   const bytes = Y.diffUpdate(update, NO_STATE).byteLength + parts * PART_BYTES + UPDATE_BYTES;
-  return { bytes, levels, clients };
+  return { bytes, levels, clients, parts: held };
 }
 
-/** The structs and deleted ranges of an update that was read, the shared types among them that are not text, and whose the structs are. */
+/**
+ * The structs and deleted ranges of an update that was read (`parts`, with the
+ * `Skip` that Yjs writes in the gap between two that wait, which cost bytes;
+ * `held`, without it, which are what `MAX_WAITING_PARTS` counts), the shared
+ * types among them that are not text, and whose the structs are.
+ */
 function partsOf({ structs, ds }: ReturnType<typeof Y.decodeUpdate>) {
   let parts = structs.length;
-  for (const ranges of ds.clients.values()) parts += ranges.length;
+  let held = structs.filter((struct) => !(struct instanceof Y.Skip)).length;
+  for (const ranges of ds.clients.values()) {
+    parts += ranges.length;
+    held += ranges.length;
+  }
   let levels = 0;
   const clients = new Set<number>();
   for (const struct of structs) {
@@ -205,7 +230,7 @@ function partsOf({ structs, ds }: ReturnType<typeof Y.decodeUpdate>) {
     if (!(struct instanceof Y.Item) || !(struct.content instanceof Y.ContentType)) continue;
     if (!(struct.content.type instanceof Y.Text)) levels += 1;
   }
-  return { parts, levels, clients };
+  return { parts, held, levels, clients };
 }
 
 /**
@@ -217,16 +242,23 @@ function partsOf({ structs, ds }: ReturnType<typeof Y.decodeUpdate>) {
  * shared type that is not text. Their own bytes are in the state already: Yjs
  * writes what waits into the state it encodes.
  */
-function owedBy(document: Y.Doc): { bytes: number; levels: number } {
+function owedBy(document: Y.Doc): { bytes: number; levels: number; parts: number } {
   let bytes = 0;
   let levels = 0;
+  let parts = 0;
   for (const waiting of [document.store.pendingStructs?.update, document.store.pendingDs]) {
     if (!waiting) continue;
     const read = partsOf(Y.decodeUpdateV2(waiting));
     bytes += read.parts * PART_BYTES + UPDATE_BYTES;
     levels += read.levels;
+    parts += read.held;
   }
-  return { bytes, levels };
+  return { bytes, levels, parts };
+}
+
+/** How many parts a document waits with: the number `MAX_WAITING_PARTS` bounds. It reads what waits, and the document not at all. */
+export function waitingParts(document: Y.Doc): number {
+  return owedBy(document).parts;
 }
 
 /** How many marks of formatting a document holds that are not deleted: what Yjs may yet delete by itself. */
@@ -295,6 +327,12 @@ export function limitsOf(document: Y.Doc): (update: Uint8Array) => Limit | null 
   // The levels of what waited at the last measure (`owedBy`), which are not in
   // `depth` until an update can have them taken in.
   let owedLevels = 0;
+  // The parts the document waits with, at most: those counted at the last
+  // measure, and every part of each update let through since, whether it
+  // waits or is taken in (`MAX_WAITING_PARTS`). Never less than the document
+  // waits with; it comes down at the next measure, which is one for about
+  // every 2,000 parts of updates, and is as small as a copy of a small document.
+  let waiting = Infinity;
   return (update) => {
     // An update longer than the room that is left is measured without being read twice.
     const growth = update.byteLength <= MAX_STATE_BYTES - bytes ? boundOf(update) : null;
@@ -305,8 +343,13 @@ export function limitsOf(document: Y.Doc): (update: Uint8Array) => Limit | null 
       const missing = document.store.pendingStructs?.missing;
       const wakes = missing !== undefined && [...growth.clients].some((client) => missing.has(client));
       const levels = growth.levels + (wakes ? owedLevels : 0);
-      if (bytes + growth.bytes <= MAX_STATE_BYTES && depth + levels <= MAX_ELEMENT_DEPTH) {
+      if (
+        bytes + growth.bytes <= MAX_STATE_BYTES &&
+        depth + levels <= MAX_ELEMENT_DEPTH &&
+        waiting + growth.parts <= MAX_WAITING_PARTS
+      ) {
         bytes += growth.bytes;
+        waiting += growth.parts;
         // The levels of the update are counted now, whether it is taken in or left waiting.
         depth += levels;
         if (wakes) owedLevels = 0;
@@ -325,11 +368,13 @@ export function limitsOf(document: Y.Doc): (update: Uint8Array) => Limit | null 
       // Refused, and so not applied: the document is as it was measured.
       bytes = held;
       owedLevels = owed.levels;
+      waiting = owed.parts;
       return exact.past;
     }
     bytes = held + (growth ?? boundOf(update)).bytes;
     depth = exact.depth;
     owedLevels = exact.owedLevels;
+    waiting = exact.waiting;
     return null;
   };
 }

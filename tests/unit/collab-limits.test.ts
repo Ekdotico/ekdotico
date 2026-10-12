@@ -7,11 +7,13 @@ import * as Y from 'yjs';
 import {
   MAX_ELEMENT_DEPTH,
   MAX_STATE_BYTES,
+  MAX_WAITING_PARTS,
   elementDepth,
   encodeState,
   growthBound,
   limitsOf,
   pastLimits,
+  waitingParts,
 } from '../../src/lib/collab/state.ts';
 
 const size = (document: Y.Doc) => encodeState(document).byteLength;
@@ -624,12 +626,12 @@ describe('the limits of a document, asked without the copy (limitsOf)', () => {
         const document = nearlyFull(600_000);
         const past = limitsOf(document);
         for (const update of typed(document, 3, 2)) asked(document, past, update);
-        // Two thousand cuts of the document wait for one letter, and are let through without a copy.
+        // 1,500 cuts (past 2,000 parts nothing waits: MAX_WAITING_PARTS) of the document wait for one letter, and are let through without a copy.
         const member = peerOf(document, 5);
         member.peer.getText('t').insert(0, 'z');
         const opening = member.sent();
         member.peer.transact(() => {
-          for (let n = 0; n < 2000; n += 1) member.peer.getText('t').insert(5000 + 7 * n, 'y');
+          for (let n = 0; n < 1500; n += 1) member.peer.getText('t').insert(5000 + 7 * n, 'y');
         });
         expect(copies(document, past, [member.sent()])).toBe(0);
         expect(waits(document)).toBe(true);
@@ -710,6 +712,133 @@ describe('the limits of a document, asked without the copy (limitsOf)', () => {
         }
       },
     );
+
+    // The third review of pull request 24 (S1'), and the owner's decision of
+    // 12 October 2026: one update of some 18 to 136 KB can leave thousands of
+    // structs waiting for content no one sends, which fill the room at
+    // PART_BYTES each and make every later update of every member a copy.
+    describe('at most 2,000 parts wait (MAX_WAITING_PARTS)', () => {
+      /** A document of 10,000 letters, with a member whose first change is never delivered and whose second holds `count` structs. */
+      function withheld(document: Y.Doc, client: number, count: number) {
+        const member = peerOf(document, client);
+        member.peer.getText('t').insert(0, 'z');
+        const head = member.sent();
+        member.peer.transact(() => {
+          for (let n = 0; n < count; n += 1) member.peer.getText('t').insert(10 + 3 * n, 'y');
+        });
+        return { head, rest: member.sent() };
+      }
+      const base = () => {
+        const document = new Y.Doc();
+        document.clientID = 1;
+        document.getText('t').insert(0, 'x'.repeat(10_000));
+        return document;
+      };
+
+      it('lets a document wait with 2,000 and refuses the update that takes it to 2,001', () => {
+        expect(MAX_WAITING_PARTS).toBe(2000);
+        const document = base();
+        const past = limitsOf(document);
+        const a = withheld(document, 5, MAX_WAITING_PARTS);
+        expect(asked(document, past, a.rest)).toBe(false);
+        expect(waitingParts(document)).toBe(MAX_WAITING_PARTS);
+        // One struct more, from another member, takes it past; the copy and the keeper both refuse.
+        const b = withheld(document, 6, 1);
+        expect(asked(document, past, b.rest)).toBe(true);
+        expect(waitingParts(document)).toBe(MAX_WAITING_PARTS);
+        // And at once, in one update: 2,001 where there was nothing.
+        const fresh = base();
+        expect(asked(fresh, limitsOf(fresh), withheld(fresh, 5, MAX_WAITING_PARTS + 1).rest)).toBe(true);
+        expect(waitingParts(fresh)).toBe(0);
+      });
+
+      it('refuses what passes it a piece at a time, the sum counted without a copy', () => {
+        const document = base();
+        const past = limitsOf(document);
+        // Four pieces of 600 from four members: 600, 1,200 and 1,800 wait, and the fourth would make 2,400.
+        const pieces = [5, 6, 7, 8].map((client) => withheld(document, client, 600).rest);
+        expect(asked(document, past, pieces[0]!)).toBe(false);
+        expect(copies(document, past, pieces.slice(1, 3))).toBe(0);
+        expect(waitingParts(document)).toBe(1800);
+        expect(asked(document, past, pieces[3]!)).toBe(true);
+        expect(waitingParts(document)).toBe(1800);
+      });
+
+      it('still takes in some 1,000 parts that arrive out of order, and resolves them', () => {
+        const document = base();
+        const past = limitsOf(document);
+        const member = peerOf(document, 5);
+        member.peer.getText('t').insert(0, 'z');
+        const head = member.sent();
+        const updates = Array.from({ length: 1000 }, (_, n) => {
+          member.peer.getText('t').insert(10 + 3 * n, 'y');
+          return member.sent();
+        });
+        // The last change first, then the rest in reverse, and the first change at the end.
+        for (const update of updates.reverse()) expect(asked(document, past, update)).toBe(false);
+        expect(waitingParts(document)).toBe(1000);
+        expect(asked(document, past, head)).toBe(false);
+        expect(waits(document)).toBe(false);
+        expect(waitingParts(document)).toBe(0);
+        expect(document.getText('t').length).toBe(10_000 + 1001);
+      });
+
+      it('admits the next ordinary update without a copy after one was refused', () => {
+        const document = base();
+        const past = limitsOf(document);
+        expect(asked(document, past, withheld(document, 5, 1500).rest)).toBe(false);
+        // 400 keys of others are let through without a copy; the keeper holds them as parts that may wait.
+        expect(copies(document, past, typed(document, 8, 400))).toBe(0);
+        // 1,000 more would make 2,500: refused, and the document is as it was.
+        expect(asked(document, past, withheld(document, 6, 1000).rest)).toBe(true);
+        expect(waitingParts(document)).toBe(1500);
+        // 300 keys of a third member: 1,800 at most once counted again, and none is a copy.
+        expect(copies(document, past, typed(document, 7, 300))).toBe(0);
+        expect(waitingParts(document)).toBe(1500);
+      });
+
+      it('lets a document that was past it load, and takes every update that adds no part to what waits', () => {
+        // Waiting with 2,500, as stored before there was a limit: no update was asked.
+        const document = base();
+        const first = withheld(document, 5, 2500);
+        Y.applyUpdate(document, first.rest);
+        expect(waitingParts(document)).toBe(2500);
+        const loaded = new Y.Doc();
+        Y.applyUpdate(loaded, encodeState(document));
+        expect(waitingParts(loaded)).toBe(2500);
+        const past = limitsOf(loaded);
+        // Others write as before: each is measured, as it was.
+        for (const update of typed(loaded, 6, 30)) expect(asked(loaded, past, update)).toBe(false);
+        // One more struct that waits is refused, and what brings the waiting in is taken.
+        expect(asked(loaded, past, withheld(loaded, 7, 1).rest)).toBe(true);
+        expect(waitingParts(loaded)).toBe(2500);
+        expect(asked(loaded, past, first.head)).toBe(false);
+        expect(waitingParts(loaded)).toBe(0);
+      });
+
+      it('counts the deleted ranges that wait with the structs', () => {
+        const document = base();
+        const past = limitsOf(document);
+        // 1,500 structs of a member wait for its first change; then it deletes
+        // every other one of them, 600 ranges of clocks the document has not
+        // reached, which wait too. Alone, neither is past 2,000.
+        const member = peerOf(document, 5);
+        member.peer.getText('t').insert(0, 'z');
+        member.sent();
+        member.peer.transact(() => {
+          for (let n = 0; n < 1500; n += 1) member.peer.getText('t').insert(10 + 3 * n, 'y');
+        });
+        const inserted = member.sent();
+        member.peer.transact(() => {
+          for (let n = 1198; n >= 0; n -= 2) member.peer.getText('t').delete(10 + 3 * n, 1);
+        });
+        const deleted = member.sent();
+        expect(asked(document, past, inserted)).toBe(false);
+        expect(waitingParts(document)).toBe(1500);
+        expect(asked(document, past, deleted)).toBe(true);
+        expect(waitingParts(document)).toBe(1500);
+      });
+    });
   });
 
   it('does not copy the document for a small update far from a limit', () => {
