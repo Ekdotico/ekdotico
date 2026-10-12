@@ -37,7 +37,8 @@ vi.doMock('../../src/lib/documents/access.ts', async (original) => {
       answers.get(`${userId} ${String(documentId)}`) ?? actual.authorise(userId, documentId, permission),
   };
 });
-const { createCollabServer, originRefusalMark } = await import('../../src/collab/server.ts');
+const { createCollabServer, documentLimitRefusalMark, originRefusalMark } =
+  await import('../../src/collab/server.ts');
 
 const UNKNOWN = '3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b';
 // A text no log may hold (NFR-SE-19): it is written into documents below.
@@ -1063,6 +1064,10 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
 
       // Three megabytes are taken, and stored; three more are not.
       const { owner, id } = open;
+      // The same user is refused again for the same document within the
+      // period, which is one entry for the period and not two: the mark of the
+      // first refusal is cleared so that this refusal is the first of a period.
+      await valkey().del(documentLimitRefusalMark(id, owner.id));
       const first = await sending(owner, id);
       first.provider.document.getMap('large').set('one', 'y'.repeat(3 * 1024 * 1024));
       await until(() => first.acknowledged() > first.before, 20_000);
@@ -1085,6 +1090,91 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       expect([...later.provider.document.getMap('large').keys()]).toEqual(['one']);
     },
   );
+
+  // NFR-SE-19: one entry for each period for a limit, and not one for each
+  // refusal. A refusal closes the connection, but a client can open another
+  // and send the same again, so without the bound the rows written to the
+  // database would be as many as the client cares to send.
+  describe('the entry for a refused update is one for each period, document and user', () => {
+    const entry = (userId: string, documentId: string) => ({
+      kind: 'document_limit_refused',
+      userId,
+      documentId,
+    });
+    /** A new connection of `cookie` to the document, which sends an update that is too deep and is refused. */
+    async function refused(port: number, cookie: string, documentId: string) {
+      const client = connect(port, cookie);
+      const { provider, synced } = client.open(documentId);
+      await synced;
+      nest(provider.document.getXmlFragment('default'), MAX_ELEMENT_DEPTH + 1, 'too deep');
+      const closed = await until(
+        () => client.framesFor(documentId).find((each) => each.type === CLOSE),
+        20_000,
+      );
+      expect(closed.rest).toBe(closedBecause(REFUSAL.TOO_DEEP));
+    }
+
+    it('leaves one entry for the same user refused twice for the same document, and refuses both', async () => {
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      await refused(server.port, await owner.signedIn(), id);
+      await until(async () => (await logged()).length > 0);
+      // Another connection, the same update, in the same period.
+      await refused(server.port, await owner.signedIn(), id);
+      await sleep(500);
+      expect(await logged()).toEqual([entry(owner.id, id)]);
+    });
+
+    it('leaves its own entry for another document, and for another user, in the same period', async () => {
+      const local = await inProcess();
+      try {
+        const owner = await person();
+        const editor = await person();
+        const id = await documentOf(owner.id);
+        const other = await documentOf(owner.id);
+        const document = await db().document.findUniqueOrThrow({ where: { id } });
+        // Only the Owner exists until sharing is built (see the Viewer test below).
+        answers.set(`${editor.id} ${id}`, { outcome: 'allowed', role: 'editor', document });
+
+        await refused(local.port, await owner.signedIn(), id);
+        await until(async () => (await logged()).length > 0);
+        await refused(local.port, await owner.signedIn(), other);
+        await refused(local.port, await editor.signedIn(), id);
+        await until(async () => (await logged()).length > 2);
+        await sleep(500);
+        const entries = await logged();
+        expect(entries).toHaveLength(3);
+        expect(entries).toEqual(
+          expect.arrayContaining([entry(owner.id, id), entry(owner.id, other), entry(editor.id, id)]),
+        );
+      } finally {
+        await local.stop();
+      }
+    });
+
+    it('refuses although Valkey does not answer, and without Valkey still writes one entry for the period', async () => {
+      const local = await inProcess();
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const cookies = [await owner.signedIn(), await owner.signedIn(), await owner.signedIn()];
+        // Valkey never answers the mark: the refusal is not held back, and nothing is written for it.
+        const set = vi.spyOn(valkey(), 'set').mockImplementation((() => new Promise(() => {})) as never);
+        const began = Date.now();
+        await refused(local.port, cookies[0]!, id);
+        expect(Date.now() - began).toBeLessThan(5000);
+        // Valkey fails: the entry is written by this process's own clock, once for the period.
+        set.mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
+        await refused(local.port, cookies[1]!, id);
+        await refused(local.port, cookies[2]!, id);
+        await until(async () => (await logged()).length > 0);
+        await sleep(500);
+        expect(await logged()).toEqual([entry(owner.id, id)]);
+      } finally {
+        await local.stop();
+      }
+    });
+  });
 
   // The owner's decision of 12 October 2026, with the editor's own connection
   // (src/lib/collab/client.ts): before it the client was told nothing, asked

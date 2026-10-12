@@ -107,6 +107,9 @@ const NOTICE_READ_MS = 2000;
 const FINAL_STORE_MS = 2500;
 // The mark of that period for a refused origin, kept as every such mark is (src/lib/rate-limit.ts).
 const ORIGIN_REFUSED = 'collab:origin-refused';
+// And for an update refused for a limit of its document, one for each document and user.
+const documentLimitRefused = (documentId: string, userId: string) =>
+  `collab:document-limit-refused:${documentId}:${userId}`;
 
 /** How long after the `failures`-th failure in a row a store is tried again: 1 s, 2 s, 4 s … 60 s. */
 export function storeRetryDelay(failures: number): number {
@@ -118,13 +121,20 @@ export function originRefusalMark(): string {
   return markKey(ORIGIN_REFUSED);
 }
 
-/** True once for each period, by this process's own clock. */
-function oncePerHere(seconds: number): () => boolean {
-  let last = -Infinity;
-  return () => {
+/** The Valkey key that marks the period in which a refused update of a document was logged for a user (see `logDocumentLimitRefused`). */
+export function documentLimitRefusalMark(documentId: string, userId: string): string {
+  return markKey(documentLimitRefused(documentId, userId));
+}
+
+/** True once for each period (and each `key`, where there is one), by this process's own clock. */
+function oncePerHere(seconds: number): (key?: string) => boolean {
+  const last = new Map<string, number>();
+  return (key = '') => {
     const now = Date.now();
-    if (now - last < seconds * 1000) return false;
-    last = now;
+    if (now - (last.get(key) ?? -Infinity) < seconds * 1000) return false;
+    // Forget the keys whose period is over, so that the map holds only this period's.
+    for (const [each, at] of last) if (now - at >= seconds * 1000) last.delete(each);
+    last.set(key, now);
     return true;
   };
 }
@@ -195,6 +205,7 @@ export function createCollabServer(store: StoreSettings) {
   const halt = new AbortController();
   const socketFaultDue = oncePerHere(LOG_PERIOD_SECONDS);
   const originLogDueHere = oncePerHere(LOG_PERIOD_SECONDS);
+  const documentLimitLogDueHere = oncePerHere(LOG_PERIOD_SECONDS);
   let stopping = false;
   let unstored = false;
   let stopped: Promise<boolean> | undefined;
@@ -345,6 +356,26 @@ export function createCollabServer(store: StoreSettings) {
       first = originLogDueHere();
     }
     if (first) await securityLog({ kind: 'forbidden' });
+  }
+
+  /**
+   * NFR-SE-19, as the owner amended it on 12 October 2026: an entry for an
+   * update refused for a limit of its document, with the user and the
+   * document and nothing of the update. A client whose connection is closed
+   * can reconnect and send it again, so one entry for each period for a
+   * document and a user and not one for each refusal, as for a refused origin
+   * (`logRefusedOrigin`): the same fallback without Valkey, the entry written
+   * and the bound held by this process. It never rejects, and the refusal does
+   * not wait for it.
+   */
+  async function logDocumentLimitRefused(userId: string, documentId: string): Promise<void> {
+    let first: boolean;
+    try {
+      first = await oncePer(documentLimitRefused(documentId, userId), LOG_PERIOD_SECONDS);
+    } catch {
+      first = documentLimitLogDueHere(`${documentId}:${userId}`);
+    }
+    if (first) await securityLog({ kind: 'document_limit_refused', userId, documentId });
   }
 
   /**
@@ -626,12 +657,9 @@ export function createCollabServer(store: StoreSettings) {
       }
       if (past) {
         // NFR-SE-19, as the owner amended it on 12 October 2026: a kind of its
-        // own, with the user and the document and nothing of the update.
-        await securityLog({
-          kind: 'document_limit_refused',
-          userId: context.userId,
-          documentId: documentName,
-        });
+        // own, with the user and the document and nothing of the update. One
+        // for each period, not for each refusal: the client can send it again.
+        void logDocumentLimitRefused(context.userId, documentName);
         // The client is told which limit, and does not send the same again
         // (src/lib/collab/protocol.ts).
         throw refuse(past === 'size' ? REFUSAL.TOO_LARGE : REFUSAL.TOO_DEEP);
