@@ -27,7 +27,7 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@ekdotico/domico": "0.27.0",
+    "@ekdotico/domico": "0.28.0",
     "@hocuspocus/provider": "4.7.0",
     "@hocuspocus/server": "4.7.0",
     "@prisma/adapter-pg": "7.10.0",
@@ -44,6 +44,7 @@
     "@tiptap/pm": "3.31.4",
     "@tiptap/react": "3.31.4",
     "@tiptap/starter-kit": "3.31.4",
+    "@tiptap/suggestion": "3.31.4",
     "@tiptap/y-tiptap": "3.0.9",
     "better-auth": "1.7.7",
     "ioredis": "6.0.0",
