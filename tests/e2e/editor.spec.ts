@@ -1164,6 +1164,139 @@ test('a key typed at the end of a paragraph of 32,000 asterisks is answered at o
   expect(times.toSorted((a, b) => a - b)[2]).toBeLessThan(150);
 });
 
+// The owner's decision of 12 October 2026, and the owner's sentence, written
+// out here and not taken from the code under test.
+const SLASH_HINT = 'Type / for a list of blocks.';
+const DESCRIPTION = `${SLASH_HINT} Alt+F10 moves from the text to the formatting toolbar when text is selected. When no text is selected, Alt+F10 moves to the controls of the block that holds the cursor. Escape returns to the text.`;
+
+test('an empty document says how the list of blocks is opened: in the description of the text, and as a prompt that is no content', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const prompt = doc.locator('p > span[data-placeholder]');
+
+  // The description of the text, word for word.
+  await expect(doc).toHaveAccessibleDescription(DESCRIPTION);
+
+  // The prompt: the sentence, drawn by the design package's rule, in the one empty paragraph.
+  await expect(prompt).toHaveCount(1);
+  await expect(prompt).toHaveAttribute('data-placeholder', SLASH_HINT);
+  await expect(prompt).toHaveAttribute('aria-hidden', 'true');
+  const drawn = () =>
+    prompt.evaluate((element) => {
+      const style = getComputedStyle(element, '::before');
+      // The colour as the browser paints it, whatever notation the stylesheet wrote it in.
+      const painted = (colour: string) => {
+        const canvas = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+        canvas.fillStyle = colour;
+        canvas.fillRect(0, 0, 1, 1);
+        return [...canvas.getImageData(0, 0, 1, 1).data];
+      };
+      let behind: Element | null = element;
+      let ground = [0, 0, 0, 0];
+      while (behind && ground[3] !== 255) {
+        ground = painted(getComputedStyle(behind).backgroundColor);
+        behind = behind.parentElement;
+      }
+      const light = ([red, green, blue]: number[]) => {
+        const [r, g, b] = [red!, green!, blue!].map((value) => {
+          const part = value / 255;
+          return part <= 0.04045 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+      };
+      const ink = painted(style.color);
+      const [above, below] = [light(ink), light(ground)].sort((a, b) => b - a);
+      return {
+        content: style.content,
+        inkAlpha: ink[3],
+        groundAlpha: ground[3],
+        contrast: (above! + 0.05) / (below! + 0.05),
+      };
+    });
+  // WCAG 2.2, 1.4.3: the prompt is text, so 4.5 to 1, in the light theme and in the dark.
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme });
+    const seen = await drawn();
+    expect(seen.content, colorScheme).toBe(`"${SLASH_HINT}"`);
+    expect(seen.inkAlpha, colorScheme).toBe(255);
+    expect(seen.groundAlpha, colorScheme).toBe(255);
+    expect(seen.contrast, colorScheme).toBeGreaterThanOrEqual(4.5);
+    console.log(`the prompt of an empty document, ${colorScheme}: ${seen.contrast.toFixed(2)} to 1`);
+  }
+  await page.emulateMedia({ colorScheme: null });
+
+  // It is no content. Not text of the document, on the page or in what is selected and copied.
+  await expect(doc).toHaveText('');
+  await doc.focus();
+  await page.keyboard.press('ControlOrMeta+a');
+  expect(await page.evaluate(() => window.getSelection()!.toString().trim())).toBe('');
+  // Not in the shared document: another client holds nothing, or one empty paragraph.
+  const other = await connectAs(page.context(), id);
+  try {
+    expect(['', '<paragraph></paragraph>']).toContain(
+      other.provider.document.getXmlFragment('default').toString(),
+    );
+  } finally {
+    other.close();
+  }
+  // NFR-IC-19: a screen reader is told the sentence once, by the description.
+  // In the browser's own accessibility tree nothing under the text holds it.
+  const tree = await page.context().newCDPSession(page);
+  const { nodes } = (await tree.send('Accessibility.getFullAXTree')) as {
+    nodes: { nodeId: string; childIds?: string[]; role?: { value: string }; name?: { value: string } }[];
+  };
+  await tree.detach();
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+  const box = nodes.find((node) => node.role?.value === 'textbox' && node.name?.value === 'Document text')!;
+  const under = (node: (typeof nodes)[number]): typeof nodes =>
+    (node.childIds ?? []).flatMap((child) => {
+      const found = byId.get(child);
+      return found ? [found, ...under(found)] : [];
+    });
+  expect(under(box).length).toBeGreaterThan(0);
+  expect(
+    under(box)
+      .map((node) => (node.name?.value ?? '').trim())
+      .filter(Boolean),
+  ).toEqual([]);
+  expect(nodes.filter((node) => node.name?.value === SLASH_HINT)).toEqual([]);
+
+  // At 320 CSS pixels the prompt is inside the page.
+  await page.setViewportSize({ width: 320, height: 640 });
+  await expectNoSidewaysScroll(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  // Gone at the first character, and back when the document is empty again.
+  await page.keyboard.type('a');
+  await expect(doc).toHaveText('a');
+  await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  await page.keyboard.press('Backspace');
+  await expect(prompt).toHaveCount(1);
+  // Not in a document of two empty paragraphs.
+  await page.keyboard.press('Enter');
+  await expect(doc.locator(':scope > p')).toHaveCount(2);
+  await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  await page.keyboard.press('Backspace');
+  await expect(prompt).toHaveCount(1);
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  // FR-ED-18: not in the read-only state.
+  await stopCollab();
+  try {
+    await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
+    await expect(doc).toHaveAttribute('aria-readonly', 'true');
+    await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  } finally {
+    await startCollab();
+  }
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  await expect(prompt).toHaveCount(1);
+});
+
 test('the slash palette: Tab, the cursor inside the command and out of it, and one undo of a Markdown conversion', async ({
   page,
 }) => {

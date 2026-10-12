@@ -706,6 +706,86 @@ describe('Tab, and a table in a table', () => {
   });
 });
 
+describe('the prompt of an empty document (the owner’s decision of 12 October 2026)', () => {
+  // The owner's sentence, written out here and not taken from the code under test.
+  const SENTENCE = 'Type / for a list of blocks.';
+  type Drawn = { from: number; type: { toDOM: (view: unknown) => { attributes: Record<string, string> } } };
+  /** The decorations that carry a prompt, from whichever plugin draws one. */
+  function prompts(editor: Editor): Drawn[] {
+    return editor.state.plugins.flatMap((plugin) => {
+      const set = plugin.props.decorations?.call(plugin, editor.state) as
+        { find(): unknown[] } | null | undefined;
+      return ((set?.find() ?? []) as (Drawn & { type: { attrs?: Record<string, string> } })[]).filter(
+        (each) => typeof each.type.toDOM === 'function' || each.type.attrs?.['data-placeholder'],
+      );
+    });
+  }
+  // An element as far as the prompt is made: its name and its attributes.
+  const page = {
+    dom: {
+      ownerDocument: {
+        createElement: (name: string) => {
+          const attributes: Record<string, string> = { name };
+          return { attributes, setAttribute: (key: string, value: string) => (attributes[key] = value) };
+        },
+      },
+    },
+  };
+
+  it('is the one sentence, in an element hidden from a screen reader, in the empty paragraph', () => {
+    const editor = editorOf();
+    const [prompt, ...more] = prompts(editor);
+    expect(more).toEqual([]);
+    expect(prompt!.from).toBe(1);
+    expect(prompt!.type.toDOM(page).attributes).toStrictEqual({
+      name: 'span',
+      'aria-hidden': 'true',
+      'data-placeholder': SENTENCE,
+    });
+    // No content: the document holds an empty paragraph and nothing else.
+    expect(json(editor)).toEqual([paragraph()]);
+    expect(editor.getText()).toBe('');
+  });
+
+  it('goes at the first character, and is in no document but the empty one', () => {
+    const editor = editorOf();
+    type(editor, 'a');
+    expect(prompts(editor)).toEqual([]);
+    editor.view.dispatch(editor.state.tr.delete(1, 2));
+    expect(prompts(editor)).toHaveLength(1);
+    for (const content of [
+      [paragraph(), paragraph()],
+      [{ type: 'heading', attrs: { level: 1 } }],
+      [{ type: 'bulletList', content: [{ type: 'listItem', content: [paragraph()] }] }],
+      [paragraph({ type: 'hardBreak' })],
+    ]) {
+      expect(prompts(editorOf(...content)), JSON.stringify(content)).toEqual([]);
+    }
+    // An empty block that is no paragraph, alone. The editor follows such a
+    // block with a paragraph, so the plugin is handed a document it would not make.
+    const plugin = editor.state.plugins.find((each) =>
+      (each.props.decorations?.call(each, editor.state) as { find(): Drawn[] } | null | undefined)
+        ?.find()
+        .some(({ type }) => typeof type.toDOM === 'function'),
+    )!;
+    const alone = (block: Json) =>
+      plugin.props.decorations!.call(plugin, {
+        doc: editor.schema.nodeFromJSON({ type: 'doc', content: [block] }),
+      } as typeof editor.state);
+    expect(alone(paragraph())).not.toBeNull();
+    expect(alone({ type: 'heading', attrs: { level: 1 } })).toBeNull();
+    expect(alone({ type: 'codeBlock', attrs: { language: 'plaintext' } })).toBeNull();
+  });
+
+  it('is not shown in a document that cannot be edited (FR-ED-18)', () => {
+    const editor = editorOf();
+    editor.setEditable(false);
+    expect(prompts(editor)).toEqual([]);
+    editor.setEditable(true);
+    expect(prompts(editor)).toHaveLength(1);
+  });
+});
+
 describe('the time the matcher takes', () => {
   // The pattern is linear in the line. A pattern with a quantifier inside a
   // quantifier would take seconds on these: this fails long before that.
