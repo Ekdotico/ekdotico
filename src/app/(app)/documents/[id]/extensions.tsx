@@ -213,6 +213,14 @@ function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
         <span role="status" className={copied === 'refused' ? undefined : 'sr-only'}>
           {copied === 'yes' ? 'Code copied' : copied === 'refused' ? CODE_NOT_COPIED : ''}
         </span>
+        {/* R23: a block past the length is shown without its colours, and the
+            header says so for as long as it is: to every reader of the
+            block, whether or not the block can be edited. A statement that
+            stands, and no announcement: it is read with the header when the
+            block is come to, and says nothing while the code is typed. The
+            length is the one the colourer is given, the characters of the
+            block, which is its size. */}
+        {node.content.size > CODE_COLOURS_MOST ? <span>{CODE_UNCOLOURED}</span> : null}
       </BlockControls>
       {/* FR-ED-03: "Code blocks shall not be subject to spell-checking". */}
       <pre spellCheck={false}>
@@ -1226,6 +1234,14 @@ const lowlight = createLowlight(common);
  * block that changed, if a document of many long blocks is ever written.
  */
 export const CODE_COLOURS_MOST = 50_000;
+/**
+ * What the header of a code block says while the block is past that length
+ * (the owner's decision R23 of 12 October 2026, specification row D133:
+ * "50,000, and say so in the block's header"). No requirement gives the
+ * words: written under the Expression Guidelines, with the number as it is
+ * above. AWAITS THE OWNER'S APPROVAL.
+ */
+export const CODE_UNCOLOURED = `Syntax colours are not shown in a code block longer than ${CODE_COLOURS_MOST.toLocaleString('en-GB')} characters.`;
 // What the library reads from an answer: the nodes to colour. None.
 const UNCOLOURED = { type: 'root', children: [] };
 /** `lowlight`, which answers with no colours for code past the bound. */

@@ -18,6 +18,7 @@ import * as Y from 'yjs';
 import {
   ATTRIBUTE_RULES,
   CODE_COLOURS_MOST,
+  CODE_UNCOLOURED,
   TABLE_MOST,
   closeSchema,
   codeColours,
@@ -1546,6 +1547,14 @@ describe('a change to a document that cannot be edited now (FR-ED-18)', () => {
 // keystroke, every block of the document being coloured again each time.
 describe('the colours of a code block', () => {
   const code = 'const a = "b" + 1; // c\n'.repeat(3000).slice(0, CODE_COLOURS_MOST);
+
+  // The owner's decision R23 (specification row D133): "50,000, and say so in the block's header".
+  it('are said to be left off in words that carry the bound as it is', () => {
+    // Written out here, and not taken from the code under test. The words await the owner's approval.
+    expect(CODE_UNCOLOURED).toBe(
+      'Syntax colours are not shown in a code block longer than 50,000 characters.',
+    );
+  });
 
   it('are given to a block of 50,000 characters, and to none that is longer', () => {
     expect(CODE_COLOURS_MOST).toBe(50_000);

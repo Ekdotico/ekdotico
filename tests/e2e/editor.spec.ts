@@ -2979,6 +2979,98 @@ test('a code block past the bound is shown without the colours of its language, 
   peer.close();
 });
 
+// The owner's decision R23 of 12 October 2026 (specification row D133):
+// "50,000, and say so in the block's header". The block was shown without its
+// colours, and nothing said so.
+test('the header of a code block says that the block is shown without colours while it is past 50,000 characters, to every reader, and stops when it is not', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  // Written out here, and not taken from the code under test. The words await the owner's approval.
+  const WORDS = 'Syntax colours are not shown in a code block longer than 50,000 characters.';
+  const person = await enter(page);
+  const id = await openNew(page);
+  const peer = await connectAs(page.context(), id);
+  const fragment = peer.provider.document.getXmlFragment('default');
+  // Two blocks of code as it is written: one of 50,000 characters to the letter, and one of 50,001.
+  const code = 'const a = "b" + 1; // c\n'.repeat(3000).slice(0, 50_000);
+  expect(code).toHaveLength(50_000);
+  fragment.push([
+    element('codeBlock', { language: 'javascript' }, [words(code)]),
+    element('codeBlock', { language: 'javascript' }, [words(`${code}Z`)]),
+    paragraph('END-OF-DOCUMENT'),
+  ]);
+  const doc = text(page);
+  await expect(doc).toContainText('END-OF-DOCUMENT', { timeout: 30_000 });
+  const blocks = doc.locator('.ekd-code');
+  await expect(blocks).toHaveCount(2);
+  const said = (within: Locator) => within.locator('.ekd-code-header').getByText(WORDS, { exact: true });
+  await expect(said(blocks.nth(0))).toHaveCount(0);
+  await expect(said(blocks.nth(1))).toBeVisible();
+  // A statement that stands, in the header with the block's controls, and no
+  // announcement: it is in no live region, and the one live region of the
+  // header, which says that the code was copied, is empty.
+  await expect(blocks.nth(1)).toMatchAriaSnapshot(`
+    - combobox "Code language"
+    - button "Copy"
+    - status
+    - text: ${WORDS}
+  `);
+  expect(
+    await said(blocks.nth(1)).evaluate((element) => element.closest('[role="status"], [aria-live]')),
+  ).toBeNull();
+  await expectNoSidewaysScroll(page);
+  await screens(page, 'editor-code-uncoloured');
+
+  // A second reader of the document is told the same.
+  const second = await browser.newContext();
+  const other = await second.newPage();
+  await other.goto('/sign-in');
+  await signIn(other, person);
+  await expect(other.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  await other.goto(page.url());
+  const theirs = text(other).locator('.ekd-code');
+  await expect(theirs).toHaveCount(2, { timeout: 30_000 });
+  await expect(said(theirs.nth(0))).toHaveCount(0);
+  await expect(said(theirs.nth(1))).toBeVisible();
+
+  // A letter more in the block that was at the length, and it says so too; the
+  // letter taken away again, and it stops. The same in the other reader's page.
+  const first = fragment
+    .toArray()
+    .filter((each) => (each as Y.XmlElement).nodeName === 'codeBlock')[0] as Y.XmlElement;
+  (first.get(0) as Y.XmlText).insert(50_000, 'Z');
+  await expect(said(blocks.nth(0))).toBeVisible();
+  await expect(said(theirs.nth(0))).toBeVisible();
+  (first.get(0) as Y.XmlText).delete(50_000, 1);
+  await expect(said(blocks.nth(0))).toHaveCount(0);
+  await expect(said(theirs.nth(0))).toHaveCount(0);
+  // And by the writer's own key: the last letter of the longer block deleted, in the page.
+  await placeAtEnd(blocks.nth(1).locator('code'));
+  await page.keyboard.press('Backspace');
+  await expect(said(blocks.nth(1))).toHaveCount(0);
+  await expect(said(theirs.nth(1))).toHaveCount(0);
+  await page.keyboard.type('Y');
+  await expect(said(blocks.nth(1))).toBeVisible();
+  await expect(said(theirs.nth(1))).toBeVisible();
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await second.close();
+  peer.close();
+
+  // In a view that cannot be edited the statement is there as well: the
+  // connection is lost, and the document is read-only until it returns.
+  await stopCollab();
+  try {
+    await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
+    await expect(doc).toHaveAttribute('aria-readonly', 'true');
+    await expect(said(blocks.nth(1))).toBeVisible();
+    await expect(said(blocks.nth(0))).toHaveCount(0);
+  } finally {
+    await startCollab();
+  }
+});
+
 // The owner's decision of 12 October 2026. Before it the member was told
 // nothing: the connection closed, the page asked again and was refused again,
 // and the change was lost at the next load.
