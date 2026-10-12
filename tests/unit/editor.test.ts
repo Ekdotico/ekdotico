@@ -129,15 +129,29 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
   );
 
   // The owner's decision of 12 October 2026: the same change would be sent and refused again.
-  it.each([REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP])('never tries again after %s', (reason) => {
-    for (const attempt of [1, 2, 50]) expect(retryDelay(reason, attempt)).toBeNull();
-  });
+  it.each([REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP, REFUSAL.TOO_DANGLING])(
+    'never tries again after %s',
+    (reason) => {
+      for (const attempt of [1, 2, 50]) expect(retryDelay(reason, attempt)).toBeNull();
+    },
+  );
 
   it('names, in what it says of such a refusal, the limits the server keeps', () => {
     // The page cannot import the server's module, so its words carry the numbers.
     const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
     expect(page).toContain(`would make the document larger than ${MAX_STATE_BYTES / 1024 / 1024} MB'`);
     expect(page).toContain(`would nest the content more than ${MAX_ELEMENT_DEPTH} levels deep'`);
+  });
+
+  it('says of a change that waits for content the document does not hold what is true of it, in words that name no number and no internal term', () => {
+    const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
+    const said =
+      'A change in this tab refers to content that this document does not hold, so it cannot be applied';
+    expect(page).toContain(`[REFUSAL.TOO_DANGLING]:\n    '${said}'`);
+    expect(said).not.toMatch(/\d|struct|part|wait|Yjs|2,000/i);
+    // Not the words of either of the others.
+    expect(said).not.toContain('5 MB');
+    expect(said).not.toContain('levels');
   });
 
   it('tries again no more often than once in 30 seconds at the limit of connections', () => {

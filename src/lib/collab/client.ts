@@ -25,9 +25,9 @@ const ENDINGS: readonly string[] = [REFUSAL.NO_ACCESS, REFUSAL.ACCESS_ENDED, REF
  * owner's decision of 12 October 2026; src/lib/collab/protocol.ts). The client
  * does not try again either, since it would send the same; but the text stays.
  */
-export type Held = typeof REFUSAL.TOO_LARGE | typeof REFUSAL.TOO_DEEP;
+export type Held = typeof REFUSAL.TOO_LARGE | typeof REFUSAL.TOO_DEEP | typeof REFUSAL.TOO_DANGLING;
 
-const HELD: readonly string[] = [REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP];
+const HELD: readonly string[] = [REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP, REFUSAL.TOO_DANGLING];
 // The code a socket is closed with for a message longer than it takes (RFC
 // 6455, "Message Too Big"; `MAX_MESSAGE_BYTES` of src/lib/collab/state.ts):
 // what this client sent was longer than the largest document.

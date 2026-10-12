@@ -713,12 +713,10 @@ export function createCollabServer(store: ServerSettings) {
         void logDocumentLimitRefused(context.userId, documentName);
         // The client is told which limit, and does not send the same again
         // (src/lib/collab/protocol.ts).
-        // PROVISIONAL for 'waiting' (more parts wait than `MAX_WAITING_PARTS`):
-        // it is told as `too-large`, which stops the client and keeps its
-        // text, but whose words ("larger than 5 MB") are not true of it. A
-        // reason and words of its own are the owner's to decide (register row
-        // in the report of the commit that added the limit).
-        throw refuse(past === 'depth' ? REFUSAL.TOO_DEEP : REFUSAL.TOO_LARGE);
+        // One reason for each limit, so that the words the page shows are true.
+        throw refuse(
+          { size: REFUSAL.TOO_LARGE, depth: REFUSAL.TOO_DEEP, waiting: REFUSAL.TOO_DANGLING }[past],
+        );
       }
     },
 

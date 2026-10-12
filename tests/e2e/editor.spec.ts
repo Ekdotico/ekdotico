@@ -2313,6 +2313,66 @@ test('a change that would take the document past a limit is said in words that n
   other.close();
 });
 
+// The third review of pull request 24 (S1') and the fourth: a change that
+// refers to more content than the document holds, and than may wait, is
+// refused with a reason and a statement of its own. The page cannot make
+// such a change by itself, so the socket of the test loses the first change
+// it sends, and the paste after it holds more than 2,000 structs that wait
+// for it.
+test('a change that refers to content the document does not hold is said so, in words of its own and not the 5 MB of another limit; the text stays, and the page does not try again', async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(120_000);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  let lose = false;
+  let lost = 0;
+  await page.routeWebSocket('**/collab', (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((message) => {
+      // The name of the document behind its length (36), a synchronisation (0), and an update (2).
+      if (lose && typeof message !== 'string' && message[37] === 0 && message[38] === 2 && lost === 0) {
+        lost += 1;
+        return;
+      }
+      server.send(message);
+    });
+  });
+  await enter(page);
+  const id = await openNew(page);
+  const other = await connectAs(page.context(), id);
+  await text(page).click();
+  lose = true;
+  await page.keyboard.type('A');
+  await expect.poll(() => lost).toBe(1);
+  await paste(page, '<p>from a paste</p>'.repeat(1100));
+  const held = page.getByRole('alert').filter({ hasText: 'A change in this tab refers to content' });
+  await expect(held).toBeVisible({ timeout: 30_000 });
+  await expect(held.getByRole('heading')).toHaveText(
+    'A change in this tab refers to content that this document does not hold, so it cannot be applied',
+  );
+  // The words of the other two limits are not said.
+  await expect(page.getByText('larger than 5 MB')).toHaveCount(0);
+  await expect(page.getByText('levels deep')).toHaveCount(0);
+  await expect(held).toContainText(
+    'The server did not take the change, and the document is read-only in this tab. The changes that were not sent are shown here and nowhere else. Copy the text to keep it, then reload the document from the server. Reloading discards the changes that were not sent.',
+  );
+  await expect(held.getByRole('button')).toHaveText(['Copy text', 'Reload document']);
+  // The text is still there, read-only, and no one else saw any of it.
+  await expect(text(page)).toContainText('from a paste');
+  await expect(text(page)).toHaveAttribute('aria-readonly', 'true');
+  expect(fragment(other.provider)).not.toContain('from a paste');
+  await held.getByRole('button', { name: 'Copy text' }).click();
+  await expect(held.getByRole('status')).toHaveText('Text copied.');
+  expect(await clipboardText(page)).toContain('from a paste');
+  // No further try.
+  const sockets = countSockets(page);
+  await page.waitForTimeout(5500);
+  expect(sockets.count).toBe(0);
+  await expect(held).toBeVisible();
+  other.close();
+});
+
 // The owner's decision of 12 October 2026: 600 messages that carry an update
 // in any minute for each user, past which the collaboration server closes the
 // connection (src/collab/server.ts). The server of this file keeps the number

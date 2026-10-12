@@ -36,8 +36,9 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
       // The owner's decision of 12 October 2026: one for each limit of a document.
       TOO_LARGE: 'too-large',
       TOO_DEEP: 'too-deep',
+      TOO_DANGLING: 'too-dangling',
     });
-    expect(new Set(Object.values(REFUSAL)).size).toBe(8);
+    expect(new Set(Object.values(REFUSAL)).size).toBe(9);
   });
 });
 

@@ -62,11 +62,15 @@ const ENDED: Record<Ending, { title: string; text: string; href: string; link: s
 // A change that the server refused for a limit of the document (the owner's
 // decision of 12 October 2026; src/lib/collab/protocol.ts). The numbers are
 // those of src/lib/collab/state.ts, a module of the server:
-// tests/unit/editor.test.ts holds the two together. Written under the
-// Expression Guidelines, for the owner's approval.
+// tests/unit/editor.test.ts holds the two together. The third names no number:
+// the limit is on how much a change may refer to content the document does not
+// hold, which means nothing to a writer. Written under the Expression
+// Guidelines, for the owner's approval.
 const HELD: Record<Held, string> = {
   [REFUSAL.TOO_LARGE]: 'A change in this tab would make the document larger than 5 MB',
   [REFUSAL.TOO_DEEP]: 'A change in this tab would nest the content more than 50 levels deep',
+  [REFUSAL.TOO_DANGLING]:
+    'A change in this tab refers to content that this document does not hold, so it cannot be applied',
 };
 const HELD_TEXT =
   'The server did not take the change, and the document is read-only in this tab. The changes that were not sent are shown here and nowhere else. Copy the text to keep it, then reload the document from the server. Reloading discards the changes that were not sent.';

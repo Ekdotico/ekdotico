@@ -1051,7 +1051,7 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
   // bounded, since parts that wait for content no one sends cost every later
   // update a copy (src/lib/collab/state.ts, `MAX_WAITING_PARTS`).
   it(
-    'takes 2,000 parts that wait, refuses the 2,001st with the reason of a limit, and logs it once',
+    'takes 2,000 parts that wait, refuses the 2,001st with a reason of its own, and logs it once',
     { timeout: 60_000 },
     async () => {
       expect(limits.MAX_WAITING_PARTS).toBe(2000);
@@ -1086,7 +1086,7 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       const another = await sending(open.owner, open.id);
       another.client.socket.send(sent(open.id, SYNC, UPDATE, withheld(1, 4_000_002)));
       const closed = await until(() => another.client.framesFor(open.id).find((each) => each.type === CLOSE));
-      expect(closed.rest).toBe(closedBecause(REFUSAL.TOO_LARGE));
+      expect(closed.rest).toBe(closedBecause(REFUSAL.TOO_DANGLING));
       expect(another.acknowledged()).toBe(another.before);
       await until(async () => (await logged()).length > 0);
       // And again, from a new connection, in the same period: still one entry.
@@ -1100,6 +1100,77 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       // The document still opens and is written to.
       open.watching.changes.push(['after']);
       await until(async () => (await stored(open.id))?.length === 2, 4000);
+    },
+  );
+
+  // The editor's own connection: held, with the reason of its own, and no
+  // further try. The first change of the client never reaches the server (the
+  // socket drops it), so the second, of 2,001 structs, waits for it.
+  it(
+    'holds the editor’s connection for too much that waits: the reason of its own, the text kept, and no new try',
+    { timeout: 60_000 },
+    async () => {
+      const { DocumentConnection } = await import('../../src/lib/collab/client.ts');
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const { cookie } = owner;
+      const asked = { sockets: 0, frames: 0, dropped: 0 };
+      let dropping = false;
+      class Socket extends WebSocket {
+        constructor(url: string) {
+          super(url, { headers: { cookie, origin: ORIGIN } } as never);
+          asked.sockets += 1;
+        }
+        send(data: Parameters<WebSocket['send']>[0]) {
+          const frame = data as Uint8Array;
+          // An update (a synchronisation, 2) is the one frame that is lost.
+          if (
+            dropping &&
+            frame[UUID_LENGTH + 1] === 0 &&
+            frame[UUID_LENGTH + 2] === UPDATE &&
+            !asked.dropped
+          ) {
+            asked.dropped += 1;
+            return;
+          }
+          asked.frames += 1;
+          super.send(data);
+        }
+      }
+      const UUID_LENGTH = 36;
+      const connection = new DocumentConnection({
+        url: `ws://127.0.0.1:${server.port}${COLLAB_PATH}`,
+        documentId: id,
+        errorAfterMs: 60_000,
+        probe: async () => 200,
+        WebSocketPolyfill: Socket,
+      });
+      try {
+        connection.start();
+        await until(() => connection.getState().phase === 'connected' && !connection.getState().unsent);
+        const text = connection.document.getText('text');
+        text.insert(0, 'x'.repeat(10_000));
+        await until(() => !connection.getState().unsent);
+        dropping = true;
+        text.insert(0, 'first, lost');
+        await sleep(300);
+        expect(asked.dropped).toBe(1);
+        connection.document.transact(() => {
+          for (let n = 0; n < limits.MAX_WAITING_PARTS + 1; n += 1) text.insert(20 + 3 * n, 'y');
+        });
+        await until(() => connection.getState().phase === 'held', 20_000);
+        expect(connection.getState()).toMatchObject({ phase: 'held', held: REFUSAL.TOO_DANGLING });
+        // The text stays, and nothing is asked again: no socket, no frame.
+        const then = { ...asked };
+        await sleep(6500);
+        expect(asked).toEqual(then);
+        expect(text.toString()).toContain('first, lost');
+        expect(await logged()).toEqual([
+          { kind: 'document_limit_refused', userId: owner.id, documentId: id },
+        ]);
+      } finally {
+        connection.stop();
+      }
     },
   );
 
