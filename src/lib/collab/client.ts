@@ -6,7 +6,12 @@
 // Nothing here is of React or of the browser: the page hands it the address of
 // the socket and a way to ask the application about the document, and a test
 // hands it Node's WebSocket.
-import { HocuspocusProvider, HocuspocusProviderWebsocket, WebSocketStatus } from '@hocuspocus/provider';
+import {
+  HocuspocusProvider,
+  HocuspocusProviderWebsocket,
+  MessageType,
+  WebSocketStatus,
+} from '@hocuspocus/provider';
 import * as Y from 'yjs';
 import { documentName, REFUSAL } from './protocol.ts';
 
@@ -59,6 +64,29 @@ const VERIFY_MS = 5000;
 // that has been silent for this long is taken for dead and opened again.
 const SILENCE_MS = 45_000;
 
+// HOW OFTEN THE EDITOR SENDS (the owner's decision of 12 October 2026). The
+// server counts 600 messages that carry an update, for each account, in any
+// minute (`COLLAB_MESSAGES_PER_USER`), and a key held down repeats up to 30
+// times a second. The sending is a bucket of tokens: a message costs one, a
+// token returns every BATCH_MS, and the bucket holds BURST_MESSAGES.
+// - A change is sent at once while the bucket holds a token, so typing keeps
+//   the budget of SRS 2.4 for "Yjs sync propagation to collaborator" (P50
+//   under 150 ms, P99 under 400 ms): a burst of 8 keys, and 4 keys a second
+//   for as long as that lasts, wait for nothing.
+// - With no token, the changes that come are merged into one message, which
+//   the library (`flushDelay`, @hocuspocus/provider 4.7.0) sends BATCH_MS
+//   after the first of them; by then a token has returned. A change waits
+//   250 ms at most.
+// - A key held at 30 a second is 8 messages at once and then 4 a second. In
+//   any period of L seconds a tab sends at most BURST_MESSAGES + 4 L update
+//   messages: 8 + 240 = 248 in a minute, and 496 for two tabs of one account,
+//   under the 600. No pattern of keys passes it, however it oscillates around
+//   a rate: the bound is the bucket's, and not an observed rate. The two
+//   steps of a synchronisation, sent when a connection opens, are charged to
+//   the bucket as they leave and come on top.
+export const BATCH_MS = 250;
+export const BURST_MESSAGES = 8;
+
 /**
  * How long to wait before the `attempt`-th new try after a refusal, or null
  * where the refusal will not change and the client does not try again.
@@ -108,6 +136,11 @@ export class DocumentConnection {
   private lostTimer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private refusals = 0;
+  // The bucket of tokens (above), refilled when it is looked at.
+  private tokens = BURST_MESSAGES;
+  private tokensAt = Date.now();
+  // Changes are merged into a batch that the library sends BATCH_MS after the first of them.
+  private waiting = false;
 
   /** Opens nothing: `start` does. */
   constructor(options: ConnectionOptions) {
@@ -120,6 +153,7 @@ export class DocumentConnection {
     this.started = true;
     const { options } = this;
     this.state = { phase: 'opening', opened: this.state.opened, unsent: false };
+    this.waiting = false;
     this.socket = new HocuspocusProviderWebsocket({
       url: options.url,
       messageReconnectTimeout: SILENCE_MS,
@@ -141,6 +175,9 @@ export class DocumentConnection {
       document: this.document,
       // Presence is another slice's (FR-ED-17): nothing is said of this client.
       awareness: null,
+      // Switches the library's batching on. `changed` sends a change at once while the bucket allows it.
+      flushDelay: BATCH_MS,
+      onOutgoingMessage: ({ message }) => this.sending(message.type),
       onSynced: () => this.connected(),
       onAuthenticationFailed: ({ reason }) => this.refused(reason),
       // The close of this document's connection on a socket that stays open.
@@ -148,10 +185,62 @@ export class DocumentConnection {
       onClose: ({ event }) => {
         if (this.socket.status === WebSocketStatus.Connected) this.refused(event.reason);
       },
-      onUnsyncedChanges: ({ number }) => this.set({ unsent: number > 0 }),
+      // Read after `changed` has placed the change in a batch or sent it.
+      onUnsyncedChanges: () => queueMicrotask(() => this.refreshUnsent()),
     });
     this.provider.attach();
+    // After the library's own handler, which has placed the change in a batch.
+    this.document.on('update', this.changed);
+    // The last change before the tab goes is not held back for its batch.
+    // `pagehide` is the end of a page; `visibilitychange` to hidden is the
+    // last event that some browsers give a page that is closed on a phone.
+    if (typeof window !== 'undefined') window.addEventListener('pagehide', this.flush);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.hidden);
     this.expectConnection();
+  }
+
+  /** Sends what waits in a batch, now: for a tab that is closed or hidden, and for a check. */
+  private flush = (): void => {
+    this.provider?.flushPendingUpdates();
+  };
+
+  private hidden = (): void => {
+    if (document.visibilityState === 'hidden') this.flush();
+  };
+
+  /** A change of this tab's document: sent at once while the bucket holds a token, else left to the batch. */
+  private changed = (_update: Uint8Array, origin: unknown): void => {
+    if (origin === this.provider) return;
+    this.refill();
+    if (this.tokens >= 1) this.flush();
+    else this.waiting = true;
+  };
+
+  private refill(): void {
+    const now = Date.now();
+    this.tokens = Math.min(BURST_MESSAGES, this.tokens + Math.max(0, now - this.tokensAt) / BATCH_MS);
+    this.tokensAt = now;
+  }
+
+  /** Each message of a synchronisation that leaves costs a token: a batch, an update, a step. */
+  private sending(type: MessageType | undefined): void {
+    if (type !== MessageType.Sync) return;
+    this.refill();
+    this.tokens = Math.max(0, this.tokens - 1);
+    this.waiting = false;
+    this.refreshUnsent();
+  }
+
+  /**
+   * FR-ED-18: changes the server has not acknowledged. A batch that only
+   * waits its 250 ms is not one of them while the connection is up, or the
+   * indicator would turn to "syncing" at every pause in typing. The library
+   * counts one for a batch, and one for each message sent.
+   */
+  private refreshUnsent(): void {
+    const waits = this.waiting && this.state.phase === 'connected' ? 1 : 0;
+    const unsent = this.provider.unsyncedChanges - waits > 0;
+    if (unsent !== this.state.unsent) this.set({ unsent });
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -286,6 +375,7 @@ export class DocumentConnection {
         const timer = setTimeout(() => done(false), timeoutMs);
         this.provider.on('unsyncedChanges', heard);
       });
+    this.flush();
     if (this.state.phase !== 'connected' || !(await acknowledged())) return false;
     this.provider.forceSync();
     return (await acknowledged()) && this.state.phase === 'connected';
@@ -296,6 +386,10 @@ export class DocumentConnection {
     if (!this.started) return;
     this.started = false;
     this.clearTimers();
+    if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.flush);
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.hidden);
+    this.document.off('update', this.changed);
+    // The library sends what is waiting when it is destroyed (4.7.0, `destroy`).
     this.provider.destroy();
     // FR-ED-41: "shall not attempt to reconnect". After a socket closes, the
     // library (4.7.0) opens the next one from a timer that its `destroy` does

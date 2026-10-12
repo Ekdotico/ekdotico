@@ -931,18 +931,6 @@ test('the slash palette opens where the requirement says, filters by name and al
   await page.keyboard.press('Escape');
 });
 
-/** The text of the paragraph of the shared document that holds `written` and nothing else. */
-function sharedText(shared: Y.Doc, written: string): Y.XmlText {
-  const found = shared
-    .getXmlFragment('default')
-    .toArray()
-    .flatMap((block) => (block instanceof Y.XmlElement ? block.toArray() : []))
-    .find((each) => each instanceof Y.XmlText && each.toString() === written);
-  if (!(found instanceof Y.XmlText))
-    throw new Error('the test found no such paragraph in the shared document');
-  return found;
-}
-
 test('the slash palette stays open through another client’s change elsewhere, and closes when that client rewrites the command', async ({
   page,
 }) => {
@@ -986,7 +974,21 @@ test('the slash palette stays open through another client’s change elsewhere, 
     await newLastLine(page);
     await page.keyboard.type('/h');
     await expect(rows(page)).toHaveCount(4);
-    sharedText(shared, '/h').insert(2, 'zz');
+    // The page sends what it types in a batch where the keys come fast
+    // (src/lib/collab/client.ts), so the other client lags the page by up to
+    // 250 ms, and by more of the page's changes than one. It waits until it
+    // holds the page's state up to the command: the heading chosen above,
+    // and the command in the last block, and not the one that was chosen.
+    const command = () => {
+      const fragment = shared.getXmlFragment('default');
+      if (!fragment.toString().includes('<heading level="2">Chosen</heading>')) return undefined;
+      const last = fragment.toArray().at(-1);
+      return last instanceof Y.XmlElement
+        ? last.toArray().find((each) => each instanceof Y.XmlText && each.toString() === '/h')
+        : undefined;
+    };
+    await expect.poll(() => command() !== undefined).toBe(true);
+    (command() as Y.XmlText).insert(2, 'zz');
     await expect(doc.locator(':scope > p').filter({ hasText: '/hzz' })).toHaveCount(1);
     await expect(palette(page)).toBeHidden();
     await expect(page.getByText(NO_BLOCK).first()).toBeHidden();
@@ -1245,6 +1247,7 @@ test('hostile content, pasted or sent by another client, stays inert', async ({ 
 
   // Another client, which is no editor and writes what it likes into the document.
   const hostile = await connectAs(page.context(), id);
+  await holds(hostile, 'pasted callout');
   hostile.provider.document.transact(() => {
     const paragraph = new Y.XmlElement('paragraph');
     const words = new Y.XmlText();
@@ -1372,6 +1375,7 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
   await expect(status(page, 'In sync')).toBeVisible();
 
   const hostile = await connectAs(page.context(), id);
+  await holds(hostile, 'pasted link');
   hostile.provider.document.transact(() => {
     hostile.provider.document.getXmlFragment('default').push([
       // Finding 1 of the review of pull request 20: a language that is no text.
@@ -1542,6 +1546,7 @@ test('a table past the bound of the schema is laid out with the bound, and the p
   await page.keyboard.type('Written before.');
   await expect(status(page, 'In sync')).toBeVisible();
   const hostile = await connectAs(page.context(), id);
+  await holds(hostile, 'Written before.');
   hostile.provider.document.transact(() => {
     hostile.provider.document.getXmlFragment('default').push([
       tableOf(
@@ -1604,6 +1609,7 @@ test('a table whose cells together span more than the bound opens at once, each 
   await page.keyboard.type('Written before.');
   await expect(status(page, 'In sync')).toBeVisible();
   const hostile = await connectAs(page.context(), id);
+  await holds(hostile, 'Written before.');
   hostile.provider.document.transact(() => {
     hostile.provider.document.getXmlFragment('default').push([
       tableOf(
@@ -1673,6 +1679,7 @@ test('what another client puts where it cannot stand is taken out alone: the tab
   await text(page).click();
   await page.keyboard.type('Written before.');
   const hostile = await connectAs(page.context(), id);
+  await holds(hostile, 'Written before.');
   const fragment = hostile.provider.document.getXmlFragment('default');
   fragment.push([
     tableOf(
@@ -1739,6 +1746,7 @@ test('what another client puts directly in the document where it cannot stand is
   await page.keyboard.type('Written before.');
   await expect(status(page, 'In sync')).toBeVisible();
   const hostile = await connectAs(page.context(), id);
+  await holds(hostile, 'Written before.');
   const fragment = hostile.provider.document.getXmlFragment('default');
   const held = () => fragment.toArray().map((each) => (each as Y.XmlElement).nodeName ?? 'text');
   await expect.poll(held).toEqual(['paragraph']);
@@ -1834,6 +1842,7 @@ test('a change that would take the document past a limit is said in words that n
   await page.keyboard.type('Written before.');
   await expect(status(page, 'In sync')).toBeVisible();
   const other = await connectAs(page.context(), id);
+  await holds(other, 'Written before.');
   const seen = () => other.provider.document.getXmlFragment('default').toString();
   await expect.poll(seen).toContain('Written before.');
   const BODY =
@@ -1914,7 +1923,7 @@ test('a change that would take the document past a limit is said in words that n
 // in any minute for each user, past which the collaboration server closes the
 // connection (src/collab/server.ts). The server of this file keeps the number
 // as it is first set. What the editor sends is counted on the socket itself.
-test('fast typing and a large paste stay inside the limit of messages: one for each key, and a few for a paste of 4 MB', async ({
+test('fast typing and a large paste stay inside the limit of messages: a few for 300 keys, and a few for a paste of 4 MB', async ({
   page,
 }) => {
   test.setTimeout(240_000);
@@ -1941,14 +1950,17 @@ test('fast typing and a large paste stay inside the limit of messages: one for e
   expect(sent.updates).toBe(1);
 
   // 300 characters at 100 a second, where the fastest typists reach some 15.
-  // One message for each key: the editor sends every change as it is made, so
-  // what an account may type is 600 keys in a minute, on all its tabs
-  // (docs/operations/deployment.md says what a key held down comes to).
+  // Until 12 October 2026 this was one message for each key (300). The editor
+  // now sends at once only what a bucket of 8 messages, refilled at 4 a second,
+  // allows, and merges the rest into one message for each 250 ms
+  // (src/lib/collab/client.ts): so 300 keys in some 3 seconds are about 8 + 4
+  // a second, and every character still arrives.
   const words = 'the quick brown fox jumps over the lazy dog. '.repeat(7).slice(0, 300);
   await page.keyboard.type(words, { delay: 10 });
   await expect(status(page, 'In sync')).toBeVisible();
   await expect.poll(() => other.provider.document.getXmlFragment('default').toString()).toContain(words);
-  expect(sent.updates - 1).toBe(words.length);
+  expect(sent.updates - 1).toBeGreaterThanOrEqual(8);
+  expect(sent.updates - 1).toBeLessThanOrEqual(words.length / 4);
 
   // A paste of 4 MB is a few messages, and not one for each of its words.
   const before = sent.updates;
@@ -1965,6 +1977,152 @@ test('fast typing and a large paste stay inside the limit of messages: one for e
     .poll(() => other.provider.document.getXmlFragment('default').toString())
     .toContain('And after.');
   await expect(status(page, 'In sync')).toBeVisible();
+  other.close();
+});
+
+/**
+ * Counts the messages a page sends that carry an update (the second step of a
+ * synchronisation and an update), and the closes it is sent, on its sockets.
+ */
+function countUpdates(page: Page) {
+  const counted = { updates: 0, closed: 0 };
+  page.on('websocket', (socket) => {
+    socket.on('framesent', ({ payload }) => {
+      // The name of the document, a UUID, behind its length; the type; and the step.
+      if (typeof payload !== 'string' && payload[37] === 0 && [1, 2].includes(payload[38]!))
+        counted.updates += 1;
+    });
+    socket.on('framereceived', ({ payload }) => {
+      if (typeof payload !== 'string' && payload[37] === 7) counted.closed += 1;
+    });
+  });
+  return counted;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const fragment = (provider: { document: Y.Doc }) => provider.document.getXmlFragment('default').toString();
+/**
+ * Waits for a client of the test to hold `words`. The page sends what is typed
+ * in a batch where keys come fast (src/lib/collab/client.ts), up to 250 ms
+ * after it, and "In sync" does not wait for the batch, so it is not yet a
+ * sign that the server holds the text.
+ */
+const holds = (client: { provider: { document: Y.Doc } }, words: string) =>
+  expect.poll(() => fragment(client.provider), { message: `the client holds ${words}` }).toContain(words);
+
+// The owner's decision of 12 October 2026: a key held down is never limited.
+// The editor sends at once what a bucket of 8 messages, refilled at 4 a
+// second, allows, and merges the rest into one message for each 250 ms
+// (src/lib/collab/client.ts), which is 8 + 4 a second for a key that repeats
+// 30 times a second, and not the 20 to 60 seconds to the 600 of the server.
+test('a key held down for 30 seconds is never limited: the page does not say it is restoring, far fewer than 600 messages are sent, and another client sees every character', async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const sent = countUpdates(page);
+  await enter(page);
+  const id = await openNew(page);
+  const other = await connectAs(page.context(), id);
+  await text(page).click();
+  // Any look of the page at the words of the two states that a limit would show.
+  await page.evaluate(() => {
+    const seen: string[] = ((window as unknown as { __states: string[] }).__states = []);
+    const words = /Restoring the connection|Not connected/;
+    setInterval(() => {
+      const all =
+        document.body.textContent +
+        [...document.querySelectorAll('[aria-label]')]
+          .map((each) => each.getAttribute('aria-label'))
+          .join(' ');
+      const found = words.exec(all);
+      if (found) seen.push(found[0]);
+    }, 20);
+  });
+  const before = sent.updates;
+
+  // A key that repeats the way a keyboard does: down, and down again, 30 a second.
+  const SECONDS = 30;
+  const began = Date.now();
+  let presses = 0;
+  while (Date.now() - began < SECONDS * 1000) {
+    await page.keyboard.down('x');
+    presses += 1;
+    await sleep(1000 / 30 - 3);
+  }
+  await page.keyboard.up('x');
+  const elapsed = (Date.now() - began) / 1000;
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 15_000 });
+  console.log(
+    `e2e measure: ${presses} presses in ${elapsed.toFixed(1)} s (${(presses / elapsed).toFixed(1)} a second), ${sent.updates - before} update messages`,
+  );
+  expect(presses).toBeGreaterThan(SECONDS * 20);
+  // 8 at once, then 4 a second (the bound of src/lib/collab/client.ts), and a little over for the last batch.
+  expect(sent.updates - before).toBeLessThanOrEqual(8 + 4 * Math.ceil(elapsed) + 2);
+  expect(sent.updates - before).toBeLessThan(600 / 2);
+  expect(sent.closed).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __states: string[] }).__states)).toEqual([]);
+  // Every character arrived: the other client holds as many as the key made.
+  await expect.poll(() => (fragment(other.provider).match(/x/g) ?? []).length).toBe(presses);
+  other.close();
+});
+
+test('the last keys before the tab is closed are sent, although they wait for their batch', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await enter(page);
+  const id = await openNew(page);
+  const other = await connectAs(page.context(), id);
+  await text(page).click();
+  // The timer of a batch (250 ms) never fires in this page, as in a tab that is
+  // closed before it does: only the page's leaving can send what waits.
+  await page.evaluate(() => {
+    const set = window.setTimeout.bind(window);
+    window.setTimeout = ((handler: TimerHandler, ms?: number, ...rest: unknown[]) =>
+      ms === 250 ? 0 : set(handler, ms, ...rest)) as typeof window.setTimeout;
+  });
+  // 60 keys with no pause empty the bucket of 8; the rest wait for a batch.
+  const keys = 'abcdefghijklmnopqrstuvwxyz'.repeat(2).slice(0, 60);
+  await page.keyboard.type(keys);
+  await sleep(500);
+  expect(fragment(other.provider)).not.toContain(keys);
+  // What a browser does when a tab is closed: the page is hidden, then left.
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await expect.poll(() => fragment(other.provider)).toContain(keys);
+  other.close();
+});
+
+// The first measurement of the row "Yjs sync propagation to collaborator" of
+// SRS section 2.4 (P50 under 150 ms, P99 under 400 ms; NFR-PE-01). One page
+// types and a client of the test, on the same machine, receives. It is the
+// browser's keydown to the arrival of the change, on the loopback: no network.
+test('a single keystroke reaches another client in well under the 150 ms of the budget', async ({ page }) => {
+  test.setTimeout(90_000);
+  await enter(page);
+  const id = await openNew(page);
+  const other = await connectAs(page.context(), id);
+  await text(page).click();
+  await page.evaluate(() => {
+    const keydowns: number[] = ((window as unknown as { __keydowns: number[] }).__keydowns = []);
+    document.addEventListener('keydown', () => keydowns.push(Date.now()), true);
+  });
+  const arrived: number[] = [];
+  other.provider.document.on('update', () => arrived.push(Date.now()));
+  const delays: number[] = [];
+  for (let n = 0; n < 20; n += 1) {
+    const heard = arrived.length;
+    await page.keyboard.press('x');
+    await expect.poll(() => arrived.length).toBeGreaterThan(heard);
+    const keydowns = await page.evaluate(() => (window as unknown as { __keydowns: number[] }).__keydowns);
+    delays.push(arrived[heard]! - keydowns.at(-1)!);
+    // A pause that fills the bucket again, and is longer than a person's between two keys.
+    await sleep(700);
+  }
+  delays.sort((a, b) => a - b);
+  const median = (delays[9]! + delays[10]!) / 2;
+  console.log(`e2e measure: single keystroke to another client, ms: ${delays.join(' ')}; median ${median}`);
+  expect(median).toBeLessThan(150);
+  expect(delays.at(-1)!).toBeLessThan(400);
   other.close();
 });
 

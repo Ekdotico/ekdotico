@@ -2065,6 +2065,119 @@ describe('the limit of messages that carry an update: 600 in any minute for each
     },
   );
 
+  // The editor sends at once while the rate is ordinary and merges a burst
+  // into one message for each 250 ms (src/lib/collab/client.ts; the owner's
+  // decision of 12 October 2026), so that a key held down is never limited.
+  // The clock is the real one, and the server the real process.
+  describe('what the editor sends of a burst of changes', () => {
+    const UUID_LENGTH = 36;
+    async function editor() {
+      const { DocumentConnection } = await import('../../src/lib/collab/client.ts');
+      const local = await startServer();
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const { cookie } = owner;
+      const updates: number[] = [];
+      class Socket extends WebSocket {
+        constructor(url: string) {
+          super(url, { headers: { cookie, origin: ORIGIN } } as never);
+        }
+        send(data: Parameters<WebSocket['send']>[0]) {
+          // The name of the document behind its length, a synchronisation (0), and its update (2).
+          const frame = data as Uint8Array;
+          if (frame[UUID_LENGTH + 1] === 0 && frame[UUID_LENGTH + 2] === 2) updates.push(Date.now());
+          super.send(data);
+        }
+      }
+      const connection = new DocumentConnection({
+        url: `ws://127.0.0.1:${local.port}${COLLAB_PATH}`,
+        documentId: id,
+        errorAfterMs: 60_000,
+        probe: async () => 200,
+        WebSocketPolyfill: Socket,
+      });
+      connection.start();
+      await until(() => connection.getState().phase === 'connected' && !connection.getState().unsent);
+      // The opening cost the bucket a token or two; it is full again after 250 ms.
+      await sleep(300);
+      updates.length = 0;
+      return {
+        connection,
+        id,
+        port: local.port,
+        cookie,
+        updates,
+        changes: connection.document.getArray<string>('changes'),
+      };
+    }
+
+    it(
+      'is a few messages for 60 changes in a second, and the server stores all 60',
+      { timeout: 30_000 },
+      async () => {
+        const { connection, id, updates, changes } = await editor();
+        try {
+          for (let n = 0; n < 60; n++) {
+            changes.push([`key ${n}`]);
+            await sleep(16);
+          }
+          await until(async () => (await stored(id))?.length === 60, 5000);
+          // 8 at once and then one for each 250 ms, whatever the clock did: not 60.
+          expect(updates.length).toBeGreaterThan(8);
+          expect(updates.length).toBeLessThanOrEqual(8 + 6);
+          await until(() => !connection.getState().unsent);
+          expect(await logged()).toEqual([]);
+        } finally {
+          connection.stop();
+        }
+      },
+    );
+
+    it(
+      'sends the last change when the connection is stopped, although it waits for its batch',
+      { timeout: 30_000 },
+      async () => {
+        const { connection, id, updates, changes } = await editor();
+        for (let n = 0; n < 9; n++) changes.push([`key ${n}`]);
+        // The ninth waits: the bucket held 8.
+        expect(updates).toHaveLength(8);
+        connection.stop();
+        await until(async () => (await stored(id))?.length === 9, 5000);
+        expect(updates).toHaveLength(9);
+        expect((await stored(id))!.at(-1)).toBe('key 8');
+      },
+    );
+
+    it(
+      'is seen by another client at once for an ordinary change, and within half a second where it waits for its batch',
+      { timeout: 30_000 },
+      async () => {
+        const { connection, id, port, cookie, changes } = await editor();
+        const other = connect(port, cookie).open(id);
+        await other.synced;
+        const seen = (what: string) => other.changes.toArray().includes(what);
+        try {
+          // An ordinary change: sent in its own tick, so what is measured is the server's fan-out and the sockets.
+          let began = Date.now();
+          changes.push(['ordinary']);
+          await until(() => seen('ordinary'), 2000, 2);
+          const ordinary = Date.now() - began;
+          // Fewer than the 250 ms of a batch: nothing waited for a timer.
+          expect(ordinary).toBeLessThan(150);
+
+          // The bucket is emptied, and the next change waits for a token: 250 ms at the most, and the sockets.
+          for (let n = 0; n < 9; n++) changes.push([`key ${n}`]);
+          began = Date.now();
+          changes.push(['waits']);
+          await until(() => seen('waits'), 2000, 2);
+          expect(Date.now() - began).toBeLessThan(500);
+        } finally {
+          connection.stop();
+        }
+      },
+    );
+  });
+
   // The editor's own connection (src/lib/collab/client.ts): what a writer who
   // reached the limit is shown, and that nothing written is lost.
   it(
