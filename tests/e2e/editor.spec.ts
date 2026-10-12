@@ -2131,7 +2131,7 @@ test('a document the browser cannot build is said to be so, and the page stays',
   const statement = page.getByRole('alert').filter({ hasText: 'This document could not be shown' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
   await expect(statement).toHaveText(
-    'This document could not be shownEkdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed. Open the list of documents.',
+    'This document could not be shownEkdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed.Documents',
   );
   await expect(statement).toBeFocused();
   // The page is the document's own still, and not the page of a fault on the server.
@@ -2153,7 +2153,7 @@ test('a document the browser cannot build is said to be so, and the page stays',
   }
   expect(depth).toBe(10_000);
   other.close();
-  await statement.getByRole('link', { name: 'Open the list of documents' }).click();
+  await statement.getByRole('link', { name: 'Documents', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
 });
 
