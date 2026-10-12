@@ -74,13 +74,22 @@ describe('loadSettings (FR-AU-83; register A102)', () => {
     expect(start).not.toThrow('One@');
   });
 
-  it('starts with entries in Greek and in punycode, each in its one spelling', () => {
+  it('starts with entries in Greek, each in its one spelling', () => {
     const greek = String.fromCodePoint(0x3c0, 0x3b1);
     const { foundingTeamEmails } = loadSettings({
       ...env,
-      FOUNDING_TEAM_EMAILS: `A@${greek.toUpperCase()}.GR,b@XN--BCHER-KVA.example`,
+      FOUNDING_TEAM_EMAILS: `A@${greek.toUpperCase()}.GR,b@Example.com`,
     });
-    expect(foundingTeamEmails).toEqual([`a@${greek}.gr`, 'b@xn--bcher-kva.example']);
+    expect(foundingTeamEmails).toEqual([`a@${greek}.gr`, 'b@example.com']);
+  });
+
+  // The owner's decision of 12 October 2026 (its register row is pending).
+  it('refuses to start where an entry has a label in punycode, in any case', () => {
+    for (const entry of ['b@xn--bcher-kva.example', 'b@mail.XN--P1AI']) {
+      expect(() => loadSettings({ ...env, FOUNDING_TEAM_EMAILS: `One@Example.com, ${entry}` })).toThrow(
+        /FOUNDING_TEAM_EMAILS: entry 2 is not an email address/,
+      );
+    }
   });
 });
 
@@ -230,6 +239,8 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
       RESET_PER_ADDRESS: { max: 10, windowSeconds: 3600 },
       CONFIRMATION_EMAIL_PER_USER: { max: 3, windowSeconds: 3600 },
       ADMISSION: { max: 60, windowSeconds: 60 },
+      // The owner's decision of 12 October 2026: a row to be added to NFR-SE-07.
+      COLLAB_MESSAGES_PER_USER: { max: 600, windowSeconds: 60 },
     });
   });
 

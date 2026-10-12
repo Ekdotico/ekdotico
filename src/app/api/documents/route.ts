@@ -6,7 +6,7 @@
 import { fault, notAdmitted } from '../../../lib/auth/route-answers.ts';
 import { validateSession, validateSessionRow } from '../../../lib/auth/session.ts';
 import { createDocument, listDocuments } from '../../../lib/documents/documents.ts';
-import { errorResponse, readJson } from '../../../lib/http.ts';
+import { errorResponse, notJson, readJson } from '../../../lib/http.ts';
 import { securityLog } from '../../../lib/security-log.ts';
 import { ensurePersonalWorkspace } from '../../../lib/workspace.ts';
 
@@ -50,6 +50,9 @@ export async function POST(request: Request): Promise<Response> {
     const { session } = validation;
     if (!session) return await notAdmitted(validation);
 
+    // R28: a body that is not sent as JSON is a 415, after the session and before anything is read.
+    const unsupported = notJson(request);
+    if (unsupported) return unsupported;
     const body = await readJson(request, MAX_BODY_BYTES);
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
       return errorResponse(422, 'invalid_request', MESSAGES.invalid);

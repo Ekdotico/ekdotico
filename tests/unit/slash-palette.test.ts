@@ -1011,7 +1011,7 @@ describe('Tab, and a table in a table', () => {
 
 describe('the prompt of an empty document (the owner’s decision of 12 October 2026)', () => {
   // The owner's sentence, written out here and not taken from the code under test.
-  const SENTENCE = 'Type / for a list of blocks.';
+  const SENTENCE = 'Write here, or type / for a list of blocks.';
   type Drawn = { from: number; type: { toDOM: (view: unknown) => { attributes: Record<string, string> } } };
   /** The decorations that carry a prompt, from whichever plugin draws one. */
   function prompts(editor: Editor): Drawn[] {

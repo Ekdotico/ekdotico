@@ -128,8 +128,18 @@ async function enrolled(email = address()) {
   await db().session.deleteMany({ where: { userId: id } });
   return { email, id, secret };
 }
-/** A code no step near now gives. */
-const wrongCode = (secret: string) => codeAt(secret, 40);
+/**
+ * A code that none of the steps near now gives. Chosen against them, and not
+ * the code of a far step: that one is the code of a near step three times in
+ * a million, and the refusal the test expects would then be a sign-in.
+ */
+function wrongCode(secret: string): string {
+  const right = [-1, 0, 1, 2].map((steps) => codeAt(secret, steps));
+  for (let n = 0; ; n++) {
+    const code = String(n).padStart(6, '0');
+    if (!right.includes(code)) return code;
+  }
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();

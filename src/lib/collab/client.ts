@@ -6,7 +6,12 @@
 // Nothing here is of React or of the browser: the page hands it the address of
 // the socket and a way to ask the application about the document, and a test
 // hands it Node's WebSocket.
-import { HocuspocusProvider, HocuspocusProviderWebsocket, WebSocketStatus } from '@hocuspocus/provider';
+import {
+  HocuspocusProvider,
+  HocuspocusProviderWebsocket,
+  MessageType,
+  WebSocketStatus,
+} from '@hocuspocus/provider';
 import * as Y from 'yjs';
 import { documentName, REFUSAL } from './protocol.ts';
 
@@ -16,18 +21,34 @@ export type Ending = typeof REFUSAL.NO_ACCESS | typeof REFUSAL.ACCESS_ENDED | ty
 const ENDINGS: readonly string[] = [REFUSAL.NO_ACCESS, REFUSAL.ACCESS_ENDED, REFUSAL.SESSION_ENDED];
 
 /**
+ * The refusals of what this client sent, for a limit of the document (the
+ * owner's decision of 12 October 2026; src/lib/collab/protocol.ts). The client
+ * does not try again either, since it would send the same; but the text stays.
+ */
+export type Held = typeof REFUSAL.TOO_LARGE | typeof REFUSAL.TOO_DEEP | typeof REFUSAL.TOO_DANGLING;
+
+const HELD: readonly string[] = [REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP, REFUSAL.TOO_DANGLING];
+// The code a socket is closed with for a message longer than it takes (RFC
+// 6455, "Message Too Big"; `MAX_MESSAGE_BYTES` of src/lib/collab/state.ts):
+// what this client sent was longer than the largest document.
+const MESSAGE_TOO_BIG = 1009;
+
+/**
  * - `opening`: no state of the document has arrived yet.
  * - `connected`: the socket is open and the document has been synchronised.
  * - `restoring`: the connection was lost or refused for now, and is being tried again (FR-ED-18).
  * - `lost`: it has not come back within the period of FR-ED-23; the editor is read-only.
  * - `capacity`: refused at the limit of ten connections (FR-ED-18), tried again every 30 seconds.
  * - `ended`: refused for good; `ending` says why. The connection is gone.
+ * - `held`: the server refused what this tab sent, for a limit of the document; `held` says
+ *   which. The connection is gone and is not tried again; the text stays, read-only.
  */
-export type Phase = 'opening' | 'connected' | 'restoring' | 'lost' | 'capacity' | 'ended';
+export type Phase = 'opening' | 'connected' | 'restoring' | 'lost' | 'capacity' | 'ended' | 'held';
 
 export interface ConnectionState {
   phase: Phase;
   ending?: Ending;
+  held?: Held;
   /** The document's state has arrived at least once: there is something to edit. */
   opened: boolean;
   /** Changes the server has not acknowledged, which are lost if the tab is closed (FR-ED-18). */
@@ -43,11 +64,35 @@ const VERIFY_MS = 5000;
 // that has been silent for this long is taken for dead and opened again.
 const SILENCE_MS = 45_000;
 
+// HOW OFTEN THE EDITOR SENDS (the owner's decision of 12 October 2026). The
+// server counts 600 messages that carry an update, for each account, in any
+// minute (`COLLAB_MESSAGES_PER_USER`), and a key held down repeats up to 30
+// times a second. The sending is a bucket of tokens: a message costs one, a
+// token returns every BATCH_MS, and the bucket holds BURST_MESSAGES.
+// - A change is sent at once while the bucket holds a token, so typing keeps
+//   the budget of SRS 2.4 for "Yjs sync propagation to collaborator" (P50
+//   under 150 ms, P99 under 400 ms): a burst of 8 keys, and 4 keys a second
+//   for as long as that lasts, wait for nothing.
+// - With no token, the changes that come are merged into one message, which
+//   the library (`flushDelay`, @hocuspocus/provider 4.7.0) sends BATCH_MS
+//   after the first of them; by then a token has returned. A change waits
+//   250 ms at most.
+// - A key held at 30 a second is 8 messages at once and then 4 a second. In
+//   any period of L seconds a tab sends at most BURST_MESSAGES + 4 L update
+//   messages: 8 + 240 = 248 in a minute, and 496 for two tabs of one account,
+//   under the 600. No pattern of keys passes it, however it oscillates around
+//   a rate: the bound is the bucket's, and not an observed rate. The two
+//   steps of a synchronisation, sent when a connection opens, are charged to
+//   the bucket as they leave and come on top.
+export const BATCH_MS = 250;
+export const BURST_MESSAGES = 8;
+
 /**
  * How long to wait before the `attempt`-th new try after a refusal, or null
  * where the refusal will not change and the client does not try again.
  *
  * - no access, access ended, session ended: never (FR-ED-41).
+ * - too large, too deep: never. The client would send the same and be refused the same.
  * - capacity: every 30 seconds (FR-ED-18).
  * - limited: "after a pause, never at once", longer each time "up to a
  *   minute, which is the period of the limit" (src/lib/collab/protocol.ts).
@@ -55,7 +100,7 @@ const SILENCE_MS = 45_000;
  *   then twice as long each time, and at least every 30 seconds.
  */
 export function retryDelay(reason: string, attempt: number): number | null {
-  if (ENDINGS.includes(reason)) return null;
+  if (ENDINGS.includes(reason) || HELD.includes(reason)) return null;
   if (reason === REFUSAL.CAPACITY) return CAPACITY_RETRY_MS;
   const [first, most] = reason === REFUSAL.LIMITED ? [5000, 60_000] : [1000, 30_000];
   return Math.min(first * 2 ** (attempt - 1), most);
@@ -91,6 +136,11 @@ export class DocumentConnection {
   private lostTimer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private refusals = 0;
+  // The bucket of tokens (above), refilled when it is looked at.
+  private tokens = BURST_MESSAGES;
+  private tokensAt = Date.now();
+  // Changes are merged into a batch that the library sends BATCH_MS after the first of them.
+  private waiting = false;
 
   /** Opens nothing: `start` does. */
   constructor(options: ConnectionOptions) {
@@ -103,6 +153,7 @@ export class DocumentConnection {
     this.started = true;
     const { options } = this;
     this.state = { phase: 'opening', opened: this.state.opened, unsent: false };
+    this.waiting = false;
     this.socket = new HocuspocusProviderWebsocket({
       url: options.url,
       messageReconnectTimeout: SILENCE_MS,
@@ -112,6 +163,11 @@ export class DocumentConnection {
       onStatus: ({ status }) => {
         if (status === WebSocketStatus.Disconnected) this.dropped();
       },
+      // The socket was closed for the length of a message: a change longer
+      // than the largest document, which the next socket would be sent again.
+      onClose: ({ event }) => {
+        if (event.code === MESSAGE_TOO_BIG) this.hold(REFUSAL.TOO_LARGE);
+      },
     });
     this.provider = new HocuspocusProvider({
       websocketProvider: this.socket,
@@ -119,6 +175,9 @@ export class DocumentConnection {
       document: this.document,
       // Presence is another slice's (FR-ED-17): nothing is said of this client.
       awareness: null,
+      // Switches the library's batching on. `changed` sends a change at once while the bucket allows it.
+      flushDelay: BATCH_MS,
+      onOutgoingMessage: ({ message }) => this.sending(message.type),
       onSynced: () => this.connected(),
       onAuthenticationFailed: ({ reason }) => this.refused(reason),
       // The close of this document's connection on a socket that stays open.
@@ -126,10 +185,62 @@ export class DocumentConnection {
       onClose: ({ event }) => {
         if (this.socket.status === WebSocketStatus.Connected) this.refused(event.reason);
       },
-      onUnsyncedChanges: ({ number }) => this.set({ unsent: number > 0 }),
+      // Read after `changed` has placed the change in a batch or sent it.
+      onUnsyncedChanges: () => queueMicrotask(() => this.refreshUnsent()),
     });
     this.provider.attach();
+    // After the library's own handler, which has placed the change in a batch.
+    this.document.on('update', this.changed);
+    // The last change before the tab goes is not held back for its batch.
+    // `pagehide` is the end of a page; `visibilitychange` to hidden is the
+    // last event that some browsers give a page that is closed on a phone.
+    if (typeof window !== 'undefined') window.addEventListener('pagehide', this.flush);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.hidden);
     this.expectConnection();
+  }
+
+  /** Sends what waits in a batch, now: for a tab that is closed or hidden, and for a check. */
+  private flush = (): void => {
+    this.provider?.flushPendingUpdates();
+  };
+
+  private hidden = (): void => {
+    if (document.visibilityState === 'hidden') this.flush();
+  };
+
+  /** A change of this tab's document: sent at once while the bucket holds a token, else left to the batch. */
+  private changed = (_update: Uint8Array, origin: unknown): void => {
+    if (origin === this.provider) return;
+    this.refill();
+    if (this.tokens >= 1) this.flush();
+    else this.waiting = true;
+  };
+
+  private refill(): void {
+    const now = Date.now();
+    this.tokens = Math.min(BURST_MESSAGES, this.tokens + Math.max(0, now - this.tokensAt) / BATCH_MS);
+    this.tokensAt = now;
+  }
+
+  /** Each message of a synchronisation that leaves costs a token: a batch, an update, a step. */
+  private sending(type: MessageType | undefined): void {
+    if (type !== MessageType.Sync) return;
+    this.refill();
+    this.tokens = Math.max(0, this.tokens - 1);
+    this.waiting = false;
+    this.refreshUnsent();
+  }
+
+  /**
+   * FR-ED-18: changes the server has not acknowledged. A batch that only
+   * waits its 250 ms is not one of them while the connection is up, or the
+   * indicator would turn to "syncing" at every pause in typing. The library
+   * counts one for a batch, and one for each message sent.
+   */
+  private refreshUnsent(): void {
+    const waits = this.waiting && this.state.phase === 'connected' ? 1 : 0;
+    const unsent = this.provider.unsyncedChanges - waits > 0;
+    if (unsent !== this.state.unsent) this.set({ unsent });
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -139,8 +250,13 @@ export class DocumentConnection {
 
   getState = (): ConnectionState => this.state;
 
+  /** Nothing further is tried or shown as changing: the connection is put away. */
+  private over(): boolean {
+    return this.state.phase === 'ended' || this.state.phase === 'held';
+  }
+
   private set(change: Partial<ConnectionState>): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
     this.state = { ...this.state, ...change };
     for (const listener of this.listeners) listener();
   }
@@ -168,7 +284,8 @@ export class DocumentConnection {
 
   /** The server refused this document, or closed its connection, with a reason. */
   private refused(reason: string): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
+    if (HELD.includes(reason)) return this.hold(reason as Held);
     const delay = retryDelay(reason, ++this.refusals);
     if (delay === null) return this.end(reason as Ending);
     clearTimeout(this.retryTimer);
@@ -181,16 +298,22 @@ export class DocumentConnection {
       if (this.state.phase !== 'lost') this.set({ phase: 'restoring' });
       this.expectConnection();
     }
-    // The socket is open: the document is asked for again on it.
+    // The socket is open: the document is asked for again on it, as the
+    // library asks when a socket opens. Not by its `detach` and `attach`: the
+    // first tells the server to close a connection the server no longer has,
+    // and the server (@hocuspocus/server 4.7.0, ClientConnection.ts) keeps what
+    // arrives for a document that is not open and hands it to the connection
+    // made next, which that message then closes, with the client left
+    // synchronised to a server that hears nothing from it.
     this.retryTimer = setTimeout(() => {
-      this.provider.detach();
-      this.provider.attach();
+      const opened = this.socket.receivedOnOpenPayload;
+      if (opened) void this.provider.onOpen(opened);
     }, delay);
   }
 
   /** The socket closed, or could not be opened. The library opens it again. */
   private dropped(): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
     clearTimeout(this.retryTimer);
     if (this.state.phase !== 'lost') this.set({ phase: 'restoring' });
     this.expectConnection();
@@ -214,8 +337,20 @@ export class DocumentConnection {
 
   /** FR-ED-41: no further try, and nothing kept of what the server had not acknowledged. */
   private end(ending: Ending): void {
-    if (this.state.phase === 'ended') return;
+    if (this.over()) return;
     this.set({ phase: 'ended', ending, unsent: false });
+    this.stop();
+  }
+
+  /**
+   * The server refused what this tab sent, for a limit of the document. No
+   * further try: the same would be sent and refused, a minute's worth of
+   * handshakes at a time. The document stays in the tab with the change in
+   * it, for the text to be copied, and nothing of it is sent again.
+   */
+  private hold(held: Held): void {
+    if (this.over()) return;
+    this.set({ phase: 'held', held });
     this.stop();
   }
 
@@ -240,6 +375,7 @@ export class DocumentConnection {
         const timer = setTimeout(() => done(false), timeoutMs);
         this.provider.on('unsyncedChanges', heard);
       });
+    this.flush();
     if (this.state.phase !== 'connected' || !(await acknowledged())) return false;
     this.provider.forceSync();
     return (await acknowledged()) && this.state.phase === 'connected';
@@ -250,6 +386,10 @@ export class DocumentConnection {
     if (!this.started) return;
     this.started = false;
     this.clearTimers();
+    if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.flush);
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.hidden);
+    this.document.off('update', this.changed);
+    // The library sends what is waiting when it is destroyed (4.7.0, `destroy`).
     this.provider.destroy();
     // FR-ED-41: "shall not attempt to reconnect". After a socket closes, the
     // library (4.7.0) opens the next one from a timer that its `destroy` does
@@ -271,8 +411,8 @@ const UNSENT = 'Changes that are not yet sent are lost if this tab is closed.';
  * states, and its words. A connection that is being restored is the syncing
  * state, "with words that say the connection is being restored"; and while
  * there are changes the server has not acknowledged, the words say that they
- * are lost if the tab is closed (FR-ED-18). `capacity` and `ended` are shown
- * by a statement and not by the indicator.
+ * are lost if the tab is closed (FR-ED-18). `capacity`, `ended` and `held` are
+ * shown by a statement and not by the indicator.
  */
 export function syncStatus({ phase, unsent }: ConnectionState): {
   state: 'synced' | 'syncing' | 'error';

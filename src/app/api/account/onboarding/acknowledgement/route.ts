@@ -5,7 +5,7 @@
 // itself".
 import { fault, notAdmitted } from '../../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../../lib/auth/session.ts';
-import { errorResponse, readJson } from '../../../../../lib/http.ts';
+import { errorResponse, notJson, readJson } from '../../../../../lib/http.ts';
 import { acknowledgeNotice, onboarding } from '../../../../../lib/onboarding.ts';
 
 export const dynamic = 'force-dynamic';
@@ -34,6 +34,9 @@ export async function POST(request: Request): Promise<Response> {
     // the enrolment "before the Closed α notice"; 401 without a session.
     if (!session) return await notAdmitted(validation);
 
+    // R28: a body that is not sent as JSON is a 415, after the session and before anything is read.
+    const unsupported = notJson(request);
+    if (unsupported) return unsupported;
     const version = await versionOf(request);
     if (version === undefined) return errorResponse(422, 'invalid_request', MESSAGES.invalid);
     // "A version other than the current one is refused with a 409 response."

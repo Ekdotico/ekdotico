@@ -14,7 +14,7 @@ import type { EditorView } from '@tiptap/pm/view';
 import type * as Y from 'yjs';
 import { tabbableWithin } from '@ekdotico/domico/a11y';
 import { Button, Cluster, Dialog, FormFault, Stack, SyncStatus } from '@ekdotico/domico/components';
-import { DocumentConnection, syncStatus, type Ending } from '../../../../lib/collab/client.ts';
+import { DocumentConnection, syncStatus, type Ending, type Held } from '../../../../lib/collab/client.ts';
 import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
@@ -59,13 +59,31 @@ const ENDED: Record<Ending, { title: string; text: string; href: string; link: s
     link: 'Sign in again',
   },
 };
+// A change that the server refused for a limit of the document (the owner's
+// decision of 12 October 2026; src/lib/collab/protocol.ts). The numbers are
+// those of src/lib/collab/state.ts, a module of the server:
+// tests/unit/editor.test.ts holds the two together. The third names no number:
+// the limit is on how much a change may refer to content the document does not
+// hold, which means nothing to a writer. Written under the Expression
+// Guidelines, for the owner's approval.
+const HELD: Record<Held, string> = {
+  [REFUSAL.TOO_LARGE]: 'A change in this tab would make the document larger than 5 MB',
+  [REFUSAL.TOO_DEEP]: 'A change in this tab would nest the content more than 50 levels deep',
+  [REFUSAL.TOO_DANGLING]:
+    'A change in this tab refers to content that this document does not hold, so it cannot be applied',
+};
+const HELD_TEXT =
+  'The server did not take the change, and the document is read-only in this tab. The changes that were not sent are shown here and nowhere else. Copy the text to keep it, then reload the document from the server. Reloading discards the changes that were not sent.';
+// `TEXT_NOT_COPIED`, where there is no dialog to close.
+const TEXT_NOT_COPIED_HERE =
+  'The text could not be copied. The browser may have refused access to the clipboard. Select the text in the document, and copy it with the keyboard before reloading.';
 // A document that this browser cannot build (./extensions.tsx, `holdBinding`).
 // Said as what it is, and not as a fault of the server: nothing was sent.
 const UNSHOWN = {
   title: 'This document could not be shown',
   text: 'Ekdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed.',
   href: '/',
-  link: 'Open the list of documents',
+  link: 'Documents',
 };
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
@@ -247,6 +265,29 @@ function SyncCheck({
   );
 }
 
+/**
+ * What is said where the server refused a change of this tab for a limit:
+ * which limit, and the two things there are to do, as the dialog of the sync
+ * status offers them. Focus stays in the text, which is still there to select.
+ */
+function HeldChange({ held, text }: { held: Held; text: () => string }) {
+  const [copied, setCopied] = useState<boolean | null>(null);
+  return (
+    <FormFault title={HELD[held]} autoFocus={false}>
+      <Stack gap={4}>
+        <p>{HELD_TEXT}</p>
+        <Cluster gap={3}>
+          <Button onClick={() => void copyText(text()).then(setCopied)}>Copy text</Button>
+          <Button variant="destructive" onClick={() => window.location.reload()}>
+            Reload document
+          </Button>
+        </Cluster>
+        <p role="status">{copied === null ? '' : copied ? 'Text copied.' : TEXT_NOT_COPIED_HERE}</p>
+      </Stack>
+    </FormFault>
+  );
+}
+
 function OpenDocument({ connection, canEdit }: { connection: DocumentConnection; canEdit: boolean }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
   const [check, setCheck] = useState<'checking' | 'in-sync' | 'unconfirmed' | null>(null);
@@ -283,8 +324,9 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
     // The text and whatever had the focus are gone, so the statement takes it.
     return (
       <FormFault autoFocus title={title}>
+        <p>{text}</p>
         <p>
-          {text} <Link href={href}>{link}</Link>.
+          <Link href={href}>{link}</Link>
         </p>
       </FormFault>
     );
@@ -293,7 +335,9 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
   const status = syncStatus(state);
   return (
     <Stack gap={4}>
-      {state.phase === 'capacity' ? (
+      {state.phase === 'held' && state.held ? (
+        <HeldChange held={state.held} text={() => editor.current?.getText() ?? ''} />
+      ) : state.phase === 'capacity' ? (
         // FR-ED-18: "neither the reconnecting state nor the error state".
         <FormFault tone="neutral" announce="polite">
           <p>{AT_CAPACITY}</p>
@@ -315,7 +359,7 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
       {state.opened ? (
         <Text
           document={connection.document}
-          editable={canEdit && state.phase !== 'lost'}
+          editable={canEdit && state.phase !== 'lost' && state.phase !== 'held'}
           onEditor={keep}
           onUnshown={fail}
         />
