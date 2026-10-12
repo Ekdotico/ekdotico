@@ -938,7 +938,7 @@ function settleInCell(editor: Editor): void {
 const COUNTS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 export const TABLE_NO_ROOM = `The table has no room for this. A table and the tables in its cells hold ${TABLE_CELLS_MOST.toLocaleString('en-GB')} cells, ${COUNTS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep.`;
 
-const Closed = Extension.create<{ noRoom: (is: boolean) => void }>({
+const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
   name: 'closed',
   addOptions() {
     return { noRoom: () => {} };
@@ -947,10 +947,13 @@ const Closed = Extension.create<{ noRoom: (is: boolean) => void }>({
     closeSchema(this.editor.schema);
   },
   addProseMirrorPlugins() {
-    // Whether the last change this writer asked for was refused for the room
-    // of a table. `noRoom` is told when that becomes so and when it stops
-    // being so, and at no other time.
-    let refused = false;
+    // Whether the words of a refusal stand. `noRoom` is given the words at
+    // each refusal, so that a second one is heard as the first was, and null
+    // when the document next changes, whoever changes it: the refusal was of
+    // one change to the document as it then was (the re-review of pull request
+    // 28: the words outlived their cause, through another client's change and
+    // the writer's own undo, which arrives as the binding's).
+    let said = false;
     return [
       new Plugin({
         filterTransaction: (transaction, state) => {
@@ -964,7 +967,13 @@ const Closed = Extension.create<{ noRoom: (is: boolean) => void }>({
             transaction.docChanged &&
             !transaction.getMeta(ySyncPluginKey) &&
             transaction.getMeta('appendedTransaction') === undefined;
-          if (asked && refused === held) this.options.noRoom((refused = !held));
+          if (!held && asked) {
+            said = true;
+            this.options.noRoom(TABLE_NO_ROOM);
+          } else if (held && transaction.docChanged && said) {
+            said = false;
+            this.options.noRoom(null);
+          }
           return held;
         },
         // R32: a table that a paste or a drop of this writer's leaves at the
@@ -1082,13 +1091,13 @@ export const codeColours = {
 /**
  * The extensions of the editor, bound to the document of one connection.
  * `unshown` is told, once, that the document cannot be built here (`holdBinding`).
- * `noRoom` is told when a change of the writer's is refused for the room of a
+ * `noRoom` is given the words each time a change of the writer's is refused for the room of a
  * table, and when the next one is not (`Closed`).
  */
 export function extensions(
   document: Y.Doc,
   unshown: () => void = () => {},
-  noRoom: (is: boolean) => void = () => {},
+  noRoom: (words: string | null) => void = () => {},
 ) {
   return [
     StarterKit.configure({
