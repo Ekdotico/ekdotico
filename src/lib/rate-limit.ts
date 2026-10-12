@@ -82,6 +82,47 @@ export function checkLimit(name: LimitName, key: string): Promise<LimitResult> {
   return limitWith(valkey(), settings().limits[name], name, key, false);
 }
 
+/**
+ * A limit counted in the memory of this process: "`max` in any
+ * `windowSeconds`", exactly, for each key. The one limit that is not in Valkey:
+ * the messages of the collaboration server (the number is the owner's
+ * decision of 12 October 2026; where it is counted is reported for the
+ * amendment of NFR-SE-07, which says "never in the memory of one instance").
+ * For two reasons. What it protects is the one thread
+ * of the instance that counts, which no other instance shares; and it is asked
+ * for every message a writer sends, where an answer from Valkey would be
+ * awaited before each keystroke is applied and a Valkey that does not answer
+ * would refuse them all (measured: docs/operations/deployment.md).
+ *
+ * For each key it holds the times of the last `max` events it admitted, in a
+ * ring: one more is admitted where the oldest of them has left the period. A
+ * refused event is not counted. A key is forgotten once its last event has
+ * left, looked for when a new key arrives. `held` is given by a test, which
+ * counts the keys in it.
+ */
+export function limitHere(
+  { max, windowSeconds }: Limit,
+  held = new Map<string, { times: number[]; next: number }>(),
+): (key: string, now?: number) => LimitResult {
+  const period = windowSeconds * 1000;
+  return (key, now = performance.now()) => {
+    let ring = held.get(key);
+    if (!ring) {
+      // `at(next - 1)` is the latest: every ring holds one event at least.
+      for (const [each, { times, next }] of held) if (now - times.at(next - 1)! >= period) held.delete(each);
+      held.set(key, (ring = { times: [], next: 0 }));
+    }
+    // The slot that is written next holds the `max`-th last event, once there have been that many.
+    const oldest = ring.times.length === max ? ring.times[ring.next]! : -Infinity;
+    if (now - oldest < period) {
+      return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((oldest + period - now) / 1000)) };
+    }
+    ring.times[ring.next] = now;
+    ring.next = (ring.next + 1) % max;
+    return { ok: true };
+  };
+}
+
 /** The Valkey key of a mark (see `oncePer`). Exported for the tests, which clear one. */
 export function markKey(mark: string): string {
   return `limit-logged:${createHmac('sha256', settings().authSecret).update(mark).digest('hex')}`;

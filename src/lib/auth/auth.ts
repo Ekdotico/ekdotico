@@ -10,7 +10,7 @@ import { admissionSignUp } from '../admission/sign-up.ts';
 import { clientAddress, UNKNOWN_ADDRESS } from '../client-address.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
-import { INTERNAL_FAULT } from '../http.ts';
+import { INTERNAL_FAULT, NOT_JSON } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { changeEmail, updateUser, verifyEmail } from './name-and-address.ts';
@@ -26,10 +26,10 @@ import {
   verifyTOTP,
 } from './two-factor.ts';
 
-// Text for a person, for the owner's approval: the statement of the router's
-// 400 and 415, which the library words in its own way.
-const NOT_JSON =
-  'Ekdotico could not read the request, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
+// The statement of the router's 400 and 415, which the library words in its
+// own way, and of the route's own 415 in front of it (src/app/api/auth/[...all]/route.ts).
+// It is the application's one statement of a body that is not JSON (src/lib/http.ts).
+export { NOT_JSON };
 
 /** Where the library's handler is mounted (API design, "Sign-in and identity"). */
 export const IDENTITY_BASE_PATH = '/api/auth';

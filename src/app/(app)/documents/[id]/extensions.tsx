@@ -665,6 +665,18 @@ export function closeSchema(schema: Schema): Schema {
     MENDED.add(schema);
     if (!made) return null;
     // The children the content of the type takes, in their order; a mark it does not take is left off.
+    //
+    // IN THEIR ORDER, so that of 101 rows it is the last that goes, and of two
+    // tables in a block the second, whoever put which there: a row put at the
+    // top of a full table costs the row at the bottom. Leaving out the newest
+    // instead was looked at (the third review, 12 October 2026) and cannot be
+    // done: a shared document holds no time. A struct has the number of its
+    // client and that client's own count, which orders the changes of one
+    // client and says nothing between two; and both are chosen by whoever
+    // sends the struct, a client of a new number counting from 0, or from any
+    // number at all. Every browser would agree on such an order, and a member
+    // who wished could make any row "the oldest". The order of the document
+    // is the one thing every browser holds alike that says where a thing is.
     const kept: PMNode[] = [];
     let match = made.contentMatch;
     given.forEach((child) => {
@@ -728,6 +740,25 @@ export function mayApply(transaction: Transaction, editable: boolean): boolean {
 const MEND = 'mend';
 
 /**
+ * Where, among what stands directly in the shared document, there is something
+ * the document cannot hold: text, a node of no type, a row or a cell without
+ * its table. Chosen as `closeSchema` chooses among the children of a node: in
+ * their order, each that the content does not take after those before it.
+ */
+function strays(shared: Y.XmlFragment, schema: Schema): number[] {
+  const found: number[] = [];
+  let match = schema.topNodeType.contentMatch;
+  shared.toArray().forEach((child, at) => {
+    // Text and a hook have no name.
+    const name = (child as { nodeName?: unknown }).nodeName;
+    const next = typeof name === 'string' && schema.nodes[name] ? match.matchType(schema.nodes[name]) : null;
+    if (next) match = next;
+    else found.push(at);
+  });
+  return found;
+}
+
+/**
  * Holds the collaboration binding to two things, at the three functions
  * through which the shared document and the text of the editor meet
  * (`ProsemirrorBinding` of @tiptap/y-tiptap 3.0.9: `_forceRerender` at the
@@ -743,7 +774,8 @@ const MEND = 'mend';
  * holds is no longer the document's.
  *
  * WHAT THE SCHEMA LEFT OUT IS TAKEN OUT OF THE SHARED DOCUMENT, and nothing
- * else is (`closeSchema`). The binding counts places in the text by the shared
+ * else is (`closeSchema`; `strays` for what stands directly in the document,
+ * which the schema is not asked about). The binding counts places in the text by the shared
  * document, so the two must hold the same; the text is written back by the
  * library's own comparison, which removes the children that were not made and
  * leaves the node they were in. It is not this member's change, and is in no
@@ -758,7 +790,22 @@ export function holdBinding(view: EditorView, unshown: () => void): void {
     (...given: Given) => {
       if (failed) return;
       try {
-        if (builds) MENDED.delete(schema);
+        if (builds) {
+          MENDED.delete(schema);
+          // Before the text is built, and not after as below: the library
+          // makes the document itself without asking the schema, so what
+          // stands directly in it where it cannot is not left out. A row is
+          // put into a table that the shared document does not hold, and the
+          // next thing this member types writes that table over the row, as
+          // this member's change; and text is a fault of the building, which
+          // closed the document in every tab.
+          const stray = strays(binding.type, schema);
+          if (stray.length > 0) {
+            binding.doc.transact(() => {
+              for (const at of stray.reverse()) binding.type.delete(at, 1);
+            }, MEND);
+          }
+        }
         run(...given);
         if (builds && MENDED.delete(schema)) {
           // A mapping of its own: the binding's says each node is the one it
@@ -848,6 +895,37 @@ const EmptyPrompt = Extension.create({
 const lowlight = createLowlight(common);
 
 /**
+ * The longest code block that is shown with the colours of its language, in
+ * characters. A longer one is shown without them, and is the same block in
+ * every other way: nothing of its content or its language changes, and it
+ * gains its colours again when it is shortened.
+ *
+ * AWAITS THE OWNER (the decision of 12 October 2026 leaves the number to the
+ * measurements; its register row is pending). The library colours every code
+ * block of the document again at each keystroke in any of them. Measured in
+ * Chromium on 12 October 2026, one keystroke in a block of JavaScript: 27 ms
+ * at 10 KB, 96 ms at 50 KB, 172 ms at 100 KB, 434 ms at 250 KB and 1.8 s at
+ * 1 MB; without colours 5, 8, 11, 28 and 82 ms. So the bound is where a
+ * keystroke still answers within a tenth of a second.
+ *
+ * ponytail: the bound is on one block, and the cost is the sum of all of
+ * them: two hundred blocks of 25 KB are coloured in full at each keystroke. A
+ * bound on the code of the whole document, or a plugin that colours only the
+ * block that changed, if a document of many long blocks is ever written.
+ */
+export const CODE_COLOURS_MOST = 50_000;
+// What the library reads from an answer: the nodes to colour. None.
+const UNCOLOURED = { type: 'root', children: [] };
+/** `lowlight`, which answers with no colours for code past the bound. */
+export const codeColours = {
+  ...lowlight,
+  highlight: (language: string, code: string) =>
+    code.length > CODE_COLOURS_MOST ? UNCOLOURED : lowlight.highlight(language, code),
+  highlightAuto: (code: string) =>
+    code.length > CODE_COLOURS_MOST ? UNCOLOURED : lowlight.highlightAuto(code),
+};
+
+/**
  * The extensions of the editor, bound to the document of one connection.
  * `unshown` is told, once, that the document cannot be built here (`holdBinding`).
  */
@@ -890,7 +968,7 @@ export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
       addNodeView() {
         return ReactNodeViewRenderer(CodeBlockView);
       },
-    }).configure({ lowlight, defaultLanguage: 'plaintext' }),
+    }).configure({ lowlight: codeColours, defaultLanguage: 'plaintext' }),
     Callout,
     TableOfContents,
     PageBreak,

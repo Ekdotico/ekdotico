@@ -48,6 +48,13 @@ function view(row: Row, now: Date): InvitationView {
   };
 }
 
+/**
+ * What an open invitation is: still stored as pending, and not yet expired.
+ * The one definition, for the sign-up page and for the check before a
+ * deployment (scripts/check-addresses.ts).
+ */
+export const openInvitation = (now: Date) => ({ state: 'PENDING' as const, expiresAt: { gt: now } });
+
 // What the address of an invitation must look like is the one rule of an
 // address (../field-text.ts).
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -180,7 +187,7 @@ export async function findOpenInvitation(
 ): Promise<{ email: string } | null> {
   if (typeof token !== 'string' || !TOKEN.test(token)) return null;
   const row = await db().admissionInvitation.findFirst({
-    where: { tokenHash: hashToken(token), state: 'PENDING', expiresAt: { gt: now } },
+    where: { tokenHash: hashToken(token), ...openInvitation(now) },
     select: { email: true },
   });
   return row?.email ? { email: row.email } : null;
@@ -207,8 +214,7 @@ export async function acceptInvitation(
       const claimed = await tx.admissionInvitation.updateManyAndReturn({
         where: {
           tokenHash: hashToken(input.token),
-          state: 'PENDING',
-          expiresAt: { gt: now },
+          ...openInvitation(now),
           email: { not: null },
         },
         data: { state: 'ACCEPTED', acceptedAt: now, acceptedById: userId },

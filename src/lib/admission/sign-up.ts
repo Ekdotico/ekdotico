@@ -14,7 +14,7 @@ import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { acceptedName, NAME_REFUSAL } from '../field-text.ts';
-import { readBytes } from '../http.ts';
+import { readBytes, sentAsJson } from '../http.ts';
 import { orEndSession } from '../auth/sign-in.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
@@ -36,9 +36,11 @@ export type SignUpBody = { json: object } | { refused: 'too_long' | 'not_json' }
 
 /**
  * The body of a request to `POST /api/sign-up`. Bounded, because the path
- * carries no session.
+ * carries no session, and held to its content type as every body is
+ * (`sentAsJson`): nothing of a body sent as anything else is read.
  */
 export async function readSignUpBody(request: Request): Promise<SignUpBody> {
+  if (!sentAsJson(request)) return { refused: 'not_json' };
   const bytes = await readBytes(request, MAX_BODY_BYTES);
   if (!bytes) return { refused: 'too_long' };
   try {

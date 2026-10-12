@@ -13,7 +13,11 @@ describe('the health check of the web application', () => {
 });
 
 describe('the health check of the collaboration server', () => {
-  const server = createCollabServer({ collabStoreDelayMs: 2000, collabStoreMaxMs: 10000 }).httpServer;
+  const server = createCollabServer({
+    collabStoreDelayMs: 2000,
+    collabStoreMaxMs: 10000,
+    limits: { COLLAB_MESSAGES_PER_USER: { max: 600, windowSeconds: 60 } },
+  }).httpServer;
   let base = '';
   beforeAll(async () => {
     await new Promise<void>((resolve) => server.listen(0, resolve));
