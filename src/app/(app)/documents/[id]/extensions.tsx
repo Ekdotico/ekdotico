@@ -1032,13 +1032,18 @@ function settleInCell(editor: Editor): void {
  * request). As at the top of a document, where the arrow up from a table that
  * begins it gives the same cursor before the table:
  *
- * - Down in the caption of a table that is the last thing in a cell, and
- *   Right at the end of that caption: the cursor after the table, in the cell.
- * - Up in the first line of a cell of the first row of a table that is the
- *   first thing in a cell, and Left at the start of its first cell: the cursor
- *   before the table, in the cell.
+ * - Down in the caption of a table in a cell, and Right at the end of that
+ *   caption, where no text follows the table in the cell: the cursor after
+ *   the table, in the cell.
+ * - Up in the first line of a cell of the first row of a table in a cell, and
+ *   Left at the start of its first cell, where no text is before the table in
+ *   the cell: the cursor before the table, in the cell.
  *
- * Asked before the table library's own arrows, which would take the key.
+ * "No text" is the library's own rule for where its cursor may stand
+ * (`GapCursor.valid`): at the edge of the cell, or against another table, and
+ * never against a paragraph, where the keys stay the table library's and go
+ * to that paragraph. Asked before the table library's own arrows, which would
+ * take the key.
  */
 function besideTable(editor: Editor, direction: 'up' | 'down' | 'left' | 'right'): boolean {
   const { selection, tr } = editor.state;
@@ -1054,9 +1059,6 @@ function besideTable(editor: Editor, direction: 'up' | 'down' | 'left' | 'right'
   )
     depth -= 1;
   if (depth <= 1) return false;
-  // Nothing after it in the cell, or nothing before it.
-  if (forward ? $head.indexAfter(depth - 1) !== $head.node(depth - 1).childCount : $head.index(depth - 1) > 0)
-    return false;
   if (forward) {
     // In the caption, which is the last line of the block.
     if ($head.depth !== depth + 1 || role($head.parent) === 'table') return false;

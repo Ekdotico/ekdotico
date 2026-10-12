@@ -2784,15 +2784,18 @@ test('from a table that is all a cell holds, the arrow keys reach the place besi
   const fragment = other.provider.document.getXmlFragment('default');
   fragment.insert(0, [
     gridOf(
-      1,
       2,
-      (_, column) =>
-        column === 0 ? [gridOf(2, 2, () => [paragraph('in')], 'inner caption')] : [paragraph('second')],
+      3,
+      (row, column) =>
+        row === 0 && column === 1
+          ? [gridOf(2, 2, () => [paragraph('in')], 'inner caption')]
+          : [paragraph(`o${row}.${column}`)],
       'outer caption',
     ),
   ]);
   await expect(doc.locator('table')).toHaveCount(2);
-  const cell = doc.locator('table').first().locator(':scope > tbody > tr > td').first();
+  // With a cell of text on each side of it and a row below: where the table library's own arrows would go.
+  const cell = doc.locator('table').first().locator(':scope > tbody > tr > td').nth(1);
   const shared = () =>
     ((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlElement)
       .get(0)
