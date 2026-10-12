@@ -792,11 +792,18 @@ const Closed = Extension.create({
 
 /**
  * What tells a writer of the slash palette (FR-ED-10): the owner's sentence
- * of 12 October 2026, word for word. It is said in two places: in the
- * description of the text (./editor.tsx), and as the prompt of an empty
- * document, below.
+ * of 12 October 2026, word for word, in the description of the text
+ * (./editor.tsx). A screen reader reads the description after the role of the
+ * region, so it begins with the instruction itself; the prompt below is
+ * another sentence (R31).
  */
 export const SLASH_HINT = 'Type / for a list of blocks.';
+
+/**
+ * The prompt of an empty document, for a sighted writer: the owner's decision
+ * R31 of 12 October 2026, word for word.
+ */
+const EMPTY_PROMPT = 'Write here, or type / for a list of blocks.';
 
 /**
  * The prompt of an empty document: one whose only block is an empty
@@ -806,7 +813,7 @@ export const SLASH_HINT = 'Type / for a list of blocks.';
  * It is a decoration, so it is no content: not in the document, not sent to
  * another client, not copied. It is an element of its own, hidden from a
  * screen reader, and not the attribute on the paragraph: the description of
- * the text says the same sentence, and text that a stylesheet generates
+ * the text gives the instruction already, and text that a stylesheet generates
  * cannot be hidden, so a screen reader would read it twice, the second time
  * as the first line of the document (NFR-IC-19).
  */
@@ -817,7 +824,7 @@ const EmptyPrompt = Extension.create({
     const prompt = (view: EditorView) => {
       const element = view.dom.ownerDocument.createElement('span');
       element.setAttribute('aria-hidden', 'true');
-      element.setAttribute('data-placeholder', SLASH_HINT);
+      element.setAttribute('data-placeholder', EMPTY_PROMPT);
       return element;
     };
     return [
