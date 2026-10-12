@@ -1,9 +1,10 @@
 // FR-AU-56: record the current account's acknowledgement of the Closed α
 // notice (API design, "Account"). It changes state, so it reads the session's
-// row (NFR-SE-17 (c)); the origin check is the proxy's. The account is the
-// session's and never the request's: "accepted only from the signed-in account
-// itself".
-import { fault, notAdmitted } from '../../../../../lib/auth/route-answers.ts';
+// row (NFR-SE-17 (c)); the origin check is the proxy's and, since the proxy
+// can be skipped, this route's own as well (the owner's decision R50 of
+// 12 October 2026). The account is the session's and never the request's:
+// "accepted only from the signed-in account itself".
+import { fault, notAdmitted, refusedOrigin } from '../../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../../lib/auth/session.ts';
 import { errorResponse, notJson, readJson } from '../../../../../lib/http.ts';
 import { acknowledgeNotice, onboarding } from '../../../../../lib/onboarding.ts';
@@ -27,6 +28,10 @@ async function versionOf(request: Request): Promise<unknown> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    // NFR-SE-17 (c): the origin first, before anything of the request is read.
+    const foreign = await refusedOrigin(request.headers);
+    if (foreign) return foreign;
+
     // Authorisation before validation (the owner's answer to Q8).
     const validation = await validateSessionRow(request.headers);
     const { session } = validation;

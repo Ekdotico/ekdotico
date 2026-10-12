@@ -37,9 +37,9 @@ export const GET = documentRoute('document.view', ({ document }) =>
 
 /**
  * It changes state, so the session's row is read (NFR-SE-17 (c)); the origin
- * check is the proxy's. The body: `{ "title": "…" }`, and nothing else, so
- * that no request moves a document to another workspace (FR-AU-13), changes
- * its Owner, or touches whether it is recorded (FR-ED-43).
+ * check is the proxy's and `documentRoute`'s own. The body: `{ "title": "…" }`,
+ * and nothing else, so that no request moves a document to another workspace
+ * (FR-AU-13), changes its Owner, or touches whether it is recorded (FR-ED-43).
  *
  * Authorisation before validation (the owner's answer to Q8): nothing is said
  * of the body to a caller who may not rename the document.

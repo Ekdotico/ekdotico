@@ -6,8 +6,9 @@
 //
 // Nothing here is of Next.js: a handler is called with a Request, and with the
 // parameters of the path as Next.js 16 hands them, a promise.
-import { fault, notAdmitted } from '../auth/route-answers.ts';
+import { fault, notAdmitted, refusedOrigin } from '../auth/route-answers.ts';
 import { validateSession, type ValidSession } from '../auth/session.ts';
+import { onlyReads } from '../http.ts';
 import { authorise, authoriseDeleted, refusal, type DocumentRow } from './access.ts';
 import type { DocumentRole, Permission } from './permissions.ts';
 
@@ -45,10 +46,10 @@ export function stateOf(handler: unknown): DocumentState | undefined {
 type Handler = (call: DocumentCall) => Response | Promise<Response>;
 
 /**
- * The order every request about one document is answered in: the session (a
- * 401, or the 403 of the founding-team gate, FR-AU-83), then the document and
- * the permission (a 404 or a 403), and only then `handler`, which reads the
- * body.
+ * The order every request about one document is answered in: for a request
+ * that changes state, its origin (a 403); then the session (a 401, or the 403
+ * of the founding-team gate, FR-AU-83), then the document and the permission
+ * (a 404 or a 403), and only then `handler`, which reads the body.
  *
  * NFR-SE-02, NFR-SE-17 (c): a request that only reads may be validated against
  * the signed copy of the session; every other reads the session's row.
@@ -56,6 +57,15 @@ type Handler = (call: DocumentCall) => Response | Promise<Response>;
 function make(state: DocumentState, permission: Permission, handler: Handler): DocumentRoute {
   const route: DocumentRoute = async (request, { params }) => {
     try {
+      // NFR-SE-17 (c): the origin first, and here as well as in the proxy,
+      // which can be skipped (the owner's decision R50 of 12 October 2026). A
+      // deletion and a restore read no body, so nothing else of the request
+      // would tell another site's from the application's own.
+      if (!onlyReads(request.method)) {
+        const foreign = await refusedOrigin(request.headers);
+        if (foreign) return foreign;
+      }
+
       const validation = await validateSession(request.method, request.headers);
       const { session } = validation;
       if (!session) return await notAdmitted(validation);
