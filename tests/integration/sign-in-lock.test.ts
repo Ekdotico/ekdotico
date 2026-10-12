@@ -104,9 +104,10 @@ const entriesOf = (kind: string) => db().securityLogEntry.count({ where: { kind 
 /**
  * Makes the next transaction that is opened fail where it creates a row of
  * `table`, with everything before it done: what the transaction wrote until
- * then must be undone with it.
+ * then must be undone with it. With `written`, the row is created first and
+ * the transaction fails after it: the row itself must be undone too.
  */
-function failCreateIn(table: 'verification' | 'securityLogEntry', message: string) {
+function failCreateIn(table: 'verification' | 'securityLogEntry', message: string, written = false) {
   type Work = (tx: Record<string, unknown>) => Promise<unknown>;
   const client = db() as unknown as { $transaction: (work: Work) => Promise<unknown> };
   const original = client.$transaction.bind(client);
@@ -114,7 +115,17 @@ function failCreateIn(table: 'verification' | 'securityLogEntry', message: strin
     original((tx) => {
       const rows = new Proxy(tx[table] as object, {
         get: (target, key) =>
-          key === 'create' ? () => Promise.reject(new Error(message)) : Reflect.get(target, key),
+          key === 'create'
+            ? async (...args: unknown[]) => {
+                if (written) {
+                  await (Reflect.get(target, key) as (...all: unknown[]) => Promise<unknown>).apply(
+                    target,
+                    args,
+                  );
+                }
+                throw new Error(message);
+              }
+            : Reflect.get(target, key),
       });
       return work(new Proxy(tx, { get: (target, key) => (key === table ? rows : Reflect.get(target, key)) }));
     }),
@@ -567,6 +578,21 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     expect(await entries('sign_in_by_link', id)).toBe(1);
   });
 
+  it('leaves no entry of a sign-in that did not complete: a transaction that fails after the entry undoes it', async () => {
+    const { email, id } = await person();
+    const token = await lock(email);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    failCreateIn('securityLogEntry', 'not committed', true);
+    const failed = await confirm(token);
+    expect(failed.response.status).toBe(500);
+    expect(failed.response.headers.getSetCookie()).toEqual([]);
+    expect(await sessions(id)).toEqual([]);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    // An entry written outside the transaction would be here (R38).
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
+  });
+
   it('works once: a second confirmation is answered with the fixed statement and signs no one in', async () => {
     const { email, id } = await person();
     const token = await lock(email);
@@ -847,6 +873,41 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     expect(await refused.text()).toBe(NOT_VALID);
     expect(await sessions(id)).toEqual([]);
     expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
+  });
+
+  // NFR-SE-19; R38: the second place a sign-in by the link completes
+  // (two-factor.ts), which had no test of its entry's transaction.
+  it('writes the entry in the transaction that completes the step: where it cannot be written, no one is signed in and nothing is spent', async () => {
+    const { email, id, secret } = await enrolled();
+    const cookie = withCookies('', (await confirm(await lock(email))).response);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    failCreateIn('securityLogEntry', 'the entry was not written');
+    const failed = await secondStep(auth, cookie, nextCode(secret), 'totp', fresh());
+    expect(failed.status).toBe(500);
+    expect(failed.headers.getSetCookie().join()).not.toContain('session_token');
+    expect(errors.mock.calls).toEqual([['identity: request failed (Error)']]);
+    expect(await sessions(id)).toEqual([]);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    expect(await steps(id)).toHaveLength(1);
+    expect(await entriesOf('sign_in_by_link')).toBe(0);
+    // Neither the step nor the link was spent by the fault.
+    expect((await secondStep(auth, cookie, nextCode(secret), 'totp', fresh())).status).toBe(200);
+    expect(await entries('sign_in_by_link', id)).toBe(1);
+  });
+
+  it('leaves no entry of a step that did not complete: a transaction that fails after the entry undoes it', async () => {
+    const { email, id, secret } = await enrolled();
+    const cookie = withCookies('', (await confirm(await lock(email))).response);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    failCreateIn('securityLogEntry', 'not committed', true);
+    expect((await secondStep(auth, cookie, nextCode(secret), 'totp', fresh())).status).toBe(500);
+    expect(await sessions(id)).toEqual([]);
+    expect((await account(id)).lockedUntil).not.toBeNull();
+    expect(await links(id)).toHaveLength(1);
+    expect(await steps(id)).toHaveLength(1);
+    // An entry written outside the transaction would be here (R38).
     expect(await entriesOf('sign_in_by_link')).toBe(0);
   });
 

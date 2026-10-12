@@ -1470,6 +1470,20 @@ describe('the entry of a change of the address in the security log (NFR-SE-19; t
     expect((await confirm(token, { cookie })).response.status).toBe(200);
     expect(await entries()).toEqual([['address_changed', id]]);
   });
+
+  it('leaves no entry of a change that did not take effect: a transaction that fails after the entry undoes it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { id, email, cookie } = await person();
+    const token = await linkFor(cookie, unused());
+    atStatement('securityLogEntry', 'create', async (run) => {
+      await run();
+      throw new Error('not committed');
+    });
+    expect((await confirm(token, { cookie })).response.status).toBe(500);
+    expect((await rowOf(id)).email).toBe(email);
+    // An entry written outside the transaction would be here (R38).
+    expect(await entries()).toEqual([]);
+  });
 });
 
 describe('what is logged (NFR-SE-19)', () => {

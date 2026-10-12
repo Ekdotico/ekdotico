@@ -542,6 +542,13 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
   // The link "is spent … when its second step is abandoned after five wrong
   // codes; after that, the person signs in when the lock has ended or after a
   // password reset": the answer is the statement of a link that is spent.
+  //
+  // NFR-SE-19; R38: the entries beside it (a limit reached, a sign-in refused)
+  // record refusals, and are on purpose in no transaction with the deletion
+  // of the step and of the link: a refused attempt keeps its entry whatever
+  // becomes of those rows. A fault between the statements repairs itself: the
+  // count of codes is past its number, so the next request with the step or
+  // with the link is abandoned here again.
   const abandoned = async () => {
     await end();
     if (!link) return refused('sign_in_again', MESSAGES.again);
