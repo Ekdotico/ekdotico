@@ -14,7 +14,7 @@ export function onlyReads(method: string): boolean {
  * Q6 of the plan).
  */
 export const INTERNAL_FAULT =
-  'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.';
+  'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.';
 
 /**
  * The one body of an error, `{ "error": { "code", "message" } }` (the owner's
@@ -74,10 +74,17 @@ export async function readBytes(request: Request, maxBytes: number): Promise<Buf
 }
 
 /**
- * The JSON of a request's body, or null where the body is longer than
- * `maxBytes`, is not UTF-8, or is not JSON.
+ * The JSON of a request's body, or null where the body is not sent as
+ * `application/json`, is longer than `maxBytes`, is not UTF-8, or is not JSON.
+ *
+ * The content type is held to, because a form of another site can post text
+ * that reads as JSON under the three types a browser sends without asking
+ * first (`text/plain` among them), and cannot send this one. The origin check
+ * is the proxy's (NFR-SE-17 (c)); this does not rest on it.
  */
 export async function readJson(request: Request, maxBytes: number): Promise<unknown> {
+  const type = request.headers.get('content-type')?.split(';')[0]!.trim().toLowerCase();
+  if (type !== 'application/json') return null;
   const bytes = await readBytes(request, maxBytes);
   if (!bytes) return null;
   try {

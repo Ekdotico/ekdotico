@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import type { AdmissionInvitation } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
 import type { EmailMessage } from '../email/index.ts';
+import { acceptedAddress } from '../field-text.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
 import { createPersonalWorkspace } from '../workspace.ts';
@@ -47,10 +48,8 @@ function view(row: Row, now: Date): InvitationView {
   };
 }
 
-// What the address of an invitation must look like. FR-AU-89 says "an email
-// address" and no more; this refuses what could not be one, and anything that
-// could break a header of the message. Lower case, as it is stored (FR-AU-02).
-const ADDRESS = /^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+\.[^\s@\u0000-\u001f\u007f]+$/;
+// What the address of an invitation must look like is the one rule of an
+// address (../field-text.ts).
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 // FR-AU-87 (a). Plain text; it carries nothing of a person but the address it
@@ -93,10 +92,8 @@ export type CreateResult =
  */
 export async function createInvitation(body: unknown, now: Date = new Date()): Promise<CreateResult> {
   const { email: given, requestId } = (body ?? {}) as { email?: unknown; requestId?: unknown };
-  if (typeof given !== 'string' || typeof requestId !== 'string') return { outcome: 'invalid' };
-  const email = given.toLowerCase();
-  if (email.length > 254 || !ADDRESS.test(email) || !REQUEST_ID.test(requestId))
-    return { outcome: 'invalid' };
+  const email = acceptedAddress(given);
+  if (!email || typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) return { outcome: 'invalid' };
 
   for (let attempt = 0; ; attempt += 1) {
     try {

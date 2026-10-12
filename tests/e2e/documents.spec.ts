@@ -2,8 +2,9 @@
 // creation of one, its renaming, the mark "Not recorded" with its explanation,
 // and the date in the zone of the browser (FR-ED-35, FR-ED-43, NFR-I18-06,
 // NFR-SE-08, NFR-SE-04).
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import { alertOn, expectNoSidewaysScroll, newPerson, screens, signUp, watchOrigins } from './account.ts';
+import { shown } from './shown.ts';
 
 // The fixed texts, written out here and not taken from the code under test.
 const MARK = 'Not recorded'; // FR-ED-43
@@ -14,18 +15,9 @@ const DEFAULT_TITLE = 'Untitled document'; // FR-ED-35
 // NFR-I18-06: a zone that is never the server's day and hour, so that a date
 // rendered on the server, or in UTC, cannot pass for the browser's.
 const ZONE = 'Pacific/Auckland';
-test.use({ timezoneId: ZONE });
-
-/** A time as the list shows it, in a zone: `2026-10-09 07:52`. */
-const shown = (iso: string, timeZone: string) =>
-  new Intl.DateTimeFormat('sv-SE', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(iso));
+// And a locale that is not English: the words of a date are fixed, and are not
+// the browser's (src/lib/date-text.ts).
+test.use({ timezoneId: ZONE, locale: 'el-GR' });
 
 async function enter(page: Page) {
   await signUp(page, newPerson());
@@ -87,7 +79,7 @@ test('the list of documents: empty, a document created, renamed, and still there
   const field = dialog.getByRole('textbox', { name: 'Title' });
   await expect(field).toBeFocused();
   await expect(field).toHaveValue(DEFAULT_TITLE);
-  await expect(field).toHaveAccessibleDescription(/At most 200 characters\./);
+  await expect(field).toHaveAccessibleDescription(/A title has at most 200 characters\./);
   await screens(page, 'documents-rename');
 
   // FR-ED-35: a title longer than 200 characters is refused, in text that a
@@ -166,6 +158,7 @@ test('the explanation of "Not recorded": by keyboard, by pointer, and to a scree
   // "Shown … when the mark receives keyboard focus, so the mark can be reached
   // by keyboard": after the control that creates a document comes the title,
   // which is the link to the document's page, and then the mark beside it.
+  await expect(page.getByRole('button', { name: 'New document' })).toBeEnabled();
   await page.getByRole('button', { name: 'New document' }).focus();
   await page.keyboard.press('Tab');
   const title = page.getByRole('link', { name: DEFAULT_TITLE });

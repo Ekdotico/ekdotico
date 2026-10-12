@@ -2,7 +2,7 @@
 // enough for a test to outlast. The counts themselves are in sign-in.test.ts.
 import { setTimeout as pause } from 'node:timers/promises';
 import { afterAll, describe, expect, it } from 'vitest';
-import { createAccount, load, ORIGIN, PASSWORD, prepare } from './identity.ts';
+import { createAccount, handle, load, ORIGIN, PASSWORD, prepare } from './identity.ts';
 
 const database = prepare('signinperiod', {
   TRUSTED_PROXY_COUNT: '1',
@@ -15,7 +15,8 @@ const { auth, db, valkey } = await load();
 const WRONG = 'a wrong password, long enough';
 const signIn = async (email: string, password: string, n: number) =>
   (
-    await auth().handler(
+    await handle(
+      auth,
       new Request(`${ORIGIN}/api/auth/sign-in/email`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: ORIGIN, 'x-forwarded-for': `198.51.100.${n}` },

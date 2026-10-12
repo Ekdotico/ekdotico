@@ -3,9 +3,9 @@
 // row (NFR-SE-17 (c)); the origin check is the proxy's. The account is the
 // session's and never the request's: "accepted only from the signed-in account
 // itself".
-import { fault, unauthenticated } from '../../../../../lib/auth/route-answers.ts';
+import { fault, notAdmitted } from '../../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../../lib/auth/session.ts';
-import { errorResponse } from '../../../../../lib/http.ts';
+import { errorResponse, readJson } from '../../../../../lib/http.ts';
 import { acknowledgeNotice, onboarding } from '../../../../../lib/onboarding.ts';
 
 export const dynamic = 'force-dynamic';
@@ -18,7 +18,8 @@ const MESSAGES = {
 
 /** The body: `{ "version": n }`. Any other field is refused (API design). */
 async function versionOf(request: Request): Promise<unknown> {
-  const body: unknown = await request.json().catch(() => null);
+  // Sent as JSON, and no longer than a version and the JSON around it (src/lib/http.ts).
+  const body = await readJson(request, 1024);
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return undefined;
   const { version, ...rest } = body as Record<string, unknown>;
   return Number.isSafeInteger(version) && Object.keys(rest).length === 0 ? version : undefined;
@@ -27,8 +28,11 @@ async function versionOf(request: Request): Promise<unknown> {
 export async function POST(request: Request): Promise<Response> {
   try {
     // Authorisation before validation (the owner's answer to Q8).
-    const { session } = await validateSessionRow(request.headers);
-    if (!session) return unauthenticated();
+    const validation = await validateSessionRow(request.headers);
+    const { session } = validation;
+    // FR-AU-83: 403 for an account the founding-team gate stops, which meets
+    // the enrolment "before the Closed α notice"; 401 without a session.
+    if (!session) return await notAdmitted(validation);
 
     const version = await versionOf(request);
     if (version === undefined) return errorResponse(422, 'invalid_request', MESSAGES.invalid);

@@ -20,7 +20,7 @@ const one = await import('../../src/app/api/documents/[id]/route.ts');
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const UNKNOWN = '3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b';
 const NOT_FOUND =
-  'No document was found at this address for this account. Check the address, or open the list of documents.';
+  'No document was found for this account. Reload the list of documents to see the documents that exist.';
 
 const request = (method: string, path: string, cookie?: string, body?: unknown) =>
   new Request(`${ORIGIN}${path}`, {
@@ -207,6 +207,36 @@ describe('creating a document (FR-ED-35, FR-AU-12, FR-ED-45)', () => {
     }
     expect(await db().document.count({ where: { ownerId: { in: [owner.id, other.id] } } })).toBe(0);
   });
+
+  // What a form of another site can send without the browser asking first:
+  // JSON under a content type that is not JSON's. The origin here is the
+  // application's own, so nothing but the content type refuses it.
+  it.each(['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data', 'text/json', null])(
+    'refuses a body that is JSON and is sent as %s, and changes nothing',
+    async (type) => {
+      const owner = await person();
+      const sent = (method: string, path: string, body: string) => {
+        const made = request(method, path, owner.cookie, body);
+        if (type) made.headers.set('content-type', type);
+        else made.headers.delete('content-type');
+        return made;
+      };
+      await expectError(await collection.POST(sent('POST', '/api/documents', '{}')), 422, 'invalid_request');
+      expect(await db().document.count({ where: { ownerId: owner.id } })).toBe(0);
+
+      const id = await documentOf(owner.cookie);
+      await expectError(
+        await one.PATCH(sent('PATCH', `/api/documents/${id}`, '{"title":"Renamed"}'), context(id)),
+        422,
+        'invalid_request',
+      );
+      expect((await row(id)).title).not.toBe('Renamed');
+      // The type as a browser writes it, with its parameter, is JSON's.
+      const kept = request('PATCH', `/api/documents/${id}`, owner.cookie, { title: 'Renamed' });
+      kept.headers.set('content-type', 'Application/JSON; charset=utf-8');
+      expect((await one.PATCH(kept, context(id))).status).toBe(200);
+    },
+  );
 
   it('refuses a body longer than the route expects, and creates nothing', async () => {
     const owner = await person();
@@ -914,7 +944,7 @@ describe('what is logged (NFR-SE-19, NFR-SE-06 A10)', () => {
     ]) {
       const error = await expectError(response, 500, 'internal');
       expect(error.message).toBe(
-        'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+        'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.',
       );
     }
     expect(errors.mock.calls).toEqual(Array(4).fill(['documents: request failed (Error)']));

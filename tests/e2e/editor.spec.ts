@@ -3,7 +3,7 @@
 // FR-ED-41, FR-ED-43, FR-AU-08, NFR-IC-19; NFR-SE-06, A03), against the real
 // collaboration server, which this file starts and stops.
 import { randomUUID } from 'node:crypto';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from './fixtures.ts';
 import * as Y from 'yjs';
 import {
   expectNoSidewaysScroll,
@@ -11,6 +11,7 @@ import {
   screens,
   signIn,
   signUp,
+  storeNested,
   watchOrigins,
   type Person,
 } from './account.ts';
@@ -42,6 +43,25 @@ async function openNew(page: Page): Promise<string> {
   await expect(text(page)).toBeVisible();
   await expect(status(page, 'In sync')).toBeVisible();
   return /\/documents\/([0-9a-f-]{36})$/.exec(page.url())![1]!;
+}
+
+/**
+ * What the clipboard holds. A page of the application may write to the
+ * clipboard and may not read it (src/lib/csp.ts, `Permissions-Policy`), so it
+ * is read from a page of the test's own, on the same origin, that the
+ * application did not answer and that carries no policy.
+ */
+async function clipboardText(page: Page): Promise<string> {
+  const reader = await page.context().newPage();
+  try {
+    await reader.route('**/the-clipboard-of-the-test', (route) =>
+      route.fulfill({ contentType: 'text/html', body: '<title>The clipboard of the test</title>' }),
+    );
+    await reader.goto('/the-clipboard-of-the-test');
+    return await reader.evaluate(() => navigator.clipboard.readText());
+  } finally {
+    await reader.close();
+  }
 }
 
 /** What a paste from another page hands the editor: markup, which the schema reads or drops. */
@@ -180,7 +200,7 @@ test('every block and every mark, the controls inside each block, and the toolba
   await expect(doc.locator('pre code')).toHaveClass(/language-python/);
   await doc.getByRole('button', { name: 'Copy' }).click();
   await expect(doc.getByRole('button', { name: 'Copied' })).toBeVisible();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('const answer: number = 42;');
+  expect(await clipboardText(page)).toBe('const answer: number = 42;');
 
   // FR-ED-04: three variants, chosen after the callout is there.
   await expect(doc.getByRole('note', { name: 'Warning' })).toContainText('Take care.');
@@ -724,7 +744,8 @@ test('hostile content, pasted or sent by another client, stays inert', async ({ 
         .length,
       // No handler, on any element.
       handlers: elements.flatMap((each) => each.getAttributeNames().filter((name) => name.startsWith('on'))),
-      links: [...root.querySelectorAll('a')].map((each) => ({
+      // The links of the text. The table of contents lists the heading that was sent, which is a level 1 now.
+      links: [...root.querySelectorAll('a:not(.ekd-toc a)')].map((each) => ({
         words: each.textContent,
         href: each.getAttribute('href'),
         target: each.getAttribute('target'),
@@ -746,6 +767,664 @@ test('hostile content, pasted or sent by another client, stays inert', async ({ 
   await expect(languages).toHaveCount(2);
   await expect(languages.first()).toHaveValue('plaintext');
   await expect(languages.last()).toHaveValue('plaintext');
+});
+
+// What a client that is no editor puts into a document: an element, with attributes of any type.
+const element = (
+  name: string,
+  attributes: Record<string, unknown> = {},
+  children: (Y.XmlElement | Y.XmlText)[] = [],
+) => {
+  const made = new Y.XmlElement(name);
+  for (const [key, value] of Object.entries(attributes)) made.setAttribute(key, value as string);
+  if (children.length > 0) made.insert(0, children);
+  return made;
+};
+const words = (written: string, marks?: Record<string, unknown>) => {
+  const made = new Y.XmlText();
+  made.insert(0, written, marks);
+  return made;
+};
+const paragraph = (written: string, marks?: Record<string, unknown>) =>
+  element('paragraph', {}, [words(written, marks)]);
+const tableOf = (rows: Y.XmlElement[], caption: string) =>
+  element('tableBlock', {}, [element('table', {}, rows), element('tableCaption', {}, [words(caption)])]);
+const cellWith = (attributes: Record<string, unknown>, written: string) =>
+  element('tableCell', attributes, [paragraph(written)]);
+
+test('an attribute outside its rule, sent by another client or pasted, becomes the default, and the document still opens', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  page.on('console', (message) => {
+    if (message.type() === 'error') faults.push(message.text());
+  });
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await paste(
+    page,
+    `<table><tbody><tr><td colspan="300000" rowspan="70000" colwidth="50,x,9999999" align="middle">pasted cell</td></tr></tbody></table>
+     <ol start="4000000" type="z"><li><p>pasted item</p></li></ol>
+     <pre><code class="language-html">pasted code</code></pre>
+     <p><a href="&#xfeff;https://a/../../../../api/health?x">pasted address</a> and <a href="https://example.com/ok">pasted link</a></p>`,
+  );
+  await expect(text(page)).toContainText('pasted link');
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  const hostile = await connectAs(page.context(), id);
+  hostile.provider.document.transact(() => {
+    hostile.provider.document.getXmlFragment('default').push([
+      // Finding 1 of the review of pull request 20: a language that is no text.
+      element('codeBlock', { language: 5 }, [words('code five')]),
+      element('codeBlock', { language: { toLowerCase: 1 } }, [words('code object')]),
+      element('codeBlock', { language: ['typescript'] }, [words('code list')]),
+      // An alias of the highlighter, and a name it would guess a grammar for.
+      element('codeBlock', { language: 'html' }, [words('<b>code alias</b>')]),
+      element('codeBlock', { language: 'no-such-language' }, [words('code unknown')]),
+      // Finding 2: a cell that spans more columns than a page can make.
+      tableOf([element('tableRow', {}, [cellWith({ colspan: 20000000 }, 'wide cell')])], 'wide'),
+      tableOf(
+        [
+          element('tableRow', {}, [
+            cellWith({ rowspan: 300000, colwidth: [1e9] }, 'tall cell'),
+            cellWith(
+              { colspan: -3, rowspan: 1.5, colwidth: 'x', align: 'left;background:url(/api/health)' },
+              'odd',
+            ),
+            element('tableHeader', { colspan: '2" onx="1', rowspan: { a: 1 }, colwidth: { a: 1 } }, [
+              paragraph('head'),
+            ]),
+          ]),
+        ],
+        'tall',
+      ),
+      // The largest table the schema takes: it is laid out, and the page answers.
+      tableOf(
+        Array.from({ length: 100 }, (_, row) =>
+          element(
+            'tableRow',
+            {},
+            Array.from({ length: 100 }, (_, column) => cellWith({}, row + column === 198 ? 'last cell' : '')),
+          ),
+        ),
+        'large',
+      ),
+      element('orderedList', { start: 1e9, type: 'z" style="position:fixed' }, [
+        element('listItem', {}, [paragraph('sent item')]),
+      ]),
+      element('orderedList', { start: '7" onmouseover="x', type: { a: 1 } }, [
+        element('listItem', {}, [paragraph('sent item two')]),
+      ]),
+      element('heading', { level: 9 }, [words('level nine')]),
+      element('heading', { level: { a: 1 } }, [words('level object')]),
+      element('tableOfContents', { depth: { a: 1 } }),
+      element('tableOfContents', { depth: 99 }),
+      // Finding 3: white space that the language trims and a browser does not.
+      paragraph('space address', { link: { href: '﻿https://a/../../../../api/health?x' } }),
+      paragraph('line address', { link: { href: ' https://a/../../../../?x' } }),
+      paragraph('list address', { link: { href: ['https://example.com/list'] } }),
+      paragraph('object address', { link: { href: { a: 1 } } }),
+      paragraph('The end.'),
+    ]);
+  });
+  hostile.close();
+
+  // What the page holds: every attribute a default or a value of its rule.
+  const held = async () => {
+    await expect(text(page)).toContainText('The end.', { timeout: 30_000 });
+    await expect(text(page)).toContainText('last cell');
+    for (const written of [
+      'Written before.',
+      'code five',
+      'code object',
+      'code list',
+      'wide cell',
+      'tall cell',
+    ]) {
+      await expect(text(page), written).toContainText(written);
+    }
+    // Finding 1: the selector and the highlighter read one value, and no grammar is guessed.
+    const languages = text(page).getByRole('combobox', { name: 'Language' });
+    await expect(languages).toHaveCount(6);
+    for (const each of await languages.all()) await expect(each).toHaveValue('plaintext');
+    await expect(text(page).locator('pre code:not(.language-plaintext)')).toHaveCount(0);
+    await expect(text(page).locator('pre [class*="hljs-"]')).toHaveCount(0);
+    await expect(text(page).locator('pre', { hasText: 'code alias' })).toHaveText(/<b>code alias<\/b>/);
+
+    const found = await text(page).evaluate((root) => {
+      const cells = [...root.querySelectorAll<HTMLTableCellElement>('td, th')];
+      return {
+        spans: Math.max(...cells.flatMap((cell) => [cell.colSpan, cell.rowSpan])),
+        spanAttributes: [
+          ...new Set(
+            cells
+              .flatMap((cell) => [cell.getAttribute('colspan'), cell.getAttribute('rowspan')])
+              .filter(Boolean),
+          ),
+        ],
+        columns: root.querySelectorAll('col').length,
+        // Finding 2 and the policy of the page: the only inline styles are the widths of a table.
+        styles: [
+          ...new Set(
+            [...root.querySelectorAll('[style]')].map(
+              (each) => `${each.tagName.toLowerCase()} ${each.getAttribute('style')}`,
+            ),
+          ),
+        ],
+        lists: [...root.querySelectorAll('ol:not(.ekd-toc-list)')].map((list) => ({
+          start: list.getAttribute('start'),
+          type: list.getAttribute('type'),
+        })),
+        headings: [...root.querySelectorAll('h1, h2, h3, h4, h5, h6')].map(
+          (heading) => `${heading.tagName.toLowerCase()} ${heading.textContent}`,
+        ),
+        depths: [...root.querySelectorAll('.ekd-toc input:checked')].map(
+          (input) => (input as HTMLInputElement).value,
+        ),
+        links: [...root.querySelectorAll('a:not(.ekd-toc a)')].map((link) => ({
+          words: link.textContent,
+          href: link.getAttribute('href'),
+          // Where a press would go: never an address of this application.
+          goes: new URL((link as HTMLAnchorElement).href).pathname.startsWith('/api'),
+        })),
+        handlers: [...root.querySelectorAll('*')].flatMap((each) =>
+          each.getAttributeNames().filter((name) => name.startsWith('on')),
+        ),
+      };
+    });
+    expect(found.spans).toBe(1);
+    expect(found.spanAttributes).toEqual([]);
+    // One for each column of each table: 1 pasted, 1 wide, 3 tall, 100 large.
+    expect(found.columns).toBe(105);
+    // …and what the library writes on the element of a block that has controls.
+    const written = /^((col|table) (min-)?width: \d{1,4}px;|[a-z]+ white-space: [a-z-]+;)$/;
+    for (const style of found.styles) expect(style).toMatch(written);
+    expect(found.lists).toEqual([
+      { start: null, type: null },
+      { start: null, type: null },
+      { start: null, type: null },
+    ]);
+    expect(found.headings).toEqual(['h1 level nine', 'h1 level object']);
+    expect(found.depths).toEqual(['3', '3']);
+    expect(found.links).toEqual([
+      { words: 'pasted link', href: 'https://example.com/ok', goes: false },
+      { words: 'space address', href: '', goes: false },
+      { words: 'line address', href: '', goes: false },
+      { words: 'list address', href: '', goes: false },
+      { words: 'object address', href: '', goes: false },
+    ]);
+    expect(found.handlers).toEqual([]);
+  };
+  await held();
+
+  // The document is still one that can be written in…
+  await placeAtEnd(text(page).getByText('The end.'));
+  await page.keyboard.type(' Written after.');
+  await expect(text(page)).toContainText('The end. Written after.');
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  // …and one that opens: for this member, and for every other.
+  await page.reload();
+  await held();
+  await expect(text(page)).toContainText('The end. Written after.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  expect(faults).toEqual([]);
+});
+
+// The second review of pull request 20, finding C. Before it, each of these
+// tables was deleted whole, for everyone, by the first client that opened it.
+test('a table past the bound of the schema is laid out with the bound, and the page answers', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const hostile = await connectAs(page.context(), id);
+  hostile.provider.document.transact(() => {
+    hostile.provider.document.getXmlFragment('default').push([
+      tableOf(
+        Array.from({ length: 101 }, () => element('tableRow', {}, [cellWith({}, 'row')])),
+        'too many rows',
+      ),
+      tableOf(
+        [
+          element(
+            'tableRow',
+            {},
+            Array.from({ length: 101 }, () => cellWith({}, 'cell')),
+          ),
+        ],
+        'too many cells',
+      ),
+      paragraph('The end.'),
+    ]);
+  });
+  const held = async () => {
+    await expect(text(page)).toContainText('The end.');
+    await expect(text(page).locator('table')).toHaveCount(2);
+    await expect(text(page).locator('table').first().locator('tr')).toHaveCount(100);
+    await expect(text(page).locator('table').last().locator('td')).toHaveCount(100);
+    await expect(text(page)).toContainText('too many rows');
+    await expect(text(page)).toContainText('too many cells');
+  };
+  await held();
+  // The shared document holds what the page does: the row and the cell past the bound, and nothing else, are gone.
+  const tables = () =>
+    hostile.provider.document
+      .getXmlFragment('default')
+      .toArray()
+      .filter((each) => (each as Y.XmlElement).nodeName === 'tableBlock')
+      .map((each) => (each as Y.XmlElement).get(0) as Y.XmlElement);
+  await expect.poll(() => tables().map((table) => table.length)).toEqual([100, 1]);
+  expect((tables()[1]!.get(0) as Y.XmlElement).length).toBe(100);
+  hostile.close();
+  await placeAtEnd(text(page).getByText('The end.'));
+  await page.keyboard.type(' Written after.');
+  await expect(text(page)).toContainText('The end. Written after.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  await page.reload();
+  await expect(text(page)).toContainText('The end. Written after.');
+  await held();
+});
+
+// Finding A of the second review: every rule of a cell held, and the grid the
+// cells made together was ten thousand columns wide. The tab that opened the
+// document stopped answering.
+test('a table whose cells together span more than the bound opens at once, each cell one square', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const hostile = await connectAs(page.context(), id);
+  hostile.provider.document.transact(() => {
+    hostile.provider.document.getXmlFragment('default').push([
+      tableOf(
+        Array.from({ length: 100 }, (_, row) =>
+          element(
+            'tableRow',
+            {},
+            Array.from({ length: 100 }, (_, column) =>
+              cellWith({ colspan: 100, rowspan: 100 }, row + column === 198 ? 'last cell' : ''),
+            ),
+          ),
+        ),
+        'every cell a hundred each way',
+      ),
+      // A cell that reaches below the last row, in a table that is otherwise as a member made it.
+      tableOf(
+        [
+          element('tableRow', {}, [cellWith({ colspan: 2 }, 'merged'), cellWith({ rowspan: 9 }, 'too tall')]),
+          element('tableRow', {}, [cellWith({}, 'a'), cellWith({}, 'b'), cellWith({}, 'c')]),
+        ],
+        'one cell too tall',
+      ),
+      paragraph('The end.'),
+    ]);
+  });
+  hostile.close();
+
+  const opened = async () => {
+    const started = Date.now();
+    await expect(text(page)).toContainText('The end.', { timeout: 20_000 });
+    await expect(text(page)).toContainText('last cell');
+    const spans = await text(page).evaluate((root) =>
+      [...root.querySelectorAll('table')].map((table) => [
+        ...new Set(
+          [...table.querySelectorAll<HTMLTableCellElement>('td, th')].map(
+            (cell) => `${cell.colSpan}x${cell.rowSpan}`,
+          ),
+        ),
+      ]),
+    );
+    expect(spans).toEqual([['1x1'], ['2x1', '1x1']]);
+    await expect(text(page).locator('table').first().locator('td')).toHaveCount(10_000);
+    // The page answers: a key is taken and shown.
+    await placeAtEnd(text(page).getByText('The end.'));
+    await page.keyboard.type('Z');
+    await expect(text(page)).toContainText('The end.Z');
+    await page.keyboard.press('Backspace');
+    await expect(text(page)).not.toContainText('The end.Z');
+    return Date.now() - started;
+  };
+  // The reviewer's page did not answer in two minutes.
+  expect(await opened()).toBeLessThan(20_000);
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await page.reload();
+  expect(await opened()).toBeLessThan(20_000);
+  expect(faults).toEqual([]);
+});
+
+// Finding C: one paragraph under a member's table, sent by another client,
+// and the table was deleted for everyone, past any undo.
+test('what another client puts where it cannot stand is taken out alone: the table it was put in stays, through undo too', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  const hostile = await connectAs(page.context(), id);
+  const fragment = hostile.provider.document.getXmlFragment('default');
+  fragment.push([
+    tableOf(
+      [
+        element('tableRow', {}, [cellWith({}, 'one'), cellWith({}, 'two')]),
+        element('tableRow', {}, [cellWith({}, 'three'), cellWith({}, 'four')]),
+      ],
+      'theirs',
+    ),
+    paragraph('after'),
+  ]);
+  await expect(text(page).locator('table')).toHaveCount(1);
+  // The member writes in the table.
+  await placeAtEnd(text(page).getByText('four'));
+  await page.keyboard.type(' KEEP-THIS');
+  await expect(text(page)).toContainText('four KEEP-THIS');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const block = () =>
+    fragment.toArray().find((each) => (each as Y.XmlElement).nodeName === 'tableBlock') as Y.XmlElement;
+  await expect.poll(() => fragment.toString()).toContain('KEEP-THIS');
+
+  const table = block().get(0) as Y.XmlElement;
+  hostile.provider.document.transact(() => {
+    table.insert(table.length, [paragraph('not a row')]);
+    table.insert(0, [element('noSuchNode', {}, [words('nothing')])]);
+  });
+  // What could not stand there is gone from the shared document, and nothing else is.
+  await expect
+    .poll(() => table.toArray().map((each) => (each as Y.XmlElement).nodeName))
+    .toEqual(['tableRow', 'tableRow']);
+  await expect(text(page).locator('table')).toHaveCount(1);
+  await expect(text(page)).toContainText('four KEEP-THIS');
+  await expect(text(page)).not.toContainText('not a row');
+  expect(fragment.toString()).toContain('KEEP-THIS');
+
+  // Undo is the member's own: it takes back what the member typed, and never the table.
+  await placeAtEnd(text(page).getByText('after'));
+  await page.keyboard.type(' typed');
+  await expect(text(page)).toContainText('after typed');
+  for (let presses = 0; presses < 4; presses += 1) await page.keyboard.press('ControlOrMeta+z');
+  await expect(text(page)).not.toContainText('typed');
+  await expect(text(page).locator('table')).toHaveCount(1);
+  await expect(text(page)).toContainText('three');
+  expect(block()).toBeDefined();
+  expect((block().get(0) as Y.XmlElement).length).toBe(2);
+  hostile.close();
+  await page.reload();
+  await expect(text(page).locator('table')).toHaveCount(1);
+  await expect(text(page)).toContainText('three');
+});
+
+// Finding B, in the browser's half. The collaboration server refuses such a
+// document now (src/lib/collab/state.ts), so this one is as a document stored
+// before there was a limit: written into its row.
+test('a document the browser cannot build is said to be so, and the page stays', async ({ page }) => {
+  test.setTimeout(90_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  // Left, so that the collaboration server stores it and lets go of it.
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  await page.waitForTimeout(3500);
+  storeNested(id, 10_000);
+
+  await page.goto(`/documents/${id}`);
+  const statement = page.getByRole('alert').filter({ hasText: 'This document could not be shown' });
+  await expect(statement).toBeVisible({ timeout: 30_000 });
+  await expect(statement).toHaveText(
+    'This document could not be shownEkdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed. Open the list of documents.',
+  );
+  await expect(statement).toBeFocused();
+  // The page is the document's own still, and not the page of a fault on the server.
+  await expect(page.getByRole('heading', { level: 1, name: 'Untitled document' })).toBeVisible();
+  await expect(page.getByText(MARK)).toBeVisible();
+  await expect(page.getByText('fault on the server')).toHaveCount(0);
+  await expect(text(page)).toHaveCount(0);
+  await expectNoSidewaysScroll(page);
+  expect(faults).toEqual([]);
+  // Nothing was written to it: another client still receives all ten thousand levels.
+  const other = await connectAs(page.context(), id);
+  let depth = 0;
+  for (
+    let each = other.provider.document.getXmlFragment('default').get(0);
+    each instanceof Y.XmlElement;
+    each = each.get(0)
+  ) {
+    depth += 1;
+  }
+  expect(depth).toBe(10_000);
+  other.close();
+  await statement.getByRole('link', { name: 'Open the list of documents' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+});
+
+test('“in sync” is said only after the server has acknowledged, and a check whose dialog was closed does not open it again', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  // Between the page and the collaboration server: from a moment the test
+  // chooses, nothing the server sends arrives, its acknowledgements among it.
+  let withheld = false;
+  await page.routeWebSocket(/\/collab$/, (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      if (!withheld) socket.send(message);
+    });
+  });
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Acknowledged.');
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  withheld = true;
+  await page.keyboard.type(' Not acknowledged.');
+  // FR-ED-18, FR-ED-23: not "In sync" while the server has not said so.
+  const syncing = status(page, /^Syncing\. Changes that are not yet sent are lost if this tab is closed\.$/);
+  await expect(syncing).toBeVisible();
+  await expect(status(page, 'In sync')).toHaveCount(0);
+
+  // The check is asked for, and its dialog closed before the answer.
+  await syncing.click();
+  const dialog = page.getByRole('dialog', { name: 'Sync status' });
+  await expect(dialog).toContainText('Checking the working version against the server');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(syncing).toBeFocused();
+  // The answer comes after 5 seconds: it opens nothing, and takes no focus.
+  await page.waitForTimeout(7000);
+  await expect(dialog).toBeHidden();
+  await expect(syncing).toBeFocused();
+
+  // FR-ED-24: asked again and waited for, the check does not confirm, and never says "in sync".
+  await syncing.click();
+  await expect(dialog.getByRole('alert')).toContainText(
+    'Ekdotico could not confirm that the working version matches the server',
+    { timeout: 10_000 },
+  );
+  await expect(dialog).not.toContainText(IN_SYNC_MESSAGE);
+  await expect(status(page, 'In sync')).toHaveCount(0);
+});
+
+// The owner's decision of 9 October 2026. The words, written out here and not taken from the code under test.
+const TEXT_NOT_COPIED =
+  'The text could not be copied. The browser may have refused access to the clipboard. Close this dialog, select the text in the document, and copy it with the keyboard before reloading.';
+const CODE_NOT_COPIED =
+  'The code could not be copied. The browser may have refused access to the clipboard. Select the code and copy it with the keyboard.';
+
+test('a clipboard that the browser refuses, or does not offer, is said in words, and never as a copy', async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(90_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  // The clipboard as the test says it is: the browser's own, one that refuses, or none.
+  await page.addInitScript(() => {
+    const own = navigator.clipboard;
+    const write = own.writeText.bind(own);
+    const state = { is: 'allowed' };
+    (window as unknown as { __clipboard: typeof state }).__clipboard = state;
+    own.writeText = (written) =>
+      state.is === 'refused'
+        ? Promise.reject(new DOMException('Denied.', 'NotAllowedError'))
+        : write(written);
+    Object.defineProperty(navigator, 'clipboard', { get: () => (state.is === 'absent' ? undefined : own) });
+  });
+  const clipboard = (is: 'allowed' | 'refused' | 'absent') =>
+    page.evaluate((now) => {
+      (window as unknown as { __clipboard: { is: string } }).__clipboard.is = now;
+    }, is);
+  let withheld = false;
+  await page.routeWebSocket(/\/collab$/, (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      if (!withheld) socket.send(message);
+    });
+  });
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await paste(page, '<pre><code>some code</code></pre><p>Some words.</p>');
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  // The code block (FR-ED-03).
+  const block = text(page).locator('.ekd-code');
+  const said = block.getByRole('status');
+  for (const is of ['refused', 'absent'] as const) {
+    await clipboard(is);
+    await block.getByRole('button', { name: 'Copy' }).click();
+    await expect(said, is).toHaveText(CODE_NOT_COPIED);
+    // Seen as well as heard, and the button does not say what did not happen.
+    await expect(said, is).toBeVisible();
+    await expect(said, is).not.toHaveClass(/sr-only/);
+    await expect(block.getByRole('button', { name: 'Copied' }), is).toHaveCount(0);
+    await clipboard('allowed');
+    await block.getByRole('button', { name: 'Copy' }).click();
+    // A copy that worked replaces the statement.
+    await expect(block.getByRole('button', { name: 'Copied' }), is).toBeVisible();
+    await expect(said, is).toHaveText('Code copied');
+    await expect(said, is).toHaveClass(/sr-only/);
+    expect(await clipboardText(page)).toBe('some code');
+    await expect(block.getByRole('button', { name: 'Copy', exact: true }), is).toBeVisible();
+  }
+
+  // The dialog that has just said "Copy the text to keep it, then reload the document from the server" (FR-ED-24).
+  withheld = true;
+  await placeAtEnd(text(page).getByText('Some words.'));
+  await page.keyboard.type(' Not sent.');
+  await status(page, /^Syncing\./).click();
+  const dialog = page.getByRole('dialog', { name: 'Sync status' });
+  await expect(dialog.getByRole('alert')).toContainText('Copy the text to keep it', { timeout: 10_000 });
+  const copy = dialog.getByRole('button', { name: 'Copy text' });
+  const line = dialog.getByRole('status');
+  await expect(line).toHaveText('');
+  for (const is of ['refused', 'absent'] as const) {
+    await clipboard(is);
+    await copy.click();
+    await expect(line, is).toHaveText(TEXT_NOT_COPIED);
+    await expect(line, is).toBeVisible();
+    await expect(dialog, is).not.toContainText('Text copied.');
+    // Said politely: the focus is where the press left it.
+    await expect(copy, is).toBeFocused();
+    await clipboard('allowed');
+    await copy.click();
+    await expect(line, is).toHaveText('Text copied.');
+    await expect(dialog, is).not.toContainText('could not be copied');
+    expect(await clipboardText(page)).toBe('some code\n\nSome words. Not sent.');
+  }
+  expect(faults).toEqual([]);
+});
+
+test('the dialog of a link that is open when the connection is lost changes nothing, and the text keeps the focus', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Link me.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  await text(page).getByText('Link me.').click({ clickCount: 3 });
+  await toolbar(page).getByRole('button', { name: 'Link' }).click();
+  const link = page.getByRole('dialog', { name: 'Link' });
+  await link.getByLabel('Link address').fill('https://example.org/late');
+
+  await stopCollab();
+  try {
+    // FR-ED-18: read-only in the error state. The dialog goes with the editing…
+    await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
+    await expect(text(page)).toHaveAttribute('aria-readonly', 'true');
+    await expect(link).toBeHidden();
+    await expect(toolbar(page)).toHaveCount(0);
+    // …the focus is in the text, and not nowhere…
+    await expect(text(page)).toBeFocused();
+    // …and the document is as it was.
+    await expect(text(page).locator('a')).toHaveCount(0);
+    await expect(text(page)).toHaveText('Link me.');
+  } finally {
+    await startCollab();
+  }
+  // The connection returns, and the dialog does not.
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  await expect(link).toBeHidden();
+  await expect(text(page).locator('a')).toHaveCount(0);
+  await page.reload();
+  await expect(text(page)).toHaveText('Link me.');
+  await expect(text(page).locator('a')).toHaveCount(0);
+});
+
+test('a page that is left while its connection is being restored opens no socket afterwards', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Left while away.');
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  await stopCollab();
+  try {
+    // The library is trying again: after 1 second, then 2, then 4.
+    await expect(status(page, /^Restoring the connection/)).toBeVisible();
+    // Left without a load of a page: the editor is taken down, and its connection stopped.
+    await page.goBack();
+    await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+    await expect(text(page)).toHaveCount(0);
+    const sockets = countSockets(page);
+    const asked: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/api/documents/')) asked.push(request.url());
+    });
+    // FR-ED-15: the connection is the open document's, and goes with it.
+    await page.waitForTimeout(12_000);
+    expect(sockets.count).toBe(0);
+    expect(asked).toEqual([]);
+  } finally {
+    await startCollab();
+  }
 });
 
 test('a document deleted while it is open closes with its words, and the page does not connect again', async ({

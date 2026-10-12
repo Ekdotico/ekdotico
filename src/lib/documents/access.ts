@@ -103,9 +103,13 @@ export async function authoriseDeleted(
 }
 
 // Text for a person (the owner's answer to Q6 of the plan: approved with the pull request).
+// `notFound` answers an action taken from a list (rename, delete, restore),
+// where the person typed no address, so it speaks of none; the list is the
+// server's, and a reload shows it as it is now. One statement whatever lay
+// behind the 404.
 const MESSAGES = {
   notFound:
-    'No document was found at this address for this account. Check the address, or open the list of documents.',
+    'No document was found for this account. Reload the list of documents to see the documents that exist.',
   forbidden:
     'The role of this account on the document does not hold the permission for this action. The Owner of the document can give it.',
 };

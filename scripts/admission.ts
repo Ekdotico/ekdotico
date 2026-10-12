@@ -88,7 +88,9 @@ export async function run(
   try {
     text = await response.text();
   } catch {
-    print('The answer of the application could not be read. List the invitations to see what was done.');
+    print(
+      'The command could not read the answer of the application. List the invitations to see what was done.',
+    );
     return 1;
   }
   let answer: string;

@@ -5,12 +5,12 @@ import type { Metadata } from 'next';
 import { PageHeading } from '@ekdotico/domico/components';
 import { ResetRequestForm } from './reset-request-form.tsx';
 
-export const metadata: Metadata = { title: 'Set a new password' };
+export const metadata: Metadata = { title: 'Set new password' };
 
 export default function ResetRequest() {
   return (
     <>
-      <PageHeading>Set a new password</PageHeading>
+      <PageHeading>Set new password</PageHeading>
       <ResetRequestForm />
     </>
   );

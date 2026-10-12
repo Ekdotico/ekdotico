@@ -32,7 +32,6 @@ import type { Duplex } from 'node:stream';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Server, type Document } from '@hocuspocus/server';
 import { messageYjsSyncStep1 } from 'y-protocols/sync';
-import { stoppedByFoundingGate } from '../lib/auth/founding-gate.ts';
 import { validateSessionRow, type ValidSession } from '../lib/auth/session.ts';
 import { isReadOnly, recordConnection, type CollabConnection } from '../lib/collab/connection.ts';
 import {
@@ -41,7 +40,16 @@ import {
   type CollabEventSubscription,
 } from '../lib/collab/events.ts';
 import { COLLAB_PATH, REFUSAL, type Refusal } from '../lib/collab/protocol.ts';
-import { applyState, assertUpdate, loadState, storeFinalState, storeState } from '../lib/collab/state.ts';
+import { ISOLATION_HEADERS, STATIC_POLICY } from '../lib/csp.ts';
+import {
+  applyState,
+  assertUpdate,
+  loadState,
+  MAX_MESSAGE_BYTES,
+  pastLimits,
+  storeFinalState,
+  storeState,
+} from '../lib/collab/state.ts';
 import { db } from '../lib/db.ts';
 import { authorise } from '../lib/documents/access.ts';
 import { faultOf } from '../lib/fault.ts';
@@ -52,6 +60,16 @@ import { securityLog } from '../lib/security-log.ts';
 import { settings, type Settings } from '../lib/settings.ts';
 
 export const HEALTH_PATH = '/collab/health';
+
+// What every answer over HTTP carries, the health check and each refusal of a
+// handshake: none is kept, none is a page, and none is read as anything but
+// what it is (src/lib/csp.ts).
+const ANSWER_HEADERS = {
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': STATIC_POLICY,
+  'X-Content-Type-Options': 'nosniff',
+  ...Object.fromEntries(ISOLATION_HEADERS.map(({ key, value }) => [key, value])),
+};
 
 type StoreSettings = Pick<Settings, 'collabStoreDelayMs' | 'collabStoreMaxMs'>;
 
@@ -346,10 +364,16 @@ export function createCollabServer(store: StoreSettings) {
 
     // (c) The session, by its row and never by the copy in a cookie
     // (NFR-SE-03 (e), NFR-SE-17 (c), (f)). Nothing of the request but the
-    // cookie is handed on.
-    const { session } = await validateSessionRow(new Headers({ cookie: request.headers.cookie ?? '' }));
-    if (!session) return { status: 401 };
-    const { userId } = session;
+    // cookie is handed on. For an account that the founding-team gate stops
+    // the validation gives no session and says whose it would be (`stopped`):
+    // it is no 401. It goes on to its limit and is refused at (e), so that the
+    // order of the answers stays as it is written here.
+    const { session, stopped } = await validateSessionRow(
+      new Headers({ cookie: request.headers.cookie ?? '' }),
+    );
+    const held = session ?? stopped;
+    if (!held) return { status: 401 };
+    const { userId } = held;
 
     // (d) NFR-SE-07: handshakes, for each authenticated user. After the origin
     // check, so that a page on another origin cannot spend a user's limit.
@@ -360,14 +384,11 @@ export function createCollabServer(store: StoreSettings) {
     }
 
     // (e) FR-AU-83: an account of the founding team without two-factor
-    // authentication reaches no collaboration handshake. The row is read at
-    // each handshake; the list is the process's own setting.
-    const account = await db().user.findUnique({
-      where: { id: userId },
-      select: { email: true, emailVerified: true, twoFactorEnabled: true },
-    });
-    if (!account) return { status: 401 };
-    if (stoppedByFoundingGate(account)) {
+    // authentication reaches no collaboration handshake. The gate is the one
+    // of the session validation (src/lib/auth/session.ts), which read the
+    // account's row at (c) for this handshake; the list is the process's own
+    // setting. Nothing but a session that the gate let through is returned.
+    if (!session) {
       await securityLog({ kind: 'forbidden', userId });
       return { status: 403 };
     }
@@ -379,6 +400,11 @@ export function createCollabServer(store: StoreSettings) {
     quiet: true,
     // Stopping is this file's own: see `stop`.
     stopOnSignals: false,
+    // Handed to the socket library as they are (@hocuspocus/server 4.7.0,
+    // Server.ts: `serverOptions` of crossws, which are those of `ws`). A
+    // message longer than this is never read to its end: the socket is closed
+    // with the code 1009.
+    websocketOptions: { maxPayload: MAX_MESSAGE_BYTES },
 
     async onRequest({ request, response }) {
       // NFR-SE-05 (c): reports whether the service is up and returns nothing
@@ -389,7 +415,7 @@ export function createCollabServer(store: StoreSettings) {
       // database for the answer: it is what the subscription last said.
       const health = request.method === 'GET' && request.url === HEALTH_PATH;
       const status = !health ? 404 : events?.isSubscribed() ? 200 : 503;
-      response.writeHead(status, { 'Cache-Control': 'no-store' }).end();
+      response.writeHead(status, ANSWER_HEADERS).end();
       return answered();
     },
 
@@ -423,8 +449,9 @@ export function createCollabServer(store: StoreSettings) {
           `HTTP/1.1 ${outcome.status} ${STATUS_CODES[outcome.status]}`,
           'Connection: close',
           'Content-Length: 0',
-          'Cache-Control: no-store',
-          ...Object.entries(outcome.headers ?? {}).map(([name, value]) => `${name}: ${value}`),
+          ...Object.entries({ ...ANSWER_HEADERS, ...outcome.headers }).map(
+            ([name, value]) => `${name}: ${value}`,
+          ),
         ];
         socket.end(`${head.join('\r\n')}\r\n\r\n`, () => socket.destroy());
         return answered();
@@ -577,13 +604,24 @@ export function createCollabServer(store: StoreSettings) {
      * nor acknowledged, nor sent to anyone. The first step of a
      * synchronisation carries no update.
      */
-    async beforeSync({ type, payload }) {
+    async beforeSync({ type, payload, document, documentName, context }) {
       if (type === messageYjsSyncStep1) return;
+      let past: boolean;
       try {
         assertUpdate(payload);
+        // The limits of a document (src/lib/collab/state.ts): an update that
+        // would take it past one is refused as one that cannot be stored is.
+        past = pastLimits(document, payload);
       } catch {
         // An object, which the library reads a close code from, and with no
         // message for it to print: what Yjs throws can quote the update.
+        throw {};
+      }
+      if (past) {
+        // NFR-SE-19: a refusal of what an account may not do, as a 403 is, with
+        // the user and the document and nothing of the update. ASSUMED: the
+        // requirement lists no kind for it (reported for the register).
+        await securityLog({ kind: 'forbidden', userId: context.userId, documentId: documentName });
         throw {};
       }
     },

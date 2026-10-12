@@ -13,15 +13,23 @@ import { faultOf } from '../fault.ts';
 import { INTERNAL_FAULT } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { settings } from '../settings.ts';
+import { changeEmail, updateUser, verifyEmail } from './name-and-address.ts';
 import { changePassword, requestPasswordReset, resetPassword } from './password.ts';
 import { FORBIDDEN } from './route-answers.ts';
 import { revokeOtherSessions, revokeSession } from './session-list.ts';
-import { signInEmail, signOut } from './sign-in.ts';
+import { signInEmail, signInLink, signOut } from './sign-in.ts';
+import {
+  disableTwoFactor,
+  enableTwoFactor,
+  generateBackupCodes,
+  verifyBackupCode,
+  verifyTOTP,
+} from './two-factor.ts';
 
 // Text for a person, for the owner's approval: the statement of the router's
 // 400 and 415, which the library words in its own way.
 const NOT_JSON =
-  'The request could not be read, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
+  'Ekdotico could not read the request, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.';
 
 /** Where the library's handler is mounted (API design, "Sign-in and identity"). */
 export const IDENTITY_BASE_PATH = '/api/auth';
@@ -43,6 +51,10 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // FR-AU-81: sign-in by email address and password, the only way to sign in.
   // The endpoint is the application's own (sign-in.ts).
   'POST /sign-in/email',
+  // FR-AU-81: the one exception, the single-use sign-in link of a lock email
+  // (register D115; A104, assumed). The application's own (sign-in.ts), and
+  // not the library's magic link, which is not installed (NFR-SE-17 (d)).
+  'POST /sign-in/link',
   // FR-AU-84: signing out ends the session at once and clears the browser's
   // cookies. The application's own too.
   'POST /sign-out',
@@ -59,6 +71,28 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
   // endpoint: the library's returns every session's token.
   'POST /revoke-session',
   'POST /revoke-other-sessions',
+  // FR-AU-83: two-factor authentication by authenticator application, with
+  // recovery codes. All five are the application's own (two-factor.ts), under
+  // the plugin's names and paths: the beginning of an enrolment; a code of the
+  // authenticator, which confirms an enrolment under a session and is the
+  // second step of a sign-in without one (FR-AU-81); the second step by a
+  // recovery code; turning it off; and replacing the recovery codes. The
+  // plugin's code by email (`/two-factor/send-otp`, `/two-factor/verify-otp`)
+  // and its `/two-factor/get-totp-uri`, which shows a secret again, are not
+  // in the handler at all (`secondFactor`, below).
+  'POST /two-factor/enable',
+  'POST /two-factor/verify-totp',
+  'POST /two-factor/verify-backup-code',
+  'POST /two-factor/disable',
+  'POST /two-factor/generate-backup-codes',
+  // FR-AU-90: the change of the name in the account settings. FR-AU-03: the
+  // request for a change of the address, and its confirmation by the token of
+  // the link sent to the new address, which is a POST and never the library's
+  // GET (the owner's answer to Q3 of the plan). All three are the
+  // application's own (name-and-address.ts), under the library's paths.
+  'POST /update-user',
+  'POST /change-email',
+  'POST /verify-email',
 ]);
 
 // FR-AU-81, FR-AU-84: the application's sign-in and sign-out. A plugin's
@@ -66,7 +100,7 @@ export const IDENTITY_ENDPOINTS: ReadonlySet<string> = new Set([
 // sign-in and sign-out are not in the handler and not in `auth().api`.
 const ownSignIn = {
   id: 'ekdotico-sign-in',
-  endpoints: { signInEmail, signOut },
+  endpoints: { signInEmail, signInLink, signOut },
 } satisfies BetterAuthPlugin;
 
 // FR-AU-85, FR-AU-86: the same for the password and the sessions. The
@@ -75,6 +109,29 @@ const ownSignIn = {
 const ownCredentials = {
   id: 'ekdotico-credentials',
   endpoints: { requestPasswordReset, resetPassword, changePassword, revokeSession, revokeOtherSessions },
+} satisfies BetterAuthPlugin;
+
+// FR-AU-03, FR-AU-90: the same for the name and the address. The library's
+// own change of an address stays switched off in its options as well, below.
+const ownAccount = {
+  id: 'ekdotico-account',
+  endpoints: { updateUser, changeEmail, verifyEmail },
+} satisfies BetterAuthPlugin;
+
+// FR-AU-83, NFR-SE-17 (d): two-factor authentication by authenticator
+// application, with recovery codes. The library's plugin, as it is given no
+// option, with the application's five endpoints in place of all of its own
+// (two-factor.ts) and without its step after a sign-in. What is kept of it is
+// its schema, which puts `twoFactorEnabled` on the account the library answers
+// with a session. What is left out with the rest: its code by email, its
+// endpoint that shows a secret again, its function that reads the recovery
+// codes of any account, its remembering of a device, and its own count and
+// lock of wrong codes. Two plugins that name one path make the library report
+// an error at each start, so the five are not mounted from a plugin of their own.
+const secondFactor = {
+  ...twoFactor(),
+  endpoints: { enableTwoFactor, verifyTOTP, verifyBackupCode, disableTwoFactor, generateBackupCodes },
+  hooks: undefined,
 } satisfies BetterAuthPlugin;
 
 // The application's own gate, and no feature of the library.
@@ -128,11 +185,11 @@ function create() {
       maxPasswordLength: passwordMaxLength,
     },
     // No `socialProviders`, and of the plugins only two-factor authentication by
-    // authenticator application with recovery codes (FR-AU-83). Its code by
-    // email exists only where a function to send one is configured; none is.
+    // authenticator application with recovery codes (FR-AU-83), whose
+    // endpoints are the application's own (`secondFactor`, above).
     // `admissionSignUp` (FR-AU-90) has one endpoint, without a path: the
     // handler cannot reach it, and only `POST /api/sign-up` calls it.
-    plugins: [twoFactor(), surface, ownSignIn, ownCredentials, admissionSignUp],
+    plugins: [secondFactor, surface, ownSignIn, ownCredentials, ownAccount, admissionSignUp],
     // NFR-SE-17 (d): each is off in the library by default but the linking of
     // accounts; all three are written so that a changed default changes nothing.
     account: { accountLinking: { enabled: false } },

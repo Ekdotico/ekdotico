@@ -13,9 +13,46 @@ describe('the address of a hyperlink (FR-ED-02; NFR-SE-06, A03)', () => {
     'http://example.com',
     'mailto:someone@example.com',
     'HTTPS://EXAMPLE.COM/',
-  ])('admits %s', (address) => {
+    'hTtP://Example.com/Path',
+    'MAILTO:someone@example.com',
+    'https://example.com/a%20b?q=%E2%80%A8',
+  ])('admits %s, and stores it as it was given', (address) => {
     expect(linkAddress(address)).toBe(address);
-    expect(linkAddress(`  ${address}\n`)).toBe(address);
+  });
+
+  // What is admitted is what reaches the `href`, character for character. The
+  // language's `trim` removes U+FEFF, U+00A0, U+2028 and more, and a browser's
+  // parser does not: an address tested trimmed and rendered untrimmed would be
+  // one relative to the page, to any path of this application.
+  it.each([
+    ['a space before', ' https://example.com/'],
+    ['a space after', 'https://example.com/ '],
+    ['a line end after', 'https://example.com/\n'],
+    ['U+FEFF before', '﻿https://a/../../../../api/health?x'],
+    ['U+00A0 before', ' https://example.com/'],
+    ['U+2028 before', ' https://a/../../../../?x'],
+    ['U+2029 after', 'https://example.com/ '],
+    ['U+3000 before', '　https://example.com/'],
+    ['U+000B before', '\u000bhttps://a/../../../../api/health'],
+    ['U+0000 before', '\u0000https://example.com/'],
+    ['U+007F before', '\u007fhttps://example.com/'],
+    ['U+0085 before', '\u0085https://example.com/'],
+    ['a tab inside the scheme', 'ht\ttps://example.com/'],
+    ['a line end inside the scheme', 'http\ns://example.com/'],
+    ['a tab after the colon', 'https:\t//example.com/'],
+    ['a tab inside the host', 'https://exam\tple.com/'],
+    ['a line end inside the path', 'https://example.com/a\nb'],
+    ['a space inside the path', 'https://example.com/a b'],
+    ['a space inside a mailto', 'mailto:someone@example.com?subject=a b'],
+    ['backslashes for the slashes', 'https:\\\\example.com/'],
+    ['one backslash', 'https:/\\example.com/'],
+    ['a backslash before the host of another', 'https://example.com\\@example.org/'],
+    ['a backslash in the path', 'https://example.com/a\\b'],
+    ['mixed case of a scheme that is not allowed', 'JavaScript://example.com/%0aalert(1)'],
+    ['no host', 'https:///example.com'],
+    ['no host, with a port', 'http://:80/'],
+  ])('refuses an address with %s', (_, address) => {
+    expect(linkAddress(address)).toBeNull();
   });
 
   // Each is read by some browser as script, as a document of the writer's
@@ -45,6 +82,31 @@ describe('the address of a hyperlink (FR-ED-02; NFR-SE-06, A03)', () => {
     '   ',
   ])('refuses %j', (address) => {
     expect(linkAddress(address)).toBeNull();
+  });
+
+  // The owner's decision of 9 October 2026: a name before the host. A reader
+  // takes the address for the host it begins with, and a browser goes to the
+  // one after the `@`.
+  it.each([
+    'https://app.example@evil.example/x',
+    'http://user:pw@host/',
+    'https://user:@example.com/',
+    'https://:pw@example.com/',
+    'https://@evil.example/x',
+    'HTTPS://App.Example@evil.example',
+    'https://app.example%40x@evil.example/',
+    'https://a@b@evil.example/',
+  ])('refuses %s, which names someone before its host', (address) => {
+    expect(linkAddress(address)).toBeNull();
+  });
+
+  it.each([
+    'mailto:a@b.example',
+    'https://example.com/@user',
+    'https://example.com/a?to=a@b.example#c@d',
+    'https://example.com:8443/path@x',
+  ])('admits %s: an @ that is in no host', (address) => {
+    expect(linkAddress(address)).toBe(address);
   });
 
   it.each([null, undefined, 1, {}, ['https://example.com'], new URL('https://example.com')])(

@@ -3,12 +3,13 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, FormFault, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 
 // Text for a person (the owner's answer to Q6 of the plan). FR-AU-85: "every
 // other session of the account ends".
-const CHANGED = 'The password is changed. Every other session of this account has ended.';
+const CHANGED = 'Password changed. Every other session of this account has ended.';
 
 /**
  * FR-AU-85, FR-AU-88: the change of the password, which "requires the current
@@ -28,6 +29,7 @@ export function ChangePasswordForm({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
+  const ready = useReady();
   const [changed, setChanged] = useState(false);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -95,7 +97,13 @@ export function ChangePasswordForm({
           error={refusal}
         />
         <div>
-          <Button variant="primary" type="submit" pending={pending} pendingLabel="Changing password…">
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!ready}
+            pending={pending}
+            pendingLabel="Changing password…"
+          >
             Change password
           </Button>
         </div>

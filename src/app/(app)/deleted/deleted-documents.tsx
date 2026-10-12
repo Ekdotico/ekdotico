@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
+import { useReady } from '../../../components/ready.ts';
 import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 import { InBrowser, LocalTime } from '../local-time.tsx';
@@ -33,6 +34,7 @@ export function DeletedDocuments({
   const router = useRouter();
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const ready = useReady();
   const [restoring, setRestoring] = useState<string | null>(null);
   // How many documents were restored from this page: see the same in ../documents.tsx.
   const [restored, setRestored] = useState(0);
@@ -94,6 +96,7 @@ export function DeletedDocuments({
                   </InBrowser>
                 </Stack>
                 <Button
+                  disabled={!ready}
                   aria-describedby={`title-${document.id}`}
                   pending={restoring === document.id}
                   pendingLabel="Restoring document…"

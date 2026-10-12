@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page } from '@playwright/test';
-import { APP_ORIGIN } from './origin.ts';
+import { APP_ORIGIN, AUTH_SECRET } from './origin.ts';
 
 // The fixed texts, written out here and not taken from the code under test.
 export const NOT_OPEN = 'This invitation is not open. Ask the Ekdotico team for a new one.'; // FR-AU-90
@@ -70,6 +70,49 @@ export function admission(...args: string[]): { status: number; answer: unknown 
   expect(ran.status, ran.stderr + ran.stdout).toBe(0);
   const [status, ...answer] = ran.stdout.split('\n');
   return { status: Number(status), answer: JSON.parse(answer.join('\n')) };
+}
+
+/**
+ * A document of the account with this address, under this title, written into
+ * the database of the run for an account that reaches no route
+ * (tests/e2e/own-document.ts). Returns its identifier.
+ */
+export function ownDocument(email: string, title: string): string {
+  const ran = spawnSync('node', ['tests/e2e/own-document.ts', email, title], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN,
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(ran.status, ran.stderr).toBe(0);
+  return ran.stdout.trim();
+}
+
+/**
+ * Stores, as the state of a document, quotes nested `depth` deep: what no
+ * client can send now, and a document stored before there was a limit could
+ * hold (tests/e2e/stored-state.ts).
+ */
+export function storeNested(documentId: string, depth: number): void {
+  const ran = spawnSync('node', ['tests/e2e/stored-state.ts', documentId, String(depth)], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN,
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(ran.status, ran.stderr).toBe(0);
 }
 
 /**

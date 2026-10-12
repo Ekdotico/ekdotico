@@ -1,6 +1,7 @@
 // Settings read from the environment when a process starts. The web application
 // and the collaboration server both load them through this one module
 // (NFR-SE-17 (f)). Every secret is read here and nowhere else (NFR-SE-19).
+import { acceptedAddress } from './field-text.ts';
 
 /** A limit of NFR-SE-07: at most `max` in any `windowSeconds`. */
 export interface Limit {
@@ -66,6 +67,25 @@ export interface Settings {
   passwordMaxLength: number;
   /** FR-AU-82: the list of commonly used and known-compromised passwords, a file read on the server. */
   passwordListFile: string;
+  /**
+   * FR-AU-83: "The second step is completed within 10 minutes of the password
+   * (an initial value), or the sign-in begins again." The secret of an
+   * enrolment waits as long for its first code (two-factor.ts).
+   */
+  secondStepSeconds: number;
+  /**
+   * NFR-SE-07, "Wrong second-factor codes, for each sign-in": 5, an initial
+   * value. The wrong code that reaches the number abandons the sign-in, and
+   * at the first code of an enrolment, the enrolment.
+   */
+  secondStepWrongCodes: number;
+  /**
+   * FR-AU-81, NFR-SE-07: how long the twentieth failed sign-in locks an
+   * account, "1 hour", an initial value (register D115: "both figures are
+   * settings"; the other is the limit FAILED_SIGN_IN_PER_EMAIL). The sign-in
+   * link of the lock's email is valid as long.
+   */
+  signInLockSeconds: number;
   /**
    * FR-AU-89: the key of the signed admission requests, or none. Without it
    * every admission request is refused. The name and the form are provisional
@@ -191,6 +211,14 @@ export function loadSettings(env: Env = process.env): Settings {
   // deployment loses its email unnoticed: sign-in and reset answer the same
   // whether or not a message went.
   const local = ['localhost', '127.0.0.1'].includes(hostname);
+  // docs/operations/deployment.md, item 9: the web application passes `/collab`
+  // to the collaboration server itself on a development machine alone
+  // (next.config.ts). The build refuses the setting with an origin that is not
+  // on localhost; a build made on localhost and started elsewhere is refused
+  // here, and what such a build holds is refused by `refuseBuiltCollabRewrite`.
+  if (!local && env.COLLAB_PROXY_TARGET) {
+    throw new Error('COLLAB_PROXY_TARGET is for a development machine: unset it.');
+  }
   if (env.EMAIL_TRANSPORT ? env.EMAIL_TRANSPORT !== 'sink' : !local) {
     throw new Error('EMAIL_TRANSPORT must be set to sink: no other sender of email is built yet.');
   }
@@ -244,6 +272,19 @@ export function loadSettings(env: Env = process.env): Settings {
   if (passwordMinLength > passwordMaxLength) {
     throw new Error('PASSWORD_MIN_LENGTH must be no more than PASSWORD_MAX_LENGTH.');
   }
+  const limits = Object.fromEntries(
+    (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
+  ) as Record<LimitName, Limit>;
+  // At least 1: a lock of 0 seconds would be no lock, without a word.
+  const signInLockSeconds = wholeNumber(env, 'SIGN_IN_LOCK_SECONDS', 3600, 1);
+  // FR-AU-81, NFR-SE-07: the failures that caused a lock are still counted when
+  // a shorter lock ends, so the next single failure would be "the twentieth"
+  // again: a lock and an email for each failure, for the rest of the period.
+  if (signInLockSeconds < limits.FAILED_SIGN_IN_PER_EMAIL.windowSeconds) {
+    throw new Error(
+      'SIGN_IN_LOCK_SECONDS must be no less than the seconds of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL.',
+    );
+  }
   // FR-ED-36. At least 1: with 0 a deletion would be permanent at the next run
   // of the timer, and the confirmation would have promised a restore that is
   // not there. At most 3,650, ten years: the days are taken from the present
@@ -257,11 +298,26 @@ export function loadSettings(env: Env = process.env): Settings {
     );
   }
 
+  // The owner's decision of 9 October 2026: an entry that no account can have
+  // as its address (src/lib/field-text.ts) matches none, and the account it
+  // was meant for would be exempt from the gate without a word. The message
+  // says which entry and never repeats it (NFR-SE-19).
+  const foundingTeamEmails = list
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry, index) => {
+      const address = acceptedAddress(entry);
+      if (address === null) {
+        throw new Error(
+          `FOUNDING_TEAM_EMAILS: entry ${index + 1} is not an email address that an account can have. Write it in the form name@example.com, with its domain in plain letters, digits and hyphens.`,
+        );
+      }
+      return address;
+    });
+
   return {
-    foundingTeamEmails: list
-      .split(',')
-      .map((address) => address.trim().toLowerCase())
-      .filter(Boolean),
+    foundingTeamEmails,
     appOrigin,
     databaseUrl: required(env, 'DATABASE_URL', 'Set it to the connection string of the role ekdotico_app.'),
     valkeyUrl: required(env, 'VALKEY_URL', 'Set it to the address of Valkey.'),
@@ -274,6 +330,11 @@ export function loadSettings(env: Env = process.env): Settings {
     passwordMinLength,
     passwordMaxLength,
     passwordListFile: env.PASSWORD_LIST_FILE || 'data/common-passwords.txt',
+    // At least 1 each: a second step of 0 seconds could never be completed,
+    // and with 0 wrong codes no count would ever reach the number.
+    secondStepSeconds: wholeNumber(env, 'TWO_FACTOR_STEP_SECONDS', 600, 1),
+    secondStepWrongCodes: wholeNumber(env, 'TWO_FACTOR_WRONG_CODES', 5, 1),
+    signInLockSeconds,
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
@@ -284,10 +345,50 @@ export function loadSettings(env: Env = process.env): Settings {
     collabStoreDelayMs,
     collabStoreMaxMs,
     collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),
-    limits: Object.fromEntries(
-      (Object.keys(LIMITS) as LimitName[]).map((name) => [name, limit(env, name)]),
-    ) as Record<LimitName, Limit>,
+    limits,
   };
+}
+
+/**
+ * Refuses a start where the application is not on localhost and the build it
+ * runs holds the development rewrite of `/collab` (next.config.ts): `next
+ * start` reads its rewrites from the build and never from the environment, so
+ * a build made with `COLLAB_PROXY_TARGET` would serve the rewrite wherever it
+ * is started, whatever is set there.
+ *
+ * `manifest` is the text of `.next/routes-manifest.json`, or null where the
+ * file is absent. On localhost that is no fault: the development server has
+ * no build. Anywhere else a build that cannot be checked is refused as one
+ * that fails the check, whether the file is absent or cannot be read as a
+ * manifest: a start from another directory would otherwise pass unchecked.
+ */
+export function refuseBuiltCollabRewrite(appOrigin: string, manifest: string | null): void {
+  if (['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) return;
+  if (manifest === null) {
+    throw new Error(
+      'The routes manifest of the build was not found at .next/routes-manifest.json: start the application in the directory that holds its build.',
+    );
+  }
+  let rewrites: unknown;
+  try {
+    rewrites = (JSON.parse(manifest) as { rewrites?: unknown }).rewrites;
+  } catch {
+    rewrites = undefined;
+  }
+  if (rewrites === null || typeof rewrites !== 'object') {
+    throw new Error('The routes manifest of the build cannot be read: build the application again.');
+  }
+  // An array in an older manifest, and three lists by name in this one.
+  const all = (Array.isArray(rewrites) ? rewrites : Object.values(rewrites).flat()) as unknown[];
+  const collab = all.some((each) => {
+    const source = (each as { source?: unknown } | null)?.source;
+    return typeof source !== 'string' || source === '/collab' || source.startsWith('/collab/');
+  });
+  if (collab) {
+    throw new Error(
+      'This build passes /collab to the collaboration server itself, which is for a development machine: build the application again without COLLAB_PROXY_TARGET.',
+    );
+  }
 }
 
 let loaded: Settings | undefined;

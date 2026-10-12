@@ -1,7 +1,7 @@
 // The acceptance of an admission invitation, `POST /api/sign-up` (FR-AU-90,
 // FR-AU-09, FR-AU-82, FR-AU-02), through its route handler, against a
-// provisioned database. The origin check and the limit for each network
-// address are the proxy's, and are tested with it.
+// provisioned database. The limit for each network address is the proxy's,
+// and is tested with it; the origin check is the proxy's and the route's own.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,18 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
 // One step of the transaction, made to fail on demand.
-const fault = vi.hoisted(() => ({ workspace: false }));
+const fault = vi.hoisted(() => ({ workspace: false, cookie: false }));
+// The writing of the session's cookies, as the sign-up itself imports it.
+vi.mock('better-auth/cookies', async (original) => {
+  const actual = await original<typeof import('better-auth/cookies')>();
+  return {
+    ...actual,
+    setSessionCookie: (...args: Parameters<typeof actual.setSessionCookie>) =>
+      fault.cookie
+        ? Promise.reject(new Error('the cookie of private.person@example.com was not written'))
+        : actual.setSessionCookie(...args),
+  };
+});
 vi.mock('../../src/lib/workspace.ts', async (original) => {
   const actual = await original<typeof import('../../src/lib/workspace.ts')>();
   return {
@@ -67,6 +78,7 @@ const NOTHING = { users: 0, accounts: 0, workspaces: 0, sessions: 0 };
 afterEach(async () => {
   vi.restoreAllMocks();
   fault.workspace = false;
+  fault.cookie = false;
   await db().session.deleteMany();
   await db().workspace.deleteMany();
   await db().account.deleteMany();
@@ -327,7 +339,7 @@ describe('a request that cannot be read', () => {
     const response = await submit(undefined, raw);
     expect(looked).not.toHaveBeenCalled();
     expect(await refused(response, 422, token)).toBe(
-      'The account was not created, because the request could not be read. Reload the page and try again.',
+      'The account was not created, because Ekdotico could not read the request. Reload the page and try again.',
     );
   });
 });
@@ -352,6 +364,40 @@ describe('an account whose session cannot be started (FR-AU-90)', () => {
     // The person signs in on the sign-in page.
     vi.restoreAllMocks();
     expect((await signIn(auth, 'private.person@example.com', PASSWORD)).status).toBe(200);
+  });
+
+  // The owner's decision of 9 October 2026, as at a sign-in (sign-in-faults.test.ts).
+  it('leaves no session behind where the fault follows the making of the session, and the account stands', async () => {
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { id, token } = await invite('private.person@example.com');
+    const made = vi.spyOn((await auth().$context).internalAdapter, 'createSession');
+    fault.cookie = true;
+    const response = await submit({ token, name: 'A Person', password: PASSWORD });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ signedIn: false });
+    expect(response.headers.getSetCookie()).toEqual([]);
+    // The session was made, and is gone: no browser holds a cookie for it.
+    expect(made).toHaveBeenCalledTimes(1);
+    expect(await counts()).toEqual({ users: 1, accounts: 1, workspaces: 1, sessions: 0 });
+    expect((await db().admissionInvitation.findUniqueOrThrow({ where: { id } })).state).toBe('ACCEPTED');
+    expect(printed.mock.calls).toEqual([['sign-up: account created, session not started (Error)']]);
+    fault.cookie = false;
+    expect((await signIn(auth, 'private.person@example.com', PASSWORD)).status).toBe(200);
+  });
+
+  it('clears the cookies of a session the browser held, which the sign-up had ended before the fault', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const holder = await createAccount(auth, 'holder@example.com');
+    const cookie = cookiesOf(await signIn(auth, 'holder@example.com'));
+    const { token } = await invite('private.person@example.com');
+    fault.cookie = true;
+    const response = await submit({ token, name: 'A Person', password: PASSWORD }, undefined, { cookie });
+    expect(await response.json()).toEqual({ signedIn: false });
+    expect(await db().session.count()).toBe(0);
+    expect(await db().user.count({ where: { id: holder } })).toBe(1);
+    const cookies = response.headers.getSetCookie();
+    expect(cookies.some((each) => each.includes('session_token=;'))).toBe(true);
+    expect(cookies.some((each) => /session_token=[^;]/.test(each))).toBe(false);
   });
 });
 
@@ -561,6 +607,45 @@ describe('the endpoint inside the identity library', () => {
   });
 });
 
+// NFR-SE-17 (c): the route checks the origin itself, since the proxy can be
+// skipped (docs/operations/deployment.md).
+describe('a request from another origin (NFR-SE-17 (c))', () => {
+  const FORBIDDEN =
+    '{"error":{"code":"forbidden","message":"This request did not come from a page of Ekdotico and was not carried out. Open Ekdotico in the browser and try again."}}';
+  const forbidden = () => db().securityLogEntry.count({ where: { kind: 'forbidden', userId: null } });
+
+  it('is refused as the proxy refuses it, before the invitation is looked at, with one entry for the period', async () => {
+    const { token } = await invite('person@example.com');
+    const before = await forbidden();
+    const from = { 'x-forwarded-for': '203.0.113.50' };
+    for (const origin of ['https://evil.example', 'null', `${ORIGIN}.evil.example`, '']) {
+      const response = await submit({ token, name: 'A Person', password: PASSWORD }, undefined, {
+        origin,
+        ...from,
+      });
+      expect(response.status, origin).toBe(403);
+      expect(await response.text(), origin).toBe(FORBIDDEN);
+      expect(response.headers.getSetCookie(), origin).toEqual([]);
+    }
+    // Without the header at all.
+    const bare = await POST(
+      new Request(`${ORIGIN}/api/sign-up`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...from },
+        body: JSON.stringify({ token, name: 'A Person', password: PASSWORD }),
+      }),
+    );
+    expect(bare.status).toBe(403);
+    expect(await counts()).toEqual(NOTHING);
+    expect(await findOpenInvitation(token)).not.toBeNull();
+    // NFR-SE-19: a 403 has its entry, one for the period and the network
+    // address, however many requests were refused in it.
+    expect((await forbidden()) - before).toBe(1);
+    // And the invitation is accepted from the application's own origin.
+    expect((await submit({ token, name: 'A Person', password: PASSWORD })).status).toBe(201);
+  });
+});
+
 // The independent review of 8 October 2026. The identity library hashes the
 // compatibility form (NFKC) of a password; every rule has to judge that form,
 // and sign-in has to count as sign-up counted.
@@ -615,7 +700,96 @@ describe('a password as it is stored (FR-AU-81, FR-AU-82)', () => {
   });
 });
 
+// FR-AU-02: "two addresses that differ only by case are one address and cannot
+// belong to two accounts". The lower case of the Greek capital sigma is one of
+// two letters by where it stands, so an address typed in capitals and the same
+// address typed in small letters were two (the owner's decision of 9 October
+// 2026). Each is written by its code points.
+describe('one address, however its sigma and its marks are typed (FR-AU-02)', () => {
+  const of = (points: string) =>
+    String.fromCodePoint(...points.split(' ').map((point) => Number.parseInt(point, 16)));
+  const upper = `${of('39f 394 39f 3a3')}@Example.GR`;
+  const finalSigma = `${of('3bf 3b4 3bf 3c2')}@example.gr`;
+  const sigma = `${of('3bf 3b4 3bf 3c3')}@example.gr`;
+  const net = (n: number) => ({ 'x-forwarded-for': `203.0.113.${n}` });
+
+  it('is one account at sign-up, at sign-in, and at a reset, in each of its three spellings', async () => {
+    const { post, sunk } = await import('./identity.ts');
+    const { token } = await invite(upper);
+    expect((await submit({ token, name: 'A Person', password: PASSWORD })).status).toBe(201);
+    const user = await db().user.findFirstOrThrow();
+    expect(user.email).toBe(sigma);
+
+    // No second account: an invitation for any spelling finds the first.
+    for (const address of [upper, finalSigma, sigma]) {
+      const again = await createInvitation({ email: address, requestId: `request-${++invitations}` });
+      expect(again.outcome, address).toBe('account_exists');
+    }
+    // The spelling is the one the unique index holds: a second row is refused by it.
+    const { addressSpelling } = await import('../../src/lib/field-text.ts');
+    await expect(
+      db().user.create({ data: { id: 'second', name: 'Another', email: addressSpelling(finalSigma) } }),
+    ).rejects.toMatchObject({ code: 'P2002' });
+
+    // Sign-in, and a reset, find the account under each spelling.
+    let n = 0;
+    for (const address of [upper, finalSigma, sigma]) {
+      expect((await signIn(auth, address, PASSWORD, net(++n))).status, address).toBe(200);
+      const asked = await post(auth, '/request-password-reset', { email: address }, net(++n));
+      expect(asked.response.status).toBe(200);
+      await asked.after();
+    }
+    const resets = (await sunk(sink)).filter(
+      (message) => message.subject === 'Set a new password for Ekdotico',
+    );
+    expect(resets.map((message) => message.to)).toEqual([sigma, sigma, sigma]);
+    // The three were one address to the limit too: 3 in any hour (NFR-SE-07).
+    const fourth = await post(auth, '/request-password-reset', { email: finalSigma }, net(++n));
+    await fourth.after();
+    expect(
+      (await sunk(sink)).filter((message) => message.subject === 'Set a new password for Ekdotico'),
+    ).toHaveLength(3);
+  });
+
+  it('is one address whether a letter is typed composed or as a base and a mark', async () => {
+    const composed = `andr${of('e9')}@example.com`;
+    const decomposed = `andre${of('301')}@example.com`;
+    const { token } = await invite(decomposed);
+    expect((await submit({ token, name: 'A Person', password: PASSWORD })).status).toBe(201);
+    expect((await db().user.findFirstOrThrow()).email).toBe(composed);
+    for (const [n, address] of [composed, decomposed, decomposed.toUpperCase()].entries()) {
+      expect((await signIn(auth, address, PASSWORD, net(20 + n))).status, address).toBe(200);
+    }
+  });
+
+  it('creates no invitation for an address that could break a header', async () => {
+    for (const email of ['x<attacker@evil.example>', 'a@b.example,c', '"a"@b.example', 'a@[127.0.0.1]']) {
+      const result = await createInvitation({ email, requestId: `request-${++invitations}` });
+      expect(result.outcome, email).toBe('invalid');
+    }
+    expect(await db().admissionInvitation.count()).toBe(0);
+  });
+});
+
 describe('a name (FR-AU-90)', () => {
+  // The owner's decision of 9 October 2026: the rule of a name (tests/unit/field-text.test.ts).
+  it('refuses a name that reorders the text beside it, or shows nothing, and accepts a joiner inside a name', async () => {
+    const of = (points: string) =>
+      String.fromCodePoint(...points.split(' ').map((point) => Number.parseInt(point, 16)));
+    const { token } = await invite(`shown-${++invitations}@example.com`);
+    for (const name of [`${of('202e')}evil`, of('200b'), of('2800'), `a${of('2028')}b`, `a${of('85')}b`]) {
+      const response = await submit({ token, name, password: PASSWORD });
+      expect(response.status).toBe(422);
+      expect((await response.json()).error.fields.name).toBe(
+        'A name has 1 to 100 characters, at least one of which can be seen, and holds no control character and no character that changes the direction of text. Enter a name of that kind.',
+      );
+    }
+    expect(await findOpenInvitation(token)).not.toBeNull();
+    const persian = `${of('645 6cc 200c 62e 648 627 647 645')}`;
+    expect((await submit({ token, name: persian, password: PASSWORD })).status).toBe(201);
+    expect((await db().user.findFirstOrThrow()).name).toBe(persian);
+  });
+
   it.each([
     ['a null character', 'a\u0000b'],
     ['a line feed', 'a\nb'],

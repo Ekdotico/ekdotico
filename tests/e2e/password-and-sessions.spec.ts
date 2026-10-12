@@ -1,7 +1,7 @@
 // The reset of a password by an emailed link, its change in the account
 // settings, and the list of sessions with the means to end them (FR-AU-85,
 // FR-AU-86, FR-AU-87 (c), (d), FR-AU-88; NFR-I18-06).
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 import {
   NOTICE_TITLE,
   SIGN_IN_REFUSED,
@@ -15,6 +15,7 @@ import {
   watchOrigins,
 } from './account.ts';
 import { APP_ORIGIN } from './origin.ts';
+import { shown } from './shown.ts';
 
 // The fixed texts, written out here and not taken from the code under test.
 // FR-AU-86.
@@ -29,9 +30,8 @@ const NOTICE_EMAIL =
 // The application's own words (the owner's answer to Q6 of the plan).
 const NOT_VALID =
   'This link is no longer valid. A link to set a new password works once and is valid for 1 hour. Ask for a new one.';
-const RESET_DONE =
-  'The password is changed, and every session of the account has ended. Sign in with the new password.';
-const CHANGED = 'The password is changed. Every other session of this account has ended.';
+const RESET_DONE = 'Password changed. Every session of the account has ended. Sign in with the new password.';
+const CHANGED = 'Password changed. Every other session of this account has ended.';
 const UNAUTHENTICATED = 'This request needs a signed-in session. Sign in and try again.';
 
 const noticeTitle = { level: 1, name: NOTICE_TITLE } as const;
@@ -55,10 +55,10 @@ test('a password is reset by an emailed link, which works once, and the old pass
   await expect(page).toHaveURL('/sign-in');
 
   // FR-AU-86: from the sign-in page to the reset page, which needs no session.
-  await page.getByRole('link', { name: 'Set a new password' }).click();
+  await page.getByRole('link', { name: 'Set new password' }).click();
   await expect(page).toHaveURL('/reset-password');
-  await expect(page).toHaveTitle('Set a new password – Ekdotico');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Set a new password');
+  await expect(page).toHaveTitle('Set new password – Ekdotico');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Set new password');
   const address = page.getByLabel('Email address');
   await expect(address).toHaveAttribute('autocomplete', 'username');
   await expectNoSidewaysScroll(page);
@@ -79,7 +79,7 @@ test('a password is reset by an emailed link, which works once, and the old pass
 
   // The link opens a page that names the account and sets a new password.
   await page.goto(link);
-  await expect(page).toHaveTitle('Set a new password – Ekdotico');
+  await expect(page).toHaveTitle('Set new password – Ekdotico');
   await expect(page.locator('meta[name="referrer"]')).toHaveAttribute('content', 'no-referrer');
   const account = page.getByLabel('Email address');
   await expect(account).toHaveValue(person.email);
@@ -123,7 +123,7 @@ test('a password is reset by an emailed link, which works once, and the old pass
   await page.goto(link);
   await expect(page.getByRole('main').getByRole('heading', { level: 2 })).toHaveText(NOT_VALID);
   await expect(page.getByRole('textbox')).toHaveCount(0);
-  await expect(page.getByRole('link', { name: 'Set a new password' })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'Set new password' })).toHaveAttribute(
     'href',
     '/reset-password',
   );
@@ -217,7 +217,13 @@ test.describe('the account settings', () => {
     await expect(page).toHaveURL('/settings');
     await expect(page).toHaveTitle('Account settings – Ekdotico');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Account settings');
-    await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Password', 'Sessions']);
+    await expect(page.getByRole('heading', { level: 2 })).toHaveText([
+      'Name',
+      'Email address',
+      'Password',
+      'Two-factor authentication',
+      'Sessions',
+    ]);
     const sessions = page.getByRole('main').getByRole('listitem');
     await expect(sessions).toHaveCount(2);
     // Which one is in use, in words; the browser and the system; no network address.
@@ -228,13 +234,7 @@ test.describe('the account settings', () => {
     const times = sessions.first().locator('time');
     await expect(times).toHaveCount(2);
     const began = await times.first().getAttribute('datetime');
-    await expect(times.first()).toHaveText(
-      new Intl.DateTimeFormat('en-GB', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-        timeZone: 'Pacific/Auckland',
-      }).format(new Date(began!)),
-    );
+    await expect(times.first()).toHaveText(shown(began!, 'Pacific/Auckland'));
     await expectNoSidewaysScroll(page);
     await screens(page, 'settings');
 
@@ -263,7 +263,10 @@ test.describe('the account settings', () => {
     await expect(sessions).toHaveCount(2);
 
     // FR-AU-85: the change of the password requires the current one.
-    const current = page.getByLabel('Current password', { exact: true });
+    // In its own part of the page: the part for two-factor authentication asks for the password too.
+    const current = page
+      .getByRole('region', { name: 'Password' })
+      .getByLabel('Current password', { exact: true });
     const next = page.getByLabel('New password', { exact: true });
     await expect(current).toHaveAttribute('autocomplete', 'current-password');
     await expect(next).toHaveAttribute('autocomplete', 'new-password');
@@ -278,7 +281,8 @@ test.describe('the account settings', () => {
 
     await current.fill(person.password);
     await page.getByRole('button', { name: 'Change password' }).click();
-    await expect(page.getByRole('status')).toHaveText(CHANGED);
+    // In its own part of the page: the name and the address each have a status too.
+    await expect(page.getByRole('region', { name: 'Password' }).getByRole('status')).toHaveText(CHANGED);
     await expect(alertOn(page)).toHaveCount(0);
     // Neither password stays in the page.
     await expect(current).toHaveValue('');

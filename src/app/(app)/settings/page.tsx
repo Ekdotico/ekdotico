@@ -1,17 +1,21 @@
-// The account settings (FR-AU-85, FR-AU-88): the change of the password, and
-// the list of the account's sessions with the means to end them. The name, the
-// address, two-factor authentication and the deletion join it with the slices
-// that build them. The path is this application's choice: no page of the
+// The account settings (FR-AU-03, FR-AU-83, FR-AU-85, FR-AU-88, FR-AU-90): the
+// name, the address, the change of the password, two-factor authentication,
+// and the list of the account's sessions with the means to end them. The
+// deletion joins it with the slice that builds it. The path is this application's choice: no page of the
 // specification names one.
 import { PageHeading, Stack } from '@ekdotico/domico/components';
 import { listSessions } from '../../../lib/auth/session-list.ts';
+import { ofFoundingTeam } from '../../../lib/auth/two-factor.ts';
 import { db } from '../../../lib/db.ts';
 import { settings } from '../../../lib/settings.ts';
 import { reading } from '../../page-fault.ts';
 import styles from '../../pages.module.css';
 import { currentAccount, titled } from '../account.ts';
+import { ChangeAddressForm } from './change-address-form.tsx';
 import { ChangePasswordForm } from './change-password-form.tsx';
+import { NameForm } from './name-form.tsx';
 import { SessionList } from './session-list.tsx';
+import { TwoFactorSettings } from './two-factor-settings.tsx';
 
 export const generateMetadata = () => titled('Account settings');
 
@@ -24,15 +28,39 @@ export default async function AccountSettings() {
   // A fault of either read is the page of a fault, and one line (page-fault.ts).
   const [user, sessions] = await reading(() =>
     Promise.all([
-      db().user.findUnique({ where: { id: userId }, select: { email: true } }),
+      db().user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true, emailVerified: true, twoFactorEnabled: true },
+      }),
       listSessions(userId, sessionId),
     ]),
   );
   const { passwordMinLength, passwordMaxLength } = settings();
+  // FR-AU-83: an account of the founding team "cannot turn two-factor
+  // authentication off", so the control is not offered to it. Decided here,
+  // from the row and the list of the process. Nor can its address be changed
+  // (FR-AU-03), so that form is not offered to it either.
+  const foundingTeam = user ? ofFoundingTeam(user) : false;
 
   return (
     <Stack gap={8}>
       <PageHeading>Account settings</PageHeading>
+      <section aria-labelledby="name-heading" className={styles.narrow}>
+        <Stack gap={5}>
+          <h2 id="name-heading" className={styles.heading}>
+            Name
+          </h2>
+          <NameForm name={user?.name ?? ''} />
+        </Stack>
+      </section>
+      <section aria-labelledby="address-heading" className={styles.narrow}>
+        <Stack gap={5}>
+          <h2 id="address-heading" className={styles.heading}>
+            Email address
+          </h2>
+          <ChangeAddressForm email={user?.email ?? ''} foundingTeam={foundingTeam} />
+        </Stack>
+      </section>
       <section aria-labelledby="password-heading" className={styles.narrow}>
         <Stack gap={5}>
           <h2 id="password-heading" className={styles.heading}>
@@ -42,6 +70,18 @@ export default async function AccountSettings() {
             email={user?.email ?? ''}
             passwordMinLength={passwordMinLength}
             passwordMaxLength={passwordMaxLength}
+          />
+        </Stack>
+      </section>
+      <section aria-labelledby="two-factor-heading" className={styles.narrow}>
+        <Stack gap={5}>
+          <h2 id="two-factor-heading" className={styles.heading}>
+            Two-factor authentication
+          </h2>
+          <TwoFactorSettings
+            email={user?.email ?? ''}
+            on={user?.twoFactorEnabled === true}
+            foundingTeam={foundingTeam}
           />
         </Stack>
       </section>

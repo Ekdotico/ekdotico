@@ -59,6 +59,12 @@ const from = (n: number) => ({ 'x-forwarded-for': `198.51.100.${n}` });
 
 let people = 0;
 const address = () => `person${++people}@example.com`;
+/**
+ * An address that no account can have (the owner's decision of 9 October 2026:
+ * a full-width letter in its domain). A request for a reset does not refuse it
+ * for that: it finds no account, as any unknown address.
+ */
+const neverStored = () => `person${++people}@\u{ff45}xample.com`;
 async function person(verified = true) {
   const email = address();
   return { email, id: await createAccount(auth, email, verified) };
@@ -168,7 +174,15 @@ describe('the answer does not show who is registered (FR-AU-86, FR-AU-81)', () =
     const known = await person();
     const unverified = await person(false);
     const answers: string[] = [];
-    for (const email of [known.email, unverified.email, address(), 'not an address', '', 'x'.repeat(5000)]) {
+    for (const email of [
+      known.email,
+      unverified.email,
+      address(),
+      neverStored(),
+      'not an address',
+      '',
+      'x'.repeat(5000),
+    ]) {
       const { response } = await request(email);
       expect(response.status).toBe(200);
       expect(response.headers.getSetCookie()).toEqual([]);
@@ -199,7 +213,7 @@ describe('the answer does not show who is registered (FR-AU-86, FR-AU-81)', () =
     ];
     const asked = vi.spyOn(valkey(), 'eval');
 
-    for (const email of [known.email, unverified.email, address(), 'not an address']) {
+    for (const email of [known.email, unverified.email, address(), neverStored(), 'not an address']) {
       asked.mockClear();
       const { response, left } = await request(email);
       expect(response.status).toBe(200);
@@ -228,10 +242,11 @@ describe('the answer does not show who is registered (FR-AU-86, FR-AU-81)', () =
     } finally {
       database.sql('ALTER TABLE "UserAway" RENAME TO "User"');
     }
-    // NFR-SE-19: the work that failed is named, and nothing it held.
+    // NFR-SE-19: the work that failed is named, with the class and code of
+    // the fault, and nothing it held.
     expect(errors.mock.calls).toEqual([
-      ['after response: password reset link failed'],
-      ['after response: password reset link failed'],
+      ['after response: password reset link failed (PrismaClientKnownRequestError P2021)'],
+      ['after response: password reset link failed (PrismaClientKnownRequestError P2021)'],
     ]);
     expect(await mailTo(known.email, RESET_SUBJECT)).toHaveLength(0);
   });
@@ -296,7 +311,14 @@ describe('the answer does not show who is registered (FR-AU-86, FR-AU-81)', () =
     const unverified = await person(false);
     const unknown = address();
     const before = (await sunk(sink)).length;
-    for (const email of [unverified.email, unknown, 'not an address', '', 'a\u0000b@example.com']) {
+    for (const email of [
+      unverified.email,
+      unknown,
+      neverStored(),
+      'not an address',
+      '',
+      'a\u0000b@example.com',
+    ]) {
       const asked = await request(email);
       await asked.after();
     }

@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next';
+import { COMPANION_HEADERS, STATIC_POLICY } from './src/lib/csp.ts';
 
 /**
  * The pages whose address holds the token of a single-use link (src/proxy.ts,
@@ -52,11 +53,24 @@ const config: NextConfig = {
   rewrites: async () => collabRewrites(),
   // The development server would write an AGENTS.md of its own into the repository.
   agentRules: false,
-  headers: async () =>
-    TOKEN_PAGES.map((source) => ({
+  headers: async () => [
+    // Every response, the proxy's own answers and those it never saw among
+    // them (docs/operations/deployment.md): the headers of src/lib/csp.ts,
+    // with the policy that admits nothing. The proxy replaces the policy on
+    // the pages it passes on, with one that holds the nonce of the request
+    // (src/proxy.ts); a page that reaches a browser without passing the proxy
+    // runs nothing.
+    {
+      source: '/:path*',
+      headers: [{ key: 'Content-Security-Policy', value: STATIC_POLICY }, ...COMPANION_HEADERS],
+    },
+    // After the rule above, so that this value is the one sent: where two
+    // rules set one header, Next.js sends the last.
+    ...TOKEN_PAGES.map((source) => ({
       source,
       headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }],
     })),
+  ],
 };
 
 export default config;

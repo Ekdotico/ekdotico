@@ -1,8 +1,10 @@
 // FR-AU-90: accept an admission invitation. No session (NFR-SE-05 (a)): the
 // request is authorised by the token of a pending invitation, and by nothing
-// else. The origin check and the limit for each network address are the
-// proxy's (src/proxy.ts, group (a)).
+// else. The limit for each network address is the proxy's (src/proxy.ts,
+// group (a)); the origin check is the proxy's and, since the proxy can be
+// skipped, this route's own as well.
 import { auth } from '../../../lib/auth/auth.ts';
+import { refusedOrigin } from '../../../lib/auth/route-answers.ts';
 import { readSignUpBody } from '../../../lib/admission/sign-up.ts';
 import { INVITATION_NOT_OPEN } from '../../../lib/admission/statements.ts';
 import { faultOf } from '../../../lib/fault.ts';
@@ -19,12 +21,15 @@ const MESSAGES = {
   tooLong:
     'The account was not created, because the request is longer than a name and a password can make it. Shorten the name or the password and try again.',
   notRead:
-    'The account was not created, because the request could not be read. Reload the page and try again.',
+    'The account was not created, because Ekdotico could not read the request. Reload the page and try again.',
   internal: 'The account could not be created because of a fault on the server. Try again in a few minutes.',
 };
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    // NFR-SE-17 (c): before anything of the request is read.
+    const foreign = await refusedOrigin(request.headers);
+    if (foreign) return foreign;
     // A request that cannot be read says nothing of its invitation, so it is
     // answered before the endpoint is called, and never as "not open": the
     // invitation stands, and the form keeps what was typed.

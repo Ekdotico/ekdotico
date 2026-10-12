@@ -7,6 +7,7 @@
 // cannot differ. The list is the setting `FOUNDING_TEAM_EMAILS`, read when the
 // process starts and lowered then; it is never taken from a request or from
 // the database. Nothing here is of Next.js.
+import { addressSpelling } from '../field-text.ts';
 import { settings } from '../settings.ts';
 
 /** The columns of an account's row that the gate reads. */
@@ -27,5 +28,5 @@ export interface GatedAccount {
 export function stoppedByFoundingGate(account: GatedAccount): boolean {
   if (account.twoFactorEnabled === true) return false;
   if (account.emailVerified !== true || typeof account.email !== 'string') return false;
-  return settings().foundingTeamEmails.includes(account.email.toLowerCase());
+  return settings().foundingTeamEmails.includes(addressSpelling(account.email));
 }

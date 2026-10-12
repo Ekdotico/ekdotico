@@ -95,7 +95,8 @@ describe('the pages and endpoints of a person without a session (NFR-SE-05 (a))'
       ['GET', '/reset-password'],
       ['POST', '/api/auth/sign-in/email'],
       ['POST', '/api/sign-up'],
-      ['POST', '/sign-in/link/token'],
+      ['GET', '/sign-in/link/token'],
+      ['POST', '/api/auth/sign-in/link'],
     ] as const) {
       const response = await call(method, path, { ...from, origin: ORIGIN });
       const message = await expectError(response, 429, 'rate_limited');
@@ -127,7 +128,7 @@ describe('the pages and endpoints of a person without a session (NFR-SE-05 (a))'
   });
 
   it('refuse a request that changes state from any origin but the own (NFR-SE-17 (c))', async () => {
-    for (const path of ['/api/auth/sign-in/email', '/api/sign-up', '/sign-in/link/token']) {
+    for (const path of ['/api/auth/sign-in/email', '/api/sign-up', '/api/auth/sign-in/link']) {
       const from = address();
       await expectError(await call('POST', path, from), 403, 'forbidden');
       await expectError(await call('POST', path, { ...from, origin: 'null' }), 403, 'forbidden');
@@ -409,7 +410,7 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
   async function expectClosed(response: Response, errors: ReturnType<typeof quiet>, ...lines: string[]) {
     const message = await expectError(response, 500, 'internal');
     expect(message).toBe(
-      'The request could not be completed because of a fault on the server. Nothing was changed. Try again in a few minutes.',
+      'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.',
     );
     expect(errors.mock.calls).toEqual(lines.map((line) => [line]));
   }

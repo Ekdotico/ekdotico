@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadSettings } from '../../src/lib/settings.ts';
+import { loadSettings, refuseBuiltCollabRewrite } from '../../src/lib/settings.ts';
 
 const env = {
   FOUNDING_TEAM_EMAILS: '',
@@ -52,6 +52,35 @@ describe('loadSettings (FR-AU-83; register A102)', () => {
       FOUNDING_TEAM_EMAILS: ' One@Example.com,two@example.com ,',
     });
     expect(foundingTeamEmails).toEqual(['one@example.com', 'two@example.com']);
+  });
+
+  // The owner's decision of 9 October 2026: an entry that no account can have
+  // as its address would match none, and exempt the account it was meant for.
+  it.each([
+    ['a full-width letter in its domain', 'listed@\u{ff45}xample.com'],
+    ['a ligature in its domain', 'listed@of\u{fb01}ce.example'],
+    ['a label that ends with a hyphen', 'listed@example-.com'],
+    ['an empty label', 'listed@example..com'],
+    ['no domain', 'listed'],
+    ['a semicolon where a comma was meant', 'listed@example.com;other@example.com'],
+  ])('refuses to start where an entry has %s, and says which without repeating it', (_what, entry) => {
+    const start = () => loadSettings({ ...env, FOUNDING_TEAM_EMAILS: `One@Example.com, ${entry} ,` });
+    expect(start).toThrow(
+      new Error(
+        'FOUNDING_TEAM_EMAILS: entry 2 is not an email address that an account can have. Write it in the form name@example.com, with its domain in plain letters, digits and hyphens.',
+      ),
+    );
+    expect(start).not.toThrow('listed');
+    expect(start).not.toThrow('One@');
+  });
+
+  it('starts with entries in Greek and in punycode, each in its one spelling', () => {
+    const greek = String.fromCodePoint(0x3c0, 0x3b1);
+    const { foundingTeamEmails } = loadSettings({
+      ...env,
+      FOUNDING_TEAM_EMAILS: `A@${greek.toUpperCase()}.GR,b@XN--BCHER-KVA.example`,
+    });
+    expect(foundingTeamEmails).toEqual([`a@${greek}.gr`, 'b@xn--bcher-kva.example']);
   });
 });
 
@@ -148,6 +177,13 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
   it('keeps the signed copy of a session for 1 minute and the security log for 30 days', () => {
     expect(settings.cookieCacheSeconds).toBe(60);
     expect(settings.securityLogRetentionDays).toBe(30);
+  });
+
+  // FR-AU-83: "within 10 minutes of the password (an initial value)"; NFR-SE-07: 5 wrong codes.
+  it('gives the second step of a sign-in 10 minutes and 5 wrong codes, and takes another of each', () => {
+    expect(settings).toMatchObject({ secondStepSeconds: 600, secondStepWrongCodes: 5 });
+    const changed = loadSettings({ ...env, TWO_FACTOR_STEP_SECONDS: '120', TWO_FACTOR_WRONG_CODES: '3' });
+    expect(changed).toMatchObject({ secondStepSeconds: 120, secondStepWrongCodes: 3 });
   });
 
   // FR-ED-36: "retained for 30 days (an initial value)".
@@ -251,6 +287,8 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'PASSWORD_MIN_LENGTH',
     'PASSWORD_MAX_LENGTH',
     'ADMISSION_INVITATION_DAYS',
+    'TWO_FACTOR_STEP_SECONDS',
+    'TWO_FACTOR_WRONG_CODES',
   ])('refuses 0 as %s', (name) => {
     expect(() => loadSettings({ ...env, [name]: '0' })).toThrow(`${name} must be a whole number, 1 or more.`);
   });
@@ -273,6 +311,38 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(least).toMatchObject({ sessionMaxSeconds: 1, trustedProxyCount: 0, cookieCacheSeconds: 0 });
     expect(least.admissionInvitationDays).toBe(1);
     expect(loadSettings(env).admissionInvitationDays).toBe(30);
+  });
+
+  // FR-AU-81, NFR-SE-07: a lock that ended while its failures were still
+  // counted would begin again, with its email, at each single failure.
+  describe('SIGN_IN_LOCK_SECONDS and the period of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL', () => {
+    const refusal =
+      'SIGN_IN_LOCK_SECONDS must be no less than the seconds of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL.';
+
+    it.each([
+      [{ SIGN_IN_LOCK_SECONDS: '3599' }],
+      [{ SIGN_IN_LOCK_SECONDS: '1' }],
+      [{ RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/3601' }],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/601' }],
+    ])('refuses a lock shorter than the period its failures are counted in: %o', (changed) => {
+      expect(() => loadSettings({ ...env, ...changed })).toThrow(new Error(refusal));
+    });
+
+    it.each([
+      [{}, 3600],
+      [{ SIGN_IN_LOCK_SECONDS: '3600' }, 3600],
+      [{ SIGN_IN_LOCK_SECONDS: '7200' }, 7200],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '20/600' }, 600],
+      [{ SIGN_IN_LOCK_SECONDS: '600', RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '5/60' }, 600],
+    ])('admits one as long as the period, or longer: %o', (changed, seconds) => {
+      expect(loadSettings({ ...env, ...changed }).signInLockSeconds).toBe(seconds);
+    });
+
+    it('still refuses 0', () => {
+      expect(() => loadSettings({ ...env, SIGN_IN_LOCK_SECONDS: '0' })).toThrow(
+        'SIGN_IN_LOCK_SECONDS must be a whole number, 1 or more.',
+      );
+    });
   });
 
   // docs/contracts/admission-signature.md, "The setting"; NFR-SE-17 (e).
@@ -347,4 +417,74 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(() => loadSettings({ ...env, SESSION_MAX_SECONDS: '3600' })).toThrow(/SESSION_MAX_SECONDS/);
     expect(load(600, 600, 600)).toMatchObject({ sessionRenewSeconds: 600, sessionMaxSeconds: 600 });
   });
+});
+
+// docs/operations/deployment.md, item 9: the development rewrite of `/collab`
+// is refused at the start of a process that is not on localhost, by the
+// setting and by what the build holds, since `next start` reads the build.
+describe('the development rewrite of /collab, at the start of a process', () => {
+  const target = 'http://127.0.0.1:1234';
+  const manifest = (afterFiles: unknown[]) =>
+    JSON.stringify({ version: 3, rewrites: { beforeFiles: [], afterFiles, fallback: [] } });
+  const rewrite = { source: '/collab', destination: `${target}/collab`, regex: '^/collab(?:/)?$' };
+
+  it('is refused by its setting where the origin is not on localhost', () => {
+    expect(() => loadSettings({ ...env, COLLAB_PROXY_TARGET: target })).toThrow(
+      /COLLAB_PROXY_TARGET is for a development machine/,
+    );
+    expect(() => loadSettings({ ...env, COLLAB_PROXY_TARGET: target })).not.toThrow(/127\.0\.0\.1/);
+    expect(loadSettings({ ...env, COLLAB_PROXY_TARGET: '' }).appOrigin).toBe(env.APP_ORIGIN);
+  });
+
+  it.each(['http://localhost:3000', 'http://127.0.0.1:3000'])('is admitted on %s', (origin) => {
+    expect(loadSettings({ ...env, APP_ORIGIN: origin, COLLAB_PROXY_TARGET: target }).appOrigin).toBe(origin);
+    expect(() => refuseBuiltCollabRewrite(origin, manifest([rewrite]))).not.toThrow();
+  });
+
+  it('is refused where the build holds it and the origin is not on localhost', () => {
+    const refused = /This build passes \/collab to the collaboration server itself/;
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([rewrite]))).toThrow(refused);
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([rewrite]))).not.toThrow(/127\.0\.0\.1/);
+    expect(() =>
+      refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{ source: '/collab/:path*', destination: target }])),
+    ).toThrow(refused);
+    // The older form of the manifest, a list; and each of the three lists of this one.
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, JSON.stringify({ rewrites: [rewrite] }))).toThrow(
+      refused,
+    );
+    for (const list of ['beforeFiles', 'fallback']) {
+      expect(() =>
+        refuseBuiltCollabRewrite(env.APP_ORIGIN, JSON.stringify({ rewrites: { [list]: [rewrite] } })),
+      ).toThrow(refused);
+    }
+    // A rewrite that cannot be read is not taken for another path.
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{}]))).toThrow(refused);
+  });
+
+  it('admits a build without it', () => {
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([]))).not.toThrow();
+    expect(() =>
+      refuseBuiltCollabRewrite(env.APP_ORIGIN, manifest([{ source: '/collaborators', destination: '/x' }])),
+    ).not.toThrow();
+  });
+
+  // A build that is not where it is looked for cannot be checked, so it does
+  // not pass: only a development machine starts without one.
+  it('refuses the absence of a build where the origin is not on localhost, and admits it there', () => {
+    expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, null)).toThrow(
+      /routes manifest of the build was not found/,
+    );
+    for (const origin of ['http://localhost:3000', 'http://127.0.0.1:3000']) {
+      expect(() => refuseBuiltCollabRewrite(origin, null)).not.toThrow();
+    }
+  });
+
+  it.each(['', 'not JSON', '{}', '{"rewrites":null}', '{"rewrites":"none"}'])(
+    'refuses a manifest that cannot be read (%j)',
+    (text) => {
+      expect(() => refuseBuiltCollabRewrite(env.APP_ORIGIN, text)).toThrow(
+        /routes manifest of the build cannot be read/,
+      );
+    },
+  );
 });

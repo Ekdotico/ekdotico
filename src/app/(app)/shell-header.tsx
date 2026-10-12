@@ -9,7 +9,7 @@ import { SignOutButton } from './sign-out-button.tsx';
 
 /**
  * The header of the signed-in pages: the product's name, which leads to the
- * first page, the account settings (FR-AU-85), and the way to sign out
+ * list of documents, the account settings (FR-AU-85), and the way to sign out
  * (FR-AU-84).
  */
 export function ShellHeader() {

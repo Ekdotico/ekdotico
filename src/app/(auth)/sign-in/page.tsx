@@ -28,19 +28,22 @@ export default async function SignIn({
   // on to where it was going. A read, so the signed copy serves (NFR-SE-02).
   // A fault of it is the page of a fault (page-fault.ts).
   const sent = await headers();
-  const { session } = await reading(() => validateSession('GET', sent));
-  if (session) redirect(returnTo);
+  // The session of an account the founding-team gate stops is one too: where
+  // it is sent, it meets the enrolment (FR-AU-83).
+  const { session, stopped } = await reading(() => validateSession('GET', sent));
+  if (session ?? stopped) redirect(returnTo);
 
   return (
     <>
       <PageHeading>Sign in</PageHeading>
       <SignInForm returnTo={returnTo} />
-      {/* FR-AU-86. The words are those the email of the account uses for it:
-          "set a new password from the sign-in page" (FR-AU-87 (d)). Not
-          fetched ahead: each request to these pages is counted (NFR-SE-07). */}
+      {/* FR-AU-86. The verb and the noun are those the email of the account
+          uses for it, "set a new password from the sign-in page" (FR-AU-87
+          (d)), without the article, as a label has none. Not fetched ahead:
+          each request to these pages is counted (NFR-SE-07). */}
       <p className={styles.text}>
         <Link href="/reset-password" prefetch={false}>
-          Set a new password
+          Set new password
         </Link>
       </p>
     </>

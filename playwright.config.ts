@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +20,10 @@ import { APP_ORIGIN, APP_PORT, AUTH_SECRET, COLLAB_PORT } from './tests/e2e/orig
 process.env.E2E_EMAIL_SINK ??= mkdtempSync(join(tmpdir(), 'ekdotico-e2e-mail-'));
 // The key of the signed admission requests, for this run and nothing else.
 process.env.E2E_ADMISSION_SECRET ??= 'a-test-value-for-the-end-to-end-tests-and-nothing-else';
+// The one address on the list of the founding team (FR-AU-83): an address no
+// earlier run used, since the database of a development machine keeps its
+// accounts. Written with a capital: the list is compared without regard to case.
+process.env.E2E_FOUNDER ??= `E2E-Founder-${randomBytes(6).toString('hex')}@example.com`;
 // The database. On a development machine it is the local one of README.md,
 // provisioned and migrated. Where an administrator's connection is given, as
 // in CI, which has no such database, the run makes one of its own, as the
@@ -46,7 +51,7 @@ export default defineConfig({
     env: {
       // `next start` listens where PORT says: 3000, or E2E_PORT (tests/e2e/origin.ts).
       PORT: APP_PORT,
-      FOUNDING_TEAM_EMAILS: '',
+      FOUNDING_TEAM_EMAILS: process.env.E2E_FOUNDER,
       APP_ORIGIN,
       DATABASE_URL: process.env.E2E_DATABASE_URL,
       VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
@@ -66,6 +71,22 @@ export default defineConfig({
       // The same for the requests for a password reset, 10 an hour, which
       // the runs of an afternoon would use up between them.
       RATE_LIMIT_RESET_PER_ADDRESS: '100000/3600',
+      // And for the admission endpoints, 60 a minute in all (NFR-SE-07). A
+      // run asks for some forty invitations within its minute, and the count
+      // is kept in Valkey under a key that every run shares, so a run begun
+      // within a minute of another was answered 429. The limit itself is
+      // tested against a count of its own (tests/integration).
+      RATE_LIMIT_ADMISSION: '100000/60',
+      // And for the lock of FR-AU-81. Every request of a run comes from one
+      // network address, which is allowed five failed sign-ins for an email
+      // address in 15 minutes: left so, that limit would refuse by itself at
+      // the failure that locks, and a test could not tell the two apart. It
+      // is put out of the way, and the fifth failure for an address is the
+      // one that locks (tests/e2e/lock-and-link.spec.ts). No other test
+      // counts on the five: the abandoned second steps of two-factor.spec.ts
+      // count one failure each.
+      RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS: '50/900',
+      RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: '5/3600',
     },
     reuseExistingServer: false,
     timeout: 180_000,

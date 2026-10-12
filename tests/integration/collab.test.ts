@@ -21,7 +21,8 @@ const FOUNDER = 'founder@example.com';
 const database = prepare('collab');
 const { auth, db, valkey, settings, validateSession } = await load();
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
-const { applyState } = await import('../../src/lib/collab/state.ts');
+const limits = await import('../../src/lib/collab/state.ts');
+const { applyState } = limits;
 const { COLLAB_PATH, REFUSAL } = await import('../../src/lib/collab/protocol.ts');
 const { PERMISSIONS } = await import('../../src/lib/documents/permissions.ts');
 
@@ -130,6 +131,13 @@ async function expectRefused(port: number, asked: Asked, status: number) {
   expect(answer.status).toBe(status);
   expect(answer.body).toBe('');
   expect(answer.headers['cache-control']).toBe('no-store');
+  // src/lib/csp.ts: an answer of this server is no page, and admits nothing.
+  expect(answer.headers['content-security-policy']).toBe("default-src 'none'; frame-ancestors 'none'");
+  expect(answer.headers['x-content-type-options']).toBe('nosniff');
+  // The owner's decision of 9 October 2026: the three that keep a response to its origin.
+  expect(answer.headers['cross-origin-opener-policy']).toBe('same-origin');
+  expect(answer.headers['cross-origin-resource-policy']).toBe('same-origin');
+  expect(answer.headers['permissions-policy']).toMatch(/^clipboard-write=\(self\)(, [a-z-]+=\(\))+$/);
   expect(answer.headers.upgrade).toBeUndefined();
   return answer;
 }
@@ -320,6 +328,19 @@ describe('the health check and the path (NFR-SE-05 (c))', () => {
     const health = await fetch(`${base}/collab/health`);
     expect(health.status).toBe(200);
     expect(await health.text()).toBe('');
+    const owed = (response: Response) => {
+      expect(response.headers.get('content-security-policy')).toBe(
+        "default-src 'none'; frame-ancestors 'none'",
+      );
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('cross-origin-opener-policy')).toBe('same-origin');
+      expect(response.headers.get('cross-origin-resource-policy')).toBe('same-origin');
+      expect(response.headers.get('permissions-policy')).toMatch(
+        /^clipboard-write=\(self\)(, [a-z-]+=\(\))+$/,
+      );
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    };
+    owed(health);
     for (const [method, path] of [
       ['POST', '/collab/health'],
       ['GET', '/collab'],
@@ -328,6 +349,7 @@ describe('the health check and the path (NFR-SE-05 (c))', () => {
       const response = await fetch(base + path, { method });
       expect(response.status).toBe(404);
       expect(await response.text()).toBe('');
+      owed(response);
     }
   });
 
@@ -886,6 +908,215 @@ describe('a state that cannot be loaded (NFR-RE-07)', () => {
   );
 });
 
+// The owner's decision of 9 October 2026 on the second review of pull request
+// 20: the state of a document is at most 5 MB, and its elements at most 50
+// deep. Before it, 210 KB of quotes nested ten thousand deep were stored, and
+// were a fault of every page that opened the document afterwards.
+describe('the limits of a document (src/lib/collab/state.ts)', () => {
+  const { MAX_ELEMENT_DEPTH, MAX_MESSAGE_BYTES, MAX_STATE_BYTES } = limits;
+  /** Quotes one inside another, with a paragraph in the innermost: `depth` elements deep in all. */
+  function nest(fragment: Y.XmlFragment, depth: number, words: string) {
+    fragment.doc!.transact(() => {
+      let parent: Y.XmlFragment = fragment;
+      for (let level = 1; level < depth; level += 1) {
+        const quote = new Y.XmlElement('blockquote');
+        parent.insert(parent.length, [quote]);
+        parent = quote;
+      }
+      const paragraph = new Y.XmlElement('paragraph');
+      paragraph.insert(0, [new Y.XmlText(words)]);
+      parent.insert(parent.length, [paragraph]);
+    });
+  }
+  /** What the stored state of a document holds: its changes, how deep it is, and its bytes. */
+  async function held(id: string) {
+    const row = await db().document.findUniqueOrThrow({ where: { id }, select: { yjsState: true } });
+    const document = new Y.Doc();
+    if (row.yjsState) applyState(document, row.yjsState);
+    return {
+      changes: document.getArray<string>('changes').toArray(),
+      depth: limits.elementDepth(document),
+      bytes: row.yjsState?.byteLength ?? 0,
+    };
+  }
+  /** An open document with one change stored, and a second member who watches it. */
+  async function opened() {
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    const first = connect(server.port, owner.cookie).open(id);
+    const watching = connect(server.port, await owner.signedIn()).open(id);
+    await Promise.all([first.synced, watching.synced]);
+    first.changes.push(['before']);
+    await until(async () => (await stored(id))?.length === 1, 3000);
+    await until(() => watching.changes.length === 1);
+    return { owner, id, watching };
+  }
+  /** One more client of the document, which will send what `change` puts into its copy. */
+  async function sending(owner: Awaited<ReturnType<typeof person>>, id: string) {
+    const client = connect(server.port, await owner.signedIn());
+    const { provider, synced } = client.open(id);
+    await synced;
+    await sleep(200);
+    const acknowledged = () => client.framesFor(id).filter((each) => each.type === SYNC_STATUS).length;
+    return { client, provider, acknowledged, before: acknowledged() };
+  }
+  /** Refused as an update that cannot be stored is: the connection closed, nothing acknowledged, stored or sent on. */
+  async function expectRefusedUpdate(
+    { owner, id, watching }: Awaited<ReturnType<typeof opened>>,
+    change: (document: Y.Doc) => void,
+  ) {
+    const { client, provider, acknowledged, before } = await sending(owner, id);
+    change(provider.document);
+    await until(() => client.framesFor(id).some((each) => each.type === CLOSE), 20_000);
+    expect(acknowledged()).toBe(before);
+    // NFR-SE-19: one entry, with the user and the document and nothing else.
+    await until(async () => (await logged()).length > 0);
+    expect(await logged()).toEqual([{ kind: 'forbidden', userId: owner.id, documentId: id }]);
+    // Longer than the 2 seconds of a store (NFR-RE-07): nothing of it is stored or sent on.
+    await sleep(2500);
+    expect(await held(id)).toMatchObject({ changes: ['before'], depth: 0 });
+    expect(watching.changes.toArray()).toEqual(['before']);
+    expect(watching.provider.document.getXmlFragment('default').length).toBe(0);
+    expect(server.child.exitCode).toBeNull();
+    // The document still opens, and is still written to.
+    watching.changes.push(['after']);
+    await until(async () => (await stored(id))?.length === 2, 3000);
+    const later = connect(server.port, await owner.signedIn()).open(id);
+    await later.synced;
+    expect(later.changes.toArray()).toEqual(['before', 'after']);
+    expect(later.provider.document.getXmlFragment('default').length).toBe(0);
+  }
+
+  it(
+    'refuses quotes nested ten thousand deep, and the document still opens',
+    { timeout: 60_000 },
+    async () => {
+      const open = await opened();
+      await expectRefusedUpdate(open, (document) =>
+        nest(document.getXmlFragment('default'), 10_000, CONTENT),
+      );
+    },
+  );
+
+  it(
+    'takes elements 50 deep and refuses 51, the text of an element being no level',
+    { timeout: 60_000 },
+    async () => {
+      expect(MAX_ELEMENT_DEPTH).toBe(50);
+      const open = await opened();
+      await expectRefusedUpdate(open, (document) =>
+        nest(document.getXmlFragment('default'), MAX_ELEMENT_DEPTH + 1, 'too deep'),
+      );
+      await db().securityLogEntry.deleteMany();
+
+      const { client, provider, acknowledged, before } = await sending(open.owner, open.id);
+      nest(provider.document.getXmlFragment('default'), MAX_ELEMENT_DEPTH, 'deep enough');
+      await until(() => acknowledged() > before);
+      await until(async () => (await held(open.id)).depth === MAX_ELEMENT_DEPTH, 4000);
+      expect(client.framesFor(open.id).some((each) => each.type === CLOSE)).toBe(false);
+      await until(() => limits.elementDepth(open.watching.provider.document) === MAX_ELEMENT_DEPTH);
+      expect(await logged()).toEqual([]);
+
+      // One level more, added to what is there, is refused; a change that adds none is taken.
+      const innermost = (document: Y.Doc) => {
+        let element = document.getXmlFragment('default').get(0) as Y.XmlElement;
+        while (element.get(0) instanceof Y.XmlElement) element = element.get(0) as Y.XmlElement;
+        return element;
+      };
+      (innermost(provider.document).get(0) as Y.XmlText).insert(0, 'and written in, ');
+      await until(() => acknowledged() > before + 1);
+      const deeper = await sending(open.owner, open.id);
+      innermost(deeper.provider.document).insert(1, [new Y.XmlElement('hardBreak')]);
+      await until(() => deeper.client.framesFor(open.id).some((each) => each.type === CLOSE));
+      await sleep(2500);
+      expect((await held(open.id)).depth).toBe(MAX_ELEMENT_DEPTH);
+    },
+  );
+
+  it(
+    'refuses the update that takes the state past 5 MB, by itself or on top of what is there',
+    { timeout: 120_000 },
+    async () => {
+      expect(MAX_STATE_BYTES).toBe(5 * 1024 * 1024);
+      // Past the limit of the state, and inside what the socket takes: this is the server's own refusal.
+      const open = await opened();
+      const over = 'x'.repeat(MAX_STATE_BYTES + 1024);
+      expect(over.length).toBeLessThan(MAX_MESSAGE_BYTES - 1024);
+      await expectRefusedUpdate(open, (document) => document.getArray<string>('changes').push([over]));
+      await db().securityLogEntry.deleteMany();
+
+      // Three megabytes are taken, and stored; three more are not.
+      const { owner, id } = open;
+      const first = await sending(owner, id);
+      first.provider.document.getMap('large').set('one', 'y'.repeat(3 * 1024 * 1024));
+      await until(() => first.acknowledged() > first.before, 20_000);
+      await until(async () => (await held(id)).bytes > 3 * 1024 * 1024, 5000);
+      const second = await sending(owner, id);
+      second.provider.document.getMap('large').set('two', 'z'.repeat(3 * 1024 * 1024));
+      await until(() => second.client.framesFor(id).some((each) => each.type === CLOSE), 20_000);
+      await until(async () => (await logged()).length > 0);
+      expect(await logged()).toEqual([{ kind: 'forbidden', userId: owner.id, documentId: id }]);
+      await sleep(2500);
+      const now = await held(id);
+      expect(now.bytes).toBeLessThanOrEqual(MAX_STATE_BYTES);
+      expect(now.changes).toEqual(['before', 'after']);
+      const later = connect(server.port, await owner.signedIn()).open(id);
+      await later.synced;
+      expect([...later.provider.document.getMap('large').keys()]).toEqual(['one']);
+    },
+  );
+
+  // Without the option the socket library reads a message of up to 100 MiB into memory.
+  it(
+    'closes a socket that sends a message longer than the largest document',
+    { timeout: 60_000 },
+    async () => {
+      expect(MAX_MESSAGE_BYTES).toBe(MAX_STATE_BYTES + 64 * 1024);
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const socket = new WebSocket(`ws://127.0.0.1:${server.port}${COLLAB_PATH}`, {
+        headers: { cookie: owner.cookie, origin: ORIGIN },
+      } as never);
+      const closed = new Promise<number>((resolve) =>
+        socket.addEventListener('close', (event) => resolve(event.code)),
+      );
+      await new Promise((resolve) => socket.addEventListener('open', resolve));
+      socket.send(sent(id, SYNC, UPDATE, new Uint8Array(MAX_MESSAGE_BYTES)));
+      // "Message too big" (RFC 6455).
+      expect(await closed).toBe(1009);
+      expect(server.child.exitCode).toBeNull();
+      // A message that is inside the bound is read: the same socket stays open for it.
+      const inside = connect(server.port, await owner.signedIn());
+      const { provider, synced, changes } = inside.open(id);
+      await synced;
+      provider.document.getMap('large').set('one', 'y'.repeat(4 * 1024 * 1024));
+      changes.push(['after it']);
+      await until(async () => (await stored(id))?.length === 1, 10_000);
+    },
+  );
+
+  it('leaves a document that is past a limit already open to every change that does not take it further', async () => {
+    // Stored before there was a limit: 60 deep.
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    const old = new Y.Doc();
+    nest(old.getXmlFragment('default'), 60, 'stored before the limit');
+    await db().document.update({
+      where: { id },
+      data: { yjsState: Buffer.from(Y.encodeStateAsUpdate(old)) },
+    });
+    const { client, provider, acknowledged, before } = await sending(owner, id);
+    expect(limits.elementDepth(provider.document)).toBe(60);
+    provider.document.getArray<string>('changes').push(['written beside it']);
+    await until(() => acknowledged() > before);
+    // What is too deep can be taken out.
+    provider.document.getXmlFragment('default').delete(0, 1);
+    await until(async () => (await held(id)).depth === 0, 4000);
+    expect(client.framesFor(id).some((each) => each.type === CLOSE)).toBe(false);
+    expect(await logged()).toEqual([]);
+  });
+});
+
 describe('an orderly stop (NFR-RE-07)', () => {
   it('stores every open document before the process exits', async () => {
     const stopping = await startServer();
@@ -1059,12 +1290,16 @@ describe('the order of the handshake (FR-AU-08; API design, "Collaboration conne
       expect(limit).not.toHaveBeenCalled();
       expect(account).not.toHaveBeenCalled();
 
-      // Accepted: the session, then the limit, then the account's row for the gate.
+      // Accepted: the session, then the limit. The gate is the validation's own
+      // (src/lib/auth/session.ts), so the handshake reads no row of its own
+      // for it. That a gated account is refused with a 403 is asserted in "the
+      // founding-team gate at the handshake"; that its limit is taken first is
+      // not asserted by any test.
       expect((await handshake(local.port, { cookie })).status).toBe(101);
       expect(session).toHaveBeenCalledTimes(2);
       expect(limit).toHaveBeenCalledTimes(1);
       expect(session.mock.invocationCallOrder[1]!).toBeLessThan(limit.mock.invocationCallOrder[0]!);
-      expect(limit.mock.invocationCallOrder[0]!).toBeLessThan(account.mock.invocationCallOrder[0]!);
+      expect(account).not.toHaveBeenCalled();
     } finally {
       await local.stop();
     }

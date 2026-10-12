@@ -432,6 +432,12 @@ describe('create (FR-AU-89 (a))', () => {
     ['an address with a space', { email: 'per son@example.com', requestId: 'r' }],
     ['an address with a line break', { email: 'person@example.com\nBcc: other@example.com', requestId: 'r' }],
     ['an address that is not text', { email: ['person@example.com'], requestId: 'r' }],
+    // The owner's decision of 9 October 2026: refused, and not mapped to the plain domain.
+    ['a full-width letter in the domain', { email: 'person@\u{ff45}xample.com', requestId: 'r' }],
+    ['a superscript digit in the domain', { email: 'person@example\u{b2}.com', requestId: 'r' }],
+    ['a ligature in the domain', { email: 'person@of\u{fb01}ce.example', requestId: 'r' }],
+    ['a label of the domain that ends with a hyphen', { email: 'person@example-.com', requestId: 'r' }],
+    ['an empty label in the domain', { email: 'person@example..com', requestId: 'r' }],
     ['a request identifier with another character', { email: 'person@example.com', requestId: 'r 1' }],
     ['a request identifier of 65 characters', { email: 'person@example.com', requestId: 'r'.repeat(65) }],
     ['an empty request identifier', { email: 'person@example.com', requestId: '' }],
@@ -715,7 +721,7 @@ describe('the command (FR-AU-89; register D113)', () => {
     const lines: string[] = [];
     expect(await run(['list'], ENV, broken, (line) => lines.push(line))).toBe(1);
     expect(lines).toEqual([
-      'The answer of the application could not be read. List the invitations to see what was done.',
+      'The command could not read the answer of the application. List the invitations to see what was done.',
     ]);
   });
 

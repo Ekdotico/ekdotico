@@ -13,13 +13,14 @@ import {
   TextField,
   Tooltip,
 } from '@ekdotico/domico/components';
+import { useReady } from '../../components/ready.ts';
 import { send, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { InBrowser, LocalTime } from './local-time.tsx';
 import { NOT_RECORDED, NOT_RECORDED_EXPLANATION } from './not-recorded.ts';
 
 // FR-ED-35: the limit of a title and its default, stated where a title is typed.
-const TITLE_HINT = 'At most 200 characters. An empty title is stored as “Untitled document”.';
+const TITLE_HINT = 'A title has at most 200 characters. An empty title is stored as “Untitled document”.';
 
 export interface DocumentItem {
   id: string;
@@ -177,6 +178,7 @@ export function Documents({
   const [fault, setFault] = useState<Fault | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [creating, setCreating] = useState(false);
+  const ready = useReady();
   const [renaming, setRenaming] = useState<DocumentItem | null>(null);
   const [deleting, setDeleting] = useState<DocumentItem | null>(null);
   // How many documents were deleted from this page: the statement of the last
@@ -220,7 +222,13 @@ export function Documents({
         <PageHeading>Documents</PageHeading>
         <Cluster gap={4}>
           <Link href={DELETED_PATH}>Deleted documents</Link>
-          <Button variant="primary" pending={creating} pendingLabel="Creating document…" onClick={create}>
+          <Button
+            variant="primary"
+            disabled={!ready}
+            pending={creating}
+            pendingLabel="Creating document…"
+            onClick={create}
+          >
             New document
           </Button>
         </Cluster>
@@ -260,6 +268,7 @@ export function Documents({
                 <Cluster gap={2}>
                   <Button
                     variant="quiet"
+                    disabled={!ready}
                     aria-describedby={`title-${document.id}`}
                     onClick={() => setRenaming(document)}
                   >
@@ -267,6 +276,7 @@ export function Documents({
                   </Button>
                   <Button
                     variant="quiet"
+                    disabled={!ready}
                     aria-describedby={`title-${document.id}`}
                     onClick={() => setDeleting(document)}
                   >
