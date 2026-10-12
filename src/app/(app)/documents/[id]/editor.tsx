@@ -18,7 +18,7 @@ import { DocumentConnection, syncStatus, type Ending } from '../../../../lib/col
 import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
-import { BLOCK_CONTROLS, Editable, copyText, extensions } from './extensions.tsx';
+import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
@@ -69,8 +69,11 @@ const UNSHOWN = {
 };
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
+// Before it, the sentence that tells of the slash palette (`SLASH_HINT`): the
+// shorter, and the one a writer needs first.
 const KEYS =
-  'Alt+F10 moves from the text to the formatting toolbar when text is selected. When no text is selected, Alt+F10 moves to the controls of the block that holds the cursor. Escape returns to the text.';
+  SLASH_HINT +
+  ' Alt+F10 moves from the text to the formatting toolbar when text is selected. When no text is selected, Alt+F10 moves to the controls of the block that holds the cursor. Escape returns to the text.';
 
 /** The controls of the innermost block round the cursor that has any. */
 function blockControls(view: EditorView): HTMLElement | null {

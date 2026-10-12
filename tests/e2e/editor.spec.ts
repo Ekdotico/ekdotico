@@ -76,26 +76,67 @@ async function paste(page: Page, html: string) {
 }
 
 /**
- * Puts the cursor in a block by a press on it. The editor reads where a press
- * put the cursor a few milliseconds after it, sooner than a person can type
- * and later than a test does: so the test waits.
+ * Where the editor holds the cursor, which is not always where the browser
+ * draws it. A press, an arrow key and a range set by a script move the
+ * browser's cursor, and the editor reads the move when the browser tells of
+ * it, some milliseconds later: sooner than a person can type, and later than
+ * a test does. And for 20 ms after the text takes the focus the editor's
+ * library may put the browser's cursor back where the editor holds it
+ * (prosemirror-view, the handler of `focus`), on a timer that a busy machine
+ * runs late: 76 ms was measured. A move made before it is then taken back.
+ *
+ * So a test that moves the cursor waits for this, and not for a time, and
+ * moves it again where the move was taken back.
  */
+function held(block: Locator) {
+  return block.evaluate((element) => {
+    const { editor } = element.closest('.ekd-editor') as unknown as {
+      editor: {
+        state: { selection: { empty: boolean; anchor: number; head: number } };
+        view: {
+          dom: HTMLElement;
+          domAtPos(pos: number): { node: Node };
+          posAtDOM(node: Node, offset: number): number;
+        };
+      };
+    };
+    const { selection } = editor.state;
+    const drawn = element.ownerDocument.getSelection()!;
+    const at = (node: Node | null, offset: number) =>
+      node && editor.view.dom.contains(node) ? editor.view.posAtDOM(node, offset) : -1;
+    return {
+      /** The editor holds the cursor in the block, and where the browser draws it: it has read the move. */
+      inside:
+        element.contains(editor.view.domAtPos(selection.head).node) &&
+        at(drawn.anchorNode, drawn.anchorOffset) === selection.anchor &&
+        at(drawn.focusNode, drawn.focusOffset) === selection.head,
+      /** It is a cursor, after the last of the block's text. */
+      atEnd: selection.empty && selection.head === editor.view.posAtDOM(element, element.childNodes.length),
+    };
+  });
+}
+
+/** Puts the cursor in a block by a press on it, and waits for the editor to hold it there. */
 async function place(block: Locator) {
+  // One press: a second one soon after it would be the second of two, and select a word.
   await block.click();
-  await block.page().waitForTimeout(100);
+  await expect.poll(async () => (await held(block)).inside).toBe(true);
 }
 
 /** Puts the cursor at the end of a block's text, whatever the keys of the platform do. */
 async function placeAtEnd(block: Locator) {
   await place(block);
-  await block.evaluate((element) => {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    range.collapse(false);
-    window.getSelection()!.removeAllRanges();
-    window.getSelection()!.addRange(range);
-  });
-  await block.page().waitForTimeout(100);
+  await expect(async () => {
+    await block.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    // The browser tells of the range in a task of its own: the first look is often too soon.
+    expect((await held(block)).atEnd).toBe(true);
+  }).toPass({ intervals: [20, 50] });
 }
 
 /** Counts the sockets a page opens from now on. */
@@ -640,10 +681,19 @@ const rows = (page: Page) => palette(page).getByRole('option');
  * the caption, and the paragraph.
  */
 async function newLastLine(page: Page) {
-  for (let press = 0; press < 6; press += 1) await page.keyboard.press('ArrowDown');
-  // The editor reads where a key of the browser's put the cursor a few milliseconds after it (`place`).
-  await page.waitForTimeout(100);
+  const blocks = text(page).locator(':scope > *');
+  // Down until the editor holds the cursor at the end of the last block, and
+  // not for a count of keys and a time: a key that the editor's library took
+  // back is pressed again (`held`).
+  await expect(async () => {
+    await page.keyboard.press('ArrowDown');
+    expect((await held(blocks.last())).atEnd).toBe(true);
+  }).toPass({ intervals: [20, 50] });
+  const before = await blocks.count();
   await page.keyboard.press('Enter');
+  // Enter is the editor's own key, and its paragraph is there when the key has been answered.
+  await expect(blocks).toHaveCount(before + 1);
+  await expect.poll(async () => (await held(blocks.last())).atEnd).toBe(true);
 }
 
 // FR-ED-12, the rows for the blocks of the cut: the command, the name of its
@@ -1009,9 +1059,342 @@ test('the slash palette stays open through another client’s change elsewhere, 
     await page.waitForTimeout(300);
     await expect(palette(page)).toBeHidden();
     await expect(doc.locator(':scope > p').last()).toHaveText('/to');
+
+    // The review of pull request 25. The other client rewrites the command in
+    // one change with a block that the editor answers by a change of its own:
+    // a rule put last, which the editor follows with a paragraph. The list
+    // closes as for any rewrite; it opened again on "/code", and Enter put a
+    // code block in place of it and of the writer's "de".
+    const fragment = shared.getXmlFragment('default');
+    await newLastLine(page);
+    await page.keyboard.type('see  de mine');
+    for (let press = 0; press < ' de mine'.length; press += 1) await page.keyboard.press('ArrowLeft');
+    await page.keyboard.type('/co');
+    await expect(rows(page)).toHaveText(['Code block/code', 'Table of contents/toc']);
+    await expect.poll(() => fragment.toString()).toContain('see /co de mine');
+    shared.transact(() => {
+      sharedText(shared, 'see /co de mine').delete('see /co'.length, 1);
+      fragment.push([element('horizontalRule')]);
+    });
+    await expect(doc.locator(':scope > p').filter({ hasText: 'see /code mine' })).toHaveCount(1);
+    // The editor did answer: the rule is there, and a paragraph after it.
+    await expect(doc.locator(':scope > hr + p:last-child')).toHaveCount(1);
+    await page.waitForTimeout(300);
+    await expect(palette(page)).toBeHidden();
+    await expect(page.getByText(NO_BLOCK).first()).toBeHidden();
+    await expect(doc).not.toHaveAttribute('aria-controls');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    await expect(doc.locator('pre')).toHaveCount(0);
+    // Enter was the text's key: it broke the line at the cursor, and the writer's words are whole.
+    await expect(doc.getByText('see /co', { exact: true })).toHaveCount(1);
+    await expect(doc.getByText('de mine', { exact: true })).toHaveCount(1);
+
+    // And an open list stays, at the row the writer moved to, through such a change elsewhere.
+    await newLastLine(page);
+    await page.keyboard.type('/q');
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await expect.poll(() => fragment.toString()).toContain('/q');
+    shared.transact(() => {
+      fragment.insert(0, [paragraph('Elsewhere.')]);
+      fragment.push([element('pageBreak')]);
+    });
+    await expect(doc.locator(':scope > p').first()).toHaveText('Elsewhere.');
+    await expect(doc.locator(':scope > .ekd-page-break + p:last-child')).toHaveCount(1);
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await expect(doc).toHaveAttribute('aria-controls', LIST_ID);
+    await page.keyboard.press('Enter');
+    await expect(doc.locator('blockquote')).toHaveCount(1);
   } finally {
     other.close();
   }
+});
+
+// The owner's decision of 12 October 2026: the palette opens only when the
+// writer themself typed the slash. Before it, the writer's own change to a
+// command opened the list, so another client could put a slash before the
+// word a writer was typing: the next letter opened the list on a row, and
+// Enter put that row's block in place of the word.
+test('the slash palette opens only on a slash the writer typed: not on another client’s, a pasted one, one an undo brought back, or one the cursor left', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const blocks = doc.locator(':scope > p');
+  const other = await connectAs(page.context(), id);
+  const shared = other.provider.document;
+  /** Nothing opens within the time a list takes to. */
+  const staysClosed = async (why: string) => {
+    await page.waitForTimeout(300);
+    await expect(palette(page), why).toBeHidden();
+    await expect(page.getByText(NO_BLOCK).first(), why).toBeHidden();
+    await expect(doc, why).not.toHaveAttribute('aria-controls');
+  };
+  try {
+    await doc.focus();
+
+    // The writer has typed "cod" of a word. Another client puts a slash before it.
+    await page.keyboard.type('cod');
+    await expect.poll(() => shared.getXmlFragment('default').toString()).toContain('cod');
+    sharedText(shared, 'cod').insert(0, '/');
+    await expect(blocks).toHaveText(['/cod']);
+    await staysClosed('after another client’s slash');
+    // The writer types on: no list. Enter is the text's key, and the word stays.
+    await page.keyboard.type('e');
+    await expect(blocks).toHaveText(['/code']);
+    await staysClosed('after the writer’s next letter');
+    await page.keyboard.press('Enter');
+    await staysClosed('after Enter');
+    await expect(doc.locator('pre')).toHaveCount(0);
+    await expect(blocks).toHaveText(['/code', '']);
+
+    // The writer's own slash, which the cursor left: the list went then, and
+    // typing in the word does not bring it back. Not when another client has
+    // joined the writer's next words to the command either.
+    await page.keyboard.type('see /c');
+    await expect(rows(page)).toHaveText(['Code block/code', 'Callout/callout', 'Table of contents/toc']);
+    await page.keyboard.type(' de mine');
+    await staysClosed('past the command');
+    for (let press = 0; press < ' de mine'.length; press += 1) await page.keyboard.press('ArrowLeft');
+    await staysClosed('back in the command');
+    await expect.poll(() => shared.getXmlFragment('default').toString()).toContain('see /c de mine');
+    sharedText(shared, 'see /c de mine').delete('see /c'.length, 1);
+    await expect(blocks).toHaveText(['/code', 'see /cde mine']);
+    await staysClosed('after another client joined the words');
+    await page.keyboard.type('o');
+    await expect(blocks).toHaveText(['/code', 'see /code mine']);
+    await staysClosed('after a letter typed in the joined word');
+    await page.keyboard.press('Enter');
+    await staysClosed('after Enter in the joined word');
+    await expect(doc.locator('pre')).toHaveCount(0);
+    await expect(blocks).toHaveText(['/code', 'see /co', 'de mine']);
+
+    // A pasted slash.
+    await newLastLine(page);
+    await paste(page, '<p>/h</p>');
+    await expect(blocks.last()).toHaveText('/h');
+    await staysClosed('after a paste');
+    await page.keyboard.type('1');
+    await expect(blocks.last()).toHaveText('/h1');
+    await staysClosed('after a letter typed in what was pasted');
+
+    // A slash that an undo brought back. Each part is a step of undo of its own.
+    await newLastLine(page);
+    await page.waitForTimeout(700);
+    await page.keyboard.type('/q');
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await page.waitForTimeout(700);
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
+    await expect(blocks.last()).toHaveText('');
+    await page.waitForTimeout(700);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(blocks.last()).toHaveText('/q');
+    await staysClosed('after an undo');
+    // The undo leaves the cursor before the slash: to the end of the command, which asks for nothing.
+    await placeAtEnd(blocks.last());
+    await staysClosed('a cursor that arrives after an undo');
+    await page.keyboard.type('u');
+    await expect(blocks.last()).toHaveText('/qu');
+    await staysClosed('after a letter typed in what the undo brought back');
+    await page.keyboard.press('Enter');
+    await expect(doc.locator('blockquote')).toHaveCount(0);
+
+    // The writer asks again by typing a slash.
+    await page.keyboard.type('/q');
+    await expect(rows(page)).toHaveText(['Quote/quote']);
+    await page.keyboard.press('Enter');
+    await expect(doc.locator('blockquote')).toHaveCount(1);
+  } finally {
+    other.close();
+  }
+});
+
+// A long run of one character that no line can break at was laid out again,
+// whole, at every key: with kerning on, the cost grew with the square of its
+// length, about 430 ms a key at 32,000 characters. The design package turns
+// kerning off on the document surface from 0.28.1 (`font-kerning: none` on
+// `.ekd-editor`), and a key then costs a few milliseconds. This fails if the
+// cost comes back, from the package or from a style of the application's.
+test('a key typed at the end of a paragraph of 32,000 asterisks is answered at once', async ({ page }) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const other = await connectAs(page.context(), id);
+  try {
+    other.provider.document.getXmlFragment('default').insert(0, [paragraph('*'.repeat(32_000))]);
+    await expect(doc.locator(':scope > p')).toHaveText(/^\*{32000}$/);
+  } finally {
+    other.close();
+  }
+  await placeAtEnd(doc.locator(':scope > p'));
+  // From the key going down to the second frame after it came up: the key,
+  // the change to the document, and the layout and the paint that follow.
+  const times: number[] = [];
+  for (const key of 'abcde') {
+    // The page listens before the key is pressed: this is awaited, and the
+    // time is asked for afterwards. Asked for in one step, a slow page was
+    // reached by the key first, and the time never came.
+    await page.evaluate(() => {
+      (window as unknown as { keyTime: Promise<number> }).keyTime = new Promise<number>((resolve) => {
+        let down = 0;
+        document.addEventListener('keydown', () => (down = performance.now()), {
+          once: true,
+          capture: true,
+        });
+        document.addEventListener(
+          'keyup',
+          () => requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - down))),
+          { once: true, capture: true },
+        );
+      });
+    });
+    await page.keyboard.press(key);
+    times.push(
+      Math.round(await page.evaluate(() => (window as unknown as { keyTime: Promise<number> }).keyTime)),
+    );
+  }
+  await expect(doc.locator(':scope > p')).toHaveText(/^\*{32000}abcde$/);
+  test.info().annotations.push({ type: 'milliseconds for each key', description: times.join(', ') });
+  console.log(`a key at the end of 32,000 asterisks: ${times.join(', ')} ms`);
+  // The middle one of five, so that one slow frame of a busy machine fails nothing.
+  expect(times.toSorted((a, b) => a - b)[2]).toBeLessThan(150);
+});
+
+// The owner's decision of 12 October 2026, and the owner's sentence, written
+// out here and not taken from the code under test.
+const SLASH_HINT = 'Type / for a list of blocks.';
+const DESCRIPTION = `${SLASH_HINT} Alt+F10 moves from the text to the formatting toolbar when text is selected. When no text is selected, Alt+F10 moves to the controls of the block that holds the cursor. Escape returns to the text.`;
+
+test('an empty document says how the list of blocks is opened: in the description of the text, and as a prompt that is no content', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const prompt = doc.locator('p > span[data-placeholder]');
+
+  // The description of the text, word for word.
+  await expect(doc).toHaveAccessibleDescription(DESCRIPTION);
+
+  // The prompt: the sentence, drawn by the design package's rule, in the one empty paragraph.
+  await expect(prompt).toHaveCount(1);
+  await expect(prompt).toHaveAttribute('data-placeholder', SLASH_HINT);
+  await expect(prompt).toHaveAttribute('aria-hidden', 'true');
+  const drawn = () =>
+    prompt.evaluate((element) => {
+      const style = getComputedStyle(element, '::before');
+      // The colour as the browser paints it, whatever notation the stylesheet wrote it in.
+      const painted = (colour: string) => {
+        const canvas = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+        canvas.fillStyle = colour;
+        canvas.fillRect(0, 0, 1, 1);
+        return [...canvas.getImageData(0, 0, 1, 1).data];
+      };
+      let behind: Element | null = element;
+      let ground = [0, 0, 0, 0];
+      while (behind && ground[3] !== 255) {
+        ground = painted(getComputedStyle(behind).backgroundColor);
+        behind = behind.parentElement;
+      }
+      const light = ([red, green, blue]: number[]) => {
+        const [r, g, b] = [red!, green!, blue!].map((value) => {
+          const part = value / 255;
+          return part <= 0.04045 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+      };
+      const ink = painted(style.color);
+      const [above, below] = [light(ink), light(ground)].sort((a, b) => b - a);
+      return {
+        content: style.content,
+        inkAlpha: ink[3],
+        groundAlpha: ground[3],
+        contrast: (above! + 0.05) / (below! + 0.05),
+      };
+    });
+  // WCAG 2.2, 1.4.3: the prompt is text, so 4.5 to 1, in the light theme and in the dark.
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme });
+    const seen = await drawn();
+    expect(seen.content, colorScheme).toBe(`"${SLASH_HINT}"`);
+    expect(seen.inkAlpha, colorScheme).toBe(255);
+    expect(seen.groundAlpha, colorScheme).toBe(255);
+    expect(seen.contrast, colorScheme).toBeGreaterThanOrEqual(4.5);
+    console.log(`the prompt of an empty document, ${colorScheme}: ${seen.contrast.toFixed(2)} to 1`);
+  }
+  await page.emulateMedia({ colorScheme: null });
+
+  // It is no content. Not text of the document, on the page or in what is selected and copied.
+  await expect(doc).toHaveText('');
+  await doc.focus();
+  await page.keyboard.press('ControlOrMeta+a');
+  expect(await page.evaluate(() => window.getSelection()!.toString().trim())).toBe('');
+  // Not in the shared document: another client holds nothing, or one empty paragraph.
+  const other = await connectAs(page.context(), id);
+  try {
+    expect(['', '<paragraph></paragraph>']).toContain(
+      other.provider.document.getXmlFragment('default').toString(),
+    );
+  } finally {
+    other.close();
+  }
+  // NFR-IC-19: a screen reader is told the sentence once, by the description.
+  // In the browser's own accessibility tree nothing under the text holds it.
+  const tree = await page.context().newCDPSession(page);
+  const { nodes } = (await tree.send('Accessibility.getFullAXTree')) as {
+    nodes: { nodeId: string; childIds?: string[]; role?: { value: string }; name?: { value: string } }[];
+  };
+  await tree.detach();
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]));
+  const box = nodes.find((node) => node.role?.value === 'textbox' && node.name?.value === 'Document text')!;
+  const under = (node: (typeof nodes)[number]): typeof nodes =>
+    (node.childIds ?? []).flatMap((child) => {
+      const found = byId.get(child);
+      return found ? [found, ...under(found)] : [];
+    });
+  expect(under(box).length).toBeGreaterThan(0);
+  expect(
+    under(box)
+      .map((node) => (node.name?.value ?? '').trim())
+      .filter(Boolean),
+  ).toEqual([]);
+  expect(nodes.filter((node) => node.name?.value === SLASH_HINT)).toEqual([]);
+
+  // At 320 CSS pixels the prompt is inside the page.
+  await page.setViewportSize({ width: 320, height: 640 });
+  await expectNoSidewaysScroll(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  // Gone at the first character, and back when the document is empty again.
+  await page.keyboard.type('a');
+  await expect(doc).toHaveText('a');
+  await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  await page.keyboard.press('Backspace');
+  await expect(prompt).toHaveCount(1);
+  // Not in a document of two empty paragraphs.
+  await page.keyboard.press('Enter');
+  await expect(doc.locator(':scope > p')).toHaveCount(2);
+  await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  await page.keyboard.press('Backspace');
+  await expect(prompt).toHaveCount(1);
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  // FR-ED-18: not in the read-only state.
+  await stopCollab();
+  try {
+    await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
+    await expect(doc).toHaveAttribute('aria-readonly', 'true');
+    await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  } finally {
+    await startCollab();
+  }
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  await expect(prompt).toHaveCount(1);
 });
 
 test('the slash palette: Tab, the cursor inside the command and out of it, and one undo of a Markdown conversion', async ({
