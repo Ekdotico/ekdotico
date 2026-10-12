@@ -13,7 +13,7 @@ import {
   TITLE_MAX_CHARACTERS,
 } from '../../../../lib/documents/documents.ts';
 import { documentRoute } from '../../../../lib/documents/route.ts';
-import { errorResponse, readJson } from '../../../../lib/http.ts';
+import { errorResponse, notJson, readJson } from '../../../../lib/http.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,6 +45,9 @@ export const GET = documentRoute('document.view', ({ document }) =>
  * of the body to a caller who may not rename the document.
  */
 export const PATCH = documentRoute('document.rename', async ({ request, document, session }) => {
+  // R28: a body that is not sent as JSON is a 415, after the authorisation and before anything is read.
+  const unsupported = notJson(request);
+  if (unsupported) return unsupported;
   const body = await readJson(request, MAX_BODY_BYTES);
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return errorResponse(422, 'invalid_request', MESSAGES.invalid);

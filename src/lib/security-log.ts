@@ -28,6 +28,11 @@ const KINDS = [
   // (FR-AU-03), written in the transaction of the change.
   'address_changed',
   'forbidden',
+  // The owner's decision of 12 October 2026 (its register row is pending; an
+  // amendment to carry to NFR-SE-19, which does not list it): an update that
+  // the collaboration server refused because it would take a document past
+  // one of its limits (src/lib/collab/state.ts), with the user and the document.
+  'document_limit_refused',
   'rate_limit_reached',
   'signature_invalid',
   'collaborators_changed',

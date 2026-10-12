@@ -215,10 +215,15 @@ describe('the acknowledgement (FR-AU-56)', () => {
       });
       if (type) request.headers.set('content-type', type);
       else request.headers.delete('content-type');
+      // A browser states the length of a body, which is how a body is told from none.
+      request.headers.set('content-length', String(Buffer.byteLength(body)));
       return POST(request);
     };
+    // R28 (12 October 2026): a 415, as the identity routes give, and no longer a 422.
     for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data', null]) {
-      await expectError(await sent(type), 422, 'invalid_request');
+      expect(await expectError(await sent(type), 415, 'invalid_request')).toBe(
+        'Ekdotico could not read the request, and nothing was changed. A request to this address holds JSON, sent with the content type application/json.',
+      );
     }
     await expectError(
       await sent('application/json', `{"version":1${' '.repeat(2000)}}`),

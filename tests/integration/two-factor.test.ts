@@ -635,18 +635,26 @@ describe('wrong codes, for each sign-in (NFR-SE-07; FR-AU-83; the owner’s answ
     expect(await passwordAccepted(email, net)).toBe(false);
   });
 
-  it('counts it toward the 20 in an hour too, from whatever network address', async () => {
-    const { email, secret } = await enrolled();
-    // Twenty second steps abandoned, each from a network address of its own.
-    for (let round = 0; round < 20; round++) {
-      const net = fresh();
-      expect(await passwordAccepted(email, fresh()), `round ${round}`).toBe(true);
-      const step = await passwordStep(auth, email, net);
-      for (let n = 0; n < 5; n++) await secondStep(auth, step, wrongCode(secret), 'totp', net);
-    }
-    // No more than 100 codes in an hour: the password is now refused from everywhere.
-    expect(await passwordAccepted(email, fresh())).toBe(false);
-  });
+  // Forty checks of a password and a hundred of a code: some four seconds on a
+  // quiet machine, and past the five a test has by default on a busy one. A
+  // test that runs out of time is not stopped: it went on writing to the log
+  // under the test after it, which then failed too.
+  it(
+    'counts it toward the 20 in an hour too, from whatever network address',
+    { timeout: 60_000 },
+    async () => {
+      const { email, secret } = await enrolled();
+      // Twenty second steps abandoned, each from a network address of its own.
+      for (let round = 0; round < 20; round++) {
+        const net = fresh();
+        expect(await passwordAccepted(email, fresh()), `round ${round}`).toBe(true);
+        const step = await passwordStep(auth, email, net);
+        for (let n = 0; n < 5; n++) await secondStep(auth, step, wrongCode(secret), 'totp', net);
+      }
+      // No more than 100 codes in an hour: the password is now refused from everywhere.
+      expect(await passwordAccepted(email, fresh())).toBe(false);
+    },
+  );
 
   it('sends no notice for it, and logs each refusal and, at the fifth, a rate limit reached (NFR-SE-19)', async () => {
     const { email, id, secret } = await enrolled();

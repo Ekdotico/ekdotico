@@ -36,6 +36,13 @@ const LIMITS = {
   CONFIRMATION_EMAIL_PER_USER: [3, 3600],
   /** Requests to the admission endpoints, in all. */
   ADMISSION: [60, 60],
+  /**
+   * Messages that carry an update of a document, for each authenticated user
+   * on one collaboration server. No row of NFR-SE-07 yet: the owner's decision
+   * of 12 October 2026, to be added by amendment. Counted in the memory of the
+   * instance (`limitHere` of src/lib/rate-limit.ts says why).
+   */
+  COLLAB_MESSAGES_PER_USER: [600, 60],
 } as const satisfies Record<string, readonly [number, number]>;
 
 export type LimitName = keyof typeof LIMITS;

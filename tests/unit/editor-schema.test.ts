@@ -17,8 +17,10 @@ import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   ATTRIBUTE_RULES,
+  CODE_COLOURS_MOST,
   TABLE_MOST,
   closeSchema,
+  codeColours,
   extensions,
   holdBinding,
   mayApply,
@@ -522,6 +524,155 @@ describe('what another client sent that the schema cannot hold', () => {
     expect(editor.text().textContent).toContain('r98');
     expect(editor.undo.undoStack).toEqual([]);
   });
+
+  // WHICH child goes (the third review, 12 October 2026): the one that is past
+  // the bound in the order of the document, which every client holds alike.
+  // Not the newest: a shared document holds no time (`closeSchema` says why).
+  describe('and where there is one too many, the last in the order of the document', () => {
+    const full = (rows: number) => {
+      const document = new Y.Doc();
+      document.clientID = 50;
+      document
+        .getXmlFragment('default')
+        .push([blockOf(Array.from({ length: rows }, (_, at) => rowOf(`r${at}`)))]);
+      return document;
+    };
+    /** A member of the document under a client number of its own, with an editor open. */
+    const member = (document: Y.Doc, client: number) => {
+      const copy = new Y.Doc();
+      copy.clientID = client;
+      Y.applyUpdate(copy, Y.encodeStateAsUpdate(document));
+      return open(copy);
+    };
+    const exchange = (...editors: ReturnType<typeof open>[]) => {
+      // Twice round: what one mends reaches the others.
+      for (let round = 0; round < 2; round += 1)
+        for (const from of editors)
+          for (const to of editors)
+            if (from !== to)
+              Y.applyUpdate(to.fragment.doc!, Y.encodeStateAsUpdate(from.fragment.doc!), 'peer');
+    };
+    const rows = (editor: ReturnType<typeof open>) =>
+      tableIn(editor.fragment)
+        .toArray()
+        .map((row) => row.toString().replace(/<[^>]+>/g, ''));
+
+    it('of two honest members who each add a row to 99 at once, the row of the higher client number goes, in every browser', () => {
+      const document = full(99);
+      const [low, high, watching] = [member(document, 7), member(document, 9), member(document, 8)];
+      tableIn(low.fragment).push([rowOf('of-seven')]);
+      tableIn(high.fragment).push([rowOf('of-nine')]);
+      exchange(low, high, watching);
+      // Yjs puts two things written at one place in the order of their clients'
+      // numbers, so the row of 9 stands after the row of 7, and is the 101st.
+      for (const editor of [low, high, watching]) {
+        expect(rows(editor)).toHaveLength(TABLE_MOST);
+        expect(rows(editor).slice(-2)).toEqual(['r98', 'of-seven']);
+        expect(editor.text().textContent).not.toContain('of-nine');
+        expect(editor.unshown).not.toHaveBeenCalled();
+      }
+      // The three shared documents are one document.
+      expect(new Set([low, high, watching].map((editor) => editor.fragment.toString())).size).toBe(1);
+      // Whichever way the two arrive.
+      const [first, second] = [member(document, 9), member(document, 7)];
+      tableIn(first.fragment).push([rowOf('of-nine')]);
+      tableIn(second.fragment).push([rowOf('of-seven')]);
+      exchange(second, first);
+      expect(rows(first)).toEqual(rows(low));
+      expect(rows(second)).toEqual(rows(low));
+    });
+
+    // Known, and left: what is past the bound is what stands last, whoever put what where.
+    it('a row put at the top of a full table costs the row at the bottom, and a table put before the table costs the table', () => {
+      const editor = open(full(100));
+      const peer = peerOf(editor.fragment.doc!);
+      tableIn(peer.fragment).insert(0, [rowOf('put-at-the-top')]);
+      peer.send();
+      expect(rows(editor)).toHaveLength(TABLE_MOST);
+      expect(rows(editor)[0]).toBe('put-at-the-top');
+      expect(rows(editor).at(-1)).toBe('r98');
+      expect(editor.undo.undoStack).toEqual([]);
+
+      const two = open(tableAndAfter());
+      const other = peerOf(two.fragment.doc!);
+      (other.fragment.get(0) as Y.XmlElement).insert(0, [element('table', {}, [rowOf('put-before')])]);
+      other.send();
+      expect(names(two.fragment.get(0) as Y.XmlElement)).toEqual(['table', 'tableCaption']);
+      expect(two.text().textContent).toBe('put-beforecaptionafter');
+    });
+  });
+
+  // What stands directly in the document where it cannot (the third review):
+  // the library makes the document itself without asking the schema.
+  describe('directly in the document', () => {
+    const twoParagraphs = () => {
+      const document = new Y.Doc();
+      document.getXmlFragment('default').push([paragraph('before'), paragraph('KEEP-THIS')]);
+      return document;
+    };
+    const STRAYS: [string, () => Y.XmlElement | Y.XmlText][] = [
+      ['a row without a table', () => rowOf('stray')],
+      ['a cell without a row', () => element('tableCell', {}, [paragraph('stray')])],
+      ['a table without its block', () => element('table', {}, [rowOf('stray')])],
+      ['a caption without a table', () => element('tableCaption', {}, [words('stray')])],
+      ['an item without a list', () => element('listItem', {}, [paragraph('stray')])],
+      ['text', () => words('stray')],
+      ['a node of no type', () => element('noSuchNode', {}, [words('stray')])],
+    ];
+
+    it.each(STRAYS)('%s is taken out alone, and the page stays', (_, stray) => {
+      const editor = open(twoParagraphs());
+      const peer = peerOf(editor.fragment.doc!);
+      peer.fragment.insert(1, [stray()]);
+      expect(() => peer.send()).not.toThrow();
+      expect(editor.unshown).not.toHaveBeenCalled();
+      // The neighbours stand, and the shared document and the text hold the same.
+      expect(names(editor.fragment)).toEqual(['paragraph', 'paragraph']);
+      expect(editor.text().textContent).toBe('beforeKEEP-THIS');
+      expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+
+      // It is not this member's change. What the member types next is, and
+      // undoing that brings nothing of the stray back.
+      expect(editor.undo.undoStack).toEqual([]);
+      const view = editor.typed();
+      view.dispatch(view.state.tr.insertText('typed ', 1));
+      editor.binding._prosemirrorChanged(view.state.doc);
+      expect(editor.fragment.toString()).toContain('typed before');
+      expect(editor.undo.undoStack).toHaveLength(1);
+      editor.undo.undo();
+      expect(names(editor.fragment)).toEqual(['paragraph', 'paragraph']);
+      expect(editor.fragment.toString()).not.toContain('stray');
+      expect(editor.fragment.toString()).toContain('KEEP-THIS');
+    });
+
+    it.each(STRAYS)(
+      '%s is taken out of a document that is opened with it, the same by every client',
+      (_, stray) => {
+        const document = twoParagraphs();
+        document.getXmlFragment('default').insert(0, [stray()]);
+        document.getXmlFragment('default').push([stray()]);
+        const second = new Y.Doc();
+        Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+        const [one, two] = [open(document), open(second)];
+        Y.applyUpdate(document, Y.encodeStateAsUpdate(second));
+        Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+        for (const editor of [one, two]) {
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(names(editor.fragment)).toEqual(['paragraph', 'paragraph']);
+          expect(editor.text().textContent).toBe('beforeKEEP-THIS');
+        }
+      },
+    );
+
+    it('nothing but strays leaves a document that can be written in', () => {
+      const document = new Y.Doc();
+      document.getXmlFragment('default').push([words('stray'), rowOf('stray')]);
+      const editor = open(document);
+      expect(editor.unshown).not.toHaveBeenCalled();
+      expect(names(editor.fragment)).toEqual([]);
+      expect(editor.text().toString()).toBe('doc(paragraph)');
+    });
+  });
 });
 
 // Finding B of the second review, in the browser's half: quotes nested ten
@@ -724,5 +875,32 @@ describe('a change to a document that cannot be edited now (FR-ED-18)', () => {
   it('is applied where it is another client’s, and a transaction that changes nothing always is', () => {
     expect(mayApply(typed().setMeta(ySyncPluginKey, { isChangeOrigin: true }), false)).toBe(true);
     expect(mayApply(state.tr, false)).toBe(true);
+  });
+});
+
+// The third review: a megabyte of code was a second and a half at each
+// keystroke, every block of the document being coloured again each time.
+describe('the colours of a code block', () => {
+  const code = 'const a = "b" + 1; // c\n'.repeat(3000).slice(0, CODE_COLOURS_MOST);
+
+  it('are given to a block of 50,000 characters, and to none that is longer', () => {
+    expect(CODE_COLOURS_MOST).toBe(50_000);
+    expect(code).toHaveLength(CODE_COLOURS_MOST);
+    expect(codeColours.highlight('javascript', code).children.length).toBeGreaterThan(5000);
+    expect(codeColours.highlight('javascript', `${code}x`).children).toEqual([]);
+    // And where the block names no language the library knows.
+    expect(codeColours.highlightAuto(code).children.length).toBeGreaterThan(1000);
+    expect(codeColours.highlightAuto(`${code}x`).children).toEqual([]);
+  });
+
+  it('are asked of the bounded colourer by the editor’s own code block, which lists the languages as before', () => {
+    const block = all.find((each) => each.name === 'codeBlock') as {
+      options: { lowlight: typeof codeColours };
+    };
+    // The library copies its options: the two functions are the ones it was given.
+    expect(block.options.lowlight.highlight).toBe(codeColours.highlight);
+    expect(block.options.lowlight.highlightAuto).toBe(codeColours.highlightAuto);
+    expect(codeColours.listLanguages()).toContain('typescript');
+    expect(codeColours.registered('javascript')).toBe(true);
   });
 });

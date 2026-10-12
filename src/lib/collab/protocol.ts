@@ -50,6 +50,14 @@ export const REFUSAL = {
    * the socket once more. The reason carries no time: the client tries again
    * after a pause, never at once, and lengthens the pause each time up to a
    * minute, which is the period of the limit.
+   *
+   * It is also the reason of the close of an open connection: the account
+   * sent this server more than 600 messages that carry an update in a minute,
+   * on all its connections together (the owner's decision of 12 October 2026;
+   * a row to be added to NFR-SE-07). The message past the limit was not
+   * applied. The client does the same about it: it keeps the changes, pauses
+   * 5 seconds, asks for the document again, and sends what the server lacks
+   * as one message, which is refused in the same way while the minute lasts.
    */
   LIMITED: 'limited',
   /** Reserved for the limit of ten connections (NFR-PE-05, FR-ED-18); not sent yet. */
@@ -64,6 +72,21 @@ export const REFUSAL = {
   ACCESS_ENDED: 'access-ended',
   /** Reserved for the end of the session the connection was opened under (NFR-SE-03 (b), (e)); not sent yet. */
   SESSION_ENDED: 'session-ended',
+  /**
+   * What this client sent would take the document past one of its three
+   * limits (src/lib/collab/state.ts): the 5 MB of its state, the 50 levels of
+   * its elements, or the 2,000 parts that may wait for content the document
+   * was never sent. The owner's decisions of 12 October 2026 (their register
+   * rows are pending). Each is the reason of the close of an open connection.
+   * Nothing of what was sent was applied, stored, or sent on. The client does
+   * not try again, since it would send the same and be refused the same: it
+   * keeps the text in the tab, read-only, says which limit, and offers to
+   * copy the text before the document is loaded again.
+   */
+  TOO_LARGE: 'too-large',
+  TOO_DEEP: 'too-deep',
+  /** The third: the change refers to content the document does not hold, and more of it than may wait. */
+  TOO_DANGLING: 'too-dangling',
 } as const;
 
 export type Refusal = (typeof REFUSAL)[keyof typeof REFUSAL];

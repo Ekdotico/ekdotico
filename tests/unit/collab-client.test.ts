@@ -1,0 +1,315 @@
+// How the editor's connection sends what is typed (src/lib/collab/client.ts;
+// the owner's decision of 12 October 2026): at once while the rate is
+// ordinary, in one message for each 250 ms where it is not, so that no key a
+// person holds can reach the 600 messages a minute of the server. The real
+// class and the real provider run here over a socket that records what is
+// sent, with the clock faked; nothing is a server.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as Y from 'yjs';
+import { BATCH_MS, BURST_MESSAGES, DocumentConnection, syncStatus } from '../../src/lib/collab/client.ts';
+
+const ID = '3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b';
+// The frames of the socket: the name of the document behind its length (36
+// characters, so one byte), the type of the message (0 is a synchronisation),
+// and for a synchronisation its step (0 and 1 the steps, 2 an update).
+const SYNC = 0;
+const UPDATE = 2;
+
+const varint = (value: number): number[] => {
+  const bytes = [];
+  for (; value > 127; value = Math.floor(value / 128)) bytes.push(128 | (value % 128));
+  return [...bytes, value];
+};
+const toFrame = (...rest: number[]) =>
+  new Uint8Array([ID.length, ...new TextEncoder().encode(ID), ...rest]).buffer;
+
+/** A socket that opens by itself and records what is sent; `receive` plays the server. */
+class Socket extends EventTarget {
+  static all: Socket[] = [];
+  readyState = 0;
+  binaryType = 'blob';
+  readonly sent: Uint8Array[] = [];
+  readonly url: string;
+  constructor(url: string) {
+    super();
+    this.url = url;
+    Socket.all.push(this);
+    setTimeout(() => {
+      this.readyState = 1;
+      this.dispatchEvent(new Event('open'));
+    }, 0);
+  }
+  send(data: Uint8Array) {
+    this.sent.push(data);
+  }
+  close() {
+    this.readyState = 3;
+  }
+  receive(data: ArrayBuffer) {
+    this.dispatchEvent(new MessageEvent('message', { data }));
+  }
+  get updates(): Uint8Array[] {
+    return this.sent.filter((frame) => frame[ID.length + 1] === SYNC && frame[ID.length + 2] === UPDATE);
+  }
+}
+
+/** The update inside a frame that carries one. */
+function inside(frame: Uint8Array): Uint8Array {
+  let at = ID.length + 3;
+  let length = 0;
+  for (let shift = 0; ; shift += 7) {
+    const byte = frame[at++]!;
+    length += (byte & 127) * 2 ** shift;
+    if (byte < 128) break;
+  }
+  return frame.slice(at, at + length);
+}
+
+/** A connection that has opened its document: the server has answered the first step and acknowledged. */
+async function opened() {
+  const connection = new DocumentConnection({
+    url: 'ws://example.invalid/collab',
+    documentId: ID,
+    errorAfterMs: 60_000,
+    probe: async () => 200,
+    WebSocketPolyfill: Socket,
+  });
+  connection.start();
+  await vi.advanceTimersByTimeAsync(10);
+  const socket = Socket.all.at(-1)!;
+  socket.receive(new Uint8Array([9]).buffer); // a ping: the socket is taken for connected
+  socket.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
+  socket.receive(toFrame(8, 1)); // the acknowledgement of our second step
+  await vi.advanceTimersByTimeAsync(0);
+  expect(connection.getState()).toMatchObject({ phase: 'connected', unsent: false });
+  // The first step of the opening cost a token; the bucket is full again.
+  await vi.advanceTimersByTimeAsync(BATCH_MS);
+  socket.sent.length = 0;
+  const changes = connection.document.getArray<string>('changes');
+  return { connection, socket, changes };
+}
+
+/** What the server would hold of the updates a socket was sent. */
+function serverCopy(socket: Socket): Y.Array<string> {
+  const server = new Y.Doc();
+  for (const frame of socket.updates) Y.applyUpdate(server, inside(frame));
+  return server.getArray<string>('changes');
+}
+
+/** Types `count` changes spaced `every` ms apart, each a transaction of its own. */
+async function type(changes: Y.Array<string>, count: number, every: number) {
+  for (let n = 0; n < count; n += 1) {
+    changes.push([`key ${n}`]);
+    await vi.advanceTimersByTimeAsync(every);
+  }
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  Socket.all = [];
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe('ordinary typing is sent at once (SRS 2.4: Yjs sync propagation, P50 under 150 ms)', () => {
+  it('sends 5 changes a second for 3 seconds as 15 messages, each in the tick of its change', async () => {
+    const { connection, socket, changes } = await opened();
+    for (let n = 0; n < 15; n += 1) {
+      changes.push([`key ${n}`]);
+      // Without advancing the clock: nothing waited for a timer.
+      expect(socket.updates).toHaveLength(n + 1);
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    expect(serverCopy(socket).toArray()).toHaveLength(15);
+    connection.stop();
+  });
+
+  it('sends a burst of as many keys as the bucket holds at once, and no more', async () => {
+    const { connection, socket, changes } = await opened();
+    for (let n = 0; n < BURST_MESSAGES; n += 1) changes.push([`key ${n}`]);
+    expect(socket.updates).toHaveLength(BURST_MESSAGES);
+    changes.push(['the ninth']);
+    expect(socket.updates).toHaveLength(BURST_MESSAGES);
+    // The ninth waits for its batch, and is sent when the delay has passed.
+    await vi.advanceTimersByTimeAsync(BATCH_MS - 1);
+    expect(socket.updates).toHaveLength(BURST_MESSAGES);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.updates).toHaveLength(BURST_MESSAGES + 1);
+    connection.stop();
+  });
+});
+
+describe('a burst is merged: 8 at once and then 4 a second, and every change arrives', () => {
+  it('sends 60 changes made in a second as at most 8 + 4 messages, and all 60 reach the server', async () => {
+    const { connection, socket, changes } = await opened();
+    await type(changes, 60, 16);
+    await vi.advanceTimersByTimeAsync(BATCH_MS);
+    expect(socket.updates.length).toBeLessThanOrEqual(BURST_MESSAGES + 4 + 1);
+    expect(socket.updates.length).toBeGreaterThan(BURST_MESSAGES);
+    expect(serverCopy(socket).toArray()).toEqual(Array.from({ length: 60 }, (_, n) => `key ${n}`));
+    connection.stop();
+  });
+
+  it('sends at once again when the rate has fallen back', async () => {
+    const { connection, socket, changes } = await opened();
+    await type(changes, 60, 16);
+    await vi.advanceTimersByTimeAsync(2 * BATCH_MS * BURST_MESSAGES); // the bucket is full again
+    const before = socket.updates.length;
+    for (let n = 0; n < BURST_MESSAGES; n += 1) {
+      changes.push([`after ${n}`]);
+      expect(socket.updates).toHaveLength(before + n + 1);
+    }
+    connection.stop();
+  });
+});
+
+describe('the most a tab sends in a minute is 248 update messages, whatever the keys do', () => {
+  const MINUTE_BOUND = BURST_MESSAGES + 60_000 / BATCH_MS;
+  // Each pattern is a list of the gaps between changes, in ms, repeated for a minute.
+  const patterns: Record<string, number[]> = {
+    'a key held at 30 a second': [33],
+    'a key held at 100 a second': [10],
+    'bursts of 9 changes in 90 ms each second, around the rate of the bucket': [
+      10, 10, 10, 10, 10, 10, 10, 10, 10, 910,
+    ],
+    'bursts of 8 and a pause, which is the rate of ordinary typing': [5, 5, 5, 5, 5, 5, 5, 5, 960],
+    '5 keys a second': [200],
+  };
+  for (const [name, gaps] of Object.entries(patterns)) {
+    it(`holds for ${name}`, { timeout: 60_000 }, async () => {
+      const { connection, socket, changes } = await opened();
+      let made = 0;
+      for (let at = 0, n = 0; at < 60_000; n += 1) {
+        const gap = gaps[n % gaps.length]!;
+        changes.push([`key ${made++}`]);
+        await vi.advanceTimersByTimeAsync(gap);
+        at += gap;
+      }
+      expect(socket.updates.length).toBeLessThanOrEqual(MINUTE_BOUND);
+      // Two tabs of one account, both held: under the 600 of the server.
+      expect(2 * socket.updates.length).toBeLessThan(600);
+      // And nothing is lost: what is sent is every change.
+      await vi.advanceTimersByTimeAsync(BATCH_MS);
+      expect(serverCopy(socket).length).toBe(made);
+      connection.stop();
+    });
+  }
+
+  it(
+    'is 248 for a key held at 30 a second: the bound is nearly reached, not far under it',
+    { timeout: 60_000 },
+    async () => {
+      const { connection, socket, changes } = await opened();
+      await type(changes, 1800, 33);
+      expect(socket.updates.length).toBeGreaterThan(200);
+      expect(socket.updates.length).toBeLessThanOrEqual(MINUTE_BOUND);
+      connection.stop();
+    },
+  );
+});
+
+describe('a change that waits is sent when the page goes', () => {
+  /** A page whose events the test makes. */
+  function page() {
+    const window = new EventTarget();
+    const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    vi.stubGlobal('window', window);
+    vi.stubGlobal('document', document);
+    return { window, document };
+  }
+  async function waiting() {
+    const here = page();
+    const open = await opened();
+    for (let n = 0; n < BURST_MESSAGES; n += 1) open.changes.push([`key ${n}`]);
+    open.changes.push(['the last, waiting']);
+    expect(open.socket.updates).toHaveLength(BURST_MESSAGES);
+    return { ...here, ...open };
+  }
+
+  it('on pagehide', async () => {
+    const { window, socket, connection } = await waiting();
+    window.dispatchEvent(new Event('pagehide'));
+    expect(socket.updates).toHaveLength(BURST_MESSAGES + 1);
+    expect(serverCopy(socket).toArray().at(-1)).toBe('the last, waiting');
+    connection.stop();
+  });
+
+  it('when the page becomes hidden, and not when it becomes visible', async () => {
+    const { document, socket, connection } = await waiting();
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(socket.updates).toHaveLength(BURST_MESSAGES);
+    document.visibilityState = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(socket.updates).toHaveLength(BURST_MESSAGES + 1);
+    connection.stop();
+  });
+
+  it('when the connection is stopped, which is what a page that is left does', async () => {
+    const { window, document, socket, connection } = await waiting();
+    const removed = vi.spyOn(window, 'removeEventListener');
+    const removedFromDocument = vi.spyOn(document, 'removeEventListener');
+    expect(socket.updates).toHaveLength(BURST_MESSAGES);
+    connection.stop();
+    expect(socket.updates).toHaveLength(BURST_MESSAGES + 1);
+    expect(serverCopy(socket).toArray().at(-1)).toBe('the last, waiting');
+    // The listeners are removed with the connection.
+    expect(removed).toHaveBeenCalledWith('pagehide', expect.any(Function));
+    expect(removedFromDocument).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+  });
+});
+
+describe('a change that waits for its batch does not turn the indicator to syncing', () => {
+  it('shows "In sync" while it waits, and "syncing" only for a message that is sent and not yet acknowledged', async () => {
+    const { connection, socket, changes } = await opened();
+    // The bucket is emptied, and the server acknowledges each message.
+    for (let n = 0; n < BURST_MESSAGES; n += 1) changes.push([`key ${n}`]);
+    for (let n = 0; n < BURST_MESSAGES; n += 1) socket.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncStatus(connection.getState())).toEqual({ state: 'synced', label: 'In sync' });
+
+    const seen: string[] = [];
+    connection.subscribe(() => seen.push(syncStatus(connection.getState()).label));
+    changes.push(['waits']);
+    await vi.advanceTimersByTimeAsync(BATCH_MS - 1);
+    // Nothing was sent, and nothing was shown.
+    expect(socket.updates).toHaveLength(BURST_MESSAGES);
+    expect(seen).toEqual([]);
+    expect(connection.getState().unsent).toBe(false);
+
+    // Sent: not acknowledged yet, so the words say that it could be lost.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.updates).toHaveLength(BURST_MESSAGES + 1);
+    expect(connection.getState().unsent).toBe(true);
+    expect(syncStatus(connection.getState())).toEqual({
+      state: 'syncing',
+      label: 'Syncing. Changes that are not yet sent are lost if this tab is closed.',
+    });
+    socket.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncStatus(connection.getState())).toEqual({ state: 'synced', label: 'In sync' });
+    connection.stop();
+  });
+
+  it('shows only "In sync" and "Syncing" while a key is held, and never the restoring or the error words', async () => {
+    const { connection, socket, changes } = await opened();
+    const shown = new Set<string>();
+    connection.subscribe(() => shown.add(syncStatus(connection.getState()).label));
+    // 10 seconds at 30 a second, and the server acknowledges each message 40 ms after it.
+    for (let n = 0; n < 300; n += 1) {
+      const heard = socket.updates.length;
+      changes.push([`key ${n}`]);
+      await vi.advanceTimersByTimeAsync(33);
+      if (socket.updates.length > heard) {
+        setTimeout(() => socket.receive(toFrame(8, 1)), 40);
+      }
+    }
+    await vi.advanceTimersByTimeAsync(BATCH_MS + 100);
+    expect([...shown].sort()).toEqual([
+      'In sync',
+      'Syncing. Changes that are not yet sent are lost if this tab is closed.',
+    ]);
+    connection.stop();
+  });
+});
