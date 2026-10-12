@@ -57,6 +57,9 @@ import { LightbulbIcon, StickyNoteIcon, TriangleAlertIcon } from '@ekdotico/domi
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
 import styles from './editor.module.css';
+import { MarkdownInput } from './input-rules.ts';
+import { Shortcuts } from './shortcuts.ts';
+import { SlashPalette } from './slash-palette.tsx';
 
 /** Whether the document can be edited now: the role, and the connection (FR-ED-18). Node views read it. */
 export const Editable = createContext(false);
@@ -869,5 +872,8 @@ export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
       },
     }).configure({ document, field: FRAGMENT_NAME }),
     Closed,
+    Shortcuts,
+    MarkdownInput,
+    SlashPalette,
   ];
 }

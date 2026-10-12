@@ -32,6 +32,7 @@ import {
 import { linkAddress } from '../../../../lib/editor/link.ts';
 import styles from './editor.module.css';
 import { Editable } from './extensions.tsx';
+import { EDIT_LINK } from './shortcuts.ts';
 
 // FR-ED-02, in its order: the name of each mark in the schema, the name of its
 // control, and its icon. The hyperlink is the eighth and has its own control.
@@ -168,6 +169,17 @@ export function SelectionToolbar({
       editor.off('blur', blur);
     };
   }, [editor, rowRef]);
+
+  // FR-ED-13: Ctrl or Cmd, and K, pressed in the text, opens the same dialog (./shortcuts.ts).
+  useEffect(() => {
+    const within = surface.current;
+    const edit = () => {
+      setLink((count) => count + 1);
+      setLinking(true);
+    };
+    within?.addEventListener(EDIT_LINK, edit);
+    return () => within?.removeEventListener(EDIT_LINK, edit);
+  }, [surface]);
 
   const shown = editable && selection.shown && (inText || inRow || linking);
 

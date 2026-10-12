@@ -19,7 +19,9 @@ import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
 import { BLOCK_CONTROLS, Editable, copyText, extensions } from './extensions.tsx';
+import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
+import { SlashPaletteList } from './slash-palette.tsx';
 
 // The fixed texts, word for word.
 const IN_SYNC = 'Document autosaves — working version is in sync.'; // FR-ED-24
@@ -119,9 +121,9 @@ function Text({
     injectNonce: globalThis.document.querySelector<HTMLScriptElement>('script[nonce]')?.nonce,
     // Rendered in the browser alone: the server has no document to render.
     immediatelyRender: false,
-    // FR-ED-14, the Markdown shortcuts, is the next slice's: the library's own
-    // set, which is not that list, stays off until then.
-    enableInputRules: false,
+    // FR-ED-14: the rules of ./input-rules.ts and of no other extension. The
+    // library's own set is not that list, and nothing pasted is converted.
+    enableInputRules: [MARKDOWN_INPUT],
     enablePasteRules: false,
     editorProps: {
       // NFR-IC-19: the region has a role and a name, says whether it can be
@@ -184,6 +186,7 @@ function Text({
       >
         {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
         <EditorContent editor={editor} />
+        {editor ? <SlashPaletteList editor={editor} /> : null}
       </div>
     </Editable.Provider>
   );
