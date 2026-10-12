@@ -981,6 +981,17 @@ test('the slash palette opens where the requirement says, filters by name and al
   await page.keyboard.press('Escape');
 });
 
+function sharedText(shared: Y.Doc, written: string): Y.XmlText {
+  const found = shared
+    .getXmlFragment('default')
+    .toArray()
+    .flatMap((block) => (block instanceof Y.XmlElement ? block.toArray() : []))
+    .find((each) => each instanceof Y.XmlText && each.toString() === written);
+  if (!(found instanceof Y.XmlText))
+    throw new Error('the test found no such paragraph in the shared document');
+  return found;
+}
+
 test('the slash palette stays open through another client’s change elsewhere, and closes when that client rewrites the command', async ({
   page,
 }) => {
