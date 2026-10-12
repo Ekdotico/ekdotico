@@ -29,27 +29,27 @@ const AT_CAPACITY =
 // The requirements give no words for what follows. Written under the
 // Expression Guidelines; the owner approves them with the pull request (the
 // answer to Q6 of the plan).
-const DISCARDED = 'Changes that were not yet sent were discarded.';
+const DISCARDED = 'Ekdotico discarded the changes that it had not yet sent.';
 const TEXT_NOT_COPIED =
   'The text could not be copied. The browser may have refused access to the clipboard. Close this dialog, select the text in the document, and copy it with the keyboard before reloading.';
 const ENDED: Record<Ending, { title: string; text: string; href: string; link: string }> = {
   // FR-ED-41: "a neutral statement that the user's access to the document has ended".
   [REFUSAL.ACCESS_ENDED]: {
     title: 'Access to this document has ended',
-    text: `The document is closed in this tab. ${DISCARDED}`,
+    text: `Ekdotico closed the document in this tab. ${DISCARDED}`,
     href: '/',
-    link: 'Open the list of documents',
+    link: 'Documents',
   },
   // The words of the 404 of a document's routes (src/lib/documents/access.ts).
   [REFUSAL.NO_ACCESS]: {
     title: 'No document was found at this address for this account',
     text: 'Check the address.',
     href: '/',
-    link: 'Open the list of documents',
+    link: 'Documents',
   },
   [REFUSAL.SESSION_ENDED]: {
     title: 'The session has ended',
-    text: `The document is closed in this tab. ${DISCARDED}`,
+    text: `Ekdotico closed the document in this tab. ${DISCARDED}`,
     // `SIGN_IN_PATH` of src/proxy.ts, which is a module of the server.
     href: '/sign-in',
     link: 'Sign in again',
@@ -66,7 +66,7 @@ const UNSHOWN = {
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
 const KEYS =
-  'Alt+F10 moves from the text to the formatting toolbar while text is selected, and otherwise to the controls of the block the cursor is in. Escape returns to the text.';
+  'Alt+F10 moves from the text to the formatting toolbar when text is selected. When no text is selected, Alt+F10 moves to the controls of the block that holds the cursor. Escape returns to the text.';
 
 /** The controls of the innermost block round the cursor that has any. */
 function blockControls(view: EditorView): HTMLElement | null {
@@ -262,8 +262,9 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
     // that had the focus are gone, so the statement takes it.
     return (
       <FormFault tone="neutral" announce="polite" autoFocus title={title}>
+        <p>{text}</p>
         <p>
-          {text} <Link href={href}>{link}</Link>.
+          <Link href={href}>{link}</Link>
         </p>
       </FormFault>
     );

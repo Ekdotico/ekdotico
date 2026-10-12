@@ -289,12 +289,12 @@ export function syncStatus({ phase, unsent }: ConnectionState): {
     case 'lost':
       return {
         state: 'error',
-        label: `Not connected. The document is read-only until the connection returns.${tail}`,
+        label: `Not connected. The document is read-only until the connection returns. Check the connection. Ekdotico tries again automatically.${tail}`,
       };
     default:
       return {
         state: 'syncing',
-        label: `Restoring the connection. Changes are kept in this tab and are sent when the connection returns.${tail}`,
+        label: `Restoring the connection. Ekdotico keeps changes in this tab and sends them when the connection returns.${tail}`,
       };
   }
 }

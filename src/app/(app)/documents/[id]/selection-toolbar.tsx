@@ -49,7 +49,8 @@ const MARKS = [
 
 const ADDRESS_ID = 'link-address';
 const ADDRESS_HINT = 'An address that begins with https://, http://, or mailto:';
-const ADDRESS_RULE = 'Enter an address that begins with https://, http://, or mailto:';
+const ADDRESS_RULE =
+  'Enter an address that begins with https://, http://, or mailto: — for example, https://example.org.';
 
 /** The address of the link: set, changed, or removed. A text field stands beside a toolbar and never in one. */
 function LinkForm({ editor, onDone }: { editor: Editor; onDone: () => void }) {
