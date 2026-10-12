@@ -1006,6 +1006,124 @@ describe('Tab, and a table in a table', () => {
       editor.commands.deleteRow();
       expect(rowsOf(editor)).toEqual([99, 9]);
     });
+
+    const one = (word: string): Json => ({
+      type: 'tableBlock',
+      content: [
+        {
+          type: 'table',
+          content: [
+            { type: 'tableRow', content: [{ type: 'tableCell', content: [paragraph(words(word))] }] },
+          ],
+        },
+        { type: 'tableCaption', content: [words(`${word} caption`)] },
+      ],
+    });
+    const rowOf = (...held: Json[][]): Json => ({
+      type: 'tableBlock',
+      content: [
+        {
+          type: 'table',
+          content: [{ type: 'tableRow', content: held.map((content) => ({ type: 'tableCell', content })) }],
+        },
+        { type: 'tableCaption' },
+      ],
+    });
+    /** Puts the cursor at the start of the paragraph that holds these words. */
+    const at = (editor: Editor, written: string) => {
+      let found = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (found < 0 && node.type.name === 'paragraph' && node.textContent === written) found = pos + 1;
+      });
+      editor.commands.setTextSelection(found);
+    };
+    /** The cursor, where it is one: the text of its block, and how far into it. */
+    const cursor = (editor: Editor) => {
+      const { empty, $from } = editor.state.selection;
+      return empty ? `${$from.parent.textContent}@${$from.parentOffset}` : 'a range';
+    };
+
+    // The review of pull request 28, S3: the library selects all a cell holds,
+    // and one letter then left a table of one cell with that letter in it.
+    it('Tab and Shift+Tab into a cell that holds a table select nothing: the cursor goes to the cell’s own text, and a letter replaces nothing', () => {
+      const editor = editorOf(
+        rowOf(
+          [paragraph(words('plain'))],
+          [one('first'), paragraph(words('own text'))],
+          [paragraph(words('last'))],
+          [one('alone')],
+        ),
+      );
+      const whole = text(editor);
+      at(editor, 'plain');
+      expect(key(editor, 'Tab')).toBe(true);
+      // In the cell's own text, after the table: the innermost table is still the one being moved through.
+      expect(cursor(editor)).toBe('own text@0');
+      expect(round(editor).filter((name) => name === 'table')).toHaveLength(1);
+      type(editor, 'X');
+      expect(text(editor)).toBe(whole.replace('own text', 'Xown text'));
+      editor.view.dispatch(
+        editor.state.tr.delete(editor.state.selection.from - 1, editor.state.selection.from),
+      );
+      // A cell of text is as the library leaves it: all of it selected.
+      expect(key(editor, 'Tab')).toBe(true);
+      expect(cursor(editor)).toBe('a range');
+      expect(editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to)).toBe(
+        'last',
+      );
+      // A cell that holds a table and no text of its own: the first text in it, and nothing selected.
+      expect(key(editor, 'Tab')).toBe(true);
+      expect(cursor(editor)).toBe('alone@0');
+      type(editor, 'X');
+      expect(text(editor)).toBe(whole.replace('alone', 'Xalone'));
+      editor.view.dispatch(
+        editor.state.tr.delete(editor.state.selection.from - 1, editor.state.selection.from),
+      );
+      // And backwards.
+      at(editor, 'last');
+      expect(key(editor, 'Tab', true)).toBe(true);
+      expect(cursor(editor)).toBe('own text@0');
+      expect(text(editor)).toBe(whole);
+    });
+
+    // The review of pull request 28: a table pasted into an empty cell left
+    // the cell with no place the keyboard reaches (WCAG 2.1.1).
+    it('a table that a paste of the writer’s leaves at the end of a cell is followed by a paragraph, in the same step; no other cell is given one', () => {
+      const held = (editor: Editor) => {
+        const found: string[] = [];
+        editor.state.doc.firstChild!.firstChild!.firstChild!.forEach((cell) =>
+          found.push(cell.children.map(({ type }) => type.name).join(' ')),
+        );
+        return found;
+      };
+      const pasteOver = (editor: Editor, block: Json, meta: [string, unknown]) => {
+        const { $from } = editor.state.selection;
+        editor.view.dispatch(
+          editor.state.tr
+            .replaceWith($from.before(), $from.after(), editor.schema.nodeFromJSON(block))
+            .setMeta(...meta),
+        );
+      };
+      const editor = editorOf(rowOf([paragraph()], [paragraph(words('second'))], [paragraph()]));
+      pasteOver(editor, one('pasted'), ['paste', true]);
+      expect(held(editor)).toEqual(['tableBlock paragraph', 'paragraph', 'paragraph']);
+      editor.state.doc.check();
+      // A drop is one too. And a table put there by anything else is left as it is.
+      at(editor, '');
+      at(editor, 'second');
+      pasteOver(editor, one('dropped'), ['uiEvent', 'drop']);
+      expect(held(editor)).toEqual(['tableBlock paragraph', 'tableBlock paragraph', 'paragraph']);
+
+      // Another client's cell that holds a table alone is not added to: not
+      // when it arrives, and not when the writer pastes somewhere else.
+      const theirs = editorOf(rowOf([paragraph()], [paragraph(words('second'))]));
+      peer(theirs, [rowOf([one('theirs')], [paragraph(words('second'))])], 1);
+      expect(held(theirs)).toEqual(['tableBlock', 'paragraph']);
+      at(theirs, 'second');
+      theirs.view.dispatch(theirs.state.tr.insertText('pasted ').setMeta('paste', true));
+      expect(text(theirs)).toContain('pasted second');
+      expect(held(theirs)).toEqual(['tableBlock', 'paragraph']);
+    });
   });
 });
 

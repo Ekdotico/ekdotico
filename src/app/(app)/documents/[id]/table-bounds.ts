@@ -20,6 +20,24 @@
 // this writer's that would take a table past a bound is not applied
 // (`holdsTables`, there too): a step of a transaction copies the nodes round a
 // change and asks the schema nothing.
+//
+// KNOWN, AND LEFT (the review of pull request 28; reported to the owner):
+//
+// - Near the bound, an undo can cost another writer's rows for good. One
+//   writer deletes a large table from a cell, another then adds rows to a
+//   table further down, and the first undoes: the large table is back, the
+//   count is past the bound, and what is left out is the last in the order of
+//   the document, which is the other writer's rows. They are taken out of the
+//   shared document as no one's change, so neither writer's undo brings them
+//   back.
+// - A table can be left with a row a cell short. Where rows are left out of a
+//   table in a cell and a cell above reached down into them, or where a client
+//   sends such a table at 9,999 cells, the table library's repair adds the
+//   missing cell; where that would pass the bound the repair is not applied
+//   (`holdsTables`), at this key and at every later one, and the table stays as
+//   it is until a cell is deleted somewhere in the outermost table.
+// - The collaboration server holds neither bound: it reads the size and the
+//   depth of a document and nothing else.
 import { Fragment, type Node as PMNode, type ResolvedPos } from '@tiptap/pm/model';
 
 // The bounds are this file's: the Docs give none (reported for the register).
@@ -31,14 +49,20 @@ export const TABLE_CELLS_MOST = TABLE_MOST * TABLE_MOST;
  * The most levels of table, one in a cell of another, the outermost counted:
  * a table in a cell of a table, and no table in a cell of that one.
  *
- * AWAITS THE OWNER (R32 allows a table in a cell and names no depth; the row
- * for the register is reported with the pull request). The limit of the
- * collaboration server alone, 50 elements one in another
- * (src/lib/collab/state.ts), would allow 12: each level is four elements, the
- * block, the table, the row and the cell, and the text of the twelfth is the
- * 49th. Two is the least that the decision asks for, and the one choice that
- * can be changed without loss: a bound that is raised deletes nothing, and one
- * that is lowered deletes every table past it, for everyone.
+ * The owner's decision R57 of 12 October 2026 (its register row is pending):
+ * tables nest at most 2 deep. The limit of the collaboration server alone, 50
+ * elements one in another (src/lib/collab/state.ts), would allow 12: each
+ * level is four elements, the block, the table, the row and the cell, and the
+ * text of the twelfth is the 49th.
+ *
+ * Changing it is not free either way. A bound that is lowered deletes every
+ * table past it, for everyone, at once. And one that is raised is not safe at
+ * once. Every browser holds the bound it was loaded
+ * with, so for as long as one tab of an earlier release has a document open,
+ * that tab leaves out the tables past ITS bound and takes them out of the
+ * shared document, for everyone. A higher bound is safe only once no browser
+ * runs the lower one: released in two steps, or with the server holding the
+ * bound, which it does not.
  */
 export const TABLE_DEPTH_MOST = 2;
 
@@ -174,4 +198,29 @@ export function tableRoom($at: ResolvedPos): { cells: number; levels: number } {
     outermost ??= $at.node(depth);
   }
   return { cells: TABLE_CELLS_MOST - (outermost ? tablesIn(outermost).cells : 0), levels };
+}
+
+const cell = (node: PMNode) => role(node) === 'cell' || role(node) === 'header_cell';
+/** Whether the last thing a cell holds is a table, in its block: the cell then ends where no text can be written. */
+const endsInTable = (node: PMNode) => cell(node) && role(node.lastChild?.firstChild ?? node) === 'table';
+
+/**
+ * The end of every cell of `after` that ends in a table and did not in
+ * `before`: where a paragraph is put after a table that this writer's change
+ * left at the end of a cell (`Closed` of ./extensions.tsx). A cell is the
+ * same cell while nothing in it changed, so one that already ended in a table
+ * is left as it was, whoever made it so.
+ */
+export function tablesEndingCells(before: PMNode, after: PMNode): number[] {
+  const ended = new WeakSet<PMNode>();
+  before.descendants((node) => {
+    if (endsInTable(node)) ended.add(node.lastChild!);
+    return tablesIn(node).levels > 0;
+  });
+  const ends: number[] = [];
+  after.descendants((node, pos) => {
+    if (endsInTable(node) && !ended.has(node.lastChild!)) ends.push(pos + node.nodeSize - 1);
+    return tablesIn(node).levels > 0;
+  });
+  return ends;
 }

@@ -38,7 +38,7 @@ import Superscript from '@tiptap/extension-superscript';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { Placeholder } from '@tiptap/extensions';
 import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
-import { Plugin, type Transaction } from '@tiptap/pm/state';
+import { Plugin, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 import { TableMap } from '@tiptap/pm/tables';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import {
@@ -61,7 +61,15 @@ import styles from './editor.module.css';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
-import { TABLE_MOST, closeNested, tableRoom, tablesIn } from './table-bounds.ts';
+import {
+  TABLE_CELLS_MOST,
+  TABLE_DEPTH_MOST,
+  TABLE_MOST,
+  closeNested,
+  tableRoom,
+  tablesEndingCells,
+  tablesIn,
+} from './table-bounds.ts';
 
 /** Whether the document can be edited now: the role, and the connection (FR-ED-18). Node views read it. */
 export const Editable = createContext(false);
@@ -427,37 +435,42 @@ const TABLE_ACTIONS = [
 
 function TableBlockView({ node, editor, getPos }: NodeViewProps) {
   const editable = useContext(Editable);
-  // What the selection allows, where this table is the innermost round it. An
-  // action of this menu never reaches another table: not the one this table
-  // stands in, and not one in a cell of this table, which has a menu of its
-  // own (R32). The library's commands act on the innermost table round the
-  // selection, so that is the one table whose menu offers them.
+  // What the selection allows, where the table of this block is the innermost
+  // table round it. An action of this menu never reaches another table: not
+  // the one this table stands in, and not one in a cell of this table, which
+  // has a menu of its own (R32). The library's commands act on the innermost
+  // table round the selection, so that is the one table whose menu offers
+  // them.
+  //
+  // The caption of a table is in no cell of it. So from the caption of a table
+  // that stands in a cell, the innermost table is the one round that cell, and
+  // it is that table's menu that answers, for the row and the column of the
+  // cell; the menu of the caption's own table offers nothing, as it does from
+  // the caption of a table that stands in no cell.
   const allowed = useEditorState({
     editor,
     selector: ({ editor: current }) => {
       const pos = getPos();
       const { $from } = current.state.selection;
       let depth = $from.depth;
-      while (depth > 0 && $from.node(depth).type !== node.type) depth -= 1;
-      if (pos === undefined || depth === 0 || $from.before(depth) !== pos) return null;
-      // In the table, and not in the caption: from the caption of a table in
-      // a cell the commands would reach the table that cell is in.
-      const table = $from.node(depth).firstChild;
-      if ($from.depth === depth || $from.node(depth + 1) !== table) return null;
+      while (depth > 0 && $from.node(depth).type.spec.tableRole !== 'table') depth -= 1;
+      // The block of a table is the node round it.
+      if (pos === undefined || depth < 2 || $from.before(depth - 1) !== pos) return null;
+      const table = $from.node(depth);
       const can = current.can();
-      const rows = table?.childCount ?? 0;
-      const columns = table?.firstChild?.childCount ?? 0;
+      const rows = table.childCount;
+      const columns = table.firstChild?.childCount ?? 0;
       // R32: the cells left to the outermost table round this one, and how
       // many an action adds at most: a row its columns, a column its rows, a
       // split the squares of the cell but one.
       const room = tableRoom($from).cells;
-      const grid = table ? TableMap.get(table) : null;
-      const cell = $from.node(Math.min($from.depth, depth + 3)).attrs;
+      const grid = TableMap.get(table);
+      const cell = $from.node(Math.min($from.depth, depth + 2)).attrs;
       const adds = (command: string) =>
         command.startsWith('addRow')
-          ? (grid?.width ?? 0)
+          ? grid.width
           : command.startsWith('addColumn')
-            ? (grid?.height ?? 0)
+            ? grid.height
             : command === 'splitCell'
               ? (Number(cell.colspan) || 1) * (Number(cell.rowspan) || 1) - 1
               : 0;
@@ -472,12 +485,21 @@ function TableBlockView({ node, editor, getPos }: NodeViewProps) {
     },
   });
   const headerRow = node.firstChild?.firstChild?.firstChild?.type.name === 'tableHeader';
+  // NFR-IC-19: a table with a caption is named by it, and so is its menu, so
+  // that two tables, and above all a table in a cell of another, are told
+  // apart by more than their place. The caption stands in the element that
+  // holds the content of the block and is no child of the figure, so the
+  // browser does not name the figure by it. Without a caption both are named
+  // as before.
+  const caption = node.lastChild?.type.name === 'tableCaption' ? node.lastChild.textContent.trim() : '';
   return (
-    <NodeViewWrapper as="figure" className={styles.table}>
+    <NodeViewWrapper as="figure" className={styles.table} aria-label={caption || undefined}>
       {editable ? (
         <BlockControls editor={editor} className={styles.controls}>
           <MenuButton
             label="Table"
+            // The name begins with the word on the button (WCAG 2.5.3).
+            aria-label={caption ? `Table: ${caption}` : undefined}
             items={TABLE_ACTIONS.map(([command, label], index) => ({
               label: command === 'toggleHeaderRow' && headerRow ? 'Remove header row' : label,
               disabled: !allowed?.[index],
@@ -872,16 +894,95 @@ export function holdBinding(view: EditorView, unshown: () => void): void {
   binding._prosemirrorChanged = held(binding._prosemirrorChanged.bind(binding), false);
 }
 
-const Closed = Extension.create({
+/**
+ * Tab and Shift+Tab into a cell that holds a table (R32). The library selects
+ * all that the cell it moves to holds, so that the next letter replaces it,
+ * as in a sheet. Where that is a table, the selection ran from its first cell
+ * to its caption and the text after it, and one letter left a table of one
+ * cell (the review of pull request 28). There the selection becomes a cursor,
+ * and nothing is selected for a letter to replace.
+ *
+ * The cursor goes to the start of the first text that is the cell's own, and
+ * not to the first text in the cell, which is in the table it holds: Tab then
+ * moves on through the table the writer is moving through, and is not taken
+ * into the inner one, where Tab in the last cell adds a row. A cell that
+ * holds a table and no text of its own has no such place, and there the
+ * cursor goes to the first text in the cell.
+ */
+function settleInCell(editor: Editor): void {
+  const { selection, tr } = editor.state;
+  if (selection.empty || !(selection instanceof TextSelection)) return;
+  const { $from } = selection;
+  const cell = (node: PMNode) => /^(header_)?cell$/.test(String(node.type.spec.tableRole));
+  let depth = $from.sharedDepth(selection.to);
+  while (depth > 0 && !cell($from.node(depth))) depth -= 1;
+  if (depth === 0 || tablesIn($from.node(depth)).levels === 0) return;
+  const start = $from.start(depth);
+  let own = -1;
+  $from.node(depth).forEach((child, offset) => {
+    if (own < 0 && child.isTextblock) own = start + offset + 1;
+  });
+  editor.view.dispatch(
+    tr
+      .setSelection(own < 0 ? Selection.near(tr.doc.resolve(start), 1) : TextSelection.create(tr.doc, own))
+      .scrollIntoView(),
+  );
+}
+
+/**
+ * The words for a change that was not made because a table has no room for it
+ * (`holdsTables`). The requirements give none: the sentence is the one the
+ * owner approved (R63 of 12 October 2026; its register row is pending). The
+ * two numbers are the bounds themselves, and are written nowhere else.
+ */
+const COUNTS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+export const TABLE_NO_ROOM = `The table has no room for this. A table and the tables in its cells hold ${TABLE_CELLS_MOST.toLocaleString('en-GB')} cells, ${COUNTS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep.`;
+
+const Closed = Extension.create<{ noRoom: (is: boolean) => void }>({
   name: 'closed',
+  addOptions() {
+    return { noRoom: () => {} };
+  },
   onBeforeCreate() {
     closeSchema(this.editor.schema);
   },
   addProseMirrorPlugins() {
+    // Whether the last change this writer asked for was refused for the room
+    // of a table. `noRoom` is told when that becomes so and when it stops
+    // being so, and at no other time.
+    let refused = false;
     return [
       new Plugin({
-        filterTransaction: (transaction, state) =>
-          mayApply(transaction, this.editor.isEditable) && holdsTables(transaction, state.doc),
+        filterTransaction: (transaction, state) => {
+          if (!mayApply(transaction, this.editor.isEditable)) return false;
+          const held = holdsTables(transaction, state.doc);
+          // NFR-IC-19 (WCAG 3.3.1, 4.1.3): a change that is not made is said
+          // to be so. Of this writer's own asking only: not what the binding
+          // brings, and not what a plugin appends, which is the table
+          // library's repair, tried again at every key and asked for by no one.
+          const asked =
+            transaction.docChanged &&
+            !transaction.getMeta(ySyncPluginKey) &&
+            transaction.getMeta('appendedTransaction') === undefined;
+          if (asked && refused === held) this.options.noRoom((refused = !held));
+          return held;
+        },
+        // R32: a table that a paste or a drop of this writer's leaves at the
+        // end of a cell is followed by an empty paragraph, as one from the
+        // palette is (./slash-palette.tsx), and in the same step of undo.
+        // Never for a cell as another client or a stored document made it:
+        // that would be an addition every browser writes for itself.
+        appendTransaction: (transactions, before, state) => {
+          const pasted = transactions.some(
+            (each) => each.docChanged && (each.getMeta('paste') || each.getMeta('uiEvent') === 'drop'),
+          );
+          const ends = pasted ? tablesEndingCells(before.doc, state.doc) : [];
+          if (ends.length === 0) return null;
+          const { tr } = state;
+          // From the last, so that no place moves before it is used.
+          for (const at of ends.reverse()) tr.insert(at, state.schema.nodes.paragraph!.create());
+          return tr;
+        },
       }),
     ];
   },
@@ -978,8 +1079,14 @@ export const codeColours = {
 /**
  * The extensions of the editor, bound to the document of one connection.
  * `unshown` is told, once, that the document cannot be built here (`holdBinding`).
+ * `noRoom` is told when a change of the writer's is refused for the room of a
+ * table, and when the next one is not (`Closed`).
  */
-export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
+export function extensions(
+  document: Y.Doc,
+  unshown: () => void = () => {},
+  noRoom: (is: boolean) => void = () => {},
+) {
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
@@ -1026,7 +1133,22 @@ export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
     // that no table a client sends is too large to lay out (`TABLE_MOST`): a
     // row or a cell past the bound is not content of this schema, and is left
     // out as a node without a type is (`closeSchema`).
-    Table.extend({ group: '', content: `tableRow{1,${TABLE_MOST}}` }),
+    Table.extend({
+      group: '',
+      content: `tableRow{1,${TABLE_MOST}}`,
+      // The library's keys, and after its Tab and Shift+Tab, `settleInCell`.
+      addKeyboardShortcuts() {
+        const keys = this.parent?.() ?? {};
+        const settled =
+          (key: 'Tab' | 'Shift-Tab'): NonNullable<(typeof keys)[string]> =>
+          (props) => {
+            const taken = keys[key]?.(props) ?? false;
+            if (taken) settleInCell(this.editor);
+            return taken;
+          };
+        return { ...keys, Tab: settled('Tab'), 'Shift-Tab': settled('Shift-Tab') };
+      },
+    }),
     TableRow.extend({ content: `(tableCell | tableHeader){0,${TABLE_MOST}}` }),
     TableHeader,
     TableCell,
@@ -1052,7 +1174,7 @@ export function extensions(document: Y.Doc, unshown: () => void = () => {}) {
         return plugins;
       },
     }).configure({ document, field: FRAGMENT_NAME }),
-    Closed,
+    Closed.configure({ noRoom }),
     Shortcuts,
     MarkdownInput,
     SlashPalette,

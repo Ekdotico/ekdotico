@@ -4,7 +4,7 @@
 // rendering is handed a value another client chose freely.
 import { getSchema } from '@tiptap/core';
 import { DOMSerializer, type Node as PMNode, type Schema } from '@tiptap/pm/model';
-import { EditorState, type Plugin, type Transaction } from '@tiptap/pm/state';
+import { EditorState, TextSelection, type Plugin, type Transaction } from '@tiptap/pm/state';
 import { TableMap } from '@tiptap/pm/tables';
 import {
   prosemirrorJSONToYDoc,
@@ -25,7 +25,7 @@ import {
   holdBinding,
   mayApply,
 } from '../../src/app/(app)/documents/[id]/extensions.tsx';
-import { holdsTables } from '../../src/app/(app)/documents/[id]/extensions.tsx';
+import { TABLE_NO_ROOM, holdsTables } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import {
   TABLE_CELLS_MOST,
   TABLE_DEPTH_MOST,
@@ -491,6 +491,29 @@ describe('the tables in the cells of a table (R32)', () => {
     expect(deep.textContent).toBe('level 1level 2');
   });
 
+  // The review of pull request 28, S1: a header cell is a cell of another type.
+  it('counts a header cell as a cell, in a table and in the tables in its cells', () => {
+    const head = (...content: PMNode[]) => schema.node('tableHeader', null, content.length ? content : [p()]);
+    // Header cells throughout: a hundred, each holding ninety-nine; and one row more in the last.
+    const block = (more: boolean) =>
+      blockOfRows(
+        rowsOf(10, 10, (row, column) =>
+          head(
+            blockOfRows([
+              ...rowsOf(9, 11, () => head()),
+              ...(more && row + column === 18 ? rowsOf(1, 1, () => head(p('ONE-PAST'))) : []),
+            ]),
+          ),
+        ),
+      );
+    expect(tablesIn(block(false))).toEqual({ cells: 10_000, levels: 2, past: false });
+    expect(tablesIn(block(true))).toEqual({ cells: 10_000, levels: 2, past: false });
+    expect(block(true).textContent).toBe('');
+    // And the room a place has is less by each of them.
+    const doc = schema.node('doc', null, [blockOfRows(rowsOf(2, 3, () => head(p('x'))))]);
+    expect(tableRoom(doc.resolve(6))).toEqual({ cells: 10_000 - 6, levels: 1 });
+  });
+
   it('counts a table that stands in a quotation or a list in a cell', () => {
     const hidden = (levels: number): PMNode =>
       blockOfRows(
@@ -623,15 +646,76 @@ describe('the tables in the cells of a table (R32)', () => {
       const two = state(
         blockOfRows(rowsOf(1, 1, () => cellOf(blockOfRows(rowsOf(1, 1, () => cellOf(p('deep'))))))),
       );
-      const closed = all.find((each) => each.name === 'closed') as unknown as {
-        config: { addProseMirrorPlugins(this: { editor: { isEditable: boolean } }): Plugin[] };
-      };
-      const [plugin] = closed.config.addProseMirrorPlugins.call({ editor: { isEditable: true } });
-      const held = EditorState.create({ schema, doc: two.doc, plugins: [plugin!] });
+      const { plugin } = closedPlugin();
+      const held = EditorState.create({ schema, doc: two.doc, plugins: [plugin] });
       const third = held.tr.insert(inside(held.doc, 'deep') + 5, blockOfRows(rowsOf(1, 1)));
       expect(held.applyTransaction(third).transactions).toEqual([]);
       const typed = held.tr.insertText('typed', inside(held.doc, 'deep'));
       expect(held.applyTransaction(typed).state.doc.textContent).toBe('typeddeep');
+    });
+
+    /** The plugin of the editor that refuses, as the editor makes it, and what it tells of a refusal. */
+    function closedPlugin() {
+      const closed = all.find((each) => each.name === 'closed') as unknown as {
+        config: {
+          addProseMirrorPlugins(this: {
+            editor: { isEditable: boolean };
+            options: { noRoom(is: boolean): void };
+          }): Plugin[];
+        };
+      };
+      const noRoom = vi.fn();
+      const [plugin] = closed.config.addProseMirrorPlugins.call({
+        editor: { isEditable: true },
+        options: { noRoom },
+      });
+      return { plugin: plugin!, noRoom };
+    }
+
+    // The review of pull request 28, S5: a refusal said nothing (WCAG 3.3.1, 4.1.3).
+    it('is said to be refused, once, until the next change the writer makes; a repair and another client’s change say nothing', () => {
+      const { plugin, noRoom } = closedPlugin();
+      let held = EditorState.create({
+        schema,
+        doc: state(
+          blockOfRows(rowsOf(1, 1, () => cellOf(blockOfRows(rowsOf(1, 1, () => cellOf(p('deep'))))))),
+        ).doc,
+        plugins: [plugin],
+      });
+      const third = () => held.tr.insert(inside(held.doc, 'deep') + 5, blockOfRows(rowsOf(1, 1)));
+      // What a plugin appends, as the table library's repair is, and what the binding brings.
+      held.applyTransaction(third().setMeta('appendedTransaction', held.tr));
+      held.applyTransaction(third().setMeta(ySyncPluginKey, { isChangeOrigin: false }));
+      held = held.applyTransaction(third().setMeta(ySyncPluginKey, { isChangeOrigin: true })).state;
+      expect(tablesIn(held.doc).past).toBe(true);
+      expect(noRoom).not.toHaveBeenCalled();
+
+      held = EditorState.create({
+        schema,
+        doc: state(
+          blockOfRows(rowsOf(1, 1, () => cellOf(blockOfRows(rowsOf(1, 1, () => cellOf(p('deep'))))))),
+        ).doc,
+        plugins: [plugin],
+      });
+      // The writer's own: said at the first refusal, and not again at the second and the third.
+      for (let asked = 0; asked < 3; asked += 1) held.applyTransaction(third());
+      expect(noRoom.mock.calls).toEqual([[true]]);
+      // A move of the cursor is no change, and the words stay.
+      held = held.applyTransaction(held.tr.setSelection(TextSelection.create(held.doc, 1))).state;
+      // A repair that is refused meanwhile says nothing, and takes nothing back.
+      held.applyTransaction(third().setMeta('appendedTransaction', held.tr));
+      expect(noRoom.mock.calls).toEqual([[true]]);
+      // The next change the writer makes takes the words away, once.
+      held = held.applyTransaction(held.tr.insertText('typed', inside(held.doc, 'deep'))).state;
+      held = held.applyTransaction(held.tr.insertText('more', inside(held.doc, 'typeddeep'))).state;
+      expect(noRoom.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('says it in the owner’s words, with the two bounds as they are', () => {
+      // Written out here, and not taken from the code under test.
+      expect(TABLE_NO_ROOM).toBe(
+        'The table has no room for this. A table and the tables in its cells hold 10,000 cells, two levels deep.',
+      );
     });
   });
 

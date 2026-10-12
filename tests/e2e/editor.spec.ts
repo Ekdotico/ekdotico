@@ -2281,15 +2281,51 @@ test('a table is put in a cell of a table from the palette, by keyboard alone: i
   await page.keyboard.type('the cell’s own');
   await expect(cell.locator(':scope > p')).toHaveText('the cell’s own');
 
-  // In the caption of the inner table its menu offers nothing: the commands
-  // would reach the table round it.
+  // The caption of the inner table is in no cell of it, and in a cell of the
+  // outer one. So the inner menu offers nothing there, the outer menu acts on
+  // the row and the column of that cell, and Alt+F10 goes to the menu that
+  // offers something, and not to the one that offers nothing.
   await place(inner.locator('figcaption'));
   await page.keyboard.type('Inner caption');
   expect(await menuOf(inner)).toEqual(Array(9).fill(true));
+  expect(await menuOf(outer)).toEqual([false, false, false, false, false, false, true, true, false]);
+  await page.keyboard.press('Alt+F10');
+  await expect(
+    outer.locator(':scope > [data-block-controls]').getByRole('button', { name: 'Table' }),
+  ).toBeFocused();
+  await chooseItem(page, 'Add column right');
+  await expect(ownRows(doc.locator('table').first()).first().locator(':scope > td')).toHaveCount(4);
+  await expect(inner.locator('tr').first().locator('td')).toHaveCount(3);
+  await expect(doc).toBeFocused();
+  // From the caption of a table that stands in no cell the key goes to that
+  // table's own menu, which offers nothing there: as before the decision.
+  await place(doc.locator('figcaption').last());
   expect(await menuOf(outer)).toEqual(Array(9).fill(true));
+  await page.keyboard.press('Alt+F10');
+  await expect(
+    outer.locator(':scope > [data-block-controls]').getByRole('button', { name: 'Table' }),
+  ).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(doc).toBeFocused();
+
+  // Tab into the cell that holds the table selects nothing: the cursor is in
+  // the cell's own text, and a letter replaces nothing (the review of pull
+  // request 28: one letter left a table of one cell).
+  await place(doc.getByText('outer A1', { exact: true }));
+  await page.keyboard.press('Tab');
+  await expect.poll(async () => (await held(cell.locator(':scope > p'))).inside).toBe(true);
+  await page.keyboard.type('Z');
+  await expect(cell.locator(':scope > p')).toHaveText('Zthe cell’s own');
+  await expect(inner.locator('td')).toHaveCount(12);
+  for (const [at, written] of ['inner A1', 'inner B1', 'inner C1'].entries())
+    await expect(inner.locator('td').nth(at)).toHaveText(written);
+  await expect(inner.locator('figcaption')).toHaveText('Inner caption');
+  await page.keyboard.press('Backspace');
+  await expect(cell.locator(':scope > p')).toHaveText('the cell’s own');
 
   // NFR-IC-19: what is exposed. Each table is a table in a figure with its own
-  // button, and the inner one stands in a cell of the outer.
+  // button, and the inner one stands in a cell of the outer. A table with a
+  // caption is named by it, and so is its button; one without is as before.
   await expect(doc).toMatchAriaSnapshot(`
     - figure:
       - button "Table"
@@ -2298,8 +2334,8 @@ test('a table is put in a cell of a table from the palette, by keyboard alone: i
           - row:
             - cell "outer A1"
             - cell:
-              - figure:
-                - button "Table"
+              - figure "Inner caption":
+                - 'button "Table: Inner caption"'
                 - table:
                   - rowgroup:
                     - row "inner A1 inner B1 inner C1":
@@ -2316,18 +2352,46 @@ test('a table is put in a cell of a table from the palette, by keyboard alone: i
   // cell of the inner table it would be a level too deep, and nothing is pasted.
   const figure =
     '<figure class="ekd-table"><table><tbody><tr><td><p>PASTED</p></td></tr></tbody></table><figcaption class="ekd-table-caption">pasted caption</figcaption></figure>';
+  // What is not pasted is said to be so, once, in words that are seen and
+  // heard, and the focus stays in the text. Written out here, and not taken
+  // from the code under test.
+  const noRoom = page.getByRole('status').filter({
+    hasText:
+      'The table has no room for this. A table and the tables in its cells hold 10,000 cells, two levels deep.',
+  });
+  await expect(noRoom).toHaveCount(0);
   await place(inner.locator('td').nth(4));
   await paste(page, figure);
-  await place(ownRows(doc.locator('table').first()).nth(1).locator(':scope > td').first());
+  await expect(noRoom).toBeVisible();
+  await expect(doc).toBeFocused();
+  await expect(doc.locator('table')).toHaveCount(2);
   await paste(page, figure);
+  await expect(noRoom).toHaveCount(1);
+  // The words go with the next change the writer makes.
+  const empty = ownRows(doc.locator('table').first()).nth(1).locator(':scope > td').first();
+  await place(empty);
+  await expect(noRoom).toBeVisible();
+  await paste(page, figure);
+  await expect(noRoom).toHaveCount(0);
   await expect(doc.locator('table')).toHaveCount(3);
   await expect(doc.getByText('PASTED', { exact: true })).toHaveCount(1);
   await expect(doc.getByText('pasted caption', { exact: true })).toHaveCount(1);
   await expect(inner.first().locator('table')).toHaveCount(1);
+  // The table was pasted into an empty cell, and a paragraph follows it there:
+  // the cell has a place of its own, which the keyboard reaches from the
+  // caption of the pasted table (the review: WCAG 2.1.1).
+  await expect(empty.locator(':scope > *')).toHaveCount(2);
+  await expect(empty.locator(':scope > p')).toHaveText('');
+  await place(empty.locator('figcaption'));
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => (await held(empty.locator(':scope > p'))).inside).toBe(true);
+  await page.keyboard.type('own place');
+  await expect(empty.locator(':scope > p')).toHaveText('own place');
   await expect(status(page, 'In sync')).toBeVisible();
   await page.reload();
   await expect(text(page).locator('table')).toHaveCount(3);
   await expect(text(page)).toContainText('the cell’s own');
+  await expect(text(page)).toContainText('own place');
   expect(faults).toEqual([]);
 });
 
@@ -2445,6 +2509,29 @@ test('a key typed in a table whose cells hold tables, ten thousand cells in all,
   console.log(`a key in a table of tables, 10,000 cells: ${times.join(', ')} ms`);
   // The middle one of five, as for the 32,000 asterisks.
   expect(times.toSorted((a, b) => a - b)[2]).toBeLessThan(150);
+
+  // At the bound the menu offers no row and no column (the review of pull
+  // request 28, S2), and what would take one away is still offered.
+  expect(await menuOf(doc.locator('figure figure').last())).toEqual([
+    true,
+    true,
+    true,
+    true,
+    false,
+    false,
+    true,
+    true,
+    false,
+  ]);
+  // Tab in the last cell would add a row: it adds none, and the page says so.
+  const noRoom = page.getByRole('status').filter({ hasText: 'The table has no room for this.' });
+  await expect(noRoom).toHaveCount(0);
+  await page.keyboard.press('Tab');
+  await expect(noRoom).toBeVisible();
+  await expect(doc.locator('td')).toHaveCount(10_000);
+  await expect(doc).toBeFocused();
+  await page.keyboard.type('f');
+  await expect(noRoom).toHaveCount(0);
 });
 
 // The third review: the library makes the document itself without asking the
