@@ -2107,6 +2107,326 @@ test('what another client puts where it cannot stand is taken out alone: the tab
   await expect(text(page)).toContainText('three');
 });
 
+// ── A table in a cell of a table (the owner's decision R32 of 12 October 2026) ──
+
+/** The time of one key, from its going down to the second frame after it came up, for each key of `keys`. */
+async function keyTimes(page: Page, keys: string): Promise<number[]> {
+  const times: number[] = [];
+  for (const key of keys) {
+    // The page listens before the key is pressed (the test of 32,000 asterisks says why).
+    await page.evaluate(() => {
+      (window as unknown as { keyTime: Promise<number> }).keyTime = new Promise<number>((resolve) => {
+        let down = 0;
+        document.addEventListener('keydown', () => (down = performance.now()), { once: true, capture: true });
+        document.addEventListener(
+          'keyup',
+          () => requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - down))),
+          { once: true, capture: true },
+        );
+      });
+    });
+    await page.keyboard.press(key);
+    times.push(
+      Math.round(await page.evaluate(() => (window as unknown as { keyTime: Promise<number> }).keyTime)),
+    );
+  }
+  return times;
+}
+/** A table as a client that is no editor writes it: each cell holds what `cell` gives. */
+const gridOf = (
+  rows: number,
+  columns: number,
+  cell: (row: number, column: number) => (Y.XmlElement | Y.XmlText)[],
+  caption = '',
+) =>
+  tableOf(
+    Array.from({ length: rows }, (_, row) =>
+      element(
+        'tableRow',
+        {},
+        Array.from({ length: columns }, (_, column) => element('tableCell', {}, cell(row, column))),
+      ),
+    ),
+    caption,
+  );
+const cellsIn = (fragment: Y.XmlFragment) => fragment.toString().split('<tablecell').length - 1;
+/** The rows of a table that are its own, and not those of a table in one of its cells. */
+const ownRows = (table: Locator) => table.locator(':scope > tbody > tr');
+/** The items of a table's menu, as they stand in the page while the menu is closed: each name, and whether it is off. */
+const menuOf = (figure: Locator) =>
+  figure
+    .locator(':scope > [data-block-controls] [role="menuitem"]')
+    .evaluateAll((items) => items.map((item) => item.getAttribute('aria-disabled') === 'true'));
+/** Chooses an item of the menu that has the focus, by the keyboard alone. */
+async function chooseItem(page: Page, name: string) {
+  await page.keyboard.press('Enter');
+  const item = page.getByRole('menuitem', { name, exact: true });
+  await expect(item).toBeVisible();
+  await expect(async () => {
+    if (!(await item.evaluate((each) => each === document.activeElement)))
+      await page.keyboard.press('ArrowDown');
+    await expect(item).toBeFocused({ timeout: 100 });
+  }).toPass({ intervals: [20, 50] });
+  await page.keyboard.press('Enter');
+}
+
+test('a table is put in a cell of a table from the palette, by keyboard alone: its keys, its menu, one undo, and what a screen reader is told', async ({
+  page,
+}) => {
+  test.slow();
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  const outer = doc.locator('figure').first();
+  const inner = doc.locator('figure figure');
+  // No press of a pointer from here on.
+  await doc.focus();
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('table')).toHaveCount(1);
+  await page.keyboard.type('outer A1');
+  await page.keyboard.press('Tab');
+
+  // The row is listed in a cell, and Enter puts the table there.
+  await page.keyboard.type('/table');
+  await expect(rows(page).filter({ hasText: '/table' })).toHaveCount(1);
+  await expect(rows(page).first()).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('table')).toHaveCount(2);
+  await expect(inner.locator('td')).toHaveCount(9);
+  await expect(doc).toBeFocused();
+  // One undo takes the table away, and leaves what was typed to ask for it; a redo brings it back.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(doc.locator('table')).toHaveCount(1);
+  await expect(ownRows(doc.locator('table')).first().locator('td').nth(1)).toHaveText('/table');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect(doc.locator('table')).toHaveCount(2);
+  // The cell holds the table and a paragraph after it: a place of the cell's own.
+  const cell = ownRows(doc.locator('table').first()).first().locator(':scope > td').nth(1);
+  await expect(cell.locator(':scope > p')).toHaveCount(1);
+  await expect(cell.locator(':scope > :last-child')).toHaveJSProperty('tagName', 'P');
+
+  // The cursor is in the first cell of the new table, and Tab moves between its cells.
+  await place(inner.locator('td').first());
+  await page.keyboard.type('inner A1');
+  await expect(inner.locator('td').first()).toHaveText('inner A1');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('inner B1');
+  await expect(inner.locator('td').nth(1)).toHaveText('inner B1');
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  // No table a level deeper: the row is not listed there.
+  await page.keyboard.type('/');
+  await expect(palette(page)).toBeVisible();
+  await expect(rows(page)).toHaveCount(SLASH_ROWS.length - 1);
+  await expect(rows(page).filter({ hasText: '/table' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type('inner C1');
+  await expect(inner.locator('td').nth(2)).toHaveText('inner C1');
+
+  // Alt+F10 reaches the menu of the innermost table, which acts on that table alone.
+  // The menu of the table round it offers nothing while the cursor is in the inner one.
+  expect(await menuOf(outer)).toEqual(Array(9).fill(true));
+  expect(await menuOf(inner)).toEqual([false, false, false, false, false, false, true, true, false]);
+  await page.keyboard.press('Alt+F10');
+  await expect(inner.getByRole('button', { name: 'Table' })).toBeFocused();
+  await chooseItem(page, 'Add row below');
+  await expect(inner.locator('tr')).toHaveCount(4);
+  await expect(ownRows(doc.locator('table').first())).toHaveCount(3);
+  await expect(doc).toBeFocused();
+
+  // Down to the paragraph after the inner table, in the cell of the outer one:
+  // from there Alt+F10 reaches the menu of the outer table, which acts on it alone.
+  // A key is pressed only once the editor holds the cursor where the last one
+  // put it (`held`): a key too many would go on, past the paragraph.
+  await expect(async () => {
+    if ((await held(inner)).inside) await page.keyboard.press('ArrowDown');
+    expect((await held(cell.locator(':scope > p'))).inside).toBe(true);
+  }).toPass({ intervals: [20, 50] });
+  expect(await menuOf(inner)).toEqual(Array(9).fill(true));
+  await page.keyboard.press('Alt+F10');
+  await expect(
+    outer.locator(':scope > [data-block-controls]').getByRole('button', { name: 'Table' }),
+  ).toBeFocused();
+  await chooseItem(page, 'Add row below');
+  await expect(ownRows(doc.locator('table').first())).toHaveCount(4);
+  await expect(inner.locator('tr')).toHaveCount(4);
+  // The focus is back in the text before a letter is typed: the menu would take it for a search.
+  await expect(doc).toBeFocused();
+  await expect.poll(async () => (await held(cell.locator(':scope > p'))).inside).toBe(true);
+  await page.keyboard.type('the cell’s own');
+  await expect(cell.locator(':scope > p')).toHaveText('the cell’s own');
+
+  // In the caption of the inner table its menu offers nothing: the commands
+  // would reach the table round it.
+  await place(inner.locator('figcaption'));
+  await page.keyboard.type('Inner caption');
+  expect(await menuOf(inner)).toEqual(Array(9).fill(true));
+  expect(await menuOf(outer)).toEqual(Array(9).fill(true));
+
+  // NFR-IC-19: what is exposed. Each table is a table in a figure with its own
+  // button, and the inner one stands in a cell of the outer.
+  await expect(doc).toMatchAriaSnapshot(`
+    - figure:
+      - button "Table"
+      - table:
+        - rowgroup:
+          - row:
+            - cell "outer A1"
+            - cell:
+              - figure:
+                - button "Table"
+                - table:
+                  - rowgroup:
+                    - row "inner A1 inner B1 inner C1":
+                      - cell "inner A1"
+                      - cell "inner B1"
+                      - cell "inner C1"
+                - text: Inner caption
+              - paragraph: the cell’s own
+  `);
+  await expectNoSidewaysScroll(page);
+  await screens(page, 'editor-table-in-cell');
+
+  // A pasted table with its caption goes into a cell as a table in it; into a
+  // cell of the inner table it would be a level too deep, and nothing is pasted.
+  const figure =
+    '<figure class="ekd-table"><table><tbody><tr><td><p>PASTED</p></td></tr></tbody></table><figcaption class="ekd-table-caption">pasted caption</figcaption></figure>';
+  await place(inner.locator('td').nth(4));
+  await paste(page, figure);
+  await place(ownRows(doc.locator('table').first()).nth(1).locator(':scope > td').first());
+  await paste(page, figure);
+  await expect(doc.locator('table')).toHaveCount(3);
+  await expect(doc.getByText('PASTED', { exact: true })).toHaveCount(1);
+  await expect(doc.getByText('pasted caption', { exact: true })).toHaveCount(1);
+  await expect(inner.first().locator('table')).toHaveCount(1);
+  await expect(status(page, 'In sync')).toBeVisible();
+  await page.reload();
+  await expect(text(page).locator('table')).toHaveCount(3);
+  await expect(text(page)).toContainText('the cell’s own');
+  expect(faults).toEqual([]);
+});
+
+test('a table in a cell that another client takes past the bounds is brought inside them, and the writer’s text stays', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  await doc.click();
+  await page.keyboard.type('Written before.');
+  const hostile = await connectAs(page.context(), id);
+  const fragment = hostile.provider.document.getXmlFragment('default');
+  // The writer's table, sixty by sixty, and what the writer writes in it.
+  fragment.push([
+    gridOf(60, 60, (row, column) => [paragraph(`w${row}.${column}`)], 'the writer’s'),
+    paragraph('after'),
+  ]);
+  await expect(doc.locator('td')).toHaveCount(3600);
+  await placeAtEnd(doc.getByText('w0.0', { exact: true }));
+  await page.keyboard.type(' KEEP-THIS');
+  await expect(doc).toContainText('w0.0 KEEP-THIS');
+  await expect.poll(() => fragment.toString()).toContain('KEEP-THIS');
+
+  // Another client puts four by four in every cell, 57,600 cells more, and in
+  // one of them a table a level too deep.
+  const cellAt = (row: number, column: number) =>
+    (((fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).get(row) as Y.XmlElement).get(
+      column,
+    ) as Y.XmlElement;
+  hostile.provider.document.transact(() => {
+    for (let row = 0; row < 60; row += 1)
+      for (let column = 0; column < 60; column += 1)
+        cellAt(row, column).push([
+          gridOf(4, 4, (inner, across) =>
+            row + column + inner + across === 0
+              ? [paragraph('two'), gridOf(1, 1, () => [paragraph('THREE-DEEP')])]
+              : [paragraph('')],
+          ),
+        ]);
+  });
+  expect(cellsIn(fragment)).toBe(61_201);
+
+  // The page holds the bound: the writer's 3,600 cells, and the first four
+  // hundred of the tables put in them, in the order of the document.
+  const held = async () => {
+    await expect(doc.locator('table')).toHaveCount(401, { timeout: 60_000 });
+    await expect(doc.locator('td')).toHaveCount(10_000);
+    await expect(doc.locator('table table table')).toHaveCount(0);
+    await expect(doc).not.toContainText('THREE-DEEP');
+    for (const written of ['Written before.', 'w0.0 KEEP-THIS', 'two', 'w6.39', 'w6.40', 'w59.59', 'after'])
+      await expect(doc.getByText(written, { exact: true })).toHaveCount(1);
+  };
+  await held();
+  // The shared document holds what the page does: what was past the bounds is gone from it, and nothing else.
+  await expect.poll(() => cellsIn(fragment), { timeout: 60_000 }).toBe(10_000);
+  expect(fragment.toString()).toContain('KEEP-THIS');
+  expect(fragment.toString()).not.toContain('THREE-DEEP');
+  for (let row = 0; row < 60; row += 1)
+    for (let column = 0; column < 60; column += 1)
+      expect(cellAt(row, column).toString()).toContain(`w${row}.${column}`);
+
+  // The document is one that can be written in, and undo is the writer's own:
+  // it takes back what the writer typed last, and brings back nothing that was left out.
+  await placeAtEnd(doc.getByText('after', { exact: true }));
+  await page.keyboard.type(' typed');
+  await expect(doc).toContainText('after typed');
+  // Until the words are gone, and no further: the press before them is the writer's too.
+  await expect(async () => {
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(doc.getByText('after', { exact: true })).toHaveCount(1);
+  }).toPass();
+  await held();
+  expect(cellsIn(fragment)).toBe(10_000);
+  hostile.close();
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  await page.reload();
+  await held();
+  expect(faults).toEqual([]);
+});
+
+// The largest there may be: ten by ten, and nine by eleven in each cell, ten
+// thousand cells in a hundred and one tables. Measured on 12 October 2026: 31
+// ms a key, which is what one table of a hundred by a hundred takes.
+test('a key typed in a table whose cells hold tables, ten thousand cells in all, is answered at once', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const other = await connectAs(page.context(), id);
+  try {
+    other.provider.document
+      .getXmlFragment('default')
+      .insert(0, [
+        gridOf(10, 10, (row, column) => [
+          gridOf(9, 11, (inner, across) => [
+            paragraph(row + column + inner + across === 36 ? 'last cell' : ''),
+          ]),
+        ]),
+      ]);
+    await expect(doc.locator('td')).toHaveCount(10_000, { timeout: 60_000 });
+    await expect(doc.locator('table')).toHaveCount(101);
+  } finally {
+    other.close();
+  }
+  await placeAtEnd(doc.getByText('last cell'));
+  const times = await keyTimes(page, 'abcde');
+  await expect(doc.locator('td', { hasText: 'last cellabcde' }).last()).toBeVisible();
+  test.info().annotations.push({ type: 'milliseconds for each key', description: times.join(', ') });
+  console.log(`a key in a table of tables, 10,000 cells: ${times.join(', ')} ms`);
+  // The middle one of five, as for the 32,000 asterisks.
+  expect(times.toSorted((a, b) => a - b)[2]).toBeLessThan(150);
+});
+
 // Finding B, in the browser's half. The collaboration server refuses such a
 // document now (src/lib/collab/state.ts), so this one is as a document stored
 // before there was a limit: written into its row.
