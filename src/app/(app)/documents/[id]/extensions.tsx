@@ -180,7 +180,7 @@ function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
       <BlockControls editor={editor} className="ekd-code-header">
         <Select
           id={id}
-          label="Language"
+          label="Code language"
           labelHidden
           size="small"
           value={language}
@@ -292,8 +292,8 @@ const Callout = Node.create({
 const TOC_TITLE = 'Table of contents';
 const TOC_DEPTHS = [
   { value: '1', label: 'Level 1' },
-  { value: '2', label: 'Levels 1 and 2' },
-  { value: '3', label: 'Levels 1 to 3' },
+  { value: '2', label: 'Levels 1–2' },
+  { value: '3', label: 'Levels 1–3' },
 ];
 
 export const tocDepth = (given: unknown): 1 | 2 | 3 =>
@@ -347,7 +347,11 @@ function TableOfContentsView({ node, updateAttributes, editor }: NodeViewProps) 
           ))}
         </ol>
       ) : (
-        <p>No headings yet. Each heading of the document is listed here.</p>
+        <p>
+          {editable
+            ? 'No headings yet. This list shows each heading of the document. Add a heading to the document to list it here.'
+            : 'No headings yet. This list shows each heading of the document.'}
+        </p>
       )}
       {editable ? (
         <BlockControls editor={editor} className={styles.controls}>
