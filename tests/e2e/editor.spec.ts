@@ -1280,6 +1280,8 @@ test('a key typed at the end of a paragraph of 32,000 asterisks is answered at o
 // The owner's decision of 12 October 2026, and the owner's sentence, written
 // out here and not taken from the code under test.
 const SLASH_HINT = 'Type / for a list of blocks.';
+// R31: the prompt of an empty document is a sentence other than the description's.
+const PROMPT = 'Write here, or type / for a list of blocks.';
 const DESCRIPTION = `${SLASH_HINT} Alt+F10 moves from the text to the formatting toolbar when text is selected. When no text is selected, Alt+F10 moves to the controls of the block that holds the cursor. Escape returns to the text.`;
 
 test('an empty document says how the list of blocks is opened: in the description of the text, and as a prompt that is no content', async ({
@@ -1296,7 +1298,7 @@ test('an empty document says how the list of blocks is opened: in the descriptio
 
   // The prompt: the sentence, drawn by the design package's rule, in the one empty paragraph.
   await expect(prompt).toHaveCount(1);
-  await expect(prompt).toHaveAttribute('data-placeholder', SLASH_HINT);
+  await expect(prompt).toHaveAttribute('data-placeholder', PROMPT);
   await expect(prompt).toHaveAttribute('aria-hidden', 'true');
   const drawn = () =>
     prompt.evaluate((element) => {
@@ -1334,7 +1336,7 @@ test('an empty document says how the list of blocks is opened: in the descriptio
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme });
     const seen = await drawn();
-    expect(seen.content, colorScheme).toBe(`"${SLASH_HINT}"`);
+    expect(seen.content, colorScheme).toBe(`"${PROMPT}"`);
     expect(seen.inkAlpha, colorScheme).toBe(255);
     expect(seen.groundAlpha, colorScheme).toBe(255);
     expect(seen.contrast, colorScheme).toBeGreaterThanOrEqual(4.5);
@@ -1376,7 +1378,7 @@ test('an empty document says how the list of blocks is opened: in the descriptio
       .map((node) => (node.name?.value ?? '').trim())
       .filter(Boolean),
   ).toEqual([]);
-  expect(nodes.filter((node) => node.name?.value === SLASH_HINT)).toEqual([]);
+  expect(nodes.filter((node) => node.name?.value === PROMPT || node.name?.value === SLASH_HINT)).toEqual([]);
 
   // At 320 CSS pixels the prompt is inside the page.
   await page.setViewportSize({ width: 320, height: 640 });
@@ -1386,13 +1388,13 @@ test('an empty document says how the list of blocks is opened: in the descriptio
   // Gone at the first character, and back when the document is empty again.
   await page.keyboard.type('a');
   await expect(doc).toHaveText('a');
-  await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  await expect(doc.locator(`[data-placeholder="${PROMPT}"]`)).toHaveCount(0);
   await page.keyboard.press('Backspace');
   await expect(prompt).toHaveCount(1);
   // Not in a document of two empty paragraphs.
   await page.keyboard.press('Enter');
   await expect(doc.locator(':scope > p')).toHaveCount(2);
-  await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+  await expect(doc.locator(`[data-placeholder="${PROMPT}"]`)).toHaveCount(0);
   await page.keyboard.press('Backspace');
   await expect(prompt).toHaveCount(1);
   await expect(status(page, 'In sync')).toBeVisible();
@@ -1402,7 +1404,7 @@ test('an empty document says how the list of blocks is opened: in the descriptio
   try {
     await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
     await expect(doc).toHaveAttribute('aria-readonly', 'true');
-    await expect(doc.locator(`[data-placeholder="${SLASH_HINT}"]`)).toHaveCount(0);
+    await expect(doc.locator(`[data-placeholder="${PROMPT}"]`)).toHaveCount(0);
   } finally {
     await startCollab();
   }
@@ -2602,7 +2604,7 @@ test('a document the browser cannot build is said to be so, and the page stays',
   const statement = page.getByRole('alert').filter({ hasText: 'This document could not be shown' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
   await expect(statement).toHaveText(
-    'This document could not be shownEkdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed. Open the list of documents.',
+    'This document could not be shownEkdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed.Documents',
   );
   await expect(statement).toBeFocused();
   // The page is the document's own still, and not the page of a fault on the server.
@@ -2624,7 +2626,7 @@ test('a document the browser cannot build is said to be so, and the page stays',
   }
   expect(depth).toBe(10_000);
   other.close();
-  await statement.getByRole('link', { name: 'Open the list of documents' }).click();
+  await statement.getByRole('link', { name: 'Documents', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
 });
 

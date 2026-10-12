@@ -83,7 +83,7 @@ const UNSHOWN = {
   title: 'This document could not be shown',
   text: 'Ekdotico could not build the content of the document in this browser, so the document is closed in this tab. Nothing in the document was changed.',
   href: '/',
-  link: 'Open the list of documents',
+  link: 'Documents',
 };
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
@@ -324,8 +324,9 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
     // The text and whatever had the focus are gone, so the statement takes it.
     return (
       <FormFault autoFocus title={title}>
+        <p>{text}</p>
         <p>
-          {text} <Link href={href}>{link}</Link>.
+          <Link href={href}>{link}</Link>
         </p>
       </FormFault>
     );
