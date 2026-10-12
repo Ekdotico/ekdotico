@@ -1095,6 +1095,64 @@ test('a change that would take the document past a limit is said in words that n
   other.close();
 });
 
+// The owner's decision of 12 October 2026: 600 messages that carry an update
+// in any minute for each user, past which the collaboration server closes the
+// connection (src/collab/server.ts). The server of this file keeps the number
+// as it is first set. What the editor sends is counted on the socket itself.
+test('fast typing and a large paste stay inside the limit of messages: one for each key, and a few for a paste of 4 MB', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  // The frames of the socket (@hocuspocus/server, types.ts): the name of the
+  // document, a UUID, behind its length; the type; and for a synchronisation
+  // its step. An update travels in the second step and in an update.
+  const type = (payload: string | Buffer) => (typeof payload === 'string' ? -1 : payload[37]!);
+  const sent = { updates: 0, closed: 0 };
+  page.on('websocket', (socket) => {
+    socket.on('framesent', ({ payload }) => {
+      if ([0, 4].includes(type(payload)) && [1, 2].includes((payload as Buffer)[38]!)) sent.updates += 1;
+    });
+    // The close of the document's connection, whatever its reason.
+    socket.on('framereceived', ({ payload }) => {
+      if (type(payload) === 7) sent.closed += 1;
+    });
+  });
+  await enter(page);
+  const id = await openNew(page);
+  const other = await connectAs(page.context(), id);
+  const bytes = () => Y.encodeStateAsUpdate(other.provider.document).byteLength;
+  await text(page).click();
+  // The second step that answered the server when the document opened.
+  expect(sent.updates).toBe(1);
+
+  // 300 characters at 100 a second, where the fastest typists reach some 15.
+  // One message for each key: the editor sends every change as it is made, so
+  // what an account may type is 600 keys in a minute, on all its tabs
+  // (docs/operations/deployment.md says what a key held down comes to).
+  const words = 'the quick brown fox jumps over the lazy dog. '.repeat(7).slice(0, 300);
+  await page.keyboard.type(words, { delay: 10 });
+  await expect(status(page, 'In sync')).toBeVisible();
+  await expect.poll(() => other.provider.document.getXmlFragment('default').toString()).toContain(words);
+  expect(sent.updates - 1).toBe(words.length);
+
+  // A paste of 4 MB is a few messages, and not one for each of its words.
+  const before = sent.updates;
+  await paste(page, `<p>${'lorem ipsum '.repeat((4 * 1024 * 1024) / 12)}</p>`);
+  await expect.poll(bytes, { timeout: 120_000, intervals: [1000] }).toBeGreaterThan(4 * 1024 * 1024);
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  console.log(`e2e measure: ${sent.updates - before} message(s) for the paste`);
+  expect(sent.updates - before).toBeLessThanOrEqual(3);
+
+  // Never closed for the limit, or for anything else, and still written in.
+  expect(sent.closed).toBe(0);
+  await page.keyboard.type(' And after.');
+  await expect
+    .poll(() => other.provider.document.getXmlFragment('default').toString())
+    .toContain('And after.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  other.close();
+});
+
 // Finding B, in the browser's half. The collaboration server refuses such a
 // document now (src/lib/collab/state.ts), so this one is as a document stored
 // before there was a limit: written into its row.

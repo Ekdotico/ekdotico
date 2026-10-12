@@ -56,7 +56,7 @@ import { authorise } from '../lib/documents/access.ts';
 import { faultOf } from '../lib/fault.ts';
 import { assertContractVersion } from '../lib/istorico/index.ts';
 import { isOwnOrigin } from '../lib/origin.ts';
-import { logLimitReached, markKey, oncePer, takeLimit } from '../lib/rate-limit.ts';
+import { limitHere, logLimitReached, markKey, oncePer, takeLimit } from '../lib/rate-limit.ts';
 import { securityLog } from '../lib/security-log.ts';
 import { settings, type Settings } from '../lib/settings.ts';
 
@@ -73,6 +73,7 @@ const ANSWER_HEADERS = {
 };
 
 type StoreSettings = Pick<Settings, 'collabStoreDelayMs' | 'collabStoreMaxMs'>;
+type ServerSettings = StoreSettings & { limits: Pick<Settings['limits'], 'COLLAB_MESSAGES_PER_USER'> };
 
 // What the write itself may take and still be inside the period.
 const STORE_WRITE_MARGIN_MS = 500;
@@ -194,7 +195,11 @@ type Refused = { status: number; headers?: Record<string, string> };
 // which overwrites whatever a client sent under the name and names no one.
 const HANDLE_HEADER = 'x-ekdotico-handshake';
 
-export function createCollabServer(store: StoreSettings) {
+export function createCollabServer(store: ServerSettings) {
+  const messages = store.limits.COLLAB_MESSAGES_PER_USER;
+  // The messages each user has sent this instance (see `beforeSync`).
+  const takeMessage = limitHere(messages);
+  const messageLogDueHere = oncePerHere(messages.windowSeconds);
   // The session each accepted handshake presented, by its handle, for as long
   // as its socket lives.
   const admitted = new Map<string, ValidSession>();
@@ -376,6 +381,23 @@ export function createCollabServer(store: StoreSettings) {
       first = documentLimitLogDueHere(`${documentId}:${userId}`);
     }
     if (first) await securityLog({ kind: 'document_limit_refused', userId, documentId });
+  }
+
+  /**
+   * NFR-SE-19: the entry for the limit of messages reached, with the user. One
+   * for each period of the limit and each user, whatever number of connections
+   * is closed in it, as for every limit (`logLimitReached`); and, as for a
+   * refused update (`logDocumentLimitRefused`), written without Valkey too,
+   * the bound held by this process. It never rejects, and the refusal does not
+   * wait for it.
+   */
+  async function logMessageLimitReached(userId: string): Promise<void> {
+    try {
+      await logLimitReached('COLLAB_MESSAGES_PER_USER', userId, messages.windowSeconds, userId);
+    } catch {
+      // Valkey did not answer for the mark: nothing was written.
+      if (messageLogDueHere(userId)) await securityLog({ kind: 'rate_limit_reached', userId });
+    }
   }
 
   /**
@@ -637,9 +659,31 @@ export function createCollabServer(store: StoreSettings) {
      * not pass closes the connection to the document, and is neither applied,
      * nor acknowledged, nor sent to anyone. The first step of a
      * synchronisation carries no update.
+     *
+     * THE LIMIT OF MESSAGES (the owner's decision of 12 October 2026; a row to
+     * be added to NFR-SE-07) is taken first, so that a message past it costs
+     * neither the reading of its update nor the check of the document's
+     * limits, which copies a document that is at its limit for every message
+     * (src/lib/collab/state.ts). The library calls this hook for the two
+     * messages that carry an update and for the first step, and for nothing
+     * else (@hocuspocus/server 4.7.0, MessageReceiver.ts, `readSyncMessage`):
+     * awareness, which a cursor sends many times a second, never comes here.
+     * A read-only connection is counted too: the hook runs before the library
+     * looks at the flag.
+     *
+     * Counted for the user and not for the connection: a count on the
+     * connection begins again with the next one, and a user may hold as many
+     * as the limit of handshakes lets through, 30 more each minute. Past the
+     * limit the connection that sent the message is closed with the reason of
+     * a limit; the client waits before it asks for the document again
+     * (src/lib/collab/protocol.ts).
      */
     async beforeSync({ type, payload, document, documentName, context }) {
       if (type === messageYjsSyncStep1) return;
+      if (!takeMessage(context.userId).ok) {
+        void logMessageLimitReached(context.userId);
+        throw refuse(REFUSAL.LIMITED);
+      }
       let past: Limit | null;
       try {
         assertUpdate(payload);

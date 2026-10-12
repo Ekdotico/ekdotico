@@ -209,10 +209,16 @@ export class DocumentConnection {
       if (this.state.phase !== 'lost') this.set({ phase: 'restoring' });
       this.expectConnection();
     }
-    // The socket is open: the document is asked for again on it.
+    // The socket is open: the document is asked for again on it, as the
+    // library asks when a socket opens. Not by its `detach` and `attach`: the
+    // first tells the server to close a connection the server no longer has,
+    // and the server (@hocuspocus/server 4.7.0, ClientConnection.ts) keeps what
+    // arrives for a document that is not open and hands it to the connection
+    // made next, which that message then closes, with the client left
+    // synchronised to a server that hears nothing from it.
     this.retryTimer = setTimeout(() => {
-      this.provider.detach();
-      this.provider.attach();
+      const opened = this.socket.receivedOnOpenPayload;
+      if (opened) void this.provider.onOpen(opened);
     }, delay);
   }
 

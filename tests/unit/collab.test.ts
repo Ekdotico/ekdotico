@@ -7,6 +7,7 @@ import { storeRetryDelay, storeTimers } from '../../src/collab/server.ts';
 import { isReadOnly, recordConnection } from '../../src/lib/collab/connection.ts';
 import { COLLAB_PATH, documentName, FRAGMENT_NAME, REFUSAL } from '../../src/lib/collab/protocol.ts';
 import { assertUpdate } from '../../src/lib/collab/state.ts';
+import { limitHere } from '../../src/lib/rate-limit.ts';
 import {
   defaultPermissionSet,
   PERMISSIONS,
@@ -149,6 +150,79 @@ describe('what is recorded for a connection (NFR-SE-03 (a))', () => {
     const document = { id: ID, permissionSet };
     expect(recordConnection(session, document, 'editor').permissions).toContain('document.rename');
     expect(recordConnection(session, document, 'viewer').permissions).not.toContain('document.content.edit');
+  });
+});
+
+// The owner's decision of 12 October 2026: the count is in the memory of the
+// instance (src/lib/rate-limit.ts, `limitHere`). Times are given, in milliseconds.
+describe('a limit counted in the memory of the process: `max` in any period, for each key', () => {
+  const SECOND = 1000;
+
+  it('admits the 600th in a minute and refuses the 601st, which it does not count', () => {
+    const take = limitHere({ max: 600, windowSeconds: 60 });
+    for (let n = 0; n < 600; n++) expect(take('a', n)).toEqual({ ok: true });
+    expect(take('a', 600)).toEqual({ ok: false, retryAfterSeconds: 60 });
+    // Refused however often it is asked, and none of the refusals is counted:
+    // the first event leaves a minute after it happened, and one more is admitted.
+    for (let n = 0; n < 1000; n++) expect(take('a', 59_999).ok).toBe(false);
+    expect(take('a', 60_000)).toEqual({ ok: true });
+    // One left, one came: the second leaves a millisecond later, and no sooner.
+    expect(take('a', 60_000)).toEqual({ ok: false, retryAfterSeconds: 1 });
+    expect(take('a', 60_001)).toEqual({ ok: true });
+  });
+
+  it('counts any period and not one that begins on the minute', () => {
+    const take = limitHere({ max: 3, windowSeconds: 10 });
+    // Three at the end of one ten seconds, and none at the start of the next.
+    for (const at of [7, 8, 9]) expect(take('a', at * SECOND).ok).toBe(true);
+    for (const at of [10, 11, 16.999]) expect(take('a', at * SECOND).ok).toBe(false);
+    expect(take('a', 17 * SECOND).ok).toBe(true);
+    expect(take('a', 17.5 * SECOND)).toEqual({ ok: false, retryAfterSeconds: 1 });
+    expect(take('a', 18 * SECOND).ok).toBe(true);
+    expect(take('a', 19 * SECOND).ok).toBe(true);
+    expect(take('a', 26.9 * SECOND)).toEqual({ ok: false, retryAfterSeconds: 1 });
+    // Round the ring more than once.
+    for (const at of [27, 28, 29]) expect(take('a', at * SECOND).ok).toBe(true);
+    expect(take('a', 30 * SECOND)).toEqual({ ok: false, retryAfterSeconds: 7 });
+  });
+
+  it('says how long until one more is admitted, in whole seconds and never none', () => {
+    const take = limitHere({ max: 1, windowSeconds: 60 });
+    expect(take('a', 0).ok).toBe(true);
+    expect(take('a', 1)).toEqual({ ok: false, retryAfterSeconds: 60 });
+    expect(take('a', 30_500)).toEqual({ ok: false, retryAfterSeconds: 30 });
+    expect(take('a', 59_999)).toEqual({ ok: false, retryAfterSeconds: 1 });
+  });
+
+  it('keeps a count for each key, and forgets a key whose events have all left', () => {
+    const take = limitHere({ max: 2, windowSeconds: 1 });
+    expect([take('a', 0), take('a', 0), take('a', 0)].map(({ ok }) => ok)).toEqual([true, true, false]);
+    expect([take('b', 0), take('b', 0), take('b', 0)].map(({ ok }) => ok)).toEqual([true, true, false]);
+    // A key that was forgotten and one that never was are the same: both begin again.
+    expect(take('c', 999).ok).toBe(true);
+    expect(take('a', 999).ok).toBe(false);
+    expect(take('d', 1000).ok).toBe(true);
+    expect([take('a', 1000), take('a', 1000), take('a', 1000)].map(({ ok }) => ok)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it('holds no more than the keys of one period, whatever number it has seen', () => {
+    const held = new Map();
+    const take = limitHere({ max: 2, windowSeconds: 1 }, held);
+    // Ten new keys in each second, for a thousand seconds.
+    for (let n = 0; n < 10_000; n++) take(`user-${n}`, n * 100);
+    expect(held.size).toBe(10);
+    // A key that is still counted is not among the forgotten, however many came since.
+    expect(take('user-9999', 999_900).ok).toBe(true);
+    expect(take('user-9999', 999_900).ok).toBe(false);
+  });
+
+  it('counts by a clock that does not go back where no time is given', () => {
+    const take = limitHere({ max: 2, windowSeconds: 60 });
+    expect([take('a'), take('a'), take('a')].map(({ ok }) => ok)).toEqual([true, true, false]);
   });
 });
 

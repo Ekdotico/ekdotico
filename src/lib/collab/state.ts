@@ -232,9 +232,9 @@ function liveFormats(document: Y.Doc): number {
  * leaves the numbers too high, which costs a measure and nothing else.
  *
  * What it does not bound: a member who fills a document to within a few bytes
- * of the limit makes every update a measure again. That takes a limit of
- * messages for each connection, whose number is the owner's (reported for the
- * register, with the measurements).
+ * of the limit makes every update a measure again. The collaboration server
+ * bounds that by its limit of messages for each user, which it takes before
+ * it asks here (the owner's decision of 12 October 2026: 600 in a minute).
  */
 export function limitsOf(document: Y.Doc): (update: Uint8Array) => Limit | null {
   let bytes = Infinity;

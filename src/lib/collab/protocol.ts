@@ -50,6 +50,14 @@ export const REFUSAL = {
    * the socket once more. The reason carries no time: the client tries again
    * after a pause, never at once, and lengthens the pause each time up to a
    * minute, which is the period of the limit.
+   *
+   * It is also the reason of the close of an open connection: the account
+   * sent this server more than 600 messages that carry an update in a minute,
+   * on all its connections together (the owner's decision of 12 October 2026;
+   * a row to be added to NFR-SE-07). The message past the limit was not
+   * applied. The client does the same about it: it keeps the changes, pauses
+   * 5 seconds, asks for the document again, and sends what the server lacks
+   * as one message, which is refused in the same way while the minute lasts.
    */
   LIMITED: 'limited',
   /** Reserved for the limit of ten connections (NFR-PE-05, FR-ED-18); not sent yet. */

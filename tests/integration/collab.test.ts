@@ -13,6 +13,7 @@ import { connect as tcp, type AddressInfo } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Awareness, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import type { Access } from '../../src/lib/documents/access.ts';
 import { cookiesOf, createAccount, DAY, load, ORIGIN, prepare, signIn } from './identity.ts';
@@ -1447,8 +1448,11 @@ describe('what the processes wrote to stderr (NFR-SE-19)', () => {
 
 // ── The same server, in this process ────────────────────────────────────────
 
-async function inProcess() {
-  const collab = createCollabServer(settings());
+async function inProcess(messages = settings().limits.COLLAB_MESSAGES_PER_USER) {
+  const collab = createCollabServer({
+    ...settings(),
+    limits: { ...settings().limits, COLLAB_MESSAGES_PER_USER: messages },
+  });
   await new Promise<void>((resolve) => collab.httpServer.listen(0, resolve));
   return { ...collab, port: (collab.httpServer.address() as AddressInfo).port };
 }
@@ -1724,6 +1728,422 @@ describe('opening documents on an accepted socket (NFR-SE-07)', () => {
       await local.stop();
     }
   });
+});
+
+// The owner's decision of 12 October 2026 (a row to be added to NFR-SE-07):
+// 600 messages that carry an update in any minute, past which the connection
+// is closed and the refusal logged. A document at its limit of size costs a
+// copy of itself for every such message (src/lib/collab/state.ts).
+describe('the limit of messages that carry an update: 600 in any minute for each user', () => {
+  const AWARENESS = 1;
+  const STEP_1 = 0;
+  const reached = (userId: string) => ({ kind: 'rate_limit_reached', userId, documentId: null });
+  const open: WebSocket[] = [];
+  afterEach(() => {
+    for (const socket of open.splice(0)) socket.close();
+  });
+
+  /**
+   * A socket that sends nothing by itself: the provider answers the server's
+   * first step with a message of its own, and here every message is counted.
+   */
+  async function bare(port: number, cookie: string) {
+    const frames: ReturnType<typeof frame>[] = [];
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${COLLAB_PATH}`, {
+      headers: { cookie, origin: ORIGIN },
+    } as never);
+    socket.binaryType = 'arraybuffer';
+    socket.addEventListener('message', (event) => frames.push(frame(new Uint8Array(event.data))));
+    open.push(socket);
+    await new Promise((resolve) => socket.addEventListener('open', resolve));
+    const of = (address: string, type: number) =>
+      frames.filter((each) => each.name === address && each.type === type);
+    return {
+      socket,
+      of,
+      /** Opens a document under an address: its name, or its name and a session after a NUL. */
+      async opened(address: string) {
+        socket.send(opening(address));
+        await until(() => of(address, AUTH).length > 0);
+      },
+      update: (address: string, change: string | Uint8Array) =>
+        socket.send(sent(address, SYNC, UPDATE, typeof change === 'string' ? forgedUpdate(change) : change)),
+      acknowledged: (address: string) => of(address, SYNC_STATUS).length,
+      /** The reason of the close of the connection under an address, once it is closed. */
+      closed: (address: string) => until(() => of(address, CLOSE)[0]?.rest, 10_000),
+      isOpen: (address: string) => of(address, CLOSE).length === 0,
+    };
+  }
+  /** An update that the limits of a document refuse by themselves: quotes 51 deep. */
+  function tooDeep(): Uint8Array {
+    const deep = new Y.Doc();
+    let parent: Y.XmlFragment = deep.getXmlFragment('default');
+    for (let level = 0; level <= limits.MAX_ELEMENT_DEPTH; level += 1) {
+      const quote = new Y.XmlElement('blockquote');
+      parent.insert(0, [quote]);
+      parent = quote;
+    }
+    return Y.encodeStateAsUpdate(deep);
+  }
+
+  it(
+    'takes the 600th and closes the connection on the 601st, which is not applied, and logs the limit once',
+    { timeout: 60_000 },
+    async () => {
+      expect(settings().limits.COLLAB_MESSAGES_PER_USER).toEqual({ max: 600, windowSeconds: 60 });
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const client = await bare(server.port, owner.cookie);
+      await client.opened(id);
+      for (let n = 0; n < 600; n++) client.update(id, `change ${n}`);
+      await until(() => client.acknowledged(id) === 600, 30_000);
+      expect(client.isOpen(id)).toBe(true);
+      expect(await logged()).toEqual([]);
+
+      client.update(id, 'one too many');
+      // The reason is the one of a limit, which the client waits after (src/lib/collab/protocol.ts).
+      expect(await client.closed(id)).toBe(closedBecause('limited'));
+      expect(client.acknowledged(id)).toBe(600);
+      await until(async () => (await logged()).length > 0);
+
+      // The user's, and not the connection's: a new connection, on a new socket, begins no new count.
+      const again = await bare(server.port, await owner.signedIn());
+      await again.opened(id);
+      again.update(id, 'on another connection');
+      expect(await again.closed(id)).toBe(closedBecause(REFUSAL.LIMITED));
+      // Another user is not held back.
+      const other = await person();
+      const theirs = await documentOf(other.id);
+      const others = await bare(server.port, other.cookie);
+      await others.opened(theirs);
+      others.update(theirs, 'theirs');
+      await until(() => others.acknowledged(theirs) === 1);
+
+      // Longer than the 2 seconds of a store: the 600 are stored, and neither of the two refused.
+      await sleep(2500);
+      const changes = (await stored(id))!;
+      expect(changes).toHaveLength(600);
+      expect(changes).not.toContain('one too many');
+      expect(changes).not.toContain('on another connection');
+      // NFR-SE-19: one entry for the limit reached, with the user, and not one for each connection closed.
+      expect(await logged()).toEqual([reached(owner.id)]);
+      expect(server.child.exitCode).toBeNull();
+    },
+  );
+
+  it(
+    'counts neither awareness nor the first step of a synchronisation, and counts the second',
+    { timeout: 60_000 },
+    async () => {
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const client = await bare(server.port, owner.cookie);
+      await client.opened(id);
+      // A cursor that moves 700 times, and 700 requests for the state: more than the limit of each.
+      const cursor = new Awareness(new Y.Doc());
+      for (let n = 0; n < 700; n++) {
+        cursor.setLocalState({ cursor: n });
+        client.socket.send(sent(id, AWARENESS, encodeAwarenessUpdate(cursor, [cursor.clientID])));
+        client.socket.send(sent(id, SYNC, STEP_1, Uint8Array.of(0)));
+      }
+      // Both were read: the cursor came back, and every first step was answered with a second.
+      await until(() => client.of(id, AWARENESS).length > 0);
+      await until(
+        () => client.of(id, SYNC).filter(({ rest }) => rest.startsWith('01')).length >= 700,
+        30_000,
+      );
+
+      for (let n = 0; n < 599; n++) client.update(id, `change ${n}`);
+      client.socket.send(sent(id, SYNC, STEP_2, forgedUpdate('by a second step')));
+      await until(() => client.acknowledged(id) === 600, 30_000);
+      expect(client.isOpen(id)).toBe(true);
+      client.socket.send(sent(id, SYNC, STEP_2, forgedUpdate('one too many')));
+      expect(await client.closed(id)).toBe(closedBecause(REFUSAL.LIMITED));
+    },
+  );
+
+  const SLOW = { timeout: 30_000 };
+  it(
+    'is the user’s on every connection, and a message past it costs no check of the document’s limits',
+    SLOW,
+    async () => {
+      const local = await inProcess({ max: 5, windowSeconds: 60 });
+      try {
+        const owner = await person();
+        const editor = await person();
+        const id = await documentOf(owner.id);
+        const document = await db().document.findUniqueOrThrow({ where: { id } });
+        // Only the Owner exists until sharing is built.
+        answers.set(`${editor.id} ${id}`, { outcome: 'allowed', role: 'editor', document });
+        const first = await bare(local.port, owner.cookie);
+        const second = await bare(local.port, await owner.signedIn());
+        const other = await bare(local.port, editor.cookie);
+        // Three connections of one user, two of them on one socket, each under a
+        // session of its own (the library sends a frame without one to whatever
+        // connection the socket has to the document), and one of another user.
+        const [one, two] = [`${id}\0one`, `${id}\0two`];
+        for (const [client, address] of [
+          [first, id],
+          [second, one],
+          [second, two],
+          [other, id],
+        ] as const) {
+          await client.opened(address);
+        }
+        expect(local.hocuspocus.documents.get(id)!.getConnections()).toHaveLength(4);
+        for (let n = 0; n < 3; n++) first.update(id, `first ${n}`);
+        for (let n = 0; n < 2; n++) second.update(one, `second ${n}`);
+        await until(() => first.acknowledged(id) === 3 && second.acknowledged(one) === 2);
+        await until(async () => (await stored(id))?.length === 5, 4000);
+
+        // From here every look at the document's structs is counted. The check
+        // of the limits begins with one, whatever the update (`limitsOf`).
+        const held = local.hocuspocus.documents.get(id)!;
+        const { store } = held;
+        let looks = 0;
+        Object.defineProperty(held, 'store', { get: () => ((looks += 1), store) });
+
+        // The sixth, on each connection of the user: closed, whatever it holds.
+        // The first is an update the limits of the document would refuse too.
+        second.update(two, tooDeep());
+        expect(await second.closed(two)).toBe(closedBecause(REFUSAL.LIMITED));
+        second.update(one, 'one too many');
+        expect(await second.closed(one)).toBe(closedBecause(REFUSAL.LIMITED));
+        first.socket.send(sent(id, SYNC, STEP_2, forgedUpdate('by a second step')));
+        expect(await first.closed(id)).toBe(closedBecause(REFUSAL.LIMITED));
+        expect(first.acknowledged(id) + second.acknowledged(one) + second.acknowledged(two)).toBe(5);
+        // None was read, and the document was not looked at for any.
+        expect(looks).toBe(0);
+        expect(held.getArray('changes')).toHaveLength(5);
+
+        // The count of another user is that user's own, and the same messages are then checked.
+        other.update(id, 'from the other');
+        await until(() => other.acknowledged(id) === 1);
+        expect(looks).toBeGreaterThan(0);
+        other.update(id, tooDeep());
+        expect(await other.closed(id)).toBe(closedBecause(REFUSAL.TOO_DEEP));
+
+        await until(async () => (await logged()).length > 1);
+        await sleep(300);
+        const entries = await logged();
+        expect(entries).toHaveLength(2);
+        // One for the three connections closed for the limit, and none for a limit of the document from them.
+        expect(entries).toEqual(
+          expect.arrayContaining([
+            reached(owner.id),
+            { kind: 'document_limit_refused', userId: editor.id, documentId: id },
+          ]),
+        );
+      } finally {
+        await local.stop();
+      }
+    },
+  );
+
+  it('counts the messages of a connection that cannot edit', async () => {
+    const local = await inProcess({ max: 2, windowSeconds: 60 });
+    try {
+      const owner = await person();
+      const viewer = await person();
+      const id = await documentOf(owner.id);
+      const document = await db().document.findUniqueOrThrow({ where: { id } });
+      answers.set(`${viewer.id} ${id}`, { outcome: 'allowed', role: 'viewer', document });
+      const client = await bare(local.port, viewer.cookie);
+      await client.opened(id);
+      // The library answers each, and applies none (see the Viewer below).
+      for (let n = 0; n < 2; n++) client.update(id, `viewer ${n}`);
+      await until(() => client.acknowledged(id) === 2);
+      client.update(id, 'one too many');
+      expect(await client.closed(id)).toBe(closedBecause(REFUSAL.LIMITED));
+      expect(local.hocuspocus.documents.get(id)?.getArray('changes').length ?? 0).toBe(0);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it(
+    'closes although Valkey does not answer, and without Valkey still writes one entry for the period',
+    SLOW,
+    async () => {
+      const local = await inProcess({ max: 1, windowSeconds: 60 });
+      try {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const client = await bare(local.port, owner.cookie);
+        // Three connections on one socket, each under a session of its own.
+        const addresses = [`${id}\0one`, `${id}\0two`, `${id}\0three`];
+        const [id1] = addresses as [string];
+        for (const address of addresses) await client.opened(address);
+        client.update(id1, 'the one');
+        await until(() => client.acknowledged(id1) === 1);
+        // Valkey never answers the mark: the close is not held back, and nothing is written for it.
+        const set = vi.spyOn(valkey(), 'set').mockImplementation((() => new Promise(() => {})) as never);
+        const began = Date.now();
+        client.update(id1, 'one too many');
+        expect(await client.closed(id1)).toBe(closedBecause(REFUSAL.LIMITED));
+        expect(Date.now() - began).toBeLessThan(2000);
+        // Valkey fails: the entry is written by this process's own clock, once for the period.
+        set.mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
+        for (const address of addresses.slice(1)) {
+          client.update(address, 'one too many');
+          expect(await client.closed(address)).toBe(closedBecause(REFUSAL.LIMITED));
+        }
+        await until(async () => (await logged()).length > 0);
+        await sleep(500);
+        expect(await logged()).toEqual([reached(owner.id)]);
+      } finally {
+        await local.stop();
+      }
+    },
+  );
+
+  it(
+    'is a setting, and admits again when the period has passed, with one entry for each period',
+    { timeout: 30_000 },
+    async () => {
+      const lowered = await startServer({ RATE_LIMIT_COLLAB_MESSAGES_PER_USER: '5/2' });
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const client = await bare(lowered.port, owner.cookie);
+      const round = async (address: string, entries: number) => {
+        await client.opened(address);
+        for (let n = 0; n < 5; n++) client.update(address, `${entries} ${n}`);
+        await until(() => client.acknowledged(address) === 5);
+        client.update(address, 'one too many');
+        expect(await client.closed(address)).toBe(closedBecause(REFUSAL.LIMITED));
+        expect(client.acknowledged(address)).toBe(5);
+        await until(async () => (await logged()).length === entries);
+      };
+      await round(id, 1);
+      // Within the period nothing more is admitted, on a new connection either.
+      await client.opened(`${id}\0within`);
+      client.update(`${id}\0within`, 'one too many');
+      expect(await client.closed(`${id}\0within`)).toBe(closedBecause(REFUSAL.LIMITED));
+      // The period, and a little: the five have left it.
+      await sleep(2200);
+      await round(`${id}\0after`, 2);
+      await sleep(300);
+      expect(await logged()).toEqual([reached(owner.id), reached(owner.id)]);
+      await until(async () => (await stored(id))?.length === 10, 4000);
+    },
+  );
+
+  // The editor's own connection (src/lib/collab/client.ts): what a writer who
+  // reached the limit is shown, and that nothing written is lost.
+  it(
+    'leaves the client restoring: it waits before it asks again, and then sends what it kept',
+    { timeout: 60_000 },
+    async () => {
+      const { DocumentConnection, syncStatus } = await import('../../src/lib/collab/client.ts');
+      const lowered = await startServer({ RATE_LIMIT_COLLAB_MESSAGES_PER_USER: '6/3' });
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const { cookie } = owner;
+      const asked = { sockets: 0, frames: 0 };
+      class Socket extends WebSocket {
+        constructor(url: string) {
+          super(url, { headers: { cookie, origin: ORIGIN } } as never);
+          asked.sockets += 1;
+        }
+        send(data: Parameters<WebSocket['send']>[0]) {
+          asked.frames += 1;
+          super.send(data);
+        }
+      }
+      const connection = new DocumentConnection({
+        url: `ws://127.0.0.1:${lowered.port}${COLLAB_PATH}`,
+        documentId: id,
+        errorAfterMs: 60_000,
+        probe: async () => 200,
+        WebSocketPolyfill: Socket,
+      });
+      try {
+        connection.start();
+        await until(() => connection.getState().phase === 'connected');
+        const changes = connection.document.getArray<string>('changes');
+        // The client's own second step was the first of the six.
+        for (let n = 0; n < 5; n++) changes.push([`kept ${n}`]);
+        await until(() => !connection.getState().unsent);
+        expect(connection.getState().phase).toBe('connected');
+
+        changes.push(['the seventh']);
+        await until(() => connection.getState().phase === 'restoring');
+        // What the indicator says is true of it: the change is in the tab, and is sent later.
+        expect(syncStatus(connection.getState())).toEqual({
+          state: 'syncing',
+          label:
+            'Restoring the connection. Ekdotico keeps changes in this tab and sends them when the connection returns. Changes that are not yet sent are lost if this tab is closed.',
+        });
+        // Less than the pause after a limit, which is 5 seconds: nothing is asked of the server.
+        const then = { ...asked };
+        await sleep(4000);
+        expect(asked).toEqual(then);
+        expect(connection.getState().phase).toBe('restoring');
+        expect((await stored(id))!).toHaveLength(5);
+
+        // After it, on the same socket: the document is asked for again, and the change arrives.
+        await until(
+          () => connection.getState().phase === 'connected' && !connection.getState().unsent,
+          10_000,
+        );
+        // Three frames: the opening, the first step, and one second step with what was kept.
+        expect(asked).toEqual({ sockets: 1, frames: then.frames + 3 });
+        await until(async () => (await stored(id))?.length === 6, 4000);
+        expect((await stored(id))!.at(-1)).toBe('the seventh');
+        expect(await logged()).toEqual([reached(owner.id)]);
+        // And the connection is one the server hears: the next change is acknowledged and stored.
+        changes.push(['and after']);
+        await until(() => !connection.getState().unsent);
+        await until(async () => (await stored(id))?.length === 7, 4000);
+        expect(connection.getState().phase).toBe('connected');
+      } finally {
+        connection.stop();
+      }
+    },
+  );
+
+  // The same new try serves every refusal that will change (FR-ED-18), a
+  // document that could not be opened among them. Before 12 October 2026 the
+  // client asked by the library's `detach` and `attach`, and the connection
+  // it was given was closed by the server at once (src/lib/collab/client.ts).
+  it(
+    'opens the document at the new try after a refusal of its opening, and the server hears it',
+    SLOW,
+    async () => {
+      const { DocumentConnection } = await import('../../src/lib/collab/client.ts');
+      const local = await inProcess();
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const { cookie } = owner;
+      class Socket extends WebSocket {
+        constructor(url: string) {
+          super(url, { headers: { cookie, origin: ORIGIN } } as never);
+        }
+      }
+      const connection = new DocumentConnection({
+        url: `ws://127.0.0.1:${local.port}${COLLAB_PATH}`,
+        documentId: id,
+        errorAfterMs: 60_000,
+        probe: async () => 200,
+        WebSocketPolyfill: Socket,
+      });
+      try {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        // The load fails once: the opening is refused as `unavailable`, and tried again after a second.
+        vi.spyOn(db().document, 'findUniqueOrThrow').mockRejectedValueOnce(new Error('no answer'));
+        connection.start();
+        await until(() => connection.getState().phase === 'restoring');
+        await until(() => connection.getState().phase === 'connected');
+        connection.document.getArray<string>('changes').push(['after the new try']);
+        await until(() => !connection.getState().unsent);
+        await until(async () => (await stored(id))?.length === 1, 4000);
+        expect(local.hocuspocus.documents.get(id)!.getConnections()).toHaveLength(1);
+      } finally {
+        connection.stop();
+        await local.stop();
+      }
+    },
+  );
 });
 
 describe('the orderly stop, where something does not end (NFR-RE-07)', () => {
