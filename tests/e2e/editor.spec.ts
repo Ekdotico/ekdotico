@@ -1235,23 +1235,27 @@ test('a key typed at the end of a paragraph of 32,000 asterisks is answered at o
   // the change to the document, and the layout and the paint that follow.
   const times: number[] = [];
   for (const key of 'abcde') {
-    const timed = page.evaluate(
-      () =>
-        new Promise<number>((resolve) => {
-          let down = 0;
-          document.addEventListener('keydown', () => (down = performance.now()), {
-            once: true,
-            capture: true,
-          });
-          document.addEventListener(
-            'keyup',
-            () => requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - down))),
-            { once: true, capture: true },
-          );
-        }),
-    );
+    // The page listens before the key is pressed: this is awaited, and the
+    // time is asked for afterwards. Asked for in one step, a slow page was
+    // reached by the key first, and the time never came.
+    await page.evaluate(() => {
+      (window as unknown as { keyTime: Promise<number> }).keyTime = new Promise<number>((resolve) => {
+        let down = 0;
+        document.addEventListener('keydown', () => (down = performance.now()), {
+          once: true,
+          capture: true,
+        });
+        document.addEventListener(
+          'keyup',
+          () => requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - down))),
+          { once: true, capture: true },
+        );
+      });
+    });
     await page.keyboard.press(key);
-    times.push(Math.round(await timed));
+    times.push(
+      Math.round(await page.evaluate(() => (window as unknown as { keyTime: Promise<number> }).keyTime)),
+    );
   }
   await expect(doc.locator(':scope > p')).toHaveText(/^\*{32000}abcde$/);
   test.info().annotations.push({ type: 'milliseconds for each key', description: times.join(', ') });
