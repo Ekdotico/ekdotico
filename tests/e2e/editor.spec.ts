@@ -1014,6 +1014,54 @@ test('the slash palette stays open through another client’s change elsewhere, 
   }
 });
 
+// A long run of one character that no line can break at was laid out again,
+// whole, at every key: with kerning on, the cost grew with the square of its
+// length, about 430 ms a key at 32,000 characters. The design package turns
+// kerning off on the document surface from 0.28.1 (`font-kerning: none` on
+// `.ekd-editor`), and a key then costs a few milliseconds. This fails if the
+// cost comes back, from the package or from a style of the application's.
+test('a key typed at the end of a paragraph of 32,000 asterisks is answered at once', async ({ page }) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const other = await connectAs(page.context(), id);
+  try {
+    other.provider.document.getXmlFragment('default').insert(0, [paragraph('*'.repeat(32_000))]);
+    await expect(doc.locator(':scope > p')).toHaveText(/^\*{32000}$/);
+  } finally {
+    other.close();
+  }
+  await placeAtEnd(doc.locator(':scope > p'));
+  // From the key going down to the second frame after it came up: the key,
+  // the change to the document, and the layout and the paint that follow.
+  const times: number[] = [];
+  for (const key of 'abcde') {
+    const timed = page.evaluate(
+      () =>
+        new Promise<number>((resolve) => {
+          let down = 0;
+          document.addEventListener('keydown', () => (down = performance.now()), {
+            once: true,
+            capture: true,
+          });
+          document.addEventListener(
+            'keyup',
+            () => requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - down))),
+            { once: true, capture: true },
+          );
+        }),
+    );
+    await page.keyboard.press(key);
+    times.push(Math.round(await timed));
+  }
+  await expect(doc.locator(':scope > p')).toHaveText(/^\*{32000}abcde$/);
+  test.info().annotations.push({ type: 'milliseconds for each key', description: times.join(', ') });
+  console.log(`a key at the end of 32,000 asterisks: ${times.join(', ')} ms`);
+  // The middle one of five, so that one slow frame of a busy machine fails nothing.
+  expect(times.toSorted((a, b) => a - b)[2]).toBeLessThan(150);
+});
+
 test('the slash palette: Tab, the cursor inside the command and out of it, and one undo of a Markdown conversion', async ({
   page,
 }) => {
