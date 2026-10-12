@@ -17,6 +17,8 @@ type Transaction = Parameters<Parameters<ReturnType<typeof db>['$transaction']>[
 
 // @ts-expect-error The entry of a change is not written outside its transaction.
 const deletion: Outside = 'document_deleted';
+// @ts-expect-error Nor is that of its permanent deletion (R47; register row D161, pending).
+const permanent: Outside = 'document_deleted_permanently';
 // @ts-expect-error Nor is a step of an account deletion (FR-AU-58).
 const step: Outside = 'account_deletion_credentials_deleted';
 // @ts-expect-error A refusal is the entry of no change: a rollback would take it.
@@ -31,7 +33,7 @@ const limit: Outside = 'rate_limit_reached';
 const inside = (client: Transaction): Client => client;
 
 it('names each kind for one writer', () => {
-  expect([deletion, step, refusal, unnamed, change, limit, outside, inside]).toHaveLength(8);
+  expect([deletion, permanent, step, refusal, unnamed, change, limit, outside, inside]).toHaveLength(9);
 });
 
 const filesUnder = (directory: string): string[] =>
