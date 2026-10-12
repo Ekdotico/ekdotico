@@ -234,6 +234,12 @@ async function deletePermanently(
     // NFR-SE-18: the images of the document are deleted from storage HERE,
     // after Istorico and before the row, by the slice that builds images.
 
+    // NFR-SE-19: no entry is written here. "The deletion of a document" has
+    // its entry where the Owner deletes it (`deleteDocument`); whether the
+    // permanent deletion is one too is not decided (reported for the
+    // register). Were it, the entry and the statement below are one
+    // transaction (the owner's decision of 12 October 2026: R38; register
+    // row D153, pending).
     // The row, and with it the document's state. Only while this claim is the
     // one it holds: a claim taken over belongs to the run that took it.
     const { count } = await db().document.deleteMany({ where: claim });
