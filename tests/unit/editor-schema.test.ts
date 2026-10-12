@@ -4,7 +4,7 @@
 // rendering is handed a value another client chose freely.
 import { getSchema } from '@tiptap/core';
 import { DOMSerializer, type Node as PMNode, type Schema } from '@tiptap/pm/model';
-import { EditorState, type Transaction } from '@tiptap/pm/state';
+import { EditorState, type Plugin, type Transaction } from '@tiptap/pm/state';
 import { TableMap } from '@tiptap/pm/tables';
 import {
   prosemirrorJSONToYDoc,
@@ -23,6 +23,14 @@ import {
   holdBinding,
   mayApply,
 } from '../../src/app/(app)/documents/[id]/extensions.tsx';
+import { holdsTables } from '../../src/app/(app)/documents/[id]/extensions.tsx';
+import {
+  TABLE_CELLS_MOST,
+  TABLE_DEPTH_MOST,
+  closeNested,
+  tableRoom,
+  tablesIn,
+} from '../../src/app/(app)/documents/[id]/table-bounds.ts';
 
 import { MAX_ELEMENT_DEPTH, MAX_STATE_BYTES, elementDepth, pastLimits } from '../../src/lib/collab/state.ts';
 
@@ -340,6 +348,380 @@ describe('the grid of a table', () => {
   });
 });
 
+// The owner's decision R32 of 12 October 2026: a cell may hold a table. The
+// bounds that the tables then share (table-bounds.ts), wherever one is made.
+describe('the tables in the cells of a table (R32)', () => {
+  const p = (written = '') => schema.node('paragraph', null, written ? [schema.text(written)] : []);
+  const cellOf = (...content: PMNode[]) => schema.node('tableCell', null, content.length ? content : [p()]);
+  const rowsOf = (
+    rows: number,
+    cells: number,
+    cell: (row: number, column: number) => PMNode = () => cellOf(),
+  ) =>
+    Array.from({ length: rows }, (_, row) =>
+      schema.node(
+        'tableRow',
+        null,
+        Array.from({ length: cells }, (_, column) => cell(row, column)),
+      ),
+    );
+  const blockOfRows = (rows: PMNode[]) =>
+    schema.node('tableBlock', null, [schema.node('table', null, rows), schema.node('tableCaption')]);
+  /** The tables of a node, outermost first: the cells each holds itself. */
+  const tables = (node: PMNode) => {
+    const found: number[] = [];
+    node.descendants((each) => {
+      if (each.type.name !== 'table') return;
+      let cells = 0;
+      each.forEach((row) => (cells += row.childCount));
+      found.push(cells);
+    });
+    return found;
+  };
+
+  it('are bounded together: ten thousand cells, and two levels', () => {
+    expect(TABLE_CELLS_MOST).toBe(10_000);
+    expect(TABLE_CELLS_MOST).toBe(TABLE_MOST * TABLE_MOST);
+    expect(TABLE_DEPTH_MOST).toBe(2);
+  });
+
+  it('keeps a table that is at the bound: a hundred cells, each holding ninety-nine', () => {
+    const inner = () => blockOfRows(rowsOf(9, 11));
+    const block = blockOfRows(rowsOf(10, 10, () => cellOf(inner())));
+    expect(tablesIn(block)).toEqual({ cells: 10_000, levels: 2, past: false });
+    expect(tables(block)).toEqual([100, ...Array(100).fill(99)]);
+    // And made again from what it holds, it is the same: nothing is left out twice.
+    const rows = block.firstChild!.content;
+    expect(closeNested(rows)).toBe(rows);
+  });
+
+  it('leaves out, one cell past the bound, the row that passes it: the last in the order of the document, whole', () => {
+    // The hundredth table has a tenth row, of one cell: 10,001.
+    const block = blockOfRows(
+      rowsOf(10, 10, (row, column) =>
+        cellOf(
+          p(`outer ${row}.${column}`),
+          blockOfRows(
+            row + column === 18
+              ? [...rowsOf(9, 11, () => cellOf(p('kept'))), ...rowsOf(1, 1, () => cellOf(p('ONE-PAST')))]
+              : rowsOf(9, 11),
+          ),
+        ),
+      ),
+    );
+    expect(tablesIn(block)).toEqual({ cells: 10_000, levels: 2, past: false });
+    expect(tables(block)).toEqual([100, ...Array(100).fill(99)]);
+    expect(block.textContent).not.toContain('ONE-PAST');
+    expect(block.textContent).toContain('outer 9.9');
+    expect(block.textContent.split('kept')).toHaveLength(100);
+    block.check();
+
+    // Put in the first table instead, it is counted before the others: the row
+    // that passes the bound is the last row of the last table, of eleven cells.
+    const first = blockOfRows(
+      rowsOf(10, 10, (row, column) =>
+        cellOf(
+          blockOfRows(
+            row + column === 0
+              ? [...rowsOf(9, 11), ...rowsOf(1, 1, () => cellOf(p('PUT-FIRST')))]
+              : rowsOf(9, 11, (inner) => cellOf(p(row + column === 18 && inner === 8 ? 'LAST-ROW' : ''))),
+          ),
+        ),
+      ),
+    );
+    expect(first.textContent).toContain('PUT-FIRST');
+    expect(first.textContent).not.toContain('LAST-ROW');
+    expect(tables(first)).toEqual([100, 100, ...Array(98).fill(99), 88]);
+    expect(tablesIn(first).cells).toBe(9_990);
+  });
+
+  it('never leaves out a cell of the table itself, and keeps the text of every one', () => {
+    // A hundred by a hundred in each cell of a hundred by a hundred: 10^8 cells.
+    const hostile = blockOfRows(rowsOf(100, 100));
+    const started = performance.now();
+    const block = blockOfRows(rowsOf(100, 100, (row, column) => cellOf(p(`o${row}.${column}`), hostile)));
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(tables(block)).toEqual([10_000]);
+    expect(block.textContent).toContain('o0.0');
+    expect(block.textContent).toContain('o99.99');
+    block.check();
+    // Sixty by sixty with four by four in each: room for four hundred of them, the first in the document.
+    const some = blockOfRows(
+      rowsOf(60, 60, (row, column) => cellOf(p(`o${row}.${column}`), blockOfRows(rowsOf(4, 4)))),
+    );
+    expect(tables(some)).toEqual([3600, ...Array(400).fill(16)]);
+    expect(some.textContent).toContain('o59.59');
+    // The four hundredth is the fortieth of the seventh row, and the next cell holds none.
+    expect(tablesIn(some.firstChild!.child(6).child(39)).levels).toBe(1);
+    expect(tablesIn(some.firstChild!.child(6).child(40)).levels).toBe(0);
+  });
+
+  it('leaves out a table that would stand a level too deep, with its block, and nothing round it', () => {
+    const three = blockOfRows(
+      rowsOf(1, 2, (_, column) =>
+        column === 0
+          ? cellOf(p('one'))
+          : cellOf(
+              blockOfRows(
+                rowsOf(1, 2, (_, inner) =>
+                  inner === 0
+                    ? cellOf(p('two'), blockOfRows(rowsOf(1, 1, () => cellOf(p('THREE')))))
+                    : // A cell that held a table and nothing else holds an empty paragraph.
+                      cellOf(blockOfRows(rowsOf(2, 2, () => cellOf(p('THREE'))))),
+                ),
+              ),
+            ),
+      ),
+    );
+    expect(tablesIn(three)).toEqual({ cells: 4, levels: 2, past: false });
+    expect(three.textContent).toBe('onetwo');
+    three.check();
+    const emptied = three.firstChild!.firstChild!.child(1).firstChild!.firstChild!.firstChild!.child(1);
+    expect(emptied.toString()).toBe('tableCell(paragraph)');
+
+    // Twelve levels, which the limit of the collaboration server alone lets through.
+    let deep = blockOfRows(rowsOf(1, 1, () => cellOf(p('level 12'))));
+    for (let level = 11; level >= 1; level -= 1) {
+      const inner = deep;
+      deep = blockOfRows(rowsOf(1, 1, () => cellOf(p(`level ${level}`), inner)));
+    }
+    expect(tablesIn(deep).levels).toBe(2);
+    expect(deep.textContent).toBe('level 1level 2');
+  });
+
+  it('counts a table that stands in a quotation or a list in a cell', () => {
+    const hidden = (levels: number): PMNode =>
+      blockOfRows(
+        rowsOf(1, 1, () =>
+          levels > 1
+            ? cellOf(
+                p(`level ${levels}`),
+                schema.node('blockquote', null, [
+                  schema.node('bulletList', null, [
+                    schema.node('listItem', null, [p('item'), hidden(levels - 1)]),
+                  ]),
+                ]),
+              )
+            : cellOf(p('level 1')),
+        ),
+      );
+    expect(tablesIn(hidden(2))).toEqual({ cells: 2, levels: 2, past: false });
+    const three = hidden(3);
+    expect(tablesIn(three).levels).toBe(2);
+    // The quotation and the item stay, without the table that was a level too deep.
+    expect(three.textContent).toBe('level 3itemlevel 2item');
+    three.check();
+  });
+
+  it('holds wherever a table is made: by the type, by the schema, and from JSON', () => {
+    const { table } = schema.nodes;
+    const rows = () => rowsOf(100, 100, () => cellOf(blockOfRows(rowsOf(1, 1))));
+    for (const made of [
+      table!.create(null, rows()),
+      table!.createChecked(null, rows()),
+      table!.createAndFill(null, rows())!,
+      schema.node('table', null, rows()),
+    ]) {
+      expect(tablesIn(made)).toEqual({ cells: 10_000, levels: 1, past: false });
+    }
+    const cell = (content: object[]) => ({ type: 'tableCell', content });
+    const nest = (content: object[]) => ({
+      type: 'tableBlock',
+      content: [
+        { type: 'table', content: [{ type: 'tableRow', content: [cell(content)] }] },
+        { type: 'tableCaption' },
+      ],
+    });
+    const json = schema.nodeFromJSON(nest([nest([{ type: 'paragraph' }, nest([{ type: 'paragraph' }])])]));
+    expect(tables(json)).toEqual([1, 1]);
+  });
+
+  it('says what room a place has: the levels left, and the cells left to the outermost table', () => {
+    const doc = schema.node('doc', null, [
+      p('outside'),
+      blockOfRows(
+        rowsOf(2, 2, (row, column) => cellOf(p('x'), ...(row + column ? [] : [blockOfRows(rowsOf(3, 3))]))),
+      ),
+    ]);
+    const at = (find: (node: PMNode, pos: number) => boolean) => {
+      let found = -1;
+      doc.descendants((node, pos) => {
+        if (found < 0 && find(node, pos)) found = pos + 1;
+      });
+      return tableRoom(doc.resolve(found));
+    };
+    expect(at((node) => node.textContent === 'outside')).toEqual({ cells: 10_000, levels: 2 });
+    expect(at((node) => node.type.name === 'paragraph' && node.textContent === 'x')).toEqual({
+      cells: 10_000 - 13,
+      levels: 1,
+    });
+    expect(at((node) => node.type.name === 'paragraph' && node.textContent === '')).toEqual({
+      cells: 10_000 - 13,
+      levels: 0,
+    });
+  });
+
+  // A step of a transaction copies the nodes round a change and asks the schema nothing.
+  describe('and a change of this writer’s', () => {
+    const state = (...content: PMNode[]) =>
+      EditorState.create({ schema, doc: schema.node('doc', null, content) });
+    /** The place inside the first paragraph that holds this text. */
+    const inside = (doc: PMNode, written: string) => {
+      let found = -1;
+      doc.descendants((node, pos) => {
+        if (found < 0 && node.type.name === 'paragraph' && node.textContent === written) found = pos + 1;
+      });
+      return found;
+    };
+
+    it('is not applied where it takes a table past the cells, and is applied at the bound', () => {
+      // 9,900 cells and a table of 91 in one of them: nine more, and no more.
+      const full = state(
+        blockOfRows(
+          rowsOf(99, 100, (row, column) =>
+            row + column === 0 ? cellOf(p('here'), blockOfRows(rowsOf(7, 13))) : cellOf(),
+          ),
+        ),
+      );
+      expect(tablesIn(full.doc).cells).toBe(9_991);
+      const put = (rows: number, cells: number) =>
+        full.tr.insert(inside(full.doc, 'here') + 5, blockOfRows(rowsOf(rows, cells)));
+      expect(tablesIn(put(3, 3).doc)).toMatchObject({ cells: 10_000, past: false });
+      expect(holdsTables(put(3, 3), full.doc)).toBe(true);
+      expect(tablesIn(put(2, 5).doc)).toMatchObject({ cells: 10_001, past: true });
+      expect(holdsTables(put(2, 5), full.doc)).toBe(false);
+      // What changes no document, and what another client or an undo made, passes.
+      expect(holdsTables(full.tr.setMeta('x', 1), full.doc)).toBe(true);
+      expect(holdsTables(put(2, 5).setMeta(ySyncPluginKey, { isChangeOrigin: true }), full.doc)).toBe(true);
+      expect(holdsTables(put(2, 5).setMeta(ySyncPluginKey, { isChangeOrigin: false }), full.doc)).toBe(false);
+    });
+
+    it('is not applied where it puts a table a level too deep', () => {
+      const two = state(
+        blockOfRows(rowsOf(1, 1, () => cellOf(blockOfRows(rowsOf(1, 1, () => cellOf(p('deep'))))))),
+      );
+      const third = two.tr.insert(inside(two.doc, 'deep') + 5, blockOfRows(rowsOf(1, 1)));
+      expect(tablesIn(third.doc)).toMatchObject({ levels: 3, past: true });
+      expect(holdsTables(third, two.doc)).toBe(false);
+      expect(holdsTables(two.tr.insertText('typed', inside(two.doc, 'deep')), two.doc)).toBe(true);
+    });
+
+    it('is applied in a document that is past a bound already, which can so be written in and deleted from', () => {
+      const third = state(
+        blockOfRows(rowsOf(1, 1, () => cellOf(blockOfRows(rowsOf(1, 1, () => cellOf(p('deep'))))))),
+      ).tr;
+      third.insert(inside(third.doc, 'deep') + 5, blockOfRows(rowsOf(1, 1)));
+      const past = third.doc;
+      expect(tablesIn(past).past).toBe(true);
+      const typed = EditorState.create({ schema, doc: past }).tr.insertText('typed', inside(past, 'deep'));
+      expect(holdsTables(typed, past)).toBe(true);
+    });
+
+    it('is held by the editor itself: the plugin that refuses is among its plugins', () => {
+      const two = state(
+        blockOfRows(rowsOf(1, 1, () => cellOf(blockOfRows(rowsOf(1, 1, () => cellOf(p('deep'))))))),
+      );
+      const closed = all.find((each) => each.name === 'closed') as unknown as {
+        config: { addProseMirrorPlugins(this: { editor: { isEditable: boolean } }): Plugin[] };
+      };
+      const [plugin] = closed.config.addProseMirrorPlugins.call({ editor: { isEditable: true } });
+      const held = EditorState.create({ schema, doc: two.doc, plugins: [plugin!] });
+      const third = held.tr.insert(inside(held.doc, 'deep') + 5, blockOfRows(rowsOf(1, 1)));
+      expect(held.applyTransaction(third).transactions).toEqual([]);
+      const typed = held.tr.insertText('typed', inside(held.doc, 'deep'));
+      expect(held.applyTransaction(typed).state.doc.textContent).toBe('typeddeep');
+    });
+  });
+
+  // What another client sends, and what a stored document holds.
+  describe('and what another client sent', () => {
+    const yCell = (...children: (Y.XmlElement | Y.XmlText)[]) => element('tableCell', {}, children);
+    const yGrid = (rows: number, cells: number, cell: (row: number, column: number) => Y.XmlElement) =>
+      Array.from({ length: rows }, (_, row) =>
+        element(
+          'tableRow',
+          {},
+          Array.from({ length: cells }, (_, column) => cell(row, column)),
+        ),
+      );
+    const yCells = (fragment: Y.XmlFragment) => fragment.toString().split('<tablecell').length - 1;
+    const writers = () => {
+      const document = new Y.Doc();
+      document
+        .getXmlFragment('default')
+        .push([
+          blockOf(
+            yGrid(60, 60, (row, column) =>
+              yCell(paragraph(row + column === 0 ? 'KEEP-THIS' : `w${row}.${column}`)),
+            ),
+          ),
+          paragraph('after'),
+        ]);
+      return document;
+    };
+    const cellAt = (fragment: Y.XmlFragment, row: number, column: number) =>
+      (((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlElement).get(row) as Y.XmlElement).get(
+        column,
+      ) as Y.XmlElement;
+
+    it('is made inside the bounds, and what is past them is taken out of the shared document: the writer’s text stays', () => {
+      const editor = open(writers());
+      const peer = peerOf(editor.fragment.doc!);
+      // Four by four in each cell of the writer's sixty by sixty: 3,600 + 57,600.
+      peer.fragment.doc!.transact(() => {
+        for (let row = 0; row < 60; row += 1)
+          for (let column = 0; column < 60; column += 1)
+            cellAt(peer.fragment, row, column).push([
+              blockOf(
+                yGrid(4, 4, () => yCell(paragraph('x'))),
+                words(''),
+              ),
+            ]);
+      });
+      expect(yCells(peer.fragment)).toBe(61_200);
+      peer.send();
+
+      expect(editor.unshown).not.toHaveBeenCalled();
+      expect(tablesIn(editor.text())).toEqual({ cells: 10_000, levels: 2, past: false });
+      expect(yCells(editor.fragment)).toBe(10_000);
+      // Every word the writer wrote, in the text and in the shared document.
+      for (const written of ['KEEP-THIS', 'w0.1', 'w30.30', 'w59.59', 'after']) {
+        expect(editor.text().textContent).toContain(written);
+        expect(editor.fragment.toString()).toContain(written);
+      }
+      expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+      editor.text().check();
+      // Not this member's change.
+      expect(editor.undo.undoStack).toEqual([]);
+    });
+
+    it('is taken out the same by every client, of a document that is opened with it', () => {
+      const document = writers();
+      const fragment = document.getXmlFragment('default');
+      cellAt(fragment, 0, 0).push([
+        blockOf([
+          element('tableRow', {}, [
+            yCell(paragraph('two'), blockOf([element('tableRow', {}, [yCell(paragraph('THREE'))])])),
+          ]),
+        ]),
+      ]);
+      const second = new Y.Doc();
+      Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+      const [one, two] = [open(document), open(second)];
+      Y.applyUpdate(document, Y.encodeStateAsUpdate(second));
+      Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+      for (const editor of [one, two]) {
+        expect(editor.unshown).not.toHaveBeenCalled();
+        expect(tablesIn(editor.text())).toMatchObject({ levels: 2, past: false });
+        expect(editor.text().textContent).toContain('KEEP-THIStwo');
+        expect(editor.fragment.toString()).not.toContain('THREE');
+        expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+      }
+      expect(one.fragment.toString()).toBe(two.fragment.toString());
+    });
+  });
+});
+
 // What a client that is no editor puts into a shared document.
 const element = (
   name: string,
@@ -613,6 +995,9 @@ describe('the limits of a document', () => {
     ['a list of ten levels', list(10), 21],
     ['a numbered list of ten levels in a quote', quote(list(10, 'orderedList')), 22],
     ['a table', inCell(p), 5],
+    // R32: each level of table is four elements.
+    ['a table in a cell of a table', inCell(inCell(p)), 9],
+    ['the deepest list in a cell of a table in a cell of a table', inCell(inCell(list(20))), 49],
     ['a list of ten levels in a quote in a cell of a table', inCell(quote(list(10))), 26],
     ['the deepest list there is room for', list(24), 49],
     ['the deepest list in a cell of a table', inCell(list(22)), 49],

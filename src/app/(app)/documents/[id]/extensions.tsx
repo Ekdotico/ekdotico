@@ -39,6 +39,7 @@ import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table
 import { Placeholder } from '@tiptap/extensions';
 import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
 import { Plugin, type Transaction } from '@tiptap/pm/state';
+import { TableMap } from '@tiptap/pm/tables';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import {
   NodeViewContent,
@@ -60,6 +61,7 @@ import styles from './editor.module.css';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
+import { TABLE_MOST, closeNested, tableRoom, tablesIn } from './table-bounds.ts';
 
 /** Whether the document can be edited now: the role, and the connection (FR-ED-18). Node views read it. */
 export const Editable = createContext(false);
@@ -425,24 +427,47 @@ const TABLE_ACTIONS = [
 
 function TableBlockView({ node, editor, getPos }: NodeViewProps) {
   const editable = useContext(Editable);
-  // What the selection allows, where it is inside this table. An action of
-  // this menu never reaches another table.
+  // What the selection allows, where this table is the innermost round it. An
+  // action of this menu never reaches another table: not the one this table
+  // stands in, and not one in a cell of this table, which has a menu of its
+  // own (R32). The library's commands act on the innermost table round the
+  // selection, so that is the one table whose menu offers them.
   const allowed = useEditorState({
     editor,
     selector: ({ editor: current }) => {
       const pos = getPos();
-      const { from } = current.state.selection;
-      if (pos === undefined || from <= pos || from >= pos + node.nodeSize) return null;
+      const { $from } = current.state.selection;
+      let depth = $from.depth;
+      while (depth > 0 && $from.node(depth).type !== node.type) depth -= 1;
+      if (pos === undefined || depth === 0 || $from.before(depth) !== pos) return null;
+      // In the table, and not in the caption: from the caption of a table in
+      // a cell the commands would reach the table that cell is in.
+      const table = $from.node(depth).firstChild;
+      if ($from.depth === depth || $from.node(depth + 1) !== table) return null;
       const can = current.can();
-      const table = current.state.doc.nodeAt(pos);
-      const rows = table?.firstChild?.childCount ?? 0;
-      const columns = table?.firstChild?.firstChild?.childCount ?? 0;
+      const rows = table?.childCount ?? 0;
+      const columns = table?.firstChild?.childCount ?? 0;
+      // R32: the cells left to the outermost table round this one, and how
+      // many an action adds at most: a row its columns, a column its rows, a
+      // split the squares of the cell but one.
+      const room = tableRoom($from).cells;
+      const grid = table ? TableMap.get(table) : null;
+      const cell = $from.node(Math.min($from.depth, depth + 3)).attrs;
+      const adds = (command: string) =>
+        command.startsWith('addRow')
+          ? (grid?.width ?? 0)
+          : command.startsWith('addColumn')
+            ? (grid?.height ?? 0)
+            : command === 'splitCell'
+              ? (Number(cell.colspan) || 1) * (Number(cell.rowspan) || 1) - 1
+              : 0;
       return TABLE_ACTIONS.map(
         ([command]) =>
           can[command]() &&
           // The bound of the schema: a row or a column past it would be no table at all.
           !(command.startsWith('addRow') && rows >= TABLE_MOST) &&
-          !(command.startsWith('addColumn') && columns >= TABLE_MOST),
+          !(command.startsWith('addColumn') && columns >= TABLE_MOST) &&
+          adds(command) <= room,
       );
     },
   });
@@ -503,10 +528,10 @@ const TableCaption = Node.create({
 // ── What an attribute may hold ──────────────────────────────────────────────
 
 // The bounds are this file's: the Docs give none (reported for the register).
+// Those of a table, and of the tables in its cells, are ./table-bounds.ts.
 /** The most cells one cell may span, each way. */
 const SPAN_MOST = 100;
-/** The most rows of a table, and the most cells of a row: ten thousand cells at most. */
-export const TABLE_MOST = 100;
+export { TABLE_MOST };
 /** The widest column a cell may ask for, in CSS pixels. */
 const WIDTH_MOST = 2000;
 /** The highest number an ordered list may start at. */
@@ -636,8 +661,9 @@ const MENDED = new WeakSet<Schema>();
  * - The attributes: the one function through which each type computes them
  *   (`NodeType.computeAttrs`, which prosemirror-model 1.25.12 does not
  *   declare, and `MarkType.create`).
- * - The grid of a table: the three functions that make a node of the type
- *   (`closeGrid`).
+ * - The grid of a table, and the tables in its cells: the three functions
+ *   that make a node of the type (`closeGrid`; `closeNested` of
+ *   ./table-bounds.ts).
  * - What another client sent (`Schema.node`, `Schema.text`, `Schema.mark`,
  *   which are how the collaboration binding makes everything): a node whose
  *   content does not fit is made WITHOUT the children that do not fit, and
@@ -653,8 +679,14 @@ export function closeSchema(schema: Schema): Schema {
   if (table) {
     for (const make of ['create', 'createChecked', 'createAndFill'] as const) {
       const inner = table[make].bind(table) as NodeType['create'];
-      table[make] = ((attrs, content, marks) =>
-        inner(attrs, closeGrid(Fragment.from(content)), marks)) as NodeType['create'];
+      table[make] = ((attrs, content, marks) => {
+        const grid = closeGrid(Fragment.from(content));
+        // R32: the tables in its cells, inside the bounds they share with it.
+        // What that leaves out is taken out of the shared document, as below.
+        const rows = closeNested(grid);
+        if (rows !== grid) MENDED.add(schema);
+        return inner(attrs, rows, marks);
+      }) as NodeType['create'];
     }
   }
   const text = schema.text.bind(schema);
@@ -723,6 +755,23 @@ export function mayApply(transaction: Transaction, editable: boolean): boolean {
   return !transaction.docChanged || editable || binding?.isChangeOrigin === true;
 }
 
+/**
+ * R32: whether a transaction leaves every table inside the bounds it shares
+ * with the tables in its cells (./table-bounds.ts). One of this writer's that
+ * does not is not applied, whatever made it: a paste into a cell, a row or a
+ * column added, a cell split, the repair the table library appends. A change
+ * from the collaboration binding passes: the schema left out what was past a
+ * bound when it made that text (`closeSchema`).
+ *
+ * A document that is past a bound already is not closed to every change. None
+ * should be; if one is, it can still be written in, and deleted from.
+ */
+export function holdsTables(transaction: Transaction, before: PMNode): boolean {
+  const binding = transaction.getMeta(ySyncPluginKey) as { isChangeOrigin?: boolean } | undefined;
+  if (!transaction.docChanged || binding?.isChangeOrigin === true) return true;
+  return !tablesIn(transaction.doc).past || tablesIn(before).past;
+}
+
 // The origin of a mending of the shared document. Not one the undo manager
 // tracks: what is mended is no one's change to undo.
 const MEND = 'mend';
@@ -784,7 +833,8 @@ const Closed = Extension.create({
   addProseMirrorPlugins() {
     return [
       new Plugin({
-        filterTransaction: (transaction) => mayApply(transaction, this.editor.isEditable),
+        filterTransaction: (transaction, state) =>
+          mayApply(transaction, this.editor.isEditable) && holdsTables(transaction, state.doc),
       }),
     ];
   },
