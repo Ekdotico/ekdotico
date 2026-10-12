@@ -80,5 +80,6 @@ Do not guess, stub, or "fill the gap", and do not build a Not decided row behind
 - Verify before claiming done: run the build, typecheck, lint, and tests, and report the real output. Say plainly what was not tested.
 - Security-sensitive code (sessions, tokens, signatures, rate limits, the origin check, uploads, the zip export, authorisation on every request) gets tests that fail when the rule is broken, and an independent review before merge.
 - The accessibility target is WCAG 2.2 Level AA (NFR-IC-19).
+- Points to observe in user testing are kept in `docs/user-testing/open-issues.md`; add to it when the owner decides something provisionally.
 - Do not auto-commit while the owner is reviewing as they go. Merge a pull request only when asked, and never the Release PR.
 - UI copy follows the Expression Guidelines in `@ekdotico/domico`; British spelling; the controlled vocabulary names one term per concept ("research workspace assistant", "Task tracker", "planning canvas", "auto-add", "enrolment").
