@@ -1986,6 +1986,10 @@ describe('the limit of messages that carry an update: 600 in any minute for each
       expect(client.isOpen(id)).toBe(true);
       client.socket.send(sent(id, SYNC, STEP_2, forgedUpdate('one too many')));
       expect(await client.closed(id)).toBe(closedBecause(REFUSAL.LIMITED));
+      // The server writes the entry for the limit after it closes the connection.
+      // Left to arrive on its own, it arrives in the next test, after that test
+      // has emptied the log (`beforeEach`), and is counted there as its own.
+      await until(async () => (await logged()).length > 0);
     },
   );
 
@@ -2050,11 +2054,21 @@ describe('the limit of messages that carry an update: 600 in any minute for each
         other.update(id, tooDeep());
         expect(await other.closed(id)).toBe(closedBecause(REFUSAL.TOO_DEEP));
 
-        await until(async () => (await logged()).length > 1);
+        // The entries of the two users of this test. The log is shared by the
+        // file, and a server that closed a connection in an earlier test can
+        // still be writing its entry; that one is not this test's to count,
+        // or to wait for.
+        const mine = async () =>
+          (await logged()).filter(({ userId }) => userId === owner.id || userId === editor.id);
+        await until(async () => (await mine()).length > 1);
         await sleep(300);
-        const entries = await logged();
-        expect(entries).toHaveLength(2);
+        const entries = await mine();
+        const whose = (userId: string | null) => (userId === owner.id ? 'the owner' : 'the editor');
         // One for the three connections closed for the limit, and none for a limit of the document from them.
+        expect(entries.map(({ kind, userId }) => `${kind} of ${whose(userId)}`).sort()).toEqual([
+          'document_limit_refused of the editor',
+          'rate_limit_reached of the owner',
+        ]);
         expect(entries).toEqual(
           expect.arrayContaining([
             reached(owner.id),

@@ -18,7 +18,7 @@ import { DocumentConnection, syncStatus, type Ending, type Held } from '../../..
 import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
-import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
+import { BLOCK_CONTROLS, Editable, SLASH_HINT, TABLE_NO_ROOM, copyText, extensions } from './extensions.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
@@ -93,18 +93,35 @@ const KEYS =
   SLASH_HINT +
   ' Alt+F10 moves from the text to the formatting toolbar when text is selected. When no text is selected, Alt+F10 moves to the controls of the block that holds the cursor. Escape returns to the text.';
 
-/** The controls of the innermost block round the cursor that has any. */
+/**
+ * The controls of the innermost block round the cursor that has any.
+ *
+ * Unless they are a menu that offers nothing where the cursor is, and a block
+ * round that one has controls that do: from the caption of a table in a cell,
+ * the menu of that table offers nothing, and the menu of the table round the
+ * cell acts on the row and the column of the cell (R32; `TableBlockView`).
+ * Where no block round the cursor offers anything, the innermost is still the
+ * one, as it was: from the caption of a table that stands in no cell, the key
+ * goes to that table's menu.
+ */
 function blockControls(view: EditorView): HTMLElement | null {
   const { node } = view.domAtPos(view.state.selection.from);
   let block = (node instanceof HTMLElement ? node : node.parentElement)?.closest<HTMLElement>(
     '[data-node-view-wrapper]',
   );
+  let innermost: HTMLElement | null = null;
   while (block && view.dom.contains(block)) {
     const controls = block.querySelector<HTMLElement>(`[${BLOCK_CONTROLS}]`);
-    if (controls?.closest('[data-node-view-wrapper]') === block) return controls;
+    if (controls?.closest('[data-node-view-wrapper]') === block) {
+      const items = [...controls.querySelectorAll('[role="menuitem"]')];
+      const offers =
+        items.length === 0 || items.some((item) => item.getAttribute('aria-disabled') !== 'true');
+      if (offers) return controls;
+      innermost ??= controls;
+    }
     block = block.parentElement?.closest<HTMLElement>('[data-node-view-wrapper]');
   }
-  return null;
+  return innermost;
 }
 
 /** The text of the document: the editable region, and the toolbar on its selection. */
@@ -129,7 +146,10 @@ function Text({
   // Whether the focus was last in the surface: the text, the toolbar, a
   // block's controls, the dialog of a link.
   const within = useRef(false);
-  const all = useMemo(() => extensions(document, onUnshown), [document, onUnshown]);
+  // Whether the last change the writer asked for was refused for the room of a
+  // table (./extensions.tsx, `Closed`). Said until the next change is made.
+  const [noRoom, setNoRoom] = useState(false);
+  const all = useMemo(() => extensions(document, onUnshown, setNoRoom), [document, onUnshown]);
 
   const editor = useEditor({
     extensions: all,
@@ -193,6 +213,14 @@ function Text({
       <p id={keys} className={pageStyles.meta}>
         {KEYS}
       </p>
+      {/* NFR-IC-19: a change that was not made is said to be so, in words that
+          are seen and, when the screen reader next falls silent, heard. No
+          fault of the writer's, and the focus stays in the text. */}
+      {noRoom ? (
+        <FormFault tone="neutral" announce="polite">
+          <p>{TABLE_NO_ROOM}</p>
+        </FormFault>
+      ) : null}
       <div
         ref={surface}
         className={styles.surface}

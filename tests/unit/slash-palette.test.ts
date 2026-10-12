@@ -809,28 +809,321 @@ describe('Tab, and a table in a table', () => {
     }
   });
 
-  it('lists no table inside a table, in a cell or in a block in a cell (FR-ED-09 provides for none)', () => {
-    const table = SLASH_COMMANDS.find(({ name }) => name === 'table')!.inserts;
-    const editor = editorOf(table);
-    const others = ALL.filter((name) => name !== 'table');
+  // The owner's decision R32 of 12 October 2026: "Allow it, and list Table in
+  // the palette inside a table." Within the bounds the tables share
+  // (table-bounds.ts): two levels, and ten thousand cells.
+  const TABLE = SLASH_COMMANDS.find(({ name }) => name === 'table')!.inserts;
+  const OTHERS = ALL.filter((name) => name !== 'table');
+  /** The blocks round the cursor, from the document inwards. */
+  const round = (editor: Editor) => {
+    const { $from } = editor.state.selection;
+    return Array.from({ length: $from.depth + 1 }, (_, depth) => $from.node(depth).type.name);
+  };
+  /** The rows of each table, outermost first. */
+  const rowsOf = (editor: Editor) => {
+    const found: number[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'table') found.push(node.childCount);
+    });
+    return found;
+  };
+  const cells = (rows: number, columns: number, first: Json[] = [paragraph()]): Json => ({
+    type: 'tableBlock',
+    content: [
+      {
+        type: 'table',
+        content: Array.from({ length: rows }, (_, row) => ({
+          type: 'tableRow',
+          content: Array.from({ length: columns }, (_, column) => ({
+            type: 'tableCell',
+            content: row + column ? [paragraph()] : first,
+          })),
+        })),
+      },
+      { type: 'tableCaption' },
+    ],
+  });
+  /** A key pressed in the text, as ProseMirror hands it to every plugin in turn. True where one took it. */
+  const key = (editor: Editor, name: string, shiftKey = false) =>
+    editor.state.plugins.some(
+      (plugin) =>
+        plugin.props.handleKeyDown?.call(plugin, editor.view, {
+          key: name,
+          keyCode: name === 'Tab' ? 9 : 0,
+          shiftKey,
+          altKey: false,
+          ctrlKey: false,
+          metaKey: false,
+          preventDefault() {},
+        } as unknown as KeyboardEvent) === true,
+    );
+
+  it('lists Table in a cell of a table, and puts one there: the cursor in its first cell, and a paragraph after it in the cell', () => {
+    const editor = editorOf(TABLE);
     type(editor, '/');
-    expect(listed(editor)).toEqual(others);
+    expect(listed(editor)).toEqual(ALL);
+    type(editor, 'table');
+    expect(press(editor, 'Enter')).toBe(true);
+    expect(rowsOf(editor)).toEqual([3, 3]);
+    editor.state.doc.check();
+    expect(text(editor)).toBe('');
+    // In the first cell of the new table, which stands in the first cell of the other.
+    const inner = ['tableBlock', 'table', 'tableRow', 'tableCell'];
+    expect(round(editor)).toEqual(['doc', ...inner, ...inner, 'paragraph']);
+    const { $from } = editor.state.selection;
+    expect([$from.index(2), $from.index(3), $from.index(6), $from.index(7)]).toEqual([0, 0, 0, 0]);
+    // The cell holds the table and then a paragraph: a place to write in that is the cell's own.
+    expect($from.node(4).children.map(({ type }) => type.name)).toEqual(['tableBlock', 'paragraph']);
+    // After text in a cell, the table follows the text, and a paragraph the table.
+    const after = editorOf(TABLE);
+    type(after, 'words /table');
+    press(after, 'Enter');
+    expect(after.state.doc.firstChild!.firstChild!.firstChild!.firstChild!.toString()).toMatch(
+      /^tableCell\(paragraph\("words "\), tableBlock\(.*\), paragraph\)$/,
+    );
+  });
+
+  it('lists no table a level too deep: not in a cell of a table that stands in a cell, nor in a quotation there', () => {
+    const editor = editorOf(TABLE);
+    type(editor, '/table');
+    press(editor, 'Enter');
+    type(editor, '/');
+    expect(listed(editor)).toEqual(OTHERS);
     chooseSlashCommand(editor, 'table');
     expect(text(editor)).toBe('/');
     type(editor, 'table');
     expect(slashPalette(editor.state)).toMatchObject({ open: true, options: [] });
     expect(press(editor, 'Enter')).toBe(false);
-    // In a quotation in the cell.
-    editor.view.dispatch(editor.state.tr.delete(2, 7));
+    // In a quotation in that cell.
+    const { from } = editor.state.selection;
+    editor.view.dispatch(editor.state.tr.delete(from - 5, from));
     type(editor, 'quote');
     press(editor, 'Enter');
     type(editor, 'Quoted /');
-    expect(listed(editor)).toEqual(others);
-    let tables = 0;
-    editor.state.doc.descendants((node) => {
-      if (node.type.name === 'table') tables += 1;
+    expect(listed(editor)).toEqual(OTHERS);
+    expect(rowsOf(editor)).toEqual([3, 3]);
+    // And in the paragraph after the table, in the cell of the first table, it is listed again.
+    editor.commands.setTextSelection(editor.state.doc.content.size);
+    expect(round(editor)).toEqual(['doc', 'paragraph']);
+    type(editor, '/');
+    expect(listed(editor)).toEqual(ALL);
+  });
+
+  it('lists no table where the tables round the cursor have no room for its nine cells', () => {
+    // 9,900 cells, and a table in the first: of 91 cells, which leaves room for nine, and of 92.
+    const room = editorOf(cells(99, 100, [paragraph(), cells(7, 13)]));
+    type(room, '/');
+    expect(listed(room)).toEqual(ALL);
+    type(room, 'table');
+    press(room, 'Enter');
+    expect(rowsOf(room)).toEqual([99, 3, 7]);
+    const none = editorOf(cells(99, 100, [paragraph(), cells(4, 23)]));
+    type(none, '/');
+    expect(listed(none)).toEqual(OTHERS);
+    chooseSlashCommand(none, 'table');
+    expect(rowsOf(none)).toEqual([99, 4]);
+    // The largest table there is has room for none.
+    const full = editorOf(cells(100, 100));
+    type(full, '/');
+    expect(listed(full)).toEqual(OTHERS);
+  });
+
+  describe('the keys and the commands of a table in a cell', () => {
+    /** Two by two in the first cell of two by two, and the cursor in the first cell of the inner one. */
+    const nested = () => {
+      const editor = editorOf(cells(2, 2, [cells(2, 2), paragraph()]));
+      expect(round(editor).filter((name) => name === 'table')).toHaveLength(2);
+      return editor;
+    };
+    const place = (editor: Editor) => {
+      const { $from } = editor.state.selection;
+      const table = round(editor).lastIndexOf('table');
+      return `${round(editor).filter((name) => name === 'table').length}:${$from.index(table)}.${$from.index(table + 1)}`;
+    };
+
+    it('Tab and Shift+Tab move between the cells of the innermost table', () => {
+      const editor = nested();
+      expect(place(editor)).toBe('2:0.0');
+      for (const next of ['2:0.1', '2:1.0', '2:1.1']) {
+        expect(key(editor, 'Tab')).toBe(true);
+        expect(place(editor)).toBe(next);
+      }
+      for (const before of ['2:1.0', '2:0.1', '2:0.0']) {
+        expect(key(editor, 'Tab', true)).toBe(true);
+        expect(place(editor)).toBe(before);
+      }
+      // At its first cell Shift+Tab is not the table's: it does not step into the table round it.
+      expect(key(editor, 'Tab', true)).toBe(false);
+      expect(place(editor)).toBe('2:0.0');
     });
-    expect(tables).toBe(1);
+
+    it('Tab in its last cell adds a row to it, and none to the table round it', () => {
+      const editor = nested();
+      for (let presses = 0; presses < 4; presses += 1) key(editor, 'Tab');
+      expect(rowsOf(editor)).toEqual([2, 3]);
+      expect(place(editor)).toBe('2:2.0');
+    });
+
+    it('the row and column commands act on the innermost table', () => {
+      const editor = nested();
+      const shape = () => {
+        const found: string[] = [];
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === 'table')
+            found.push(
+              `${node.childCount}x${node.firstChild!.childCount} ${node.firstChild!.firstChild!.type.name}`,
+            );
+        });
+        return found;
+      };
+      expect(shape()).toEqual(['2x2 tableCell', '2x2 tableCell']);
+      editor.commands.addRowBefore();
+      editor.commands.addColumnAfter();
+      expect(shape()).toEqual(['2x2 tableCell', '3x3 tableCell']);
+      editor.commands.toggleHeaderRow();
+      expect(shape()).toEqual(['2x2 tableCell', '3x3 tableHeader']);
+      // The row and the column of the cursor go: the header row, which was added above it, stays.
+      editor.commands.deleteRow();
+      editor.commands.deleteColumn();
+      expect(shape()).toEqual(['2x2 tableCell', '2x2 tableHeader']);
+      editor.state.doc.check();
+    });
+
+    it('add no cell past the bound the tables share: Tab in the last cell, a row and a column change nothing', () => {
+      // 9,900 cells, and ten by ten in the first: 10,000.
+      const editor = editorOf(cells(99, 100, [cells(10, 10), paragraph()]));
+      const before = editor.state.doc;
+      editor.commands.addRowAfter();
+      editor.commands.addColumnBefore();
+      expect(editor.state.doc.eq(before)).toBe(true);
+      // To the last cell of the inner table, and Tab there.
+      for (let presses = 0; presses < 99; presses += 1) key(editor, 'Tab');
+      expect(place(editor)).toBe('2:9.9');
+      key(editor, 'Tab');
+      expect(editor.state.doc.eq(before)).toBe(true);
+      expect(rowsOf(editor)).toEqual([99, 10]);
+      // And what adds none is applied.
+      editor.commands.deleteRow();
+      expect(rowsOf(editor)).toEqual([99, 9]);
+    });
+
+    const one = (word: string): Json => ({
+      type: 'tableBlock',
+      content: [
+        {
+          type: 'table',
+          content: [
+            { type: 'tableRow', content: [{ type: 'tableCell', content: [paragraph(words(word))] }] },
+          ],
+        },
+        { type: 'tableCaption', content: [words(`${word} caption`)] },
+      ],
+    });
+    const rowOf = (...held: Json[][]): Json => ({
+      type: 'tableBlock',
+      content: [
+        {
+          type: 'table',
+          content: [{ type: 'tableRow', content: held.map((content) => ({ type: 'tableCell', content })) }],
+        },
+        { type: 'tableCaption' },
+      ],
+    });
+    /** Puts the cursor at the start of the paragraph that holds these words. */
+    const at = (editor: Editor, written: string) => {
+      let found = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (found < 0 && node.type.name === 'paragraph' && node.textContent === written) found = pos + 1;
+      });
+      editor.commands.setTextSelection(found);
+    };
+    /** The cursor, where it is one: the text of its block, and how far into it. */
+    const cursor = (editor: Editor) => {
+      const { empty, $from } = editor.state.selection;
+      return empty ? `${$from.parent.textContent}@${$from.parentOffset}` : 'a range';
+    };
+
+    // The review of pull request 28, S3: the library selects all a cell holds,
+    // and one letter then left a table of one cell with that letter in it.
+    it('Tab and Shift+Tab into a cell that holds a table select nothing: the cursor goes to the cell’s own text, and a letter replaces nothing', () => {
+      const editor = editorOf(
+        rowOf(
+          [paragraph(words('plain'))],
+          [one('first'), paragraph(words('own text'))],
+          [paragraph(words('last'))],
+          [one('alone')],
+        ),
+      );
+      const whole = text(editor);
+      at(editor, 'plain');
+      expect(key(editor, 'Tab')).toBe(true);
+      // In the cell's own text, after the table: the innermost table is still the one being moved through.
+      expect(cursor(editor)).toBe('own text@0');
+      expect(round(editor).filter((name) => name === 'table')).toHaveLength(1);
+      type(editor, 'X');
+      expect(text(editor)).toBe(whole.replace('own text', 'Xown text'));
+      editor.view.dispatch(
+        editor.state.tr.delete(editor.state.selection.from - 1, editor.state.selection.from),
+      );
+      // A cell of text is as the library leaves it: all of it selected.
+      expect(key(editor, 'Tab')).toBe(true);
+      expect(cursor(editor)).toBe('a range');
+      expect(editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to)).toBe(
+        'last',
+      );
+      // A cell that holds a table and no text of its own: the first text in it, and nothing selected.
+      expect(key(editor, 'Tab')).toBe(true);
+      expect(cursor(editor)).toBe('alone@0');
+      type(editor, 'X');
+      expect(text(editor)).toBe(whole.replace('alone', 'Xalone'));
+      editor.view.dispatch(
+        editor.state.tr.delete(editor.state.selection.from - 1, editor.state.selection.from),
+      );
+      // And backwards.
+      at(editor, 'last');
+      expect(key(editor, 'Tab', true)).toBe(true);
+      expect(cursor(editor)).toBe('own text@0');
+      expect(text(editor)).toBe(whole);
+    });
+
+    // The review of pull request 28: a table pasted into an empty cell left
+    // the cell with no place the keyboard reaches (WCAG 2.1.1).
+    it('a table that a paste of the writer’s leaves at the end of a cell is followed by a paragraph, in the same step; no other cell is given one', () => {
+      const held = (editor: Editor) => {
+        const found: string[] = [];
+        editor.state.doc.firstChild!.firstChild!.firstChild!.forEach((cell) =>
+          found.push(cell.children.map(({ type }) => type.name).join(' ')),
+        );
+        return found;
+      };
+      const pasteOver = (editor: Editor, block: Json, meta: [string, unknown]) => {
+        const { $from } = editor.state.selection;
+        editor.view.dispatch(
+          editor.state.tr
+            .replaceWith($from.before(), $from.after(), editor.schema.nodeFromJSON(block))
+            .setMeta(...meta),
+        );
+      };
+      const editor = editorOf(rowOf([paragraph()], [paragraph(words('second'))], [paragraph()]));
+      pasteOver(editor, one('pasted'), ['paste', true]);
+      expect(held(editor)).toEqual(['tableBlock paragraph', 'paragraph', 'paragraph']);
+      editor.state.doc.check();
+      // A drop is one too. And a table put there by anything else is left as it is.
+      at(editor, '');
+      at(editor, 'second');
+      pasteOver(editor, one('dropped'), ['uiEvent', 'drop']);
+      expect(held(editor)).toEqual(['tableBlock paragraph', 'tableBlock paragraph', 'paragraph']);
+
+      // Another client's cell that holds a table alone is not added to: not
+      // when it arrives, and not when the writer pastes somewhere else.
+      const theirs = editorOf(rowOf([paragraph()], [paragraph(words('second'))]));
+      peer(theirs, [rowOf([one('theirs')], [paragraph(words('second'))])], 1);
+      expect(held(theirs)).toEqual(['tableBlock', 'paragraph']);
+      at(theirs, 'second');
+      theirs.view.dispatch(theirs.state.tr.insertText('pasted ').setMeta('paste', true));
+      expect(text(theirs)).toContain('pasted second');
+      expect(held(theirs)).toEqual(['tableBlock', 'paragraph']);
+    });
   });
 });
 
