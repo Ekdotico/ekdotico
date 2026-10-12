@@ -209,6 +209,27 @@ describe('a limit counted in the memory of the process: `max` in any period, for
     ]);
   });
 
+  // A key is forgotten by its LATEST event. By its first, a user would be
+  // given a new count whenever another user arrived, with events still counted.
+  it('does not forget a key while one of its events still counts, whatever new key arrives', () => {
+    const take = limitHere({ max: 3, windowSeconds: 10 });
+    for (const at of [0, 9000, 9500]) expect(take('a', at).ok).toBe(true);
+    // The first of the three has left, and the other two have not.
+    expect(take('b', 10_000).ok).toBe(true);
+    expect([take('a', 10_001), take('a', 10_002), take('a', 10_003)].map(({ ok }) => ok)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    // And with one event: forgotten at the moment it leaves, and not before.
+    const one = limitHere({ max: 1, windowSeconds: 1 });
+    expect(one('a', 0).ok).toBe(true);
+    expect(one('b', 999).ok).toBe(true);
+    expect(one('a', 999).ok).toBe(false);
+    expect(one('c', 1000).ok).toBe(true);
+    expect([one('a', 1000), one('a', 1000)].map(({ ok }) => ok)).toEqual([true, false]);
+  });
+
   it('holds no more than the keys of one period, whatever number it has seen', () => {
     const held = new Map();
     const take = limitHere({ max: 2, windowSeconds: 1 }, held);

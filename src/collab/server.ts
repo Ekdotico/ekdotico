@@ -671,6 +671,12 @@ export function createCollabServer(store: ServerSettings) {
      * A read-only connection is counted too: the hook runs before the library
      * looks at the flag.
      *
+     * AND NOTHING MORE IS DONE FOR A READ-ONLY CONNECTION. The library applies
+     * nothing it sends (MessageReceiver.ts tests the flag before each of the
+     * two), so there is nothing to check; and a check of what is never applied
+     * would let a Viewer cost the copy of a document at its limit, and leave
+     * the keeper's numbers higher than the document with every message.
+     *
      * Counted for the user and not for the connection: a count on the
      * connection begins again with the next one, and a user may hold as many
      * as the limit of handshakes lets through, 30 more each minute. Past the
@@ -678,12 +684,13 @@ export function createCollabServer(store: ServerSettings) {
      * a limit; the client waits before it asks for the document again
      * (src/lib/collab/protocol.ts).
      */
-    async beforeSync({ type, payload, document, documentName, context }) {
+    async beforeSync({ type, payload, document, documentName, context, connection }) {
       if (type === messageYjsSyncStep1) return;
       if (!takeMessage(context.userId).ok) {
         void logMessageLimitReached(context.userId);
         throw refuse(REFUSAL.LIMITED);
       }
+      if (connection.readOnly) return;
       let past: Limit | null;
       try {
         assertUpdate(payload);

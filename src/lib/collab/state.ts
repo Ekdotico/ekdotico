@@ -129,7 +129,8 @@ function measured(document: Y.Doc, update: Uint8Array) {
     let past: Limit | null = null;
     if (bytes > MAX_STATE_BYTES && bytes > before.byteLength) past = 'size';
     else if (depth > MAX_ELEMENT_DEPTH && depth > elementDepth(document)) past = 'depth';
-    return { past, before: before.byteLength, depth };
+    // The copy waits, after the update, with what the document will wait with.
+    return { past, before: before.byteLength, depth, owedLevels: owedBy(after).levels };
   } finally {
     after.destroy();
   }
@@ -182,15 +183,49 @@ const NO_STATE = new Uint8Array([0]);
  * at most one. tests/unit/collab-limits.test.ts holds both to what Yjs does.
  */
 export function growthBound(update: Uint8Array): { bytes: number; levels: number } {
-  const { structs, ds } = Y.decodeUpdate(update);
+  const { bytes, levels } = boundOf(update);
+  return { bytes, levels };
+}
+
+/** `growthBound`, and the clients whose structs the update holds. */
+function boundOf(update: Uint8Array) {
+  const { parts, levels, clients } = partsOf(Y.decodeUpdate(update));
+  const bytes = Y.diffUpdate(update, NO_STATE).byteLength + parts * PART_BYTES + UPDATE_BYTES;
+  return { bytes, levels, clients };
+}
+
+/** The structs and deleted ranges of an update that was read, the shared types among them that are not text, and whose the structs are. */
+function partsOf({ structs, ds }: ReturnType<typeof Y.decodeUpdate>) {
   let parts = structs.length;
   for (const ranges of ds.clients.values()) parts += ranges.length;
   let levels = 0;
+  const clients = new Set<number>();
   for (const struct of structs) {
+    clients.add(struct.id.client);
     if (!(struct instanceof Y.Item) || !(struct.content instanceof Y.ContentType)) continue;
     if (!(struct.content.type instanceof Y.Text)) levels += 1;
   }
-  const bytes = Y.diffUpdate(update, NO_STATE).byteLength + parts * PART_BYTES + UPDATE_BYTES;
+  return { parts, levels, clients };
+}
+
+/**
+ * What a document can still gain from what it waits with, the structs and the
+ * deleted ranges it was sent before the structs they name
+ * (`store.pendingStructs`, `store.pendingDs`, which Yjs keeps as updates of
+ * encoding 2): nothing while they wait, and when they are taken in what each
+ * part can cost beyond its own bytes (`PART_BYTES`) and a level for each
+ * shared type that is not text. Their own bytes are in the state already: Yjs
+ * writes what waits into the state it encodes.
+ */
+function owedBy(document: Y.Doc): { bytes: number; levels: number } {
+  let bytes = 0;
+  let levels = 0;
+  for (const waiting of [document.store.pendingStructs?.update, document.store.pendingDs]) {
+    if (!waiting) continue;
+    const read = partsOf(Y.decodeUpdateV2(waiting));
+    bytes += read.parts * PART_BYTES + UPDATE_BYTES;
+    levels += read.levels;
+  }
   return { bytes, levels };
 }
 
@@ -212,10 +247,24 @@ function liveFormats(document: Y.Doc): number {
  * the update would take the document past, or null. It keeps a
  * number of bytes and a depth that the document is not past, adds to them
  * what each update it lets through can add (`growthBound`), and measures
- * again, by `pastLimits`, only when the sum would pass a limit, when the
- * document waits for a struct it has not been sent, or the first time. At a
- * measure the bytes are those of the document and 27 for each mark of
- * formatting in it, which Yjs may yet delete by itself (`PART_BYTES`).
+ * again, by `pastLimits`, only when the sum would pass a limit, or the first
+ * time. At a measure the bytes are those of the document and 27 for each mark
+ * of formatting in it, which Yjs may yet delete by itself (`PART_BYTES`).
+ *
+ * A DOCUMENT THAT WAITS, for a struct it was not sent, is not measured for
+ * every update: one small update that names a struct no one ever sends
+ * leaves a document waiting for good, in its stored state too, and each
+ * member's every key would then cost the copy. What waits is counted
+ * instead (`owedBy`). Its bytes are in the state already, and what its parts
+ * can cost when they are taken in is added to the bytes at every measure, as
+ * it was when the update that brought them was let through without one. Its
+ * levels are kept apart, since a document 20 deep that waits with 40 levels
+ * is inside the limit until they are taken in: they are added for an update
+ * that holds a struct of a client the document waits for, the only kind after
+ * which Yjs tries what waits again, and for no other; once added they stay
+ * in the depth until the next measure. Both count too much and never too
+ * little: a part that waits is counted in full again at each measure, and a
+ * level that was added is counted whether or not what waited was taken in.
  *
  * WHAT THIS RESTS ON is a reading of Yjs 13.6.33 and not a promise of the
  * library's: that nothing but the cases counted in `PART_BYTES` makes the
@@ -223,7 +272,8 @@ function liveFormats(document: Y.Doc): number {
  * to the library and a run of three members to the whole; an upgrade of Yjs
  * is read against them. Where the reading is wrong the limit of 5 MB is
  * passed by what it missed, until the next measure, and never the limit of
- * the socket or of the depth.
+ * the socket. The depth rests on one reading more: when Yjs tries again what
+ * a document waits with (`readUpdateV2`).
  *
  * It holds where every change to the document is asked of it first and is
  * applied, or not, before the next is asked: the collaboration server's
@@ -232,36 +282,54 @@ function liveFormats(document: Y.Doc): number {
  * leaves the numbers too high, which costs a measure and nothing else.
  *
  * What it does not bound: a member who fills a document to within a few bytes
- * of the limit makes every update a measure again. The collaboration server
+ * of the limit makes every update a measure again, and so does one who leaves
+ * it waiting with so many parts that 200 bytes for each fill the room (26,000
+ * for an empty document), or with more levels than there is room for and
+ * then sends structs of the client it waits for. The collaboration server
  * bounds that by its limit of messages for each user, which it takes before
  * it asks here (the owner's decision of 12 October 2026: 600 in a minute).
  */
 export function limitsOf(document: Y.Doc): (update: Uint8Array) => Limit | null {
   let bytes = Infinity;
   let depth = Infinity;
+  // The levels of what waited at the last measure (`owedBy`), which are not in
+  // `depth` until an update can have them taken in.
+  let owedLevels = 0;
   return (update) => {
-    const waiting = document.store.pendingStructs !== null || document.store.pendingDs !== null;
     // An update longer than the room that is left is measured without being read twice.
-    const growth = !waiting && update.byteLength <= MAX_STATE_BYTES - bytes ? growthBound(update) : null;
-    if (growth && bytes + growth.bytes <= MAX_STATE_BYTES && depth + growth.levels <= MAX_ELEMENT_DEPTH) {
-      bytes += growth.bytes;
-      depth += growth.levels;
-      return null;
+    const growth = update.byteLength <= MAX_STATE_BYTES - bytes ? boundOf(update) : null;
+    if (growth) {
+      // Yjs tries what waits again only where the update holds a struct of a
+      // client it waits for (`readUpdateV2`, `pending.missing`): no other
+      // update can add the levels of what waits.
+      const missing = document.store.pendingStructs?.missing;
+      const wakes = missing !== undefined && [...growth.clients].some((client) => missing.has(client));
+      const levels = growth.levels + (wakes ? owedLevels : 0);
+      if (bytes + growth.bytes <= MAX_STATE_BYTES && depth + levels <= MAX_ELEMENT_DEPTH) {
+        bytes += growth.bytes;
+        // The levels of the update are counted now, whether it is taken in or left waiting.
+        depth += levels;
+        if (wakes) owedLevels = 0;
+        return null;
+      }
     }
     const exact = measured(document, update);
+    const owed = owedBy(document);
     // The bytes are those of this document and not of the copy, and with them
     // what the marks of formatting that are in it can still cost when Yjs
-    // deletes them: those arrived before this measure, and were counted by none.
-    const held = exact.before + liveFormats(document) * DELETED_BYTES;
+    // deletes them, and what it waits with can cost when that is taken in,
+    // by this update or a later one: those arrived before this measure, and
+    // were counted by none.
+    const held = exact.before + liveFormats(document) * DELETED_BYTES + owed.bytes;
     if (exact.past) {
       // Refused, and so not applied: the document is as it was measured.
       bytes = held;
+      owedLevels = owed.levels;
       return exact.past;
     }
-    // Where it was waiting, what waited may now be in it, and has cut what it
-    // will: the next update measures.
-    bytes = waiting ? Infinity : held + (growth ?? growthBound(update)).bytes;
+    bytes = held + (growth ?? boundOf(update)).bytes;
     depth = exact.depth;
+    owedLevels = exact.owedLevels;
     return null;
   };
 }

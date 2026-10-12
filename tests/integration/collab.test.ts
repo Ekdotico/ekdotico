@@ -1940,26 +1940,63 @@ describe('the limit of messages that carry an update: 600 in any minute for each
     },
   );
 
-  it('counts the messages of a connection that cannot edit', async () => {
-    const local = await inProcess({ max: 2, windowSeconds: 60 });
-    try {
-      const owner = await person();
-      const viewer = await person();
-      const id = await documentOf(owner.id);
-      const document = await db().document.findUniqueOrThrow({ where: { id } });
-      answers.set(`${viewer.id} ${id}`, { outcome: 'allowed', role: 'viewer', document });
-      const client = await bare(local.port, viewer.cookie);
-      await client.opened(id);
-      // The library answers each, and applies none (see the Viewer below).
-      for (let n = 0; n < 2; n++) client.update(id, `viewer ${n}`);
-      await until(() => client.acknowledged(id) === 2);
-      client.update(id, 'one too many');
-      expect(await client.closed(id)).toBe(closedBecause(REFUSAL.LIMITED));
-      expect(local.hocuspocus.documents.get(id)?.getArray('changes').length ?? 0).toBe(0);
-    } finally {
-      await local.stop();
-    }
-  });
+  // The second review of pull request 24: the library applies nothing a
+  // read-only connection sends, and a check of what is never applied let a
+  // Viewer cost the copy of a document at its limit as an Editor can.
+  it(
+    'counts the messages of a connection that cannot edit, and neither reads nor checks what they hold',
+    SLOW,
+    async () => {
+      const local = await inProcess({ max: 4, windowSeconds: 60 });
+      try {
+        const owner = await person();
+        const viewer = await person();
+        const id = await documentOf(owner.id);
+        const document = await db().document.findUniqueOrThrow({ where: { id } });
+        answers.set(`${viewer.id} ${id}`, { outcome: 'allowed', role: 'viewer', document });
+        // The Owner has written, so the document has its keeper, and what was written is stored.
+        const writing = await bare(local.port, owner.cookie);
+        await writing.opened(id);
+        writing.update(id, 'from the Owner');
+        await until(() => writing.acknowledged(id) === 1);
+        await until(async () => (await stored(id))?.length === 1, 4000);
+        const client = await bare(local.port, viewer.cookie);
+        await client.opened(id);
+        const held = local.hocuspocus.documents.get(id)!;
+        expect(held.getConnections().map(({ readOnly }) => readOnly)).toEqual([false, true]);
+
+        // From here every look at the document's structs is counted: the keeper
+        // begins with one, whatever the update (`limitsOf`).
+        const { store } = held;
+        let looks = 0;
+        Object.defineProperty(held, 'store', { configurable: true, get: () => ((looks += 1), store) });
+        // Bytes that are no update, which `assertUpdate` refuses with the close
+        // of the connection; an update the limits of the document refuse, with a
+        // reason and an entry in the log; and two that an Editor would have applied.
+        client.update(id, new Uint8Array(48).fill(0xff));
+        client.update(id, tooDeep());
+        for (let n = 0; n < 2; n++) client.update(id, `viewer ${n}`);
+        // The library answers each, and applies none.
+        await until(() => client.acknowledged(id) === 4);
+        expect(client.isOpen(id)).toBe(true);
+        expect(looks).toBe(0);
+        // The four were counted: the fifth is past the limit of messages.
+        client.update(id, 'one too many');
+        expect(await client.closed(id)).toBe(closedBecause(REFUSAL.LIMITED));
+        Object.defineProperty(held, 'store', { configurable: true, writable: true, value: store });
+        expect(held.getArray('changes').toArray()).toEqual(['from the Owner']);
+        expect(limits.elementDepth(held)).toBe(0);
+        await until(async () => (await logged()).length > 0);
+        await sleep(300);
+        expect(await logged()).toEqual([reached(viewer.id)]);
+        // The same update is checked where it comes from a connection that can edit.
+        writing.update(id, tooDeep());
+        expect(await writing.closed(id)).toBe(closedBecause(REFUSAL.TOO_DEEP));
+      } finally {
+        await local.stop();
+      }
+    },
+  );
 
   it(
     'closes although Valkey does not answer, and without Valkey still writes one entry for the period',

@@ -409,6 +409,309 @@ describe('the limits of a document, asked without the copy (limitsOf)', () => {
     },
   );
 
+  // The second review of pull request 24. Before it, a document that waited
+  // was measured for every update, and one update of a few bytes that names a
+  // struct no one sends leaves a document waiting for good.
+  describe('a document that waits for a struct it was never sent', () => {
+    /**
+     * Asks the keeper each update and applies it, and counts the answers that
+     * took a copy of the document: a copy reads the document's structs many
+     * times, and an answer without one looks once, at what the document waits for.
+     */
+    function copies(document: Y.Doc, past: ReturnType<typeof limitsOf>, updates: Uint8Array[]): number {
+      const { store } = document;
+      let looks = 0;
+      let copied = 0;
+      Object.defineProperty(document, 'store', { configurable: true, get: () => ((looks += 1), store) });
+      try {
+        for (const update of updates) {
+          looks = 0;
+          expect(past(update)).toBeNull();
+          if (looks > 1) copied += 1;
+          Y.applyUpdate(document, update);
+        }
+      } finally {
+        Object.defineProperty(document, 'store', { configurable: true, writable: true, value: store });
+      }
+      return copied;
+    }
+    /** The second change of a client whose first is never sent: it waits for ever. */
+    function dangling(client: number, change: (document: Y.Doc) => void = () => {}): Uint8Array {
+      const source = new Y.Doc();
+      source.clientID = client;
+      source.getText('p').insert(0, 'never sent');
+      const sent: Uint8Array[] = [];
+      source.on('update', (update: Uint8Array) => sent.push(update));
+      source.transact(() => {
+        source.getText('p').insert(5, 'b');
+        change(source);
+      });
+      return sent[0]!;
+    }
+    /** As many small changes of one client, each an update of its own. */
+    function typed(document: Y.Doc, client: number, count: number): Uint8Array[] {
+      const { peer, sent } = peerOf(document, client);
+      return Array.from({ length: count }, (_, n) => {
+        peer.getText('t').insert(n, 'y');
+        return sent();
+      });
+    }
+
+    it('is not copied for every update after it, and not after it was stored and loaded so', () => {
+      const document = new Y.Doc();
+      document.clientID = 1;
+      document.getText('t').insert(0, 'x'.repeat(1024 * 1024));
+      const past = limitsOf(document);
+      // The first answer is a measure; the update that is left waiting is none.
+      expect(copies(document, past, typed(document, 2, 1))).toBe(1);
+      expect(copies(document, past, [dangling(99)])).toBe(0);
+      expect(waits(document)).toBe(true);
+      expect(copies(document, past, typed(document, 3, 200))).toBe(0);
+      expect(waits(document)).toBe(true);
+
+      // Yjs writes what waits into the state: the document waits after a load too.
+      const loaded = new Y.Doc();
+      Y.applyUpdate(loaded, encodeState(document));
+      expect(waits(loaded)).toBe(true);
+      const again = limitsOf(loaded);
+      expect(copies(loaded, again, typed(loaded, 4, 200))).toBe(1);
+      // And is copied when it must be: for an update of the client it waits for.
+      expect(copies(loaded, again, [dangling(99)])).toBe(0);
+    });
+
+    it(
+      'still cannot pass 50 levels by what waits, whichever arrives first, with updates of others between',
+      { timeout: 120_000 },
+      () => {
+        /** A member whose first change hangs one quote in the document, and whose second nests `levels` more in it. */
+        const nested = (document: Y.Doc, client: number, levels: number) => {
+          const { peer, sent } = peerOf(document, client);
+          const first = new Y.XmlElement('blockquote');
+          peer.getXmlFragment('default').insert(0, [first]);
+          const head = sent();
+          let parent = first;
+          peer.transact(() => {
+            for (let level = 0; level < levels; level += 1) {
+              const quote = new Y.XmlElement('blockquote');
+              parent.insert(0, [quote]);
+              parent = quote;
+            }
+          });
+          return { head, rest: sent() };
+        };
+        for (const levels of [MAX_ELEMENT_DEPTH - 1, MAX_ELEMENT_DEPTH]) {
+          const tooDeep = levels + 1 > MAX_ELEMENT_DEPTH;
+          // What waits arrives first, others write, and then the struct it waits for.
+          const document = new Y.Doc();
+          const past = limitsOf(document);
+          const { head, rest } = nested(document, 2, levels);
+          expect(asked(document, past, rest)).toBe(false);
+          expect(waits(document)).toBe(true);
+          expect(elementDepth(document)).toBe(0);
+          // No copy for what others write meanwhile, and the same answer as the copy gives.
+          for (const update of typed(document, 3, 50)) expect(asked(document, past, update)).toBe(false);
+          expect(copies(document, past, typed(document, 4, 100))).toBe(0);
+          expect(asked(document, past, head), `${levels} levels, waiting first`).toBe(tooDeep);
+          expect(elementDepth(document)).toBe(tooDeep ? 0 : MAX_ELEMENT_DEPTH);
+          // Refused, it waits still, and is refused again; no update of another brings it in.
+          for (const update of typed(document, 5, 20)) expect(asked(document, past, update)).toBe(false);
+          expect(asked(document, past, head)).toBe(tooDeep);
+          expect(elementDepth(document)).toBeLessThanOrEqual(MAX_ELEMENT_DEPTH);
+
+          // In the order they were written.
+          const ordered = new Y.Doc();
+          const limits = limitsOf(ordered);
+          const inOrder = nested(ordered, 2, levels);
+          expect(asked(ordered, limits, inOrder.head)).toBe(false);
+          expect(asked(ordered, limits, inOrder.rest), `${levels} levels, in order`).toBe(tooDeep);
+          expect(elementDepth(ordered)).toBe(tooDeep ? 1 : MAX_ELEMENT_DEPTH);
+        }
+
+        // What waits arrives in pieces, none of which is measured, and is deeper than the room that is left.
+        const document = new Y.Doc();
+        const past = limitsOf(document);
+        for (const update of typed(document, 3, 2)) asked(document, past, update);
+        const { peer, sent } = peerOf(document, 2);
+        const first = new Y.XmlElement('blockquote');
+        peer.getXmlFragment('default').insert(0, [first]);
+        const head = sent();
+        let parent = first;
+        const pieces = Array.from({ length: 3 }, () => {
+          peer.transact(() => {
+            for (let level = 0; level < 15; level += 1) {
+              const quote = new Y.XmlElement('blockquote');
+              parent.insert(0, [quote]);
+              parent = quote;
+            }
+          });
+          return sent();
+        });
+        expect(copies(document, past, pieces)).toBe(0);
+        expect(waits(document)).toBe(true);
+        // Ten levels of another member are taken in: with the 46 that wait, past the limit.
+        const other = nested(document, 6, 9);
+        expect(asked(document, past, other.head)).toBe(false);
+        expect(asked(document, past, other.rest)).toBe(false);
+        expect(elementDepth(document)).toBe(10);
+        expect(asked(document, past, head)).toBe(false);
+        expect(elementDepth(document)).toBe(46);
+        // One piece more waits, and the struct that would bring 61 levels in is refused.
+        const deeper = new Y.Doc();
+        const keeper = limitsOf(deeper);
+        for (const update of typed(deeper, 3, 2)) asked(deeper, keeper, update);
+        const more = nested(deeper, 2, 0);
+        const member = peerOf(deeper, 7);
+        Y.applyUpdate(member.peer, more.head);
+        let inner = member.peer.getXmlFragment('default').get(0) as Y.XmlElement;
+        const waiting = Array.from({ length: 4 }, () => {
+          member.peer.transact(() => {
+            for (let level = 0; level < 15; level += 1) {
+              const quote = new Y.XmlElement('blockquote');
+              inner.insert(0, [quote]);
+              inner = quote;
+            }
+          });
+          return member.sent();
+        });
+        // Three are let through without a copy; the fourth is measured, and waits too.
+        expect(copies(deeper, keeper, waiting.slice(0, 3))).toBe(0);
+        expect(asked(deeper, keeper, waiting[3]!)).toBe(false);
+        expect(waits(deeper)).toBe(true);
+        expect(asked(deeper, keeper, more.head)).toBe(true);
+        expect(elementDepth(deeper)).toBe(0);
+      },
+    );
+
+    it('still cannot pass 5 MB by what waits, whichever arrives first', { timeout: 120_000 }, () => {
+      /** Two pieces of 30,000 bytes that follow one small change: 60,000 where there is room for 40,000. */
+      const pieces = (document: Y.Doc) => {
+        const { peer, sent } = peerOf(document, 5);
+        peer.getText('p').insert(0, 'h');
+        const head = sent();
+        const large = [1, 2].map(() => {
+          peer.getText('p').insert(1, 'w'.repeat(30_000));
+          return sent();
+        });
+        return { head, large };
+      };
+      // What waits first: its bytes are in the state while it waits, so the second piece is refused there.
+      const document = nearlyFull(40_000);
+      const past = limitsOf(document);
+      const first = pieces(document);
+      expect(asked(document, past, first.large[0]!)).toBe(false);
+      expect(waits(document)).toBe(true);
+      for (const update of typed(document, 3, 20)) expect(asked(document, past, update)).toBe(false);
+      expect(asked(document, past, first.large[1]!)).toBe(true);
+      expect(asked(document, past, first.head)).toBe(false);
+      expect(waits(document)).toBe(false);
+      expect(document.getText('p').length).toBe(30_001);
+      expect(size(document)).toBeLessThanOrEqual(MAX_STATE_BYTES);
+
+      // In the order they were written.
+      const ordered = nearlyFull(40_000);
+      const limits = limitsOf(ordered);
+      const second = pieces(ordered);
+      expect(asked(ordered, limits, second.head)).toBe(false);
+      expect(asked(ordered, limits, second.large[0]!)).toBe(false);
+      expect(asked(ordered, limits, second.large[1]!)).toBe(true);
+      expect(size(ordered)).toBeLessThanOrEqual(MAX_STATE_BYTES);
+    });
+
+    it(
+      'holds back, at a measure, for what the parts that wait will cost when they are taken in',
+      { timeout: 120_000 },
+      () => {
+        const document = nearlyFull(600_000);
+        const past = limitsOf(document);
+        for (const update of typed(document, 3, 2)) asked(document, past, update);
+        // Two thousand cuts of the document wait for one letter, and are let through without a copy.
+        const member = peerOf(document, 5);
+        member.peer.getText('t').insert(0, 'z');
+        const opening = member.sent();
+        member.peer.transact(() => {
+          for (let n = 0; n < 2000; n += 1) member.peer.getText('t').insert(5000 + 7 * n, 'y');
+        });
+        expect(copies(document, past, [member.sent()])).toBe(0);
+        expect(waits(document)).toBe(true);
+        // The room is filled by another member, through measures that see the
+        // document as it is: the cuts have cost nothing yet.
+        const { peer, sent } = peerOf(document, 6);
+        for (const piece of [100_000, 10_000, 1000]) {
+          for (;;) {
+            peer.getText('more').insert(0, 'w'.repeat(piece));
+            if (asked(document, past, sent())) break;
+          }
+        }
+        expect(MAX_STATE_BYTES - size(document)).toBeLessThan(1100);
+        for (const update of typed(document, 4, 3)) expect(asked(document, past, update)).toBe(false);
+        // The letter is a few bytes, and what it brings in is more than ten thousand.
+        expect(opening.byteLength).toBeLessThan(40);
+        expect(asked(document, past, opening)).toBe(true);
+        expect(size(document)).toBeLessThanOrEqual(MAX_STATE_BYTES);
+      },
+    );
+
+    it(
+      'answers as the copy does for whatever three members send, in whatever order, near 50 levels',
+      { timeout: 120_000 },
+      () => {
+        for (const start of [1, 2, 3, 4, 5, 6]) {
+          let seed = 20261012 + start;
+          const random = (below: number) => {
+            seed = (seed + 0x6d2b79f5) | 0;
+            let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return (((t ^ (t >>> 14)) >>> 0) % 1_000_000) % below;
+          };
+          const document = new Y.Doc();
+          const past = limitsOf(document);
+          // Each member nests in a chain of its own, and writes beside it.
+          const members = [11, 2 ** 40 + 5, 2 ** 52 + 9].map((client) => ({
+            ...peerOf(document, client),
+            chain: [] as Y.XmlElement[],
+          }));
+          const onTheWay: Uint8Array[] = [];
+          const seen = { refused: 0, waited: 0, deepest: 0 };
+          for (let round = 0; round < 400; round += 1) {
+            const member = members[random(3)]!;
+            member.peer.transact(() => {
+              for (let n = random(3); n >= 0; n -= 1) {
+                const kind = random(10);
+                if (kind < 5) {
+                  const quote = new Y.XmlElement('blockquote');
+                  const parent = member.chain.at(-1) ?? member.peer.getXmlFragment('default');
+                  parent.insert(0, [quote]);
+                  member.chain.push(quote);
+                } else if (kind < 8) member.peer.getText('t').insert(0, 'word ');
+                else if (kind === 8 && member.chain.length > 3) {
+                  // The innermost three are taken out again.
+                  const from = member.chain.length - 3;
+                  (member.chain[from - 1] as Y.XmlElement).delete(0, 1);
+                  member.chain.length = from;
+                } else member.peer.getMap('m').set(`k${random(3)}`, random(9));
+              }
+            });
+            const update = member.sent();
+            onTheWay.push(update);
+            if (random(4) === 0) onTheWay.push(update);
+            while (onTheWay.length && random(3)) {
+              const [next] = onTheWay.splice(random(onTheWay.length), 1);
+              // The keeper and the copy say the same, of every update, waiting or not.
+              if (asked(document, past, next!)) seen.refused += 1;
+              if (waits(document)) seen.waited += 1;
+              seen.deepest = Math.max(seen.deepest, elementDepth(document));
+              expect(elementDepth(document)).toBeLessThanOrEqual(MAX_ELEMENT_DEPTH);
+            }
+          }
+          // The run did something: the document waited, came to the limit, and was held to it.
+          expect(seen.waited, `seed ${start}`).toBeGreaterThan(50);
+          expect(seen.refused, `seed ${start}`).toBeGreaterThan(0);
+          expect(seen.deepest, `seed ${start}`).toBeGreaterThan(MAX_ELEMENT_DEPTH - 5);
+        }
+      },
+    );
+  });
+
   it('does not copy the document for a small update far from a limit', () => {
     const document = new Y.Doc();
     document.clientID = 1;
