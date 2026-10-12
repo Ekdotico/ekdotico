@@ -932,3 +932,76 @@ describe('the time the matcher takes', () => {
     expect(performance.now() - at).toBeLessThan(250);
   });
 });
+
+// The owner's decision R44 of 12 October 2026: nothing is said after a block
+// is chosen. `closed` is what the list is given for the package's prop of
+// that name: left alone it says "List closed.", and empty it says nothing.
+describe('what the closing of the list says (R44; NFR-IC-19)', () => {
+  const closing = (editor: Editor) => {
+    const { open, closed } = slashPalette(editor.state);
+    return open ? 'open' : closed;
+  };
+
+  it('is left to the package when the list is dismissed, by any means', () => {
+    const dismissals: [string, (editor: Editor) => unknown][] = [
+      ['Escape', (editor) => press(editor, 'Escape')],
+      ['Tab', (editor) => press(editor, 'Tab')],
+      ['the cursor leaving', (editor) => editor.commands.setTextSelection(1)],
+      ['a second slash', (editor) => type(editor, '/')],
+      ['another client rewriting the command', (editor) => peer(editor, [paragraph(words('/ta'))], 4)],
+      [
+        // Marked as ProseMirror marks what a plugin appends.
+        'an appended transaction that ends the command',
+        (editor) => {
+          const tr = editor.state.tr.insertText('/');
+          editor.view.dispatch(tr.setMeta('appendedTransaction', tr));
+        },
+      ],
+    ];
+    for (const [name, dismiss] of dismissals) {
+      const editor = editorOf();
+      expect(closing(editor), name).toBeUndefined();
+      type(editor, '/h');
+      expect(closing(editor), name).toBe('open');
+      dismiss(editor);
+      expect(closing(editor), name).toBeUndefined();
+    }
+  });
+
+  it.each(ALL)('is empty after /%s is chosen, with Enter and with a press on its row', (name) => {
+    const entered = editorOf();
+    type(entered, `/${name}`);
+    expect(press(entered, 'Enter')).toBe(true);
+    // Through what a plugin appends to the choice too: the paragraph kept at the end of the document.
+    expect(closing(entered)).toBe('');
+
+    const pressed = editorOf();
+    type(pressed, '/');
+    chooseSlashCommand(pressed, name);
+    expect(closing(pressed)).toBe('');
+  });
+
+  it('is empty until the list next opens, and a dismissal of that list is left to the package again', () => {
+    const editor = editorOf();
+    type(editor, '/h1');
+    press(editor, 'Enter');
+    expect(closing(editor)).toBe('');
+    // Closed, nothing reads it: it stays through the writer's text and another client's change.
+    type(editor, 'Title');
+    peer(editor, [{ type: 'heading', attrs: { level: 1 }, content: [words('Title')] }, paragraph()], 6);
+    expect(closing(editor)).toBe('');
+    type(editor, ' /');
+    expect(closing(editor)).toBe('open');
+    press(editor, 'Escape');
+    expect(closing(editor)).toBeUndefined();
+  });
+
+  it('is not set by a choice that is not made: a row that is not listed', () => {
+    const editor = editorOf();
+    type(editor, '/h');
+    chooseSlashCommand(editor, 'table');
+    expect(closing(editor)).toBe('open');
+    press(editor, 'Escape');
+    expect(closing(editor)).toBeUndefined();
+  });
+});

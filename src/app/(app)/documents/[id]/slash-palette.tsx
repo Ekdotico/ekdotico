@@ -105,6 +105,18 @@ const HELD = new PluginKey<Held>('slashPaletteHeld');
 const STILL: Held = { activeId: null, navigating: false };
 
 /**
+ * Whether the list is closed and it was a choice that closed it (the owner's
+ * decision R44 of 12 October 2026: nothing is said after a block is chosen;
+ * NFR-IC-19). `chooseSlashCommand` marks its transaction with this key and
+ * nothing else does, so another client's change and what a plugin appends
+ * never set it. It is held in the state of the editor, beside `open`, because
+ * the package reads `closed` on the one render in which `open` becomes false:
+ * the two must come from the same state. It is put back when the list next
+ * opens, so a list that Escape then closes is said to have closed.
+ */
+const CHOSEN = new PluginKey<boolean>('slashPaletteChosen');
+
+/**
  * FR-ED-10: the command at the cursor, where there is one: a `/` "at the
  * beginning of an empty block or following a space character", and the whole
  * word it begins, to the next white space or the end of the block, wherever
@@ -222,12 +234,16 @@ const CLOSED = {
   activeId: null as string | null,
   navigating: false,
   range: { from: 0, to: 0 } as Range,
+  /** The package's `closed`: left alone, "List closed."; empty, nothing is said. */
+  closed: undefined as '' | undefined,
 };
+/** Closed by a choice: nothing is said of the closing (R44). */
+const CLOSED_BY_CHOICE: typeof CLOSED = { ...CLOSED, closed: '' };
 
 /** The palette as the state of the editor holds it: what the list draws and what the keys act on. */
 export function slashPalette(state: EditorState): typeof CLOSED {
   const suggesting = SLASH.getState(state);
-  if (!suggesting?.active) return CLOSED;
+  if (!suggesting?.active) return CHOSEN.getState(state) ? CLOSED_BY_CHOICE : CLOSED;
   const { range } = suggesting;
   const options = offered(state, range, matchSlashCommands(suggesting.query ?? '')).map(({ name }) => ({
     id: name,
@@ -239,7 +255,7 @@ export function slashPalette(state: EditorState): typeof CLOSED {
   const activeId = options.some(({ id }) => id === moving.activeId)
     ? moving.activeId
     : (options[0]?.id ?? null);
-  return { open: true, options, activeId, navigating: moving.navigating, range };
+  return { open: true, options, activeId, navigating: moving.navigating, range, closed: undefined };
 }
 
 /** Closes the palette. The `/` and what follows it stay as text, and the list stays closed for that `/`. */
@@ -292,7 +308,7 @@ export function chooseSlashCommand(editor: Editor, name: string): void {
   (
     yUndoPluginKey.getState(state) as { undoManager?: { stopCapturing(): void } } | undefined
   )?.undoManager?.stopCapturing();
-  editor.view.dispatch(tr);
+  editor.view.dispatch(tr.setMeta(CHOSEN, true));
 }
 
 /**
@@ -406,6 +422,16 @@ export const SlashPalette = Extension.create({
         },
         props: { attributes: slashAttributes },
       }),
+      // After the library's plugin, whose new state it reads: true from the
+      // choice that closes the list until the list is open again.
+      new Plugin<boolean>({
+        key: CHOSEN,
+        state: {
+          init: () => false,
+          apply: (transaction, was, _before, after) =>
+            !SLASH.getState(after)?.active && (transaction.getMeta(CHOSEN) === true || was),
+        },
+      }),
     ];
   },
   // The list does not outlast the focus of the text, nor the editing (FR-ED-18).
@@ -430,6 +456,8 @@ export function SlashPaletteList({ editor }: { editor: Editor }) {
       maxVisible={MOST_SHOWN}
       empty={NO_MATCH}
       status={counted(shown.options)}
+      // Said when the list closes: the package's "List closed.", and nothing after a choice (R44).
+      closed={shown.closed}
       // The pointer moved onto a row: marked, and no move by key.
       onActiveChange={(activeId) =>
         editor.view.dispatch(
