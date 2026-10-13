@@ -1492,8 +1492,8 @@ const lowlight = createLowlight(common);
  * every other way: nothing of its content or its language changes, and it
  * gains its colours again when it is shortened.
  *
- * AWAITS THE OWNER (the decision of 12 October 2026 leaves the number to the
- * measurements; its register row is pending). The library colours every code
+ * Approved by the owner on 12 October 2026 (R23; register row D133, pending): 50,000, as
+ * the measurements gave it. The library colours every code
  * block of the document again at each keystroke in any of them. Measured in
  * Chromium on 12 October 2026, one keystroke in a block of JavaScript: 27 ms
  * at 10 KB, 96 ms at 50 KB, 172 ms at 100 KB, 434 ms at 250 KB and 1.8 s at
