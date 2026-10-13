@@ -26,9 +26,17 @@ import {
   holdBinding,
   mayApply,
 } from '../../src/app/(app)/documents/[id]/extensions.tsx';
-import { TABLE_NO_ROOM, holdsTables } from '../../src/app/(app)/documents/[id]/extensions.tsx';
+import {
+  TABLE_NO_MORE,
+  TABLE_NO_ROOM,
+  holdsTables,
+  tableRefusal,
+} from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import {
   TABLE_CELLS_MOST,
+  TABLE_COUNT_MOST,
+  TABLE_FLOOD_MOST,
+  tableCount,
   TABLE_DEPTH_MOST,
   closeNested,
   tableRoom,
@@ -301,17 +309,18 @@ describe('the grid of a table', () => {
       [every(1, 60, { rowspan: 2 })[0]!, every(1, 41, {})[0]!],
     ],
   ])('gives every cell one row and one column where the grid is past the bound: %s', (_, grid) => {
-    const started = performance.now();
     const table = tableOf(grid);
     expect(new Set(spans(table).flat().map(String))).toEqual(new Set(['1,1']));
-    // The table library lays it out: no square is claimed twice, and it is done at once.
+    // The table library lays it out: no square is claimed twice.
     const map = TableMap.get(table);
     expect(map.width).toBeLessThanOrEqual(TABLE_MOST);
     expect(map.height).toBeLessThanOrEqual(TABLE_MOST);
     expect((map as unknown as { problems: unknown[] | null }).problems?.filter(Boolean) ?? []).toEqual(
       expect.not.arrayContaining([expect.objectContaining({ type: 'collision' })]),
     );
-    expect(performance.now() - started).toBeLessThan(2000);
+    // The work is held, and not the time: the library keeps one square for each place of the grid, and no more.
+    expect((map as unknown as { map: number[] }).map.length).toBe(map.width * map.height);
+    expect(map.width * map.height).toBeLessThanOrEqual(TABLE_MOST * TABLE_MOST);
   });
 
   it('holds wherever a table is made: from JSON and from markup as well', () => {
@@ -441,9 +450,12 @@ describe('the tables in the cells of a table (R32)', () => {
   it('never leaves out a cell of the table itself, and keeps the text of every one', () => {
     // A hundred by a hundred in each cell of a hundred by a hundred: 10^8 cells.
     const hostile = blockOfRows(rowsOf(100, 100));
-    const started = performance.now();
+    // The work is held, and not the time: the tables are made once each, the
+    // one that is in every cell and the one that holds them, and not once for each cell.
+    const made = vi.spyOn(schema.nodes.table!, 'create');
     const block = blockOfRows(rowsOf(100, 100, (row, column) => cellOf(p(`o${row}.${column}`), hostile)));
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(made.mock.calls.length).toBeLessThanOrEqual(2);
+    made.mockRestore();
     expect(tables(block)).toEqual([10_000]);
     expect(block.textContent).toContain('o0.0');
     expect(block.textContent).toContain('o99.99');
@@ -830,6 +842,1014 @@ describe('the tables in the cells of a table (R32)', () => {
       expect(one.fragment.toString()).toBe(two.fragment.toString());
     });
   });
+
+  // The owner's decision R58 of 13 October 2026: "refuse only, never delete,
+  // at 100; and a much higher threshold, in the thousands, against a flood."
+  describe('and the tables of one document (R58)', () => {
+    const small = (written: string) => blockOf([rowOf(written)], words(''));
+    const holding = (tables: number) => {
+      const document = new Y.Doc();
+      document
+        .getXmlFragment('default')
+        .push([
+          paragraph('KEEP-THIS'),
+          ...Array.from({ length: tables }, (_, at) => small(`t${at}`)),
+          paragraph('after'),
+        ]);
+      return document;
+    };
+    const bytes = (document: Y.Doc) => Buffer.from(Y.encodeStateAsUpdate(document)).toString('base64');
+    const yTables = (fragment: Y.XmlFragment) => fragment.toString().split('<tableblock').length - 1;
+    /** The words of the tables of the text, in their order. */
+    const texts = (editor: ReturnType<typeof open>) =>
+      editor
+        .text()
+        .textBetween(0, editor.text().content.size, ' ')
+        .split(' ')
+        .filter((word) => /^(t\d+|put-.*|in-.*)$/.test(word));
+    const firstCell = (fragment: Y.XmlFragment, table: number) =>
+      (((fragment.get(table + 1) as Y.XmlElement).get(0) as Y.XmlElement).get(0) as Y.XmlElement).get(
+        0,
+      ) as Y.XmlElement;
+
+    it('are a hundred for a writer, and two thousand against a flood', () => {
+      expect(TABLE_COUNT_MOST).toBe(100);
+      expect(TABLE_FLOOD_MOST).toBe(2000);
+    });
+
+    describe('the writer’s hundred: refused, and never taken out', () => {
+      const p = (written = '') => schema.node('paragraph', null, written ? [schema.text(written)] : []);
+      const table = () =>
+        schema.node('tableBlock', null, [
+          schema.node('table', null, [
+            schema.node('tableRow', null, [schema.node('tableCell', null, [p()])]),
+          ]),
+          schema.node('tableCaption'),
+        ]);
+      const state = (tables: number) =>
+        EditorState.create({
+          schema,
+          doc: schema.node('doc', null, [p('first'), ...Array.from({ length: tables }, table)]),
+        });
+
+      it('a change that leaves the document with more than a hundred, and more than it had, is not applied', () => {
+        const room = state(99);
+        expect(tableRefusal(room.tr.insert(0, table()), room.doc)).toBeNull();
+        const full = state(100);
+        expect(tableRefusal(full.tr.insert(0, table()), full.doc)).toBe('count');
+        // In a cell of a table it is one more all the same: after the paragraph of the first cell.
+        expect(full.doc.resolve(13).parent.type.name).toBe('tableCell');
+        expect(tableRefusal(full.tr.insert(13, table()), full.doc)).toBe('count');
+        expect(holdsTables(full.tr.insert(0, table()), full.doc)).toBe(false);
+        // What adds none is applied, and so is what takes one away, and what the binding brings.
+        expect(tableRefusal(full.tr.insertText('typed', 1), full.doc)).toBeNull();
+        expect(tableRefusal(full.tr.delete(7, 7 + table().nodeSize), full.doc)).toBeNull();
+        expect(
+          tableRefusal(
+            full.tr.insert(0, table()).setMeta(ySyncPluginKey, { isChangeOrigin: true }),
+            full.doc,
+          ),
+        ).toBeNull();
+      });
+
+      it('a document that holds more is written in and deleted from, and takes no table more', () => {
+        const more = state(150);
+        expect(tableRefusal(more.tr.insertText('typed', 1), more.doc)).toBeNull();
+        expect(tableRefusal(more.tr.delete(7, 7 + table().nodeSize), more.doc)).toBeNull();
+        // One taken away and one put in: no more than it had.
+        expect(tableRefusal(more.tr.delete(7, 7 + table().nodeSize).insert(0, table()), more.doc)).toBeNull();
+        expect(tableRefusal(more.tr.insert(0, table()), more.doc)).toBe('count');
+      });
+
+      it('is said in its own words, with the number as it is', () => {
+        // Written out here, and not taken from the code under test.
+        expect(TABLE_NO_MORE).toBe(
+          'The document has no room for another table. A document holds 100 tables.',
+        );
+        const closed = all.find((each) => each.name === 'closed') as unknown as {
+          config: {
+            addProseMirrorPlugins(this: {
+              editor: { isEditable: boolean };
+              options: { noRoom(words: string | null): void };
+            }): Plugin[];
+          };
+        };
+        const noRoom = vi.fn();
+        const [plugin] = closed.config.addProseMirrorPlugins.call({
+          editor: { isEditable: true },
+          options: { noRoom },
+        });
+        const full = EditorState.create({ schema, doc: state(100).doc, plugins: [plugin!] });
+        expect(full.applyTransaction(full.tr.insert(0, table())).transactions).toEqual([]);
+        expect(noRoom.mock.calls).toEqual([[TABLE_NO_MORE]]);
+      });
+
+      it('a stored document of a hundred and fifty opens with a hundred and fifty, and nothing is written to it', () => {
+        const document = holding(150);
+        const before = bytes(document);
+        const editor = open(document);
+        expect(tableCount(editor.text())).toBe(150);
+        expect(texts(editor)).toHaveLength(150);
+        expect(bytes(document)).toBe(before);
+        expect(editor.mended()).toBe(0);
+        expect(editor.unshown).not.toHaveBeenCalled();
+        // And it takes no table more from the writer.
+        const view = editor.typed();
+        expect(tableRefusal(view.state.tr.insert(0, table()), view.state.doc)).toBe('count');
+        expect(tableRefusal(view.state.tr.insertText('typed', 1), view.state.doc)).toBeNull();
+      });
+
+      it('two writers who each add the hundredth at once keep both tables', () => {
+        const document = holding(99);
+        const editor = open(document);
+        const [one, two] = [peerOf(document), peerOf(document)];
+        one.fragment.insert(1, [small('put-by-one')]);
+        two.fragment.insert(two.fragment.length - 1, [small('put-by-two')]);
+        one.send();
+        two.send();
+        expect(tableCount(editor.text())).toBe(101);
+        expect(yTables(editor.fragment)).toBe(101);
+        expect(texts(editor)).toEqual(expect.arrayContaining(['put-by-one', 'put-by-two', 't0', 't98']));
+        expect(editor.mended()).toBe(0);
+        expect(editor.undo.undoStack).toEqual([]);
+      });
+
+      it('what another client puts past a hundred stays, every table of it', () => {
+        const editor = open(holding(100));
+        const peer = peerOf(editor.fragment.doc!);
+        peer.fragment.insert(
+          1,
+          Array.from({ length: 400 }, (_, at) => small(`put-${at}`)),
+        );
+        peer.send();
+        expect(tableCount(editor.text())).toBe(500);
+        expect(texts(editor)).toHaveLength(500);
+        expect(editor.mended()).toBe(0);
+      });
+    });
+
+    describe('the flood: left out past two thousand, in the order of the document', () => {
+      it('keeps a document that holds two thousand, writes nothing to it, and makes its text for the page alone', () => {
+        const document = holding(2000);
+        const before = bytes(document);
+        // The work of making the text once, counted in the nodes the schema is asked for.
+        const asked = vi.spyOn(schema, 'node');
+        yXmlFragmentToProseMirrorRootNode(document.getXmlFragment('default'), schema);
+        const once = asked.mock.calls.length;
+        asked.mockClear();
+        const editor = open(document);
+        // Not once more for a count: the blocks of the shared document are inside the number.
+        expect(asked.mock.calls.length).toBe(once);
+        asked.mockRestore();
+        expect(tableCount(editor.text())).toBe(2000);
+        expect(bytes(document)).toBe(before);
+        expect(editor.mended()).toBe(0);
+      });
+
+      it('leaves out the tables past it, the last in the order of the document, one in a cell counted in its place; the writer’s text stays', () => {
+        const editor = open(holding(1999));
+        const peer = peerOf(editor.fragment.doc!);
+        peer.fragment.doc!.transact(() => {
+          // Nine at the end, one in the cell of the eleventh, and one at the top: 2,010.
+          peer.fragment.insert(
+            peer.fragment.length - 1,
+            Array.from({ length: 9 }, (_, at) => small(`put-last-${at}`)),
+          );
+          firstCell(peer.fragment, 10).push([small('in-a-cell')]);
+          peer.fragment.insert(1, [small('put-first')]);
+        });
+        expect(yTables(peer.fragment)).toBe(2010);
+        peer.send();
+
+        expect(editor.unshown).not.toHaveBeenCalled();
+        expect(tableCount(editor.text())).toBe(2000);
+        expect(yTables(editor.fragment)).toBe(2000);
+        // The page was never handed more than the number.
+        expect(editor.most()).toBe(2000);
+        // The first two thousand as they stand: the one put first, eleven of
+        // the writer's, the one in the cell of the eleventh, and 1,987 more.
+        const kept = texts(editor);
+        expect(kept.slice(0, 14)).toEqual([
+          'put-first',
+          ...Array.from({ length: 11 }, (_, at) => `t${at}`),
+          'in-a-cell',
+          't11',
+        ]);
+        expect(kept.at(-1)).toBe('t1997');
+        expect(kept).toHaveLength(2000);
+        for (const written of ['KEEP-THIS', 'after']) {
+          expect(editor.text().textContent).toContain(written);
+          expect(editor.fragment.toString()).toContain(written);
+        }
+        expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+        // Not this member's change.
+        expect(editor.undo.undoStack).toEqual([]);
+      });
+
+      it('is taken out the same by every client, of a document that is opened with more, and the page is handed no more', () => {
+        const document = holding(2500);
+        const second = new Y.Doc();
+        Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+        const [one, two] = [open(document), open(second)];
+        Y.applyUpdate(document, Y.encodeStateAsUpdate(second));
+        Y.applyUpdate(second, Y.encodeStateAsUpdate(document));
+        for (const editor of [one, two]) {
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.most()).toBe(2000);
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(texts(editor).at(-1)).toBe('t1999');
+          expect(editor.text().textContent).toContain('after');
+        }
+        expect(one.fragment.toString()).toBe(two.fragment.toString());
+      });
+
+      // The review of pull request 35, S1: where the last blocks of the shared
+      // document were ones the schema leaves out, the text was made again for
+      // each of them: 802 mendings and half a minute for eight hundred.
+      it.each([0, 50, 200, 800])(
+        'makes the text a fixed number of times, and mends a fixed number of times, whatever follows the tables: 2,001 and %i blocks the schema leaves out',
+        (strays) => {
+          const flooded = () => {
+            const document = holding(2001);
+            // After everything else: a paragraph that holds blocks of a table, which no paragraph may.
+            document.getXmlFragment('default').push([
+              element(
+                'paragraph',
+                {},
+                Array.from({ length: strays }, (_, at) => small(`x${at}`)),
+              ),
+            ]);
+            return document;
+          };
+          // The work of making the text once, counted in the nodes the schema is asked for.
+          const asked = vi.spyOn(schema, 'node');
+          yXmlFragmentToProseMirrorRootNode(flooded().getXmlFragment('default'), schema);
+          const once = asked.mock.calls.length;
+          asked.mockClear();
+          const document = flooded();
+          const editor = open(document);
+          const work = asked.mock.calls.length;
+          asked.mockRestore();
+          // To count, to count again after the deletion, and for the page: four times at most,
+          // whatever follows. Before, once more for each block that followed.
+          expect(work).toBeLessThanOrEqual(4 * once);
+          // One deletion for the flood, which holds deletions and nothing else; and after it,
+          // where blocks follow that the schema leaves out, the one ordinary mending of those.
+          expect(editor.mended()).toBe(strays === 0 ? 1 : 2);
+          expect(Y.decodeUpdate(editor.mends()[0]!).structs).toEqual([]);
+          // The same two thousand as before, and nothing of what followed them.
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.most()).toBe(2000);
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(yTables(editor.fragment)).toBe(2000);
+          expect(texts(editor).at(-1)).toBe('t1999');
+          expect(editor.text().textContent).toContain('KEEP-THIS');
+          expect(editor.text().textContent).toContain('after');
+          expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+          // And a second browser, which opens the document as it was, comes to the same.
+          const second = open(flooded());
+          expect(second.fragment.toString()).toBe(editor.fragment.toString());
+          Y.applyUpdate(document, Y.encodeStateAsUpdate(second.fragment.doc!));
+          expect(tableCount(editor.text())).toBe(2000);
+        },
+      );
+
+      // The binding does not hear the flood's deletions, so the whole text is
+      // made after them: what goes may stand far from what arrived.
+      it('takes tables out of a cell that the change which arrived did not touch, and the text holds what the shared document holds', () => {
+        // 1,991 tables, the last with nine in its cell: two thousand, and all of them stay.
+        const document = holding(1991);
+        firstCell(document.getXmlFragment('default'), 1990).push(
+          Array.from({ length: 9 }, (_, at) => small(`in-${at}`)),
+        );
+        const editor = open(document);
+        expect(tableCount(editor.text())).toBe(2000);
+        expect(editor.mended()).toBe(0);
+        // Five arrive at the top: the last five in the order of the document are in that cell.
+        const peer = peerOf(document);
+        peer.fragment.insert(
+          1,
+          Array.from({ length: 5 }, (_, at) => small(`put-${at}`)),
+        );
+        peer.send();
+        expect(editor.unshown).not.toHaveBeenCalled();
+        expect(editor.most()).toBe(2000);
+        expect(tableCount(editor.text())).toBe(2000);
+        expect(yTables(editor.fragment)).toBe(2000);
+        expect(texts(editor).slice(-5)).toEqual(['t1990', 'in-0', 'in-1', 'in-2', 'in-3']);
+        expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+      });
+
+      // Taking a table out of a cell makes room in the table round it, and a
+      // table that the bound on cells had left out is then kept in its place.
+      // So the count is taken again after the deletion, three times at most.
+      describe('counts again after the deletion, where a table that went made room for another', () => {
+        /** 1,990 tables, and one of 9,900 cells that has room for a hundred more, with `inCells` tables of one cell in its cells. */
+        const crowded = (inCells: number) => {
+          const document = holding(1990);
+          const fragment = document.getXmlFragment('default');
+          fragment.insert(fragment.length - 1, [
+            blockOf(
+              Array.from({ length: 99 }, (_, row) =>
+                element(
+                  'tableRow',
+                  {},
+                  Array.from({ length: 100 }, (_, column) =>
+                    element('tableCell', {}, [
+                      paragraph(''),
+                      ...(row * 100 + column < inCells ? [small(`in-${row * 100 + column}`)] : []),
+                    ]),
+                  ),
+                ),
+              ),
+              words(''),
+            ),
+          ]);
+          return document;
+        };
+
+        it('a second deletion brings the document inside the number, and the page is handed no more', () => {
+          // A hundred of the 150 are kept at first: 2,091. With 91 gone, the other 59 are all kept: 2,050.
+          const editor = open(crowded(150));
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.most()).toBe(2000);
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(texts(editor).at(-1)).toBe('in-8');
+          expect(editor.text().textContent).toContain('t1989');
+          expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+        });
+
+        // The statement of a document that cannot be shown says "Nothing in the
+        // document was changed": so nothing is, where no deletion is known to do.
+        it('where three counts would not bring it inside the number, nothing is deleted: the document is said to be one that cannot be shown, and is as it was', () => {
+          // Of 300, a hundred are kept however many go: 2,091 at each of the three counts.
+          const document = crowded(300);
+          const before = bytes(document);
+          const editor = open(document);
+          expect(editor.unshown).toHaveBeenCalledTimes(1);
+          expect(editor.most()).toBe(0);
+          expect(editor.mended()).toBe(0);
+          expect(bytes(document)).toBe(before);
+          expect(yTables(editor.fragment)).toBe(1990 + 1 + 300);
+        });
+      });
+
+      // The review at f305ee1, S1: what was past the number was counted in
+      // tables and what went was counted in blocks. A hundred of the writer's
+      // tables and a table of 2,500 cells that each hold one: 2,601, and 601
+      // to go. The large table is one block, and its 2,500 are not found, being
+      // made again by the rule on depth: so the last 601 blocks that were found
+      // were all there were, and nothing was left.
+      describe('counts what goes in tables, and not in blocks', () => {
+        /** A table of 2,500 cells, each holding a table that holds a table a level too deep. */
+        const large = () =>
+          blockOf(
+            Array.from({ length: 25 }, () =>
+              element(
+                'tableRow',
+                {},
+                Array.from({ length: 100 }, () =>
+                  element('tableCell', {}, [
+                    paragraph(''),
+                    blockOf(
+                      [
+                        element('tableRow', {}, [
+                          element('tableCell', {}, [paragraph(''), small('too-deep')]),
+                        ]),
+                      ],
+                      words(''),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+            words('the large one'),
+          );
+        const with100 = (where: 'before' | 'after') => {
+          const document = holding(100);
+          const fragment = document.getXmlFragment('default');
+          fragment.insert(where === 'before' ? 1 : fragment.length - 1, [large()]);
+          return document;
+        };
+
+        it.each(['before', 'after'] as const)(
+          'a table that holds 2,500 goes alone, %s the writer’s hundred, and every one of those stays',
+          (where) => {
+            const editor = open(with100(where));
+            expect(editor.unshown).not.toHaveBeenCalled();
+            expect(editor.most()).toBe(100);
+            expect(tableCount(editor.text())).toBe(100);
+            expect(texts(editor)).toEqual(Array.from({ length: 100 }, (_, at) => `t${at}`));
+            expect(editor.text().textContent).not.toContain('the large one');
+            expect(editor.text().textContent).toContain('KEEP-THIS');
+            // One block went, in one change that holds deletions alone.
+            expect(editor.mended()).toBe(1);
+            expect(Y.decodeUpdate(editor.mends()[0]!).structs).toEqual([]);
+            expect(yTables(editor.fragment)).toBe(100);
+            // And a second browser comes to the same.
+            const second = open(with100(where));
+            expect(texts(second)).toEqual(texts(editor));
+          },
+        );
+
+        it('takes the tables in the cells of a table one by one where they are found, and leaves the table they stand in: exactly two thousand stay', () => {
+          // 1,989 tables, then one that holds thirty in its cells (31), then ten more: 2,030.
+          const document = holding(1989);
+          const fragment = document.getXmlFragment('default');
+          fragment.insert(fragment.length - 1, [
+            blockOf(
+              [
+                element(
+                  'tableRow',
+                  {},
+                  Array.from({ length: 30 }, (_, at) =>
+                    element('tableCell', {}, [paragraph(''), small(`in-${at}`)]),
+                  ),
+                ),
+              ],
+              words('holds-thirty'),
+            ),
+            ...Array.from({ length: 10 }, (_, at) => small(`put-last-${at}`)),
+          ]);
+          const editor = open(document);
+          expect(editor.unshown).not.toHaveBeenCalled();
+          // Thirty are past it: the ten last, and the last twenty of the thirty in
+          // the cells. The table they stood in stays, with the first ten.
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(texts(editor).slice(-11)).toEqual([
+            't1988',
+            ...Array.from({ length: 10 }, (_, at) => `in-${at}`),
+          ]);
+          expect(editor.text().textContent).toContain('holds-thirty');
+          expect(editor.text().textContent).not.toContain('put-last');
+          expect(editor.mended()).toBe(1);
+          expect(Y.decodeUpdate(editor.mends()[0]!).structs).toEqual([]);
+        });
+      });
+
+      // The review at 02063b5: where a block and blocks in its cells were both
+      // taken, its tables were counted twice, the deletion fell short at every
+      // count, and the document was left unshown, with every table found.
+      // Now every table has one number, in the order of the document, a table
+      // before the tables in its cells; and those past 2,000 go.
+      describe('keeps exactly the first two thousand tables in the order of the document', () => {
+        /** A table of a hundred cells in one row, each holding a table: 101 tables. */
+        const of101 = (name: string) =>
+          blockOf(
+            [
+              element(
+                'tableRow',
+                {},
+                Array.from({ length: 100 }, (_, at) =>
+                  element('tableCell', {}, [paragraph(''), small(`${name}n${at}.`)]),
+                ),
+              ),
+            ],
+            words(`${name}outer.`),
+          );
+        const has = (editor: ReturnType<typeof open>, written: string) =>
+          editor.text().textContent.includes(written);
+        /** What every such document comes to, in two browsers that open it, and in one that opens it afterwards. */
+        const shown = (make: () => Y.Doc) => {
+          const document = make();
+          const editor = open(document);
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.most()).toBe(2000);
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(yTables(editor.fragment)).toBe(2000);
+          // One change, which holds deletions alone.
+          expect(editor.mends().map((update) => Y.decodeUpdate(update).structs)).toEqual([[]]);
+          expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+          const second = open(make());
+          expect(second.fragment.toString()).toBe(editor.fragment.toString());
+          // A browser that opens it afterwards writes nothing.
+          const later = new Y.Doc();
+          Y.applyUpdate(later, Y.encodeStateAsUpdate(document));
+          const before = bytes(later);
+          const third = open(later);
+          expect(third.mended()).toBe(0);
+          expect(bytes(later)).toBe(before);
+          expect(tableCount(third.text())).toBe(2000);
+          return editor;
+        };
+
+        it('twenty-five tables of 101 in the middle of the writer’s hundred: the first fifty of the writer’s, nineteen whole, and the twentieth with thirty of its hundred', () => {
+          const editor = shown(() => {
+            const document = holding(100);
+            // After the first line and fifty of the writer's tables.
+            document.getXmlFragment('default').insert(
+              51,
+              Array.from({ length: 25 }, (_, at) => of101(`L${at}`)),
+            );
+            return document;
+          });
+          // 50, and 19 of 101, are 1,969; the twentieth is 1,970, and the tables in its cells 1,971 to 2,070.
+          expect(texts(editor)).toEqual(Array.from({ length: 50 }, (_, at) => `t${at}`));
+          expect([has(editor, 'L18outer.'), has(editor, 'L18n99.')]).toEqual([true, true]);
+          expect([has(editor, 'L19outer.'), has(editor, 'L19n29.'), has(editor, 'L19n30.')]).toEqual([
+            true,
+            true,
+            false,
+          ]);
+          expect(has(editor, 'L20outer.')).toBe(false);
+          expect(has(editor, 'KEEP-THIS') && has(editor, 'after')).toBe(true);
+        });
+
+        it('three groups of eight tables of 101 among four single ones: the first three single ones, two groups, and of the third group three whole and one with seventy-seven', () => {
+          const editor = shown(() => {
+            const document = new Y.Doc();
+            document
+              .getXmlFragment('default')
+              .push([
+                paragraph('KEEP-THIS'),
+                ...[0, 1, 2].flatMap((group) => [
+                  small(`single${group}.`),
+                  ...Array.from({ length: 8 }, (_, at) => of101(`G${group}L${at}`)),
+                ]),
+                small('single3.'),
+                paragraph('after'),
+              ]);
+            return document;
+          });
+          // 1 and 808, twice, are 1,618; the third single one is 1,619; the fourth table of the third
+          // group is 1,923, and the tables in its cells 1,924 to 2,023.
+          expect(['single0.', 'single1.', 'single2.', 'single3.'].map((each) => has(editor, each))).toEqual([
+            true,
+            true,
+            true,
+            false,
+          ]);
+          expect([has(editor, 'G1L7n99.'), has(editor, 'G2L2n99.')]).toEqual([true, true]);
+          expect([has(editor, 'G2L3outer.'), has(editor, 'G2L3n76.'), has(editor, 'G2L3n77.')]).toEqual([
+            true,
+            true,
+            false,
+          ]);
+          expect(has(editor, 'G2L4outer.')).toBe(false);
+        });
+
+        it('a table past the number and the tables in its cells go together, once: two thousand single ones, a table that holds three, and one more', () => {
+          const editor = shown(() => {
+            const document = holding(2000);
+            const fragment = document.getXmlFragment('default');
+            fragment.insert(fragment.length - 1, [
+              blockOf(
+                [
+                  element(
+                    'tableRow',
+                    {},
+                    Array.from({ length: 3 }, (_, at) =>
+                      element('tableCell', {}, [paragraph(''), small(`in-${at}`)]),
+                    ),
+                  ),
+                ],
+                words('holds-three'),
+              ),
+              small('put-last'),
+            ]);
+            return document;
+          });
+          expect(texts(editor)).toEqual(Array.from({ length: 2000 }, (_, at) => `t${at}`));
+          expect(has(editor, 'holds-three')).toBe(false);
+        });
+
+        it('several tables whose cells hold tables that were made again, among single ones: each goes whole where one of its tables is past the number, and what follows is numbered without it', () => {
+          /** A table of `cells` cells, each holding a table that holds a table a level too deep: made again, and not found. */
+          const remade = (name: string, cells: number) =>
+            blockOf(
+              [
+                element(
+                  'tableRow',
+                  {},
+                  Array.from({ length: cells }, () =>
+                    element('tableCell', {}, [
+                      paragraph(''),
+                      blockOf(
+                        [
+                          element('tableRow', {}, [
+                            element('tableCell', {}, [paragraph(''), small('too-deep')]),
+                          ]),
+                        ],
+                        words(''),
+                      ),
+                    ]),
+                  ),
+                ),
+              ],
+              words(`${name}.`),
+            );
+          const document = holding(1900);
+          const fragment = document.getXmlFragment('default');
+          // After the writer's 1,900: one of 51 (to 1,951), one of 81 (to 2,032), one of 41, and five single ones.
+          fragment.insert(fragment.length - 1, [
+            remade('first', 50),
+            remade('second', 80),
+            remade('third', 40),
+            ...Array.from({ length: 5 }, (_, at) => small(`put-last-${at}`)),
+          ]);
+          const editor = open(document);
+          expect(editor.unshown).not.toHaveBeenCalled();
+          // The second straddles the number and cannot lose the tables in its cells one by one: it
+          // goes whole. Then the third is 1,952 to 1,992, and the five are 1,993 to 1,997.
+          expect(tableCount(editor.text())).toBe(1997);
+          expect(['first.', 'second.', 'third.'].map((each) => has(editor, each))).toEqual([
+            true,
+            false,
+            true,
+          ]);
+          expect(texts(editor).slice(-6)).toEqual([
+            't1899',
+            ...Array.from({ length: 5 }, (_, at) => `put-last-${at}`),
+          ]);
+          expect(editor.most()).toBeLessThanOrEqual(2000);
+        });
+      });
+
+      // The re-review of pull request 35: the text without the tables was
+      // written over the shared document by the library's comparison, which
+      // deleted and put in again everything between the first table that went
+      // and the last. Of twenty paragraphs, in two browsers at once, ten were
+      // doubled and six were gone; three of twenty-two kept their items; a
+      // third writer's edit was lost; the writer's typing was doubled, past undo.
+      describe('takes the tables out and touches nothing else', () => {
+        const table = (written: string) => blockOf([rowOf(written)], words(`${written} caption`));
+        /** A writer's document: a table and a paragraph, `tables` times over, between a first line and a last. */
+        const written = (tables: number) => {
+          const document = new Y.Doc();
+          document
+            .getXmlFragment('default')
+            .push([
+              paragraph('top'),
+              ...Array.from({ length: tables }, (_, at) => [
+                table(`W${at}x`),
+                paragraph(`honest ${at}.`),
+              ]).flat(),
+              paragraph('end'),
+            ]);
+          return document;
+        };
+        const copyOf = (document: Y.Doc, client?: number) => {
+          const copy = new Y.Doc();
+          if (client !== undefined) copy.clientID = client;
+          Y.applyUpdate(copy, Y.encodeStateAsUpdate(document));
+          return copy;
+        };
+        /** Every document hears every other, until none has anything new. */
+        const exchange = (...documents: Y.Doc[]) => {
+          for (let round = 0; round < 10; round += 1) {
+            const before = documents.map((each) => bytes(each));
+            for (const from of documents)
+              for (const to of documents)
+                if (from !== to)
+                  Y.applyUpdate(to, Y.encodeStateAsUpdate(from, Y.encodeStateVector(to)), 'net');
+            if (documents.every((each, at) => bytes(each) === before[at])) return;
+          }
+          throw new Error('the documents did not settle');
+        };
+        const times = (text: string, word: string) => text.split(word).length - 1;
+        const item = (type: { _item: Y.Item | null }) => `${type._item!.id.client}:${type._item!.id.clock}`;
+        /** The paragraphs that stand directly in a shared document, each as its item and the item of its text. */
+        const items = (fragment: Y.XmlFragment) =>
+          (fragment.toArray() as Y.XmlElement[])
+            .filter((each) => each.nodeName === 'paragraph')
+            .map((each) => `${item(each)}/${item(each.get(0) as Y.XmlText)}`);
+        const type = (editor: ReturnType<typeof open>, inWords: string, typed: string) => {
+          const view = editor.typed();
+          let at = -1;
+          view.state.doc.descendants((node, pos) => {
+            if (at < 0 && node.type.name === 'paragraph' && node.textContent === inWords) at = pos + 1;
+          });
+          view.dispatch(view.state.tr.insertText(typed, at));
+          editor.binding._prosemirrorChanged(view.state.doc);
+        };
+        const deletionsOnly = (editor: ReturnType<typeof open>) => {
+          expect(editor.mends().length).toBeGreaterThan(0);
+          for (const update of editor.mends()) expect(Y.decodeUpdate(update).structs).toEqual([]);
+        };
+
+        it('two browsers at once, a third writer typing, and the writer’s undo: every paragraph once, as the item it was', () => {
+          const origin = written(20);
+          const [da, db, dc] = [copyOf(origin), copyOf(origin), copyOf(origin)];
+          const [a, b, c] = [open(da), open(db), open(dc)];
+          const before = items(a.fragment);
+          expect(before).toHaveLength(22);
+          // The writer has typed in one of the paragraphs, and can undo it.
+          type(a, 'honest 7.', 'A-TYPED ');
+          exchange(da, db, dc);
+          // Another client puts two thousand tables at the top.
+          const flood = copyOf(da, 1);
+          flood.transact(() =>
+            flood.getXmlFragment('default').insert(
+              1,
+              Array.from({ length: 2000 }, (_, at) => table(`f${at}`)),
+            ),
+          );
+          const update = Y.encodeStateAsUpdate(flood, Y.encodeStateVector(da));
+          // Both browsers receive it before either hears the other; the third writer is typing meanwhile.
+          Y.applyUpdate(da, update, 'net');
+          Y.applyUpdate(db, update, 'net');
+          type(c, 'honest 12.', 'C-CONCURRENT ');
+          exchange(da, db, dc, flood);
+
+          for (const editor of [a, b, c]) {
+            const text = editor.text().textContent;
+            expect(editor.unshown).not.toHaveBeenCalled();
+            expect(tableCount(editor.text())).toBe(2000);
+            // The first two thousand in the order of the document are the ones put at the top.
+            expect(times(text, 'f1999 caption')).toBe(1);
+            expect(text).not.toContain('W0x');
+            expect(Array.from({ length: 20 }, (_, at) => times(text, `honest ${at}.`))).toEqual(
+              Array(20).fill(1),
+            );
+            expect([times(text, 'top'), times(text, 'end')]).toEqual([1, 1]);
+            expect([times(text, 'A-TYPED'), times(text, 'C-CONCURRENT')]).toEqual([1, 1]);
+            // Every paragraph is the item it was, and so is its text.
+            expect(items(editor.fragment)).toEqual(before);
+            expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+          }
+          expect(new Set([a, b, c].map((editor) => editor.fragment.toString())).size).toBe(1);
+          // What the two browsers wrote for the flood holds deletions, and nothing that was put in.
+          deletionsOnly(a);
+          deletionsOnly(b);
+          expect(c.mended()).toBe(0);
+
+          // The writer's undo is still the writer's: it takes back what the writer typed, once.
+          expect(a.undo.undoStack).toHaveLength(1);
+          a.undo.undo();
+          exchange(da, db, dc, flood);
+          for (const editor of [a, b, c]) {
+            const text = editor.text().textContent;
+            expect(times(text, 'A-TYPED')).toBe(0);
+            expect(times(text, 'honest 7.')).toBe(1);
+            expect(times(text, 'C-CONCURRENT')).toBe(1);
+          }
+        });
+
+        it('two floods of fifteen hundred that arrive in opposite orders in two browsers: the same two thousand, and every paragraph once', () => {
+          const origin = written(10);
+          const [da, db] = [copyOf(origin), copyOf(origin)];
+          const [a, b] = [open(da), open(db)];
+          const before = items(a.fragment);
+          const [one, two] = [copyOf(origin, 1), copyOf(origin, 2)];
+          const fifteenHundred = (name: string) =>
+            Array.from({ length: 1500 }, (_, at) => table(`${name}${at}`));
+          one.transact(() => one.getXmlFragment('default').insert(1, fifteenHundred('one')));
+          two.transact(() => two.getXmlFragment('default').insert(8, fifteenHundred('two')));
+          Y.applyUpdate(da, Y.encodeStateAsUpdate(one), 'net');
+          Y.applyUpdate(db, Y.encodeStateAsUpdate(two), 'net');
+          Y.applyUpdate(da, Y.encodeStateAsUpdate(two), 'net');
+          Y.applyUpdate(db, Y.encodeStateAsUpdate(one), 'net');
+          exchange(da, db, one, two);
+          for (const editor of [a, b]) {
+            const text = editor.text().textContent;
+            expect(editor.unshown).not.toHaveBeenCalled();
+            expect(tableCount(editor.text())).toBe(2000);
+            expect(Array.from({ length: 10 }, (_, at) => times(text, `honest ${at}.`))).toEqual(
+              Array(10).fill(1),
+            );
+            expect([times(text, 'top'), times(text, 'end')]).toEqual([1, 1]);
+            expect(items(editor.fragment)).toEqual(before);
+            deletionsOnly(editor);
+          }
+          expect(a.fragment.toString()).toBe(b.fragment.toString());
+        });
+
+        // KNOWN, AND NOT THIS BRANCH'S TO MEND (measured for the re-review of pull
+        // request 35, 13 October 2026, and reported to the owner). The ordinary
+        // mending, of what the schema leaves out of a node that stays, is written
+        // by the same comparison of the library (`holdBinding`, `mend`), and does
+        // what the flood's did: where the children that go stand BETWEEN children
+        // that stay, those between the first and the last that go are deleted and
+        // put in again by each browser that mends. Measured here, and the same
+        // for the items of a list and the rows of a table: ten paragraphs of a
+        // quotation with a row between each two, two browsers at once, a third
+        // writer typing in one of them. Of the ten, four are there twice and four
+        // are gone; six of ten are the items they were; the third writer's words
+        // are lost. Every browser comes to that same result.
+        //
+        // The test states what should hold, and is marked as one that fails:
+        // it passes the day the mending is made to delete and nothing else.
+        it.fails(
+          'the ordinary mending of children the schema leaves out, between children that stay, keeps each of those once',
+          () => {
+            const origin = new Y.Doc();
+            origin.getXmlFragment('default').push([
+              paragraph('top'),
+              element(
+                'blockquote',
+                {},
+                Array.from({ length: 10 }, (_, at) => paragraph(`honest ${at}.`)),
+              ),
+              paragraph('end'),
+            ]);
+            const [da, db, dc] = [copyOf(origin), copyOf(origin), copyOf(origin)];
+            const [a, b, c] = [open(da), open(db), open(dc)];
+            const quoted = (fragment: Y.XmlFragment) => fragment.get(1) as Y.XmlElement;
+            const before = (quoted(a.fragment).toArray() as Y.XmlElement[]).map(item);
+            // A client that is no editor puts a row, which no quotation holds, between each two.
+            const hostile = copyOf(origin, 1);
+            hostile.transact(() => {
+              for (let at = 9; at >= 1; at -= 1)
+                quoted(hostile.getXmlFragment('default')).insert(at, [rowOf('stray')]);
+            });
+            const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
+            Y.applyUpdate(da, update, 'net');
+            Y.applyUpdate(db, update, 'net');
+            type(c, 'honest 5.', 'C-TYPED ');
+            exchange(da, db, dc, hostile);
+            const text = a.text().textContent;
+            expect(new Set([a, b, c].map((editor) => editor.fragment.toString())).size).toBe(1);
+            expect(text).not.toContain('stray');
+            // Measured: 1,2,0,2,0,2,0,2,0,1.
+            expect(Array.from({ length: 10 }, (_, at) => times(text, `honest ${at}.`))).toEqual(
+              Array(10).fill(1),
+            );
+            // Measured: 0.
+            expect(times(text, 'C-TYPED')).toBe(1);
+            // Measured: six of the ten, among fourteen.
+            expect((quoted(a.fragment).toArray() as Y.XmlElement[]).map(item)).toEqual(before);
+          },
+        );
+      });
+
+      // The review of pull request 34, B1: a block of a table that another rule
+      // leaves out counted towards the bound, and honest tables went for it.
+      describe('counts only the tables the schema keeps: each of these leaves all ten of the writer’s', () => {
+        const ten = (first = rowOf('t0')) => {
+          const document = new Y.Doc();
+          document
+            .getXmlFragment('default')
+            .push([
+              paragraph('KEEP-THIS'),
+              blockOf([first], words('')),
+              ...Array.from({ length: 9 }, (_, at) => small(`t${at + 1}`)),
+              paragraph('after'),
+            ]);
+          return document;
+        };
+        const three = (count: number) => Array.from({ length: count }, (_, at) => small(`x${at}`));
+        const CASES: [string, (fragment: Y.XmlFragment) => void, number][] = [
+          [
+            'three thousand blocks of a table in a paragraph and in a caption',
+            (fragment) => {
+              (fragment.get(0) as Y.XmlElement).push(three(1500));
+              ((fragment.get(1) as Y.XmlElement).get(1) as Y.XmlElement).push(three(1500));
+            },
+            10,
+          ],
+          [
+            'three thousand tables a level too deep',
+            (fragment) =>
+              firstCell(fragment, 0).push([
+                blockOf([
+                  element('tableRow', {}, [element('tableCell', {}, [paragraph('two'), ...three(3000)])]),
+                ]),
+              ]),
+            11,
+          ],
+          [
+            'three thousand tables in the cells of a table that has no room for one',
+            (fragment) => {
+              const rows = (
+                (fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement
+              ).toArray() as Y.XmlElement[];
+              for (const [at, block] of three(3000).entries())
+                (rows[Math.floor(at / 100)]!.get(at % 100) as Y.XmlElement).push([block]);
+            },
+            10,
+          ],
+        ];
+
+        it.each(CASES)('%s', (name, put, tables) => {
+          // For the third, the writer's first table is as large as a table may be.
+          const full = name.includes('no room');
+          const document = full
+            ? (() => {
+                const made = ten();
+                const table = (made.getXmlFragment('default').get(1) as Y.XmlElement).get(0) as Y.XmlElement;
+                table.delete(0, table.length);
+                table.push(
+                  Array.from({ length: 100 }, (_, row) =>
+                    rowOf(...Array.from({ length: 100 }, (_, column) => (row + column ? '' : 't0'))),
+                  ),
+                );
+                return made;
+              })()
+            : ten();
+          const editor = open(document);
+          const peer = peerOf(document);
+          peer.fragment.doc!.transact(() => put(peer.fragment));
+          expect(yTables(peer.fragment)).toBeGreaterThanOrEqual(3010);
+          peer.send();
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(tableCount(editor.text())).toBe(tables);
+          expect(texts(editor).filter((word) => /^t\d$/.test(word))).toEqual(
+            Array.from({ length: 10 }, (_, at) => `t${at}`),
+          );
+          expect(editor.text().textContent).toContain('after');
+          // What the schema left out is gone from the shared document, by the rule that left it out.
+          expect(yTables(editor.fragment)).toBe(tables);
+        });
+      });
+    });
+
+    // The review of pull request 34: a browser that cannot edit the document wrote a mending to it.
+    describe('and a browser that cannot edit the document', () => {
+      it('writes no mending: the text is made without what the schema leaves out, and the shared document is as it arrived', async () => {
+        const document = holding(3);
+        const editor = open(document, false);
+        const peer = peerOf(document);
+        const table = (peer.fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement;
+        table.push([paragraph('not a row')]);
+        peer.fragment.push([rowOf('a row without a table')]);
+        peer.send();
+        expect(editor.unshown).not.toHaveBeenCalled();
+        expect(editor.text().textContent).not.toContain('not a row');
+        expect(editor.mended()).toBe(0);
+        expect(editor.fragment.toString()).toContain('not a row');
+        expect(editor.fragment.toString()).toContain('a row without a table');
+        // More arrives, and still nothing is written.
+        peer.fragment.push([paragraph('more')]);
+        peer.send();
+        expect(editor.mended()).toBe(0);
+
+        // When the text can be edited again, what was owed is mended, before anything else.
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.mended()).toBeGreaterThan(0);
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        peer.fragment.insert(0, [paragraph('and more')]);
+        peer.send();
+        expect(editor.mended()).toBeGreaterThan(0);
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        expect(editor.fragment.toString()).not.toContain('a row without a table');
+        expect(editor.text().textContent).toContain('and more');
+        expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+      });
+
+      it('mends what is owed before what the member types is written, so that it is not the member’s to undo', async () => {
+        const document = holding(1);
+        const editor = open(document, false);
+        const peer = peerOf(document);
+        ((peer.fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).push([paragraph('not a row')]);
+        peer.send();
+        expect(editor.mended()).toBe(0);
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.mended()).toBeGreaterThan(0);
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        expect(editor.undo.undoStack).toEqual([]);
+        const view = editor.typed();
+        view.dispatch(view.state.tr.insertText('typed ', 1));
+        editor.binding._prosemirrorChanged(view.state.doc);
+        expect(editor.fragment.toString()).toContain('typed KEEP-THIS');
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        expect(editor.mended()).toBeGreaterThan(0);
+        expect(editor.undo.undoStack).toHaveLength(1);
+        editor.undo.undo();
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        expect(editor.fragment.toString()).not.toContain('typed');
+      });
+
+      // The review of pull request 35, S5: nothing held it to once.
+      it('mends what is owed once: the text is not made again at every later change of the view', async () => {
+        const document = holding(1);
+        const editor = open(document, false);
+        const peer = peerOf(document);
+        ((peer.fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).push([paragraph('not a row')]);
+        peer.send();
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        const [mended, dispatched] = [editor.mended(), editor.dispatched()];
+        expect(mended).toBeGreaterThan(0);
+        // The view changes again and again, as it does at every key: nothing more is made or written.
+        for (let changes = 0; changes < 5; changes += 1) editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.dispatched()).toBe(dispatched);
+        expect(editor.mended()).toBe(mended);
+        // Not editable for a while, with nothing left out meanwhile: nothing is owed when it is editable again.
+        editor.setEditable(false);
+        peer.fragment.push([paragraph('more')]);
+        peer.send();
+        const then = editor.dispatched();
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.dispatched()).toBe(then);
+        expect(editor.mended()).toBe(mended);
+      });
+
+      it('is told that a document past the flood cannot be shown, and takes no table out of it', () => {
+        const document = holding(2500);
+        const before = bytes(document);
+        const editor = open(document, false);
+        expect(editor.unshown).toHaveBeenCalledTimes(1);
+        expect(editor.most()).toBe(0);
+        expect(editor.mended()).toBe(0);
+        expect(bytes(document)).toBe(before);
+      });
+    });
+  });
 });
 
 // What a client that is no editor puts into a shared document.
@@ -864,27 +1884,55 @@ const blockOf = (rows: Y.XmlElement[], caption = words('caption')) =>
  * (`holdBinding`), with what stands in for the view: the state, and the way a
  * transaction reaches it. No page is needed for what is tested here.
  */
-function open(document: Y.Doc) {
+function open(document: Y.Doc, editable = true) {
   const fragment = document.getXmlFragment('default');
   let state = EditorState.create({ schema, plugins: [ySyncPlugin(fragment)] });
+  // The most tables of any text the view was handed: what a page would have laid out. And how often it was handed one.
+  let dispatched = 0;
+  let most = 0;
+  // What this browser wrote to the shared document as a mending.
+  const mended: Uint8Array[] = [];
+  document.on('update', (update: Uint8Array, origin: unknown) => {
+    if (origin === 'mend') mended.push(update);
+  });
   const view = {
     get state() {
       return state;
     },
     dispatch(transaction: Transaction) {
+      most = Math.max(most, tableCount(transaction.doc));
+      dispatched += 1;
       state = state.apply(transaction);
     },
     hasFocus: () => false,
+    // As the view of the editor says whether the text can be edited.
+    editable,
   };
   const unshown = vi.fn();
   const { binding } = ySyncPluginKey.getState(state) as { binding: ProsemirrorBinding };
-  holdBinding(view as never, unshown);
+  const settle = holdBinding(view as never, unshown);
   // As the plugin of the binding starts it (@tiptap/y-tiptap, `ySyncPlugin`, `view`).
   binding.initView(view);
   binding._forceRerender();
   // The history of undo, as the editor's plugin makes it: what the binding writes is tracked.
   const undo = new Y.UndoManager(fragment, { trackedOrigins: new Set([ySyncPluginKey]) });
-  return { fragment, binding, unshown, undo, text: () => state.doc, typed: () => view };
+  return {
+    fragment,
+    binding,
+    unshown,
+    undo,
+    text: () => state.doc,
+    typed: () => view,
+    most: () => most,
+    dispatched: () => dispatched,
+    mended: () => mended.length,
+    mends: () => mended,
+    // As the plugin of the binding is told of each change of the view (./extensions.tsx).
+    setEditable: (can: boolean) => {
+      view.editable = can;
+      settle();
+    },
+  };
 }
 
 /** Another client of the same document, and the way its changes arrive. */
@@ -1378,7 +2426,7 @@ describe('the colours of a code block', () => {
 
   // The owner's decision R23 (specification row D133): "50,000, and say so in the block's header".
   it('are said to be left off in words that carry the bound as it is', () => {
-    // Written out here, and not taken from the code under test. The words await the owner's approval.
+    // Written out here, and not taken from the code under test. The owner approved the words on 13 October 2026.
     expect(CODE_UNCOLOURED).toBe(
       'Syntax colours are not shown in a code block longer than 50,000 characters.',
     );

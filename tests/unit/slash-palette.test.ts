@@ -928,6 +928,51 @@ describe('Tab, and a table in a table', () => {
     expect(listed(full)).toEqual(OTHERS);
   });
 
+  // The owner's decision R58 of 13 October 2026: a writer brings a document to a hundred tables and no further.
+  it('lists no table in a document that holds a hundred tables or more, one in a cell counted, and puts none there', () => {
+    const holding = (tables: number, first: Json[] = [paragraph()]) =>
+      editorOf(
+        paragraph(),
+        ...Array.from({ length: tables }, (_, at) => cells(1, 1, at ? undefined : first)),
+      );
+    const room = holding(99);
+    type(room, '/');
+    expect(listed(room)).toEqual(ALL);
+    type(room, 'table');
+    press(room, 'Enter');
+    expect(rowsOf(room)).toHaveLength(100);
+    // A hundred: nowhere, in the text or in a cell.
+    const full = holding(100);
+    type(full, '/');
+    expect(listed(full)).toEqual(OTHERS);
+    chooseSlashCommand(full, 'table');
+    type(full, 'table');
+    expect(press(full, 'Enter')).toBe(false);
+    expect(rowsOf(full)).toHaveLength(100);
+    const inCell = holding(100);
+    let first = -1;
+    inCell.state.doc.descendants((node, pos) => {
+      if (first < 0 && node.type.name === 'tableCell') first = pos + 2;
+    });
+    inCell.commands.setTextSelection(first);
+    type(inCell, '/');
+    expect(listed(inCell)).toEqual(OTHERS);
+    // A table in a cell is one of the hundred: ninety-eight and one in a cell of the first leave room for one.
+    const nested = holding(98, [paragraph(), cells(1, 1), paragraph()]);
+    expect(rowsOf(nested)).toHaveLength(99);
+    type(nested, '/table');
+    press(nested, 'Enter');
+    expect(rowsOf(nested)).toHaveLength(100);
+    nested.commands.setTextSelection(nested.state.doc.content.size);
+    type(nested, '/');
+    expect(listed(nested)).toEqual(OTHERS);
+    // A document that holds more, as another client or storage made it, lists none either, and everything else.
+    const more = holding(150);
+    expect(rowsOf(more)).toHaveLength(150);
+    type(more, '/');
+    expect(listed(more)).toEqual(OTHERS);
+  });
+
   describe('the keys and the commands of a table in a cell', () => {
     /** Two by two in the first cell of two by two, and the cursor in the first cell of the inner one. */
     const nested = () => {

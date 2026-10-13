@@ -51,9 +51,14 @@ import {
   type NodeViewProps,
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import { updateYFragment, ySyncPluginKey, type ProsemirrorBinding } from '@tiptap/y-tiptap';
+import {
+  updateYFragment,
+  ySyncPluginKey,
+  initProseMirrorDoc,
+  type ProsemirrorBinding,
+} from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
 import { LightbulbIcon, StickyNoteIcon, TriangleAlertIcon } from '@ekdotico/domico/icons';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
@@ -64,6 +69,9 @@ import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
 import {
   TABLE_CELLS_MOST,
+  TABLE_COUNT_MOST,
+  TABLE_FLOOD_MOST,
+  tableCount,
   TABLE_DEPTH_MOST,
   TABLE_MOST,
   closeNested,
@@ -810,9 +818,24 @@ export function mayApply(transaction: Transaction, editable: boolean): boolean {
  * should be; if one is, it can still be written in, and deleted from.
  */
 export function holdsTables(transaction: Transaction, before: PMNode): boolean {
+  return tableRefusal(transaction, before) === null;
+}
+
+/**
+ * Why a transaction is not applied, where it is for a bound on tables, and
+ * null where it is applied: `room`, where it would take a table past the
+ * bounds it shares with the tables in its cells (R32); `count`, where it
+ * would leave the document with more than `TABLE_COUNT_MOST` tables and more
+ * than it had (R58). So one that adds no table is applied whatever the
+ * document holds: a document with more than the number is written in, and
+ * deleted from, and takes no table more.
+ */
+export function tableRefusal(transaction: Transaction, before: PMNode): 'room' | 'count' | null {
   const binding = transaction.getMeta(ySyncPluginKey) as { isChangeOrigin?: boolean } | undefined;
-  if (!transaction.docChanged || binding?.isChangeOrigin === true) return true;
-  return !tablesIn(transaction.doc).past || tablesIn(before).past;
+  if (!transaction.docChanged || binding?.isChangeOrigin === true) return null;
+  if (tablesIn(transaction.doc).past && !tablesIn(before).past) return 'room';
+  const count = tableCount(transaction.doc);
+  return count > TABLE_COUNT_MOST && count > tableCount(before) ? 'count' : null;
 }
 
 // The origin of a mending of the shared document. Not one the undo manager
@@ -839,6 +862,193 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
 }
 
 /**
+ * The tables of a shared document that are past `TABLE_FLOOD_MOST` (R58),
+ * each as the element that holds its block and the block's place in it, in
+ * the order of the document; none where the document is inside the number,
+ * as every document a writer made is.
+ *
+ * WHAT IS COUNTED IS WHAT THE SCHEMA KEEPS (the review of pull request 34,
+ * B1). The blocks of a table are first counted as the shared document holds
+ * them, which is all the schema can keep and often more: one in a paragraph
+ * or a caption, one a level too deep, one past the cells of the table it
+ * stands in, is left out by another rule and is no table of the document.
+ * Only where that count is past the number is the text made, here and for
+ * this alone, as the schema makes it; and only where the tables IN IT are
+ * past the number is anything left out.
+ *
+ * WHICH BLOCKS THE SCHEMA KEPT IS READ FROM THE MAKING ITSELF (the reviews of
+ * pull request 35). The library makes the text and says which node it made
+ * of each element of the shared document (`initProseMirrorDoc` of
+ * @tiptap/y-tiptap 3.0.9: the text, and the mapping). An element is a table
+ * of the document where the node made of it is in that text. The last of
+ * those, as many as the tables of the text are past the number, are what
+ * goes: `holdBinding` DELETES THEM, AS ELEMENTS, IN ONE CHANGE, AND WRITES
+ * NOTHING ELSE. So two browsers that do it at once delete the same elements
+ * and agree, and nothing that stays is touched: not a paragraph between two
+ * tables that go, nor what a third writer is typing into it, nor anyone's
+ * history of undo.
+ *
+ * (Two forms were tried before this one and measured by the reviews. Taking
+ * out the last blocks of the shared document and counting again made the
+ * text once for every block the schema leaves out anyway: 800 of them, half a
+ * minute. Writing the text without the tables over the shared document, by
+ * the library's comparison, deleted and put in again everything between the
+ * first table that went and the last: of twenty paragraphs, in two browsers
+ * at once, ten were doubled and six were gone.)
+ *
+ * WHAT GOES IS EVERY TABLE PAST THE NUMBER, EACH COUNTED ONCE (the reviews at
+ * f305ee1 and at 02063b5). The tables of the text are numbered in its order,
+ * a table before the tables in its cells (`tablesPast`). A block that was
+ * found goes where its table's number is past `TABLE_FLOOD_MOST`, with all it
+ * holds; a table in one of its cells is not taken as well. So a table numbered
+ * inside the number stays though tables in its cells are past it, and only
+ * those go: it straddles the number, and keeps the first of them.
+ *
+ * One case is not exact. A table in a cell that another rule made again (the
+ * rule on depth left a table out of it, or the bound on cells took rows from
+ * it) is not the node the library made of its element, and cannot be deleted
+ * by itself. Where such a table is numbered past the number, the block round
+ * it that was found goes instead, whole, though its own number is inside; and
+ * its tables are then not counted, so that those after it are numbered as if
+ * it had not been there. A table of 2,500 cells that each hold such a table
+ * goes alone, and a writer's hundred tables stay, before it or after it.
+ *
+ * (Two countings were tried before this one. One block for one table took a
+ * writer's hundred tables with that table of 2,500, for 601 that were to go.
+ * Each block for as many tables as it holds, from the last, counted a table
+ * twice where a block and blocks in it were both taken, fell short at every
+ * count, and left a document of 25 tables of 101 unshown.)
+ *
+ * NOTHING IS DELETED UNLESS THE DELETION IS KNOWN TO DO (the same review). A
+ * table that goes from a cell makes room there for one the bound on cells had
+ * left out, and a table in a cell that was made again, with fewer rows, is
+ * not the node the library made of its element and is not found: so the
+ * count after a deletion is not known before it. It is found out on a copy
+ * of the shared document: the deletion, the count again, a second deletion,
+ * and a third count. Where the third is inside the number, the blocks that
+ * went from the copy are those to delete, in one change. Where it is not,
+ * nothing is deleted and the answer is null: the document cannot be shown,
+ * and the statement that says so says truly that nothing in it was changed.
+ *
+ * Before the text is built for the page, and not after, because that text is
+ * what must not be laid out.
+ *
+ * ponytail: every element of the shared document is visited at each change
+ * that arrives, a few milliseconds for the largest document there is. A count
+ * kept by the changes, if it ever shows in a profile.
+ */
+function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFragment, at: number][] | null {
+  const first = tablesPast(shared, schema);
+  if (first.length === 0) return [];
+  // The copy: the same elements, each known in both by the item it is.
+  const name = [...shared.doc!.share].find(([, type]) => (type as unknown) === shared)![0];
+  const copy = new Y.Doc();
+  try {
+    Y.applyUpdate(copy, Y.encodeStateAsUpdate(shared.doc!));
+    const copied = copy.getXmlFragment(name);
+    const going = new Set<string>();
+    let past = first.map(([, , element]) => itemOf(element));
+    for (let count = 1; past.length > 0; count += 1) {
+      if (count === 3) return null;
+      for (const each of past) going.add(each);
+      const here = new Set(past);
+      takeOut(tableBlocks(copied, schema).filter(([, , element]) => here.has(itemOf(element))));
+      past = tablesPast(copied, schema).map(([, , element]) => itemOf(element));
+    }
+    return tableBlocks(shared, schema)
+      .filter(([, , element]) => going.has(itemOf(element)))
+      .map(([parent, at]) => [parent, at]);
+  } finally {
+    copy.destroy();
+  }
+}
+
+type SharedElement = Y.XmlFragment & { nodeName?: unknown; _item?: Y.Item | null };
+/** The item an element of a shared document is: the same in every copy of the document. */
+const itemOf = (element: SharedElement) => {
+  // Every element that stands in a document is an item of it.
+  const { client, clock } = (element._item as Y.Item).id;
+  return `${client}:${clock}`;
+};
+
+/** The blocks of a table in a shared document, each with the element that holds it and its place there, in the order of the document. */
+function tableBlocks(
+  shared: Y.XmlFragment,
+  schema: Schema,
+): [parent: Y.XmlFragment, at: number, element: SharedElement][] {
+  const block = Object.values(schema.nodes).find(
+    (type) => type.contentMatch.defaultType?.spec.tableRole === 'table',
+  )?.name;
+  const blocks: [Y.XmlFragment, number, SharedElement][] = [];
+  // What is still to be looked at, the first on top: never a function that
+  // calls itself, on a document that may be any depth.
+  const waiting: [Y.XmlFragment, number, SharedElement][] = [];
+  const open = (parent: Y.XmlFragment) => {
+    const children = parent.toArray() as SharedElement[];
+    for (let at = children.length - 1; at >= 0; at -= 1) waiting.push([parent, at, children[at]!]);
+  };
+  open(shared);
+  for (let next = waiting.pop(); next; next = waiting.pop()) {
+    // Text has no name, and holds no table.
+    if (typeof next[2].nodeName !== 'string') continue;
+    if (next[2].nodeName === block) blocks.push(next);
+    open(next[2]);
+  }
+  return blocks;
+}
+
+/** The blocks to take out of a shared document as it stands, for the tables its text holds past the number: one count. */
+function tablesPast(shared: Y.XmlFragment, schema: Schema): ReturnType<typeof tableBlocks> {
+  const blocks = tableBlocks(shared, schema);
+  if (blocks.length <= TABLE_FLOOD_MOST) return [];
+  const { doc, mapping } = initProseMirrorDoc(shared, schema) as unknown as {
+    doc: PMNode;
+    mapping: Map<unknown, PMNode | undefined>;
+  };
+  if (tableCount(doc) <= TABLE_FLOOD_MOST) return [];
+  // The nodes the library made of the blocks: one of them that is in the text is a block that was found.
+  const found = new Set<unknown>(blocks.map(([, , element]) => mapping.get(element)));
+  const going = new Set<unknown>();
+  // The tables of the text, numbered as it has them: a table before the
+  // tables in its cells. `round` is the block that was found nearest round
+  // the node, the one that can be deleted for what stands in it.
+  let number = 0;
+  const visit = (node: PMNode, round: PMNode | null): void => {
+    if (tableCount(node) === 0 || going.has(round)) return;
+    if (node.firstChild?.type.spec.tableRole !== 'table') return node.forEach((child) => visit(child, round));
+    const before = number;
+    number += 1;
+    if (found.has(node)) {
+      // Past the number: it goes, with what it holds, which is not looked at.
+      if (number > TABLE_FLOOD_MOST) return void going.add(node);
+      node.forEach((child) => visit(child, node));
+      // Taken for a table in it that could not be (below): none of its tables is counted.
+      if (going.has(node)) number = before;
+    } else if (number > TABLE_FLOOD_MOST && round) going.add(round);
+    else node.forEach((child) => visit(child, round));
+  };
+  visit(doc, null);
+  return blocks.filter(([, , element]) => going.has(mapping.get(element)));
+}
+
+/** Deletes blocks of a table from the shared document they stand in. They are given in the order of the document. */
+function takeOut(blocks: readonly (readonly [parent: Y.XmlFragment, at: number, ...unknown[]])[]): void {
+  blocks[0]?.[0].doc!.transact(() => {
+    // From the last, so that no place moves before it is used; and those
+    // that stand side by side in one deletion, since each deletion counts
+    // its way to its place.
+    let end = blocks.length;
+    for (let at = blocks.length - 1; at >= 0; at -= 1) {
+      const [parent, place] = blocks[at]!;
+      const before = blocks[at - 1];
+      if (before && before[0] === parent && before[1] === place - 1) continue;
+      parent.delete(place, end - at);
+      end = at;
+    }
+  }, MEND);
+}
+
+/**
  * Holds the collaboration binding to two things, at the three functions
  * through which the shared document and the text of the editor meet
  * (`ProsemirrorBinding` of @tiptap/y-tiptap 3.0.9: `_forceRerender` at the
@@ -860,18 +1070,72 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
  * library's own comparison, which removes the children that were not made and
  * leaves the node they were in. It is not this member's change, and is in no
  * history of undo.
+ *
+ * ONLY A BROWSER THAT CAN EDIT THE DOCUMENT WRITES TO IT (the review of pull
+ * request 34). A mending is a change to the shared document, and one made
+ * where the document cannot be edited is sent to a server that takes nothing
+ * from that connection: it reaches no one, and the page says "Syncing" for
+ * good. So where the text cannot be edited nothing is mended. The text is
+ * still made without what the schema leaves out, which no one types into
+ * there. A document past the flood of tables cannot be shown without taking
+ * tables out, and is said to be one that cannot be shown. And what was not
+ * mended is mended when the text can be edited again, the connection having
+ * come back or the read-only state ended: the function this returns is called
+ * at each change of the view, and then makes the text again from the shared
+ * document and mends it, once, before this member types anything into it.
+ *
+ * FOR THE ONE WHO BUILDS SHARING: WHAT THIS COSTS A READER. No role that only
+ * reads exists yet, and when one does this must be settled in that slice. A
+ * reader's browser is one that cannot edit, so it writes nothing, and a
+ * document it cannot make without writing is one it cannot show: a document
+ * past the flood of tables, and a document with text standing directly in it,
+ * are answered with "This document could not be shown", until a browser that
+ * can edit has opened the document and mended it. For the text that is a step
+ * back from the release before, in which every browser took such text out,
+ * locally as it seemed, and showed the document. It is kept (the review of
+ * pull request 35) until the collaboration server holds these rules, after
+ * which no document reaches a reader in that state.
  */
-export function holdBinding(view: EditorView, unshown: () => void): void {
+export function holdBinding(view: EditorView, unshown: () => void): () => void {
   const { binding } = ySyncPluginKey.getState(view.state) as { binding: ProsemirrorBinding };
   const { schema } = view.state;
+  // What stands in for a view in the tests has no such property, and can edit.
+  const writes = () => (view as { editable?: boolean }).editable !== false;
+  /** Takes what stands directly in the shared document where it cannot. True where there was any. */
+  const unstray = () => {
+    const stray = strays(binding.type, schema);
+    if (stray.length > 0 && writes()) {
+      binding.doc.transact(() => {
+        for (const at of stray.reverse()) binding.type.delete(at, 1);
+      }, MEND);
+    }
+    return stray.length > 0;
+  };
+  /** Writes the text over the shared document, by the library's own comparison. */
+  const mend = () => {
+    // A mapping of its own: the binding's says each node is the one it made,
+    // which is what the comparison must not take on trust here.
+    const fresh = { mapping: new Map(), isOMark: new Map() };
+    binding.doc.transact(() => updateYFragment(binding.doc, binding.type, view.state.doc, fresh), MEND);
+  };
   let failed = false;
+  // Whether a mending was left unwritten because the text could not be edited.
+  let owed = false;
+  // Whether the tables of a flood are being taken out. The binding hears each
+  // deletion as a change of the shared document, and would make the text for
+  // it, and count, and delete, inside the deletion it is hearing: so while
+  // this is set it hears nothing. The text is made once afterwards, for the
+  // change that was being heard when the flood was found: the library makes
+  // the whole text at every change of the shared document (`_typeChanged` of
+  // @tiptap/y-tiptap 3.0.9 clears its mapping), so nothing of the deletions is
+  // missed. A test fails where a later version makes less than the whole.
+  let flooding = false;
   const held =
     <Given extends unknown[]>(run: (...given: Given) => void, builds: boolean) =>
     (...given: Given) => {
-      if (failed) return;
+      if (failed || flooding) return;
       try {
         if (builds) {
-          MENDED.delete(schema);
           // Before the text is built, and not after as below: the library
           // makes the document itself without asking the schema, so what
           // stands directly in it where it cannot is not left out. A row is
@@ -879,19 +1143,29 @@ export function holdBinding(view: EditorView, unshown: () => void): void {
           // next thing this member types writes that table over the row, as
           // this member's change; and text is a fault of the building, which
           // closed the document in every tab.
-          const stray = strays(binding.type, schema);
-          if (stray.length > 0) {
-            binding.doc.transact(() => {
-              for (const at of stray.reverse()) binding.type.delete(at, 1);
-            }, MEND);
+          if (unstray() && !writes()) owed = true;
+          // R58, and before the text is built for the same reason: the text
+          // of a flood of tables is not to be laid out.
+          // One change, or none: where no deletion is known to bring the
+          // document inside the number, nothing is deleted.
+          const past = floodOfTables(binding.type, schema);
+          if (past === null || (past.length > 0 && !writes()))
+            throw new Error('editor: more tables than a page lays out');
+          if (past.length > 0) {
+            flooding = true;
+            try {
+              takeOut(past);
+            } finally {
+              flooding = false;
+            }
           }
+          // What the making above left out is not what the building leaves out.
+          MENDED.delete(schema);
         }
         run(...given);
         if (builds && MENDED.delete(schema)) {
-          // A mapping of its own: the binding's says each node is the one it
-          // made, which is what the comparison must not take on trust here.
-          const fresh = { mapping: new Map(), isOMark: new Map() };
-          binding.doc.transact(() => updateYFragment(binding.doc, binding.type, view.state.doc, fresh), MEND);
+          if (writes()) mend();
+          else owed = true;
         }
       } catch {
         failed = true;
@@ -901,6 +1175,14 @@ export function holdBinding(view: EditorView, unshown: () => void): void {
   binding._forceRerender = held(binding._forceRerender.bind(binding), true);
   binding._observeFunction = held(binding._observeFunction as (...given: unknown[]) => void, true);
   binding._prosemirrorChanged = held(binding._prosemirrorChanged.bind(binding), false);
+  return () => {
+    if (!owed || !writes() || failed) return;
+    owed = false;
+    // The whole text again, from the shared document: what was left out of
+    // it is left out again, and this time it is mended. Once the change of
+    // the view that this is called in is done, and not inside it.
+    setTimeout(() => binding._forceRerender(), 0);
+  };
 }
 
 /**
@@ -952,7 +1234,7 @@ function settleInCell(editor: Editor): void {
  * instead, which is a selection and no content: the first letter typed at it
  * makes the paragraph, as this writer's change.
  *
- * AWAITS THE OWNER (new behaviour of four keys; reported with the pull
+ * Approved by the owner on 13 October 2026 (new behaviour of four keys; reported with the pull
  * request). As at the top of a document, where the arrow up from a table that
  * begins it gives the same cursor before the table:
  *
@@ -1009,6 +1291,12 @@ function besideTable(editor: Editor, direction: 'up' | 'down' | 'left' | 'right'
  */
 const COUNTS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 export const TABLE_NO_ROOM = `The table has no room for this. A table and the tables in its cells hold ${TABLE_CELLS_MOST.toLocaleString('en-GB')} cells, ${COUNTS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep.`;
+/**
+ * The words for a table that was not added because the document holds as many
+ * as a writer may bring it to (R58). Approved in form by the owner on 13
+ * October 2026, the number following the constant.
+ */
+export const TABLE_NO_MORE = `The document has no room for another table. A document holds ${TABLE_COUNT_MOST.toLocaleString('en-GB')} tables.`;
 
 const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
   name: 'closed',
@@ -1030,7 +1318,8 @@ const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
       new Plugin({
         filterTransaction: (transaction, state) => {
           if (!mayApply(transaction, this.editor.isEditable)) return false;
-          const held = holdsTables(transaction, state.doc);
+          const refusal = tableRefusal(transaction, state.doc);
+          const held = refusal === null;
           // NFR-IC-19 (WCAG 3.3.1, 4.1.3): a change that is not made is said
           // to be so. Of this writer's own asking only: not what the binding
           // brings, and not what a plugin appends, which is the table
@@ -1041,7 +1330,7 @@ const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
             transaction.getMeta('appendedTransaction') === undefined;
           if (!held && asked) {
             said = true;
-            this.options.noRoom(TABLE_NO_ROOM);
+            this.options.noRoom(refusal === 'count' ? TABLE_NO_MORE : TABLE_NO_ROOM);
           } else if (held && transaction.docChanged && said) {
             said = false;
             this.options.noRoom(null);
@@ -1157,7 +1446,7 @@ export const CODE_COLOURS_MOST = 50_000;
  * (the owner's decision R23 of 12 October 2026, specification row D133:
  * "50,000, and say so in the block's header"). No requirement gives the
  * words: written under the Expression Guidelines, with the number as it is
- * above. AWAITS THE OWNER'S APPROVAL.
+ * above. Approved by the owner on 13 October 2026.
  */
 export const CODE_UNCOLOURED = `Syntax colours are not shown in a code block longer than ${CODE_COLOURS_MOST.toLocaleString('en-GB')} characters.`;
 // What the library reads from an answer: the nodes to colour. None.
@@ -1272,8 +1561,17 @@ export function extensions(
         const start = sync?.spec.view;
         if (!sync || !start) throw new Error('editor: the collaboration binding was not found');
         sync.spec.view = (view) => {
-          holdBinding(view, unshown);
-          return start(view);
+          const settle = holdBinding(view, unshown);
+          const made = start(view);
+          // At each change of the view, the one that makes the text editable
+          // among them: what was owed to the shared document is mended then.
+          return {
+            ...made,
+            update: (...given) => {
+              made.update?.(...given);
+              settle();
+            },
+          };
         };
         return plugins;
       },

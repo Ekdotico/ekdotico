@@ -62,3 +62,22 @@ Add an entry whenever the owner decides something provisionally. When a point ha
 - Whether silence after a choice leaves the writer unsure that the block was inserted.
 
 **What would change the decision.** If writers are unsure after a choice, the application confirms it in a status region of its own.
+
+## Moving a table by cut and paste in a document that holds 100 tables
+
+**Where the behaviour lives:** `src/app/(app)/documents/[id]/table-bounds.ts` and the `Closed` plugin in `extensions.tsx`.
+
+**What happens.** A document holds 100 tables for a writer: a change of the writer's own that would leave it with more than 100, and more than it had, is refused with "The document has no room for another table. A document holds 100 tables." A writer who cuts a table in a document at or past 100 and pastes it elsewhere is refused at the paste, because the paste raises the count. Undoing the cut restores the table.
+
+**Decided as built** on 13 October 2026 (R58).
+
+**Alternatives considered:**
+
+- A paste that restores the count the document had before the cut is let through.
+
+**Watch for:**
+
+- Writers of long manuscripts who reach 100 tables at all.
+- Writers who lose a table by cutting it and then being refused the paste, and whether they find undo.
+
+**What would change the decision.** If a writer loses a table this way, or 100 is met in ordinary work, the paste that restores a table is let through, or the number is raised.

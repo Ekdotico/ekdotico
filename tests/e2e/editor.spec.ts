@@ -2596,6 +2596,189 @@ test('a key typed in a table whose cells hold tables, ten thousand cells in all,
   await expect(noRoom).toHaveCount(0);
 });
 
+// The owner's decision R58 of 13 October 2026: "refuse only, never delete, at
+// 100; and a much higher threshold, in the thousands, against a flood."
+test('a writer brings a document to a hundred tables and no further; one that holds more, from another client and from storage, is shown whole and takes no table more', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  // Written out here, and not taken from the code under test.
+  const WORDS = 'The document has no room for another table. A document holds 100 tables.';
+  const figure =
+    '<figure class="ekd-table"><table><tbody><tr><td><p>PASTED</p></td></tr></tbody></table><figcaption class="ekd-table-caption">pasted</figcaption></figure>';
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  await doc.click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  let other = await connectAs(page.context(), id);
+  await holds(other, 'Written before.');
+  const tablesIn = (client: typeof other) =>
+    client.provider.document.getXmlFragment('default').toString().split('<tableblock').length - 1;
+  // Ninety-nine tables, of five rows by four with text.
+  other.provider.document.transact(() =>
+    other.provider.document
+      .getXmlFragment('default')
+      .push([
+        ...Array.from({ length: 99 }, (_, at) => gridOf(5, 4, () => [paragraph('some text')], `table ${at}`)),
+        paragraph('after'),
+      ]),
+  );
+  await expect(doc.locator('table')).toHaveCount(99, { timeout: 60_000 });
+  const said = page.getByText(WORDS, { exact: true });
+
+  // The hundredth is the writer's to add, from the palette, and is listed.
+  await placeAtEnd(doc.getByText('after', { exact: true }));
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/table');
+  await expect(rows(page).filter({ hasText: '/table' })).toHaveCount(1);
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('table')).toHaveCount(100);
+  await expect.poll(() => tablesIn(other)).toBe(100);
+  // At a hundred: not listed, in the text or in a cell, and a pasted one is not put in, which the page says.
+  await page.keyboard.type('/');
+  await expect(palette(page)).toBeVisible();
+  await expect(rows(page).filter({ hasText: '/table' })).toHaveCount(0);
+  await expect(rows(page)).toHaveCount(SLASH_ROWS.length - 1);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Backspace');
+  await expect(said).toHaveCount(0);
+  await paste(page, figure);
+  await expect(said).toHaveCount(2);
+  await expect(page.getByRole('status').filter({ hasText: WORDS })).toHaveCount(1);
+  await expect(doc.locator('table')).toHaveCount(100);
+  await expect(doc).not.toContainText('PASTED');
+  // What adds no table is applied, and takes the words away.
+  await page.keyboard.type('typed');
+  await expect(said).toHaveCount(0);
+
+  // Another client is held to nothing by the page: fifty more, at the top, in
+  // a cell and at the end, and every one of the hundred and fifty stands.
+  other.provider.document.transact(() => {
+    const fragment = other.provider.document.getXmlFragment('default');
+    fragment.push(
+      Array.from({ length: 48 }, (_, at) => gridOf(1, 1, () => [paragraph('')], `put last ${at}`)),
+    );
+    (
+      (((fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).get(0) as Y.XmlElement).get(
+        0,
+      ) as Y.XmlElement
+    ).push([gridOf(1, 1, () => [paragraph('')], 'put in a cell')]);
+    fragment.insert(1, [gridOf(1, 1, () => [paragraph('')], 'put first')]);
+  });
+  const whole = async () => {
+    await expect(doc.locator('table')).toHaveCount(150, { timeout: 60_000 });
+    for (const caption of ['put first', 'put in a cell', 'table 0', 'table 98', 'put last 0', 'put last 47'])
+      await expect(doc.locator('figcaption').getByText(caption, { exact: true })).toHaveCount(1);
+    await expect(doc.getByText('Written before.', { exact: true })).toHaveCount(1);
+  };
+  await whole();
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  // Nothing was taken out of the shared document, a moment later either.
+  await page.waitForTimeout(1500);
+  expect(tablesIn(other)).toBe(150);
+  other.close();
+
+  // From storage, it opens with all of them: for this writer, and for a client that reads it afresh.
+  await page.reload();
+  await whole();
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  other = await connectAs(page.context(), id);
+  expect(tablesIn(other)).toBe(150);
+  // It is written in, and takes no table more from the writer.
+  await placeAtEnd(doc.getByText('Written before.', { exact: true }));
+  await page.keyboard.type(' And after.');
+  await expect(doc).toContainText('Written before. And after.');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/');
+  await expect(palette(page)).toBeVisible();
+  await expect(rows(page).filter({ hasText: '/table' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Backspace');
+  await paste(page, figure);
+  await expect(said).toHaveCount(2);
+  await expect(doc.locator('table')).toHaveCount(150);
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 60_000 });
+  expect(tablesIn(other)).toBe(150);
+  other.close();
+  expect(faults).toEqual([]);
+});
+
+// The second number of R58, against a flood: 2,000, which awaits the owner.
+test('a flood of tables from another client is brought back to two thousand, the last in the order of the document left out, and the writer’s text stays', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  await doc.click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const other = await connectAs(page.context(), id);
+  await holds(other, 'Written before.');
+  const fragment = other.provider.document.getXmlFragment('default');
+  const tablesIn = () => fragment.toString().split('<tableblock').length - 1;
+  // The writer's ten, and the writer's last line.
+  other.provider.document.transact(() =>
+    fragment.push([
+      ...Array.from({ length: 10 }, (_, at) => gridOf(1, 1, () => [paragraph(`w${at}`)], '')),
+      paragraph('after'),
+    ]),
+  );
+  await expect(doc.locator('table')).toHaveCount(10);
+  await placeAtEnd(doc.getByText('after', { exact: true }));
+  await page.keyboard.type(' KEEP-THIS');
+  await expect.poll(() => fragment.toString()).toContain('KEEP-THIS');
+
+  // 2,300 tables more: 2,298 after the writer's, one in a cell of the
+  // writer's first, and one at the top. 2,310 in all.
+  other.provider.document.transact(() => {
+    fragment.insert(
+      fragment.length - 1,
+      Array.from({ length: 2298 }, (_, at) => gridOf(1, 1, () => [paragraph(`f${at}`)], '')),
+    );
+    (
+      (((fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).get(0) as Y.XmlElement).get(
+        0,
+      ) as Y.XmlElement
+    ).push([gridOf(1, 1, () => [paragraph('put in a cell')], '')]);
+    fragment.insert(1, [gridOf(1, 1, () => [paragraph('put first')], '')]);
+  });
+  expect(tablesIn()).toBe(2310);
+  // The first two thousand in the order of the document: the one put first,
+  // the writer's ten with the one in a cell among them, and 1,988 of the rest.
+  const held = async () => {
+    await expect(doc.locator('table')).toHaveCount(2000, { timeout: 120_000 });
+    await expect(doc.getByText('after KEEP-THIS')).toHaveCount(1);
+    for (const written of ['Written before.', 'put first', 'put in a cell', 'w0', 'w9', 'f0', 'f1987'])
+      await expect(doc.getByText(written, { exact: true })).toHaveCount(1);
+    await expect(doc.getByText('f1988', { exact: true })).toHaveCount(0);
+  };
+  await held();
+  // The shared document holds what the page does.
+  await expect.poll(tablesIn, { timeout: 60_000 }).toBe(2000);
+  expect(fragment.toString()).toContain('KEEP-THIS');
+  // The page answers: a key is taken and shown.
+  await placeAtEnd(doc.getByText('after KEEP-THIS', { exact: true }));
+  const times = await keyTimes(page, 'abcde');
+  await expect(doc).toContainText('after KEEP-THISabcde');
+  console.log(`a key in a document of 2,000 tables of one cell: ${times.join(', ')} ms`);
+  expect(times.toSorted((a, b) => a - b)[2]).toBeLessThan(1500);
+  other.close();
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 120_000 });
+  const started = Date.now();
+  await page.reload();
+  await held();
+  console.log(`a document of 2,000 tables of one cell opens in ${Date.now() - started} ms`);
+  expect(faults).toEqual([]);
+});
+
 // The re-review of pull request 28, finding d: the words of a refusal stayed
 // through another client's change and the writer's own undo, and a second
 // refusal in the same words was not heard.
@@ -2887,7 +3070,7 @@ test('the header of a code block says that the block is shown without colours wh
   browser,
 }) => {
   test.setTimeout(120_000);
-  // Written out here, and not taken from the code under test. The words await the owner's approval.
+  // Written out here, and not taken from the code under test. The owner approved the words on 13 October 2026.
   const WORDS = 'Syntax colours are not shown in a code block longer than 50,000 characters.';
   const person = await enter(page);
   const id = await openNew(page);
