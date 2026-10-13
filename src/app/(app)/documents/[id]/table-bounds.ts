@@ -82,6 +82,12 @@ export const TABLE_DEPTH_MOST = 2;
  * Counted in the text the editor holds, after the schema has made it, so that
  * nothing the schema leaves out is counted.
  *
+ * KNOWN, AND ACCEPTED UNTIL THE OWNER SAYS OTHERWISE (the review of pull
+ * request 35): in a document at or past the number, a table that is cut
+ * cannot be pasted back. The cut is applied, and the paste would leave the
+ * document with more tables than it then had, so it is refused, in the words
+ * of the refusal. Undoing the cut restores the table.
+ *
  * The unit is the table, though the cost it stands for is not a table's
  * alone. Measured on 12 October 2026 (Chromium, Apple M2 Pro; the row "Editor
  * keystroke to character render" of §2.4, under 16 ms at P50 in the reference
@@ -97,12 +103,15 @@ export const TABLE_COUNT_MOST = 100;
  * The most tables a document is opened with: past it, the tables that are
  * last in the order of the document are left out and taken out of the shared
  * document, as the rows and the cells past their bounds are (`floodOfTables`
- * of ./extensions.tsx). Against a flood and nothing else: a client that is no
- * editor can send sixty thousand tables in under 5 MB, and a page that is
- * asked to draw them does not answer.
+ * of ./extensions.tsx; `withoutTablesPast` below). Against a flood and nothing
+ * else: a client that is no editor can send sixty thousand tables in under 5
+ * MB, and a page that is asked to draw them does not answer.
  *
- * THE NUMBER AWAITS THE OWNER (R58: "a much higher threshold, in the
- * thousands, against a flood"). Proposed from the same measurement, in the
+ * The number was approved by the owner on 13 October 2026 (R58: "a much
+ * higher threshold, in the thousands, against a flood"). IT MUST NOT BE
+ * LOWERED ONCE SHARING IS RELEASED: a browser that holds a lower number takes
+ * the tables past it out of the shared document, for everyone. It was
+ * proposed from the same measurement, in the
  * reference document: with 1,000 tables of one cell a key takes 57 ms and the
  * document opens in 1 second; with 2,000, 105 ms and 2.2 seconds, and with
  * 2,000 of five rows by four, 187 ms and 4.1 seconds; with 5,000 of one cell,
@@ -110,9 +119,10 @@ export const TABLE_COUNT_MOST = 100;
  * and answers a key within a fifth of a second, and is twenty times what a
  * writer can make.
  *
- * It deletes, so it is not free to change: see `TABLE_DEPTH_MOST`. A browser
- * that cannot edit the document writes nothing, and where it is handed a
- * document past this number it says that the document cannot be shown.
+ * It deletes, so it is not free to change either way: see `TABLE_DEPTH_MOST`.
+ * A browser that cannot edit the document writes nothing, and where it is
+ * handed a document past this number it says that the document cannot be
+ * shown (`holdBinding` of ./extensions.tsx says what that costs a reader).
  */
 export const TABLE_FLOOD_MOST = 2000;
 
@@ -173,6 +183,40 @@ export function tableCount(node: PMNode): number {
     TABLES.set(node, count);
   }
   return count;
+}
+
+/** A node without the tables past the first `left.tables` of it, or null where it is the block of one of those. */
+function first(node: PMNode, left: { tables: number }): PMNode | null {
+  const count = tableCount(node);
+  // No table in it, or all of them inside what is left: as it is.
+  if (count <= left.tables) {
+    left.tables -= count;
+    return node;
+  }
+  // The block of a table goes with its table and its caption.
+  if (role(node.firstChild ?? node) === 'table' && left.tables === 0) return null;
+  if (role(node) === 'table') left.tables -= 1;
+  const kept: PMNode[] = [];
+  node.forEach((child) => {
+    const held = first(child, left);
+    if (held) kept.push(held);
+  });
+  // A cell or a quotation that held nothing else holds an empty paragraph.
+  const content = Fragment.from(kept);
+  return node.type.validContent(content)
+    ? node.copy(content)
+    : node.type.createAndFill(node.attrs, content, node.marks);
+}
+
+/**
+ * A document with the first `most` of its tables and none of the others, a
+ * table in a cell counted in its place: the text that is written over a shared
+ * document that holds a flood of them (`floodOfTables` of ./extensions.tsx).
+ * Each table that goes, goes with its block and its caption, and with the
+ * tables in its cells; nothing else of the document is changed.
+ */
+export function withoutTablesPast(doc: PMNode, most: number): PMNode {
+  return first(doc, { tables: most }) ?? doc;
 }
 
 /**

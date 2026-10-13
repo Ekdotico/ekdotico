@@ -78,6 +78,7 @@ import {
   tableRoom,
   tablesEndingCells,
   tablesIn,
+  withoutTablesPast,
 } from './table-bounds.ts';
 
 /** Whether the document can be edited now: the role, and the connection (FR-ED-18). Node views read it. */
@@ -862,9 +863,9 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
 }
 
 /**
- * The tables of a shared document that are past `TABLE_FLOOD_MOST` (R58),
- * each as the element that holds its block and the block's place in it; none
- * where the document is inside the number.
+ * The text of a shared document that holds a flood of tables, with the first
+ * `TABLE_FLOOD_MOST` of them and none of the others (R58); null where the
+ * document is inside the number, as every document a writer made is.
  *
  * WHAT IS COUNTED IS WHAT THE SCHEMA KEEPS (the review of pull request 34,
  * B1). The blocks of a table are first counted as the shared document holds
@@ -872,44 +873,45 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
  * or a caption, one a level too deep, one past the cells of the table it
  * stands in, is left out by another rule and is no table of the document.
  * Only where that count is past the number is the text made, here and for
- * the count alone, as the schema makes it; and only where the tables IN IT
- * are past the number does anything go: as many blocks as it is past by, the
- * last in the order of the document. A block the schema would have left out
- * may be among them, and then the count is taken again; so this is asked
- * until it answers with none (`holdBinding`).
+ * this alone, as the schema makes it; and only where the tables IN IT are
+ * past the number is anything left out.
+ *
+ * ONCE, WHATEVER THE DOCUMENT HOLDS (the review of pull request 35). What is
+ * left out is chosen in the text that was made, where every table is one the
+ * schema kept, and the answer is the whole text without them: it is written
+ * over the shared document in one change (`holdBinding`). Before this the
+ * last blocks of the shared document were taken out and the text made again
+ * to count, and where those blocks were ones the schema leaves out anyway
+ * the count did not fall: eight hundred of them were eight hundred makings
+ * of the text, and half a minute.
  *
  * Before the text is built for the page, and not after, because that text is
  * what must not be laid out.
  *
  * ponytail: every element of the shared document is visited at each change
- * that arrives, a few milliseconds for the largest document there is; and a
- * document past the first count is made twice. A count kept by the changes,
- * if either ever shows in a profile.
+ * that arrives, a few milliseconds for the largest document there is. A count
+ * kept by the changes, if it ever shows in a profile.
  */
-function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFragment, at: number][] {
+function floodOfTables(shared: Y.XmlFragment, schema: Schema): PMNode | null {
   type Element = Y.XmlFragment & { nodeName?: unknown };
   const block = Object.values(schema.nodes).find(
     (type) => type.contentMatch.defaultType?.spec.tableRole === 'table',
   )?.name;
-  const blocks: [Y.XmlFragment, number][] = [];
-  // What is still to be looked at, the first on top: never a function that
-  // calls itself, on a document that may be any depth.
-  const waiting: [parent: Y.XmlFragment, at: number, child: Element][] = [];
-  const open = (parent: Y.XmlFragment) => {
-    const children = parent.toArray() as Element[];
-    for (let at = children.length - 1; at >= 0; at -= 1) waiting.push([parent, at, children[at]!]);
-  };
-  open(shared);
+  let blocks = 0;
+  // What is still to be looked at: never a function that calls itself, on a
+  // document that may be any depth.
+  const waiting: Element[] = [shared];
   for (let next = waiting.pop(); next; next = waiting.pop()) {
-    const [parent, at, child] = next;
-    // Text has no name, and holds no table.
-    if (typeof child.nodeName !== 'string') continue;
-    if (child.nodeName === block) blocks.push([parent, at]);
-    open(child);
+    for (const child of next.toArray() as Element[]) {
+      // Text has no name, and holds no table.
+      if (typeof child.nodeName !== 'string') continue;
+      if (child.nodeName === block) blocks += 1;
+      waiting.push(child);
+    }
   }
-  if (blocks.length <= TABLE_FLOOD_MOST) return [];
-  const past = tableCount(yXmlFragmentToProseMirrorRootNode(shared, schema)) - TABLE_FLOOD_MOST;
-  return past > 0 ? blocks.slice(-past) : [];
+  if (blocks <= TABLE_FLOOD_MOST) return null;
+  const made = yXmlFragmentToProseMirrorRootNode(shared, schema);
+  return tableCount(made) > TABLE_FLOOD_MOST ? withoutTablesPast(made, TABLE_FLOOD_MOST) : null;
 }
 
 /**
@@ -946,7 +948,19 @@ function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFra
  * mended is mended when the text can be edited again, the connection having
  * come back or the read-only state ended: the function this returns is called
  * at each change of the view, and then makes the text again from the shared
- * document and mends it, before this member types anything into it.
+ * document and mends it, once, before this member types anything into it.
+ *
+ * FOR THE ONE WHO BUILDS SHARING: WHAT THIS COSTS A READER. No role that only
+ * reads exists yet, and when one does this must be settled in that slice. A
+ * reader's browser is one that cannot edit, so it writes nothing, and a
+ * document it cannot make without writing is one it cannot show: a document
+ * past the flood of tables, and a document with text standing directly in it,
+ * are answered with "This document could not be shown", until a browser that
+ * can edit has opened the document and mended it. For the text that is a step
+ * back from the release before, in which every browser took such text out,
+ * locally as it seemed, and showed the document. It is kept (the review of
+ * pull request 35) until the collaboration server holds these rules, after
+ * which no document reaches a reader in that state.
  */
 export function holdBinding(view: EditorView, unshown: () => void): () => void {
   const { binding } = ySyncPluginKey.getState(view.state) as { binding: ProsemirrorBinding };
@@ -963,12 +977,12 @@ export function holdBinding(view: EditorView, unshown: () => void): () => void {
     }
     return stray.length > 0;
   };
-  /** Writes the text over the shared document, by the library's own comparison. */
-  const mend = () => {
+  /** Writes a text over the shared document, by the library's own comparison: the text of the view, or the one given. */
+  const mend = (text: PMNode = view.state.doc) => {
     // A mapping of its own: the binding's says each node is the one it made,
     // which is what the comparison must not take on trust here.
     const fresh = { mapping: new Map(), isOMark: new Map() };
-    binding.doc.transact(() => updateYFragment(binding.doc, binding.type, view.state.doc, fresh), MEND);
+    binding.doc.transact(() => updateYFragment(binding.doc, binding.type, text, fresh), MEND);
   };
   let failed = false;
   // Whether a mending was left unwritten because the text could not be edited.
@@ -989,24 +1003,12 @@ export function holdBinding(view: EditorView, unshown: () => void): () => void {
           if (unstray() && !writes()) owed = true;
           // R58, and before the text is built for the same reason: the text
           // of a flood of tables is not to be laid out.
-          for (let past = floodOfTables(binding.type, schema); past.length > 0;) {
+          const within = floodOfTables(binding.type, schema);
+          if (within) {
             if (!writes()) throw new Error('editor: more tables than a page lays out');
-            binding.doc.transact(() => {
-              // From the last, so that no place moves before it is used; and
-              // those that stand side by side in one deletion, since each
-              // deletion counts its way to its place.
-              let end = past.length;
-              for (let at = past.length - 1; at >= 0; at -= 1) {
-                const [parent, place] = past[at]!;
-                const before = past[at - 1];
-                if (before && before[0] === parent && before[1] === place - 1) continue;
-                parent.delete(place, end - at);
-                end = at;
-              }
-            }, MEND);
-            past = floodOfTables(binding.type, schema);
+            mend(within);
           }
-          // What the count above left out is not what the building leaves out.
+          // What the making above left out is not what the building leaves out.
           MENDED.delete(schema);
         }
         run(...given);

@@ -41,6 +41,7 @@ import {
   closeNested,
   tableRoom,
   tablesIn,
+  withoutTablesPast,
 } from '../../src/app/(app)/documents/[id]/table-bounds.ts';
 
 import { MAX_ELEMENT_DEPTH, MAX_STATE_BYTES, elementDepth, pastLimits } from '../../src/lib/collab/state.ts';
@@ -309,17 +310,18 @@ describe('the grid of a table', () => {
       [every(1, 60, { rowspan: 2 })[0]!, every(1, 41, {})[0]!],
     ],
   ])('gives every cell one row and one column where the grid is past the bound: %s', (_, grid) => {
-    const started = performance.now();
     const table = tableOf(grid);
     expect(new Set(spans(table).flat().map(String))).toEqual(new Set(['1,1']));
-    // The table library lays it out: no square is claimed twice, and it is done at once.
+    // The table library lays it out: no square is claimed twice.
     const map = TableMap.get(table);
     expect(map.width).toBeLessThanOrEqual(TABLE_MOST);
     expect(map.height).toBeLessThanOrEqual(TABLE_MOST);
     expect((map as unknown as { problems: unknown[] | null }).problems?.filter(Boolean) ?? []).toEqual(
       expect.not.arrayContaining([expect.objectContaining({ type: 'collision' })]),
     );
-    expect(performance.now() - started).toBeLessThan(2000);
+    // The work is held, and not the time: the library keeps one square for each place of the grid, and no more.
+    expect((map as unknown as { map: number[] }).map.length).toBe(map.width * map.height);
+    expect(map.width * map.height).toBeLessThanOrEqual(TABLE_MOST * TABLE_MOST);
   });
 
   it('holds wherever a table is made: from JSON and from markup as well', () => {
@@ -449,9 +451,12 @@ describe('the tables in the cells of a table (R32)', () => {
   it('never leaves out a cell of the table itself, and keeps the text of every one', () => {
     // A hundred by a hundred in each cell of a hundred by a hundred: 10^8 cells.
     const hostile = blockOfRows(rowsOf(100, 100));
-    const started = performance.now();
+    // The work is held, and not the time: the tables are made once each, the
+    // one that is in every cell and the one that holds them, and not once for each cell.
+    const made = vi.spyOn(schema.nodes.table!, 'create');
     const block = blockOfRows(rowsOf(100, 100, (row, column) => cellOf(p(`o${row}.${column}`), hostile)));
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(made.mock.calls.length).toBeLessThanOrEqual(2);
+    made.mockRestore();
     expect(tables(block)).toEqual([10_000]);
     expect(block.textContent).toContain('o0.0');
     expect(block.textContent).toContain('o99.99');
@@ -985,13 +990,59 @@ describe('the tables in the cells of a table (R32)', () => {
     });
 
     describe('the flood: left out past two thousand, in the order of the document', () => {
-      it('keeps a document that holds two thousand, and writes nothing to it', () => {
+      it('keeps a document that holds two thousand, writes nothing to it, and makes its text for the page alone', () => {
         const document = holding(2000);
         const before = bytes(document);
+        // The work of making the text once, counted in the nodes the schema is asked for.
+        const asked = vi.spyOn(schema, 'node');
+        yXmlFragmentToProseMirrorRootNode(document.getXmlFragment('default'), schema);
+        const once = asked.mock.calls.length;
+        asked.mockClear();
         const editor = open(document);
+        // Not once more for a count: the blocks of the shared document are inside the number.
+        expect(asked.mock.calls.length).toBe(once);
+        asked.mockRestore();
         expect(tableCount(editor.text())).toBe(2000);
         expect(bytes(document)).toBe(before);
         expect(editor.mended()).toBe(0);
+      });
+
+      it('chooses what goes in the text the schema made: the first tables in its order, a table in a cell in its place', () => {
+        const p = (written: string) => schema.node('paragraph', null, [schema.text(written)]);
+        const block = (written: string, ...inCell: PMNode[]) =>
+          schema.node('tableBlock', null, [
+            schema.node('table', null, [
+              schema.node('tableRow', null, [schema.node('tableCell', null, [p(written), ...inCell])]),
+            ]),
+            schema.node('tableCaption', null, [schema.text(`${written} caption`)]),
+          ]);
+        // One table that holds three, then a table in a quotation, then one more: six in all.
+        const doc = schema.node('doc', null, [
+          p('before'),
+          block('outer', block('in-1'), block('in-2'), block('in-3')),
+          schema.node('blockquote', null, [block('quoted')]),
+          block('last'),
+          p('after'),
+        ]);
+        expect(tableCount(doc)).toBe(6);
+        const words = (most: number) => {
+          const kept = withoutTablesPast(doc, most);
+          kept.check();
+          expect(tableCount(kept)).toBe(Math.min(most, 6));
+          return kept
+            .textBetween(0, kept.content.size, ' ')
+            .replace(/\S+ caption ?/g, '')
+            .replace(/ +/g, ' ')
+            .trim();
+        };
+        expect(withoutTablesPast(doc, 6)).toBe(doc);
+        expect(words(5)).toBe('before outer in-1 in-2 in-3 quoted after');
+        // The quotation that held a table and nothing else holds an empty paragraph.
+        expect(words(4)).toBe('before outer in-1 in-2 in-3 after');
+        // A table that is kept in part is one of those counted: itself, and two of its three.
+        expect(words(3)).toBe('before outer in-1 in-2 after');
+        expect(words(1)).toBe('before outer after');
+        expect(words(0)).toBe('before after');
       });
 
       it('leaves out the tables past it, the last in the order of the document, one in a cell counted in its place; the writer’s text stays', () => {
@@ -1050,6 +1101,56 @@ describe('the tables in the cells of a table (R32)', () => {
         }
         expect(one.fragment.toString()).toBe(two.fragment.toString());
       });
+
+      // The review of pull request 35, S1: where the last blocks of the shared
+      // document were ones the schema leaves out, the text was made again for
+      // each of them: 802 mendings and half a minute for eight hundred.
+      it.each([0, 50, 800])(
+        'makes the text a fixed number of times, and mends once, whatever follows the tables: 2,001 and %i blocks the schema leaves out',
+        (strays) => {
+          const flooded = () => {
+            const document = holding(2001);
+            // After everything else: a paragraph that holds blocks of a table, which no paragraph may.
+            document.getXmlFragment('default').push([
+              element(
+                'paragraph',
+                {},
+                Array.from({ length: strays }, (_, at) => small(`x${at}`)),
+              ),
+            ]);
+            return document;
+          };
+          // The work of making the text once, counted in the nodes the schema is asked for.
+          const asked = vi.spyOn(schema, 'node');
+          yXmlFragmentToProseMirrorRootNode(flooded().getXmlFragment('default'), schema);
+          const once = asked.mock.calls.length;
+          asked.mockClear();
+          const document = flooded();
+          const editor = open(document);
+          const work = asked.mock.calls.length;
+          asked.mockRestore();
+          // Once to count, once for the page, and once more where the mending is heard by the
+          // binding: four times at most, whatever follows. Before, once more for each block that followed.
+          expect(work).toBeLessThanOrEqual(4 * once);
+          // One mending for the flood, and at most one for what the schema then leaves out.
+          expect(editor.mended()).toBeGreaterThanOrEqual(1);
+          expect(editor.mended()).toBeLessThanOrEqual(2);
+          // The same two thousand as before, and nothing of what followed them.
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.most()).toBe(2000);
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(yTables(editor.fragment)).toBe(2000);
+          expect(texts(editor).at(-1)).toBe('t1999');
+          expect(editor.text().textContent).toContain('KEEP-THIS');
+          expect(editor.text().textContent).toContain('after');
+          expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+          // And a second browser, which opens the document as it was, comes to the same.
+          const second = open(flooded());
+          expect(second.fragment.toString()).toBe(editor.fragment.toString());
+          Y.applyUpdate(document, Y.encodeStateAsUpdate(second.fragment.doc!));
+          expect(tableCount(editor.text())).toBe(2000);
+        },
+      );
 
       // The review of pull request 34, B1: a block of a table that another rule
       // leaves out counted towards the bound, and honest tables went for it.
@@ -1190,6 +1291,34 @@ describe('the tables in the cells of a table (R32)', () => {
         expect(editor.fragment.toString()).not.toContain('typed');
       });
 
+      // The review of pull request 35, S5: nothing held it to once.
+      it('mends what is owed once: the text is not made again at every later change of the view', async () => {
+        const document = holding(1);
+        const editor = open(document, false);
+        const peer = peerOf(document);
+        ((peer.fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).push([paragraph('not a row')]);
+        peer.send();
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        const [mended, dispatched] = [editor.mended(), editor.dispatched()];
+        expect(mended).toBeGreaterThan(0);
+        // The view changes again and again, as it does at every key: nothing more is made or written.
+        for (let changes = 0; changes < 5; changes += 1) editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.dispatched()).toBe(dispatched);
+        expect(editor.mended()).toBe(mended);
+        // Not editable for a while, with nothing left out meanwhile: nothing is owed when it is editable again.
+        editor.setEditable(false);
+        peer.fragment.push([paragraph('more')]);
+        peer.send();
+        const then = editor.dispatched();
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.dispatched()).toBe(then);
+        expect(editor.mended()).toBe(mended);
+      });
+
       it('is told that a document past the flood cannot be shown, and takes no table out of it', () => {
         const document = holding(2500);
         const before = bytes(document);
@@ -1238,7 +1367,8 @@ const blockOf = (rows: Y.XmlElement[], caption = words('caption')) =>
 function open(document: Y.Doc, editable = true) {
   const fragment = document.getXmlFragment('default');
   let state = EditorState.create({ schema, plugins: [ySyncPlugin(fragment)] });
-  // The most tables of any text the view was handed: what a page would have laid out.
+  // The most tables of any text the view was handed: what a page would have laid out. And how often it was handed one.
+  let dispatched = 0;
   let most = 0;
   // What this browser wrote to the shared document as a mending.
   const mended: unknown[] = [];
@@ -1251,6 +1381,7 @@ function open(document: Y.Doc, editable = true) {
     },
     dispatch(transaction: Transaction) {
       most = Math.max(most, tableCount(transaction.doc));
+      dispatched += 1;
       state = state.apply(transaction);
     },
     hasFocus: () => false,
@@ -1273,6 +1404,7 @@ function open(document: Y.Doc, editable = true) {
     text: () => state.doc,
     typed: () => view,
     most: () => most,
+    dispatched: () => dispatched,
     mended: () => mended.length,
     // As the plugin of the binding is told of each change of the view (./extensions.tsx).
     setEditable: (can: boolean) => {
