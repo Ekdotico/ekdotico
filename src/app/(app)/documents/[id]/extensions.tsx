@@ -75,6 +75,8 @@ import {
   TABLE_DEPTH_MOST,
   TABLE_MOST,
   closeNested,
+  firstOf,
+  madeOf,
   tableRoom,
   tablesEndingCells,
   tablesIn,
@@ -652,9 +654,11 @@ function respan(row: PMNode, change: (cell: PMNode) => Record<string, number> | 
     const spans = change(cell);
     if (spans) changed = true;
     // Made by the type, so that the widths follow the span (`CELL.colwidth`).
-    cells.push(spans ? cell.type.create({ ...cell.attrs, ...spans }, cell.content, cell.marks) : cell);
+    cells.push(
+      spans ? madeOf(cell.type.create({ ...cell.attrs, ...spans }, cell.content, cell.marks), cell) : cell,
+    );
   });
-  return changed ? row.copy(Fragment.from(cells)) : row;
+  return changed ? madeOf(row.copy(Fragment.from(cells)), row) : row;
 }
 
 /**
@@ -1031,7 +1035,64 @@ function tablesPast(shared: Y.XmlFragment, schema: Schema): ReturnType<typeof ta
   return blocks.filter(([, , element]) => going.has(mapping.get(element)));
 }
 
-/** Deletes blocks of a table from the shared document they stand in. They are given in the order of the document. */
+/**
+ * An element of the shared document, told from text by what it carries and
+ * not by its class: were a second copy of Yjs ever loaded, `instanceof` would
+ * take every element for text, and `leftOut` would then take out every child
+ * of a parent that holds no text.
+ */
+const isElement = (child: unknown): child is Y.XmlElement =>
+  typeof (child as { nodeName?: unknown }).nodeName === 'string';
+
+/**
+ * What stands in the shared document and not in the text the binding has just
+ * built of it: the children the schema left out (`closeSchema`), each with the
+ * element it stands in and its place there, in the order of the document.
+ *
+ * WHY THEY ARE FOUND HERE, AND NOT BY THE LIBRARY'S COMPARISON (the owner's
+ * decision of 13 October 2026; measured for the re-review of pull request 35).
+ * The comparison lines the children of an element up from both ends, and what
+ * is between the first and the last that differ it deletes and puts in again.
+ * So where children that go stood between children that stay, those that stay
+ * were written again by every browser that mended: of ten paragraphs of a
+ * quotation with a row between each two, mended by two browsers at once, four
+ * were there twice and four were gone, and what a third writer was typing in
+ * one of them was lost. Taken out one by one, each as the element it is, two
+ * browsers delete the same and nothing that stays is touched; and what is
+ * left lines up one to one for the comparison, which then has only to add.
+ *
+ * An element STAYS where the node the binding made of it (`mapping`) is in the
+ * node made of the element it stands in; or a node that a rule made again of
+ * that one is (`firstOf` of ./table-bounds.ts: a row whose cells span less, a
+ * cell out of which a table was left). What is in an element that goes is not
+ * looked at. Text stays wherever the node holds text: what is wrong in it is
+ * the comparison's to write, in place.
+ */
+function leftOut(
+  shared: Y.XmlFragment,
+  mapping: Map<unknown, unknown>,
+): [parent: Y.XmlFragment, at: number][] {
+  const going: [Y.XmlFragment, number][] = [];
+  const visit = (parent: Y.XmlElement, node: PMNode): void => {
+    const stay = new Map<unknown, PMNode>();
+    node.forEach((child) => stay.set(firstOf(child), child));
+    parent.toArray().forEach((child, at) => {
+      if (!isElement(child)) {
+        if (!node.inlineContent) going.push([parent, at]);
+      } else if (stay.has(mapping.get(child))) visit(child, stay.get(mapping.get(child))!);
+      else going.push([parent, at]);
+    });
+  };
+  // What stands directly in the document is asked of no node; and what cannot
+  // stand there is gone before the text is built (`strays`).
+  for (const child of shared.toArray()) {
+    const made = mapping.get(child);
+    if (isElement(child) && made) visit(child, made as PMNode);
+  }
+  return going;
+}
+
+/** Deletes children from the shared document they stand in. They are given in the order of the document. */
 function takeOut(blocks: readonly (readonly [parent: Y.XmlFragment, at: number, ...unknown[]])[]): void {
   blocks[0]?.[0].doc!.transact(() => {
     // From the last, so that no place moves before it is used; and those
@@ -1066,10 +1127,11 @@ function takeOut(blocks: readonly (readonly [parent: Y.XmlFragment, at: number, 
  * WHAT THE SCHEMA LEFT OUT IS TAKEN OUT OF THE SHARED DOCUMENT, and nothing
  * else is (`closeSchema`; `strays` for what stands directly in the document,
  * which the schema is not asked about). The binding counts places in the text by the shared
- * document, so the two must hold the same; the text is written back by the
- * library's own comparison, which removes the children that were not made and
- * leaves the node they were in. It is not this member's change, and is in no
- * history of undo.
+ * document, so the two must hold the same. What was not made is deleted, each
+ * as the element it is (`leftOut`), and then the library's own comparison
+ * writes what the making added: the paragraph of a cell left with nothing, an
+ * attribute that had no value. One change, which is not this member's, and is
+ * in no history of undo.
  *
  * ONLY A BROWSER THAT CAN EDIT THE DOCUMENT WRITES TO IT (the review of pull
  * request 34). A mending is a change to the shared document, and one made
@@ -1111,12 +1173,15 @@ export function holdBinding(view: EditorView, unshown: () => void): () => void {
     }
     return stray.length > 0;
   };
-  /** Writes the text over the shared document, by the library's own comparison. */
+  /** Takes out of the shared document what the building left out, and then puts in what it added. One change. */
   const mend = () => {
     // A mapping of its own: the binding's says each node is the one it made,
     // which is what the comparison must not take on trust here.
     const fresh = { mapping: new Map(), isOMark: new Map() };
-    binding.doc.transact(() => updateYFragment(binding.doc, binding.type, view.state.doc, fresh), MEND);
+    binding.doc.transact(() => {
+      takeOut(leftOut(binding.type, binding.mapping));
+      updateYFragment(binding.doc, binding.type, view.state.doc, fresh);
+    }, MEND);
   };
   let failed = false;
   // Whether a mending was left unwritten because the text could not be edited.

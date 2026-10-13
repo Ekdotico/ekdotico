@@ -139,6 +139,22 @@ const COUNTED = new WeakMap<PMNode, Held>();
 
 const role = (node: PMNode): unknown => node.type.spec.tableRole;
 
+// A node that a rule made again, with less in it or with other attributes, and
+// the node it was made of. The collaboration binding knows a node of the
+// shared document by the node it first made of it; so that the one that stands
+// in the text in its place is known for the same (`leftOut` of ./extensions.tsx).
+const MADE_OF = new WeakMap<PMNode, PMNode>();
+/** Records that `made` stands for `of`, and returns it. */
+export function madeOf<Made extends PMNode | null>(made: Made, of: PMNode): Made {
+  if (made && made !== of) MADE_OF.set(made, of);
+  return made;
+}
+/** The node that was first made, of which this one was made again, however often. */
+export function firstOf(node: PMNode): PMNode {
+  for (let of = MADE_OF.get(node); of; of = MADE_OF.get(node)) node = of;
+  return node;
+}
+
 function tablesAmong(content: Fragment): Held {
   let cells = 0;
   let levels = 0;
@@ -213,7 +229,7 @@ function fit(node: PMNode, levels: number, left: { cells: number }): PMNode | nu
   if (!changed) return node;
   // A table without a row is none, and a block that held a table and holds
   // none now is nothing: the schema would fill it with a table of no cell.
-  if (table) return kept.length > 0 ? node.type.create(node.attrs, kept, node.marks) : null;
+  if (table) return kept.length > 0 ? madeOf(node.type.create(node.attrs, kept, node.marks), node) : null;
   if (
     node.children.some((child) => role(child) === 'table') &&
     !kept.some((child) => role(child) === 'table')
@@ -221,9 +237,12 @@ function fit(node: PMNode, levels: number, left: { cells: number }): PMNode | nu
     return null;
   // A cell or a quotation that held nothing else holds an empty paragraph.
   const content = Fragment.from(kept);
-  return node.type.validContent(content)
-    ? node.copy(content)
-    : node.type.createAndFill(node.attrs, content, node.marks);
+  return madeOf(
+    node.type.validContent(content)
+      ? node.copy(content)
+      : node.type.createAndFill(node.attrs, content, node.marks),
+    node,
+  );
 }
 
 /**

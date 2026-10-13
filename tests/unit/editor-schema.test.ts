@@ -1614,62 +1614,568 @@ describe('the tables in the cells of a table (R32)', () => {
           expect(a.fragment.toString()).toBe(b.fragment.toString());
         });
 
-        // KNOWN, AND NOT THIS BRANCH'S TO MEND (measured for the re-review of pull
-        // request 35, 13 October 2026, and reported to the owner). The ordinary
-        // mending, of what the schema leaves out of a node that stays, is written
-        // by the same comparison of the library (`holdBinding`, `mend`), and does
-        // what the flood's did: where the children that go stand BETWEEN children
-        // that stay, those between the first and the last that go are deleted and
-        // put in again by each browser that mends. Measured here, and the same
-        // for the items of a list and the rows of a table: ten paragraphs of a
-        // quotation with a row between each two, two browsers at once, a third
-        // writer typing in one of them. Of the ten, four are there twice and four
-        // are gone; six of ten are the items they were; the third writer's words
-        // are lost. Every browser comes to that same result.
-        //
-        // The test states what should hold, and is marked as one that fails:
-        // it passes the day the mending is made to delete and nothing else.
-        it.fails(
-          'the ordinary mending of children the schema leaves out, between children that stay, keeps each of those once',
-          () => {
-            const origin = new Y.Doc();
-            origin.getXmlFragment('default').push([
-              paragraph('top'),
-              element(
-                'blockquote',
-                {},
-                Array.from({ length: 10 }, (_, at) => paragraph(`honest ${at}.`)),
-              ),
-              paragraph('end'),
+        // Measured for the re-review of pull request 35, 13 October 2026, and
+        // mended by the owner's decision of that day. The ordinary mending, of
+        // what the schema leaves out of a node that stays, was written by the
+        // same comparison of the library, and did what the flood's did: where
+        // the children that go stand BETWEEN children that stay, those between
+        // the first and the last that go were deleted and put in again by each
+        // browser that mended. Ten paragraphs of a quotation with a row between
+        // each two, two browsers at once, a third writer typing in one of them:
+        // of the ten, four were there twice and four were gone; six of ten were
+        // the items they were; the third writer's words were lost. The numbers
+        // in the test are those. It was marked as one that fails until the
+        // mending took the children out as the elements they are (`leftOut`).
+        it('the ordinary mending of children the schema leaves out, between children that stay, keeps each of those once', () => {
+          const origin = new Y.Doc();
+          origin.getXmlFragment('default').push([
+            paragraph('top'),
+            element(
+              'blockquote',
+              {},
+              Array.from({ length: 10 }, (_, at) => paragraph(`honest ${at}.`)),
+            ),
+            paragraph('end'),
+          ]);
+          const [da, db, dc] = [copyOf(origin), copyOf(origin), copyOf(origin)];
+          const [a, b, c] = [open(da), open(db), open(dc)];
+          const quoted = (fragment: Y.XmlFragment) => fragment.get(1) as Y.XmlElement;
+          const before = (quoted(a.fragment).toArray() as Y.XmlElement[]).map(item);
+          // A client that is no editor puts a row, which no quotation holds, between each two.
+          const hostile = copyOf(origin, 1);
+          hostile.transact(() => {
+            for (let at = 9; at >= 1; at -= 1)
+              quoted(hostile.getXmlFragment('default')).insert(at, [rowOf('stray')]);
+          });
+          const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
+          Y.applyUpdate(da, update, 'net');
+          Y.applyUpdate(db, update, 'net');
+          type(c, 'honest 5.', 'C-TYPED ');
+          exchange(da, db, dc, hostile);
+          const text = a.text().textContent;
+          expect(new Set([a, b, c].map((editor) => editor.fragment.toString())).size).toBe(1);
+          expect(text).not.toContain('stray');
+          // Measured: 1,2,0,2,0,2,0,2,0,1.
+          expect(Array.from({ length: 10 }, (_, at) => times(text, `honest ${at}.`))).toEqual(
+            Array(10).fill(1),
+          );
+          // Measured: 0.
+          expect(times(text, 'C-TYPED')).toBe(1);
+          // Measured: six of the ten, among fourteen.
+          expect((quoted(a.fragment).toArray() as Y.XmlElement[]).map(item)).toEqual(before);
+        });
+
+        describe('and so does the ordinary mending, of what the schema leaves out of a node that stays', () => {
+          type YNode = Y.XmlElement | Y.XmlText;
+          /** An element with everything in it, each as the item it is. */
+          const deep = (type: YNode): string[] => [
+            item(type),
+            ...(type instanceof Y.XmlElement ? (type.toArray() as YNode[]).flatMap(deep) : []),
+          ];
+          /** What a mending put into the shared document, each thing by its name. */
+          const put = (editor: ReturnType<typeof open>) =>
+            editor
+              .mends()
+              .flatMap((update) => Y.decodeUpdate(update).structs)
+              .map((struct) => {
+                const { content, parentSub } = struct as Y.Item;
+                const held = content as unknown as {
+                  type?: { nodeName?: string };
+                  str?: string;
+                  arr?: unknown[];
+                };
+                if (parentSub) return `@${parentSub}`;
+                if (held.str !== undefined) return `"${held.str}"`;
+                // A value written over an attribute's earlier one, which does not name the attribute again.
+                if (held.arr) return `=${held.arr.join()}`;
+                return held.type?.nodeName ?? held.type?.constructor.name ?? struct.constructor.name;
+              });
+          const honest = (count: number) => Array.from({ length: count }, (_, at) => `honest ${at}.`);
+          // A cell as an editor writes it, with its spans: one without them is given them (below).
+          const cell = (held: Y.XmlElement[]) => element('tableCell', { colspan: 1, rowspan: 1 }, held);
+          const row = (...written: string[]) =>
+            element(
+              'tableRow',
+              {},
+              written.map((each) => cell([paragraph(each)])),
+            );
+          const full = (first: Y.XmlElement[]) =>
+            blockOf([
+              element('tableRow', {}, [
+                cell(first),
+                ...Array.from({ length: 99 }, () => cell([paragraph('')])),
+              ]),
+              ...Array.from({ length: 99 }, () => row(...Array.from({ length: 100 }, () => ''))),
             ]);
+          const child = (of: YNode, ...path: number[]) =>
+            path.reduce((at, index) => (at as Y.XmlElement).get(index) as YNode, of) as Y.XmlElement;
+
+          // The node that holds what stays, where it is in a document, and what is put between.
+          const SHAPES: [
+            name: string,
+            kept: number,
+            make: (kept: string[]) => Y.XmlElement,
+            path: number[],
+            stray: () => YNode,
+          ][] = [
+            [
+              'a quotation, and rows between its paragraphs',
+              10,
+              (kept) =>
+                element(
+                  'blockquote',
+                  {},
+                  kept.map((each) => paragraph(each)),
+                ),
+              [],
+              () => rowOf('stray'),
+            ],
+            [
+              'a list, and paragraphs between its items',
+              10,
+              (kept) =>
+                element(
+                  'bulletList',
+                  {},
+                  kept.map((each) => element('listItem', {}, [paragraph(each)])),
+                ),
+              [],
+              () => paragraph('stray'),
+            ],
+            [
+              'a table, and paragraphs between its rows',
+              10,
+              (kept) => blockOf(kept.map((each) => row(each))),
+              [0],
+              () => paragraph('stray'),
+            ],
+            [
+              'a quotation, and text between its paragraphs',
+              10,
+              (kept) =>
+                element(
+                  'blockquote',
+                  {},
+                  kept.map((each) => paragraph(each)),
+                ),
+              [],
+              () => words('stray'),
+            ],
+            // The route the review named and did not try: both are left out by the bound on cells.
+            [
+              'a cell of a table that has no room, and tables between its paragraphs',
+              3,
+              (kept) => full(kept.map((each) => paragraph(each))),
+              [0, 0, 0],
+              () => blockOf([rowOf('stray')], words('stray')),
+            ],
+          ];
+          const BETWEEN: [name: string, side: number, alone: boolean][] = [
+            ['one between each two', 1, false],
+            ['two side by side between each two', 2, false],
+            ['one, between two', 1, true],
+          ];
+          const CASES = SHAPES.flatMap(([name, ...shape]) =>
+            BETWEEN.map(([between, ...put]) => [`${name}: ${between}`, ...shape, ...put] as const),
+          );
+
+          const made = (make: (kept: string[]) => Y.XmlElement, kept: number) => {
+            const origin = new Y.Doc();
+            origin.getXmlFragment('default').push([paragraph('top'), make(honest(kept)), paragraph('end')]);
+            return origin;
+          };
+          /** What a client that is no editor sends: the document with what does not belong between what does. */
+          const strayed = (
+            from: Y.Doc,
+            path: number[],
+            kept: number,
+            stray: () => YNode,
+            side: number,
+            alone: boolean,
+          ) => {
+            const hostile = copyOf(from, 1);
+            const holds = child(hostile.getXmlFragment('default').get(1) as Y.XmlElement, ...path);
+            hostile.transact(() => {
+              for (let at = kept - 1; at >= 1; at -= 1)
+                if (!alone || at === 1)
+                  holds.insert(
+                    at,
+                    Array.from({ length: side }, () => stray()),
+                  );
+            });
+            return hostile;
+          };
+
+          it.each(CASES)('%s', (_name, kept, make, path, stray, side, alone) => {
+            const origin = made(make, kept);
             const [da, db, dc] = [copyOf(origin), copyOf(origin), copyOf(origin)];
             const [a, b, c] = [open(da), open(db), open(dc)];
-            const quoted = (fragment: Y.XmlFragment) => fragment.get(1) as Y.XmlElement;
-            const before = (quoted(a.fragment).toArray() as Y.XmlElement[]).map(item);
-            // A client that is no editor puts a row, which no quotation holds, between each two.
-            const hostile = copyOf(origin, 1);
+            const holds = (editor: ReturnType<typeof open>) =>
+              child(editor.fragment.get(1) as Y.XmlElement, ...path);
+            const before = (holds(a).toArray() as YNode[]).map(deep);
+            expect(before).toHaveLength(kept);
+            // The writer has typed in one of the children, and can undo it.
+            type(a, `honest ${kept - 1}.`, 'A-TYPED ');
+            exchange(da, db, dc);
+
+            // It reaches two browsers at once, and each mends before it hears the other.
+            const hostile = strayed(da, path, kept, stray, side, alone);
+            const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
+            const [builtA, builtB] = [a.dispatched(), b.dispatched()];
+            Y.applyUpdate(da, update, 'net');
+            Y.applyUpdate(db, update, 'net');
+            expect([a.mended(), b.mended()]).toEqual([1, 1]);
+            // Meanwhile a third writer, who has heard nothing of it, types in a child that stays.
+            type(c, 'honest 1.', 'C-TYPED ');
+            exchange(da, db, dc, hostile);
+
+            for (const editor of [a, b, c]) {
+              const text = editor.text().textContent;
+              expect(editor.unshown).not.toHaveBeenCalled();
+              expect(text).not.toContain('stray');
+              expect(honest(kept).map((each) => times(text, each))).toEqual(Array(kept).fill(1));
+              expect([times(text, 'A-TYPED'), times(text, 'C-TYPED')]).toEqual([1, 1]);
+              // Every child that stays is the item it was, and so is everything in it.
+              expect((holds(editor).toArray() as YNode[]).map(deep)).toEqual(before);
+              expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+            }
+            expect(new Set([a, b, c].map((editor) => editor.fragment.toString())).size).toBe(1);
+            // What each wrote holds deletions and nothing that was put in; and hearing the other, neither writes again.
+            deletionsOnly(a);
+            deletionsOnly(b);
+            expect([a.mended(), b.mended(), c.mended()]).toEqual([1, 1, 0]);
+            // The work: the text is made once for what arrived and once for the mending, whatever the size.
+            expect(a.dispatched() - builtA).toBeLessThanOrEqual(4);
+            expect(b.dispatched() - builtB).toBeLessThanOrEqual(4);
+
+            // The writer's undo takes back what the writer typed, and nothing else.
+            expect(a.undo.undoStack).toHaveLength(1);
+            a.undo.undo();
+            exchange(da, db, dc, hostile);
+            for (const editor of [a, b, c]) {
+              const text = editor.text().textContent;
+              expect(text).not.toContain('stray');
+              expect([times(text, 'A-TYPED'), times(text, 'C-TYPED')]).toEqual([0, 1]);
+              expect(honest(kept).map((each) => times(text, each))).toEqual(Array(kept).fill(1));
+              expect((holds(editor).toArray() as YNode[]).map(deep)).toEqual(before);
+            }
+            // A browser that opens the document later writes nothing.
+            const later = open(copyOf(da));
+            expect(later.mended()).toBe(0);
+            expect(later.text().eq(a.text())).toBe(true);
+          });
+
+          it('a browser that cannot edit writes nothing, and mends once when it can: deletions, and every child as it was', async () => {
+            const [, kept, make, path, stray] = SHAPES[0]!;
+            const origin = made(make, kept);
+            const document = copyOf(origin);
+            const editor = open(document, false);
+            const holds = () => child(editor.fragment.get(1) as Y.XmlElement, ...path);
+            const before = (holds().toArray() as YNode[]).map(deep);
+            const hostile = strayed(document, path, kept, stray, 1, false);
+            Y.applyUpdate(document, Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(document)), 'net');
+            const arrived = bytes(document);
+            expect(editor.mended()).toBe(0);
+            expect(bytes(document)).toBe(arrived);
+            expect(editor.text().textContent).not.toContain('stray');
+            expect(honest(kept).map((each) => times(editor.text().textContent, each))).toEqual(
+              Array(kept).fill(1),
+            );
+            editor.setEditable(true);
+            await new Promise((done) => setTimeout(done, 0));
+            expect(editor.mended()).toBe(1);
+            deletionsOnly(editor);
+            expect(editor.fragment.toString()).not.toContain('stray');
+            expect((holds().toArray() as YNode[]).map(deep)).toEqual(before);
+          });
+
+          // The comparison that follows the deletion: what it may put in.
+          describe('puts in what the schema requires and nothing else', () => {
+            it('the paragraph of a cell that held only what goes, beside rows that stay', () => {
+              const origin = new Y.Doc();
+              origin
+                .getXmlFragment('default')
+                .push([paragraph('top'), blockOf(honest(4).map((each) => row(each, `${each} second`)))]);
+              const document = copyOf(origin);
+              const editor = open(document);
+              const table = () => child(editor.fragment.get(1) as Y.XmlElement, 0);
+              const before = (table().toArray() as YNode[]).map(deep);
+              const hostile = copyOf(document, 1);
+              const rows = child(hostile.getXmlFragment('default').get(1) as Y.XmlElement, 0);
+              hostile.transact(() => {
+                // A row whose one cell holds a row, which no cell holds: the cell is left with nothing.
+                rows.insert(2, [element('tableRow', {}, [cell([rowOf('stray')])])]);
+                rows.insert(1, [paragraph('stray')]);
+              });
+              Y.applyUpdate(document, Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(document)), 'net');
+              expect(editor.mended()).toBe(1);
+              // One paragraph, with nothing in it, and no copy of anything that was there.
+              expect(put(editor)).toEqual(['paragraph']);
+              expect(editor.fragment.toString()).not.toContain('stray');
+              const after = (table().toArray() as YNode[]).map(deep);
+              expect([after[0], after[1], after[3], after[4]]).toEqual(before);
+              expect(child(table(), 2, 0).toString()).toContain('<paragraph></paragraph></tablecell>');
+              expect(child(table(), 2, 0).length).toBe(1);
+              expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+              expect(open(copyOf(document)).mended()).toBe(0);
+            });
+
+            // The bound on cells makes the table in the cell again, without the row that is past it
+            // (`closeNested`): it is still the table that stays, and its other rows the rows they were.
+            it('nothing, where a row of a table in a cell is past the cells and stands between rows that are not: those are the items they were', () => {
+              const wide = (cells: number, written: string) =>
+                element(
+                  'tableRow',
+                  {},
+                  Array.from({ length: cells }, (_, at) => cell([paragraph(at ? '' : written)])),
+                );
+              const origin = new Y.Doc();
+              // 9,900 cells of its own: a hundred are left for the tables in them.
+              origin
+                .getXmlFragment('default')
+                .push([
+                  paragraph('top'),
+                  blockOf(Array.from({ length: 100 }, (_, at) => wide(99, at ? '' : 'outer'))),
+                ]);
+              const [da, db] = [copyOf(origin), copyOf(origin)];
+              const [a, b] = [open(da), open(db)];
+              const inner = (fragment: Y.XmlFragment) =>
+                child(fragment.get(1) as Y.XmlElement, 0, 0, 0, 1, 0);
+              const hostile = copyOf(da, 1);
+              const sent = hostile.getXmlFragment('default');
+              // Forty and forty are inside the hundred; forty more are not; ten after them are.
+              hostile.transact(() =>
+                child(sent.get(1) as Y.XmlElement, 0, 0, 0).push([
+                  blockOf([
+                    wide(40, 'honest 0.'),
+                    wide(40, 'honest 1.'),
+                    wide(40, 'stray'),
+                    wide(10, 'honest 2.'),
+                  ]),
+                ]),
+              );
+              const rows = (inner(sent).toArray() as YNode[]).map(deep);
+              const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
+              Y.applyUpdate(da, update, 'net');
+              Y.applyUpdate(db, update, 'net');
+              exchange(da, db, hostile);
+              for (const editor of [a, b]) {
+                const text = editor.text().textContent;
+                expect(text).not.toContain('stray');
+                expect(honest(3).map((each) => times(text, each))).toEqual([1, 1, 1]);
+                expect((inner(editor.fragment).toArray() as YNode[]).map(deep)).toEqual([
+                  rows[0],
+                  rows[1],
+                  rows[3],
+                ]);
+                expect(editor.mended()).toBe(1);
+                deletionsOnly(editor);
+              }
+              expect(a.fragment.toString()).toBe(b.fragment.toString());
+              expect(open(copyOf(da)).mended()).toBe(0);
+            });
+
+            // The grid makes the row again, and its cell (`closeGrid`): they are still the row and the cell that stay.
+            it('the span of a cell that reached past the table, where a paragraph between its rows goes: written on the cell that is there', () => {
+              const origin = new Y.Doc();
+              origin
+                .getXmlFragment('default')
+                .push([paragraph('top'), blockOf(honest(3).map((each) => row(each)))]);
+              const [da, db] = [copyOf(origin), copyOf(origin)];
+              const [a, b] = [open(da), open(db)];
+              const table = (editor: ReturnType<typeof open>) =>
+                child(editor.fragment.get(1) as Y.XmlElement, 0);
+              const before = deep(table(a));
+              const hostile = copyOf(da, 1);
+              const sent = child(hostile.getXmlFragment('default').get(1) as Y.XmlElement, 0);
+              hostile.transact(() => {
+                sent.insert(2, [paragraph('stray')]);
+                child(sent, 1, 0).setAttribute('rowspan', 9 as unknown as string);
+              });
+              const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
+              Y.applyUpdate(da, update, 'net');
+              Y.applyUpdate(db, update, 'net');
+              // The span of one row, on the one cell, by each browser, and nothing else.
+              expect([put(a), put(b)]).toEqual([['=1'], ['=1']]);
+              exchange(da, db, hostile);
+              for (const editor of [a, b]) {
+                expect(deep(table(editor))).toEqual(before);
+                expect(child(table(editor), 1, 0).getAttribute('rowspan')).toBe(1);
+                expect(editor.fragment.toString()).not.toContain('stray');
+                expect(editor.mended()).toBe(1);
+              }
+              expect(a.fragment.toString()).toBe(b.fragment.toString());
+              expect(open(copyOf(da)).mended()).toBe(0);
+            });
+
+            it('the caption of a block that has none, where rows of its table go: the table and its rows are the items they were', () => {
+              const origin = new Y.Doc();
+              origin
+                .getXmlFragment('default')
+                .push([paragraph('top'), blockOf(honest(4).map((each) => row(each)))]);
+              const document = copyOf(origin);
+              const editor = open(document);
+              const block = () => editor.fragment.get(1) as Y.XmlElement;
+              const before = deep(child(block(), 0));
+              const hostile = copyOf(document, 1);
+              const sent = hostile.getXmlFragment('default').get(1) as Y.XmlElement;
+              hostile.transact(() => {
+                sent.delete(1, 1);
+                child(sent, 0).insert(3, [paragraph('stray')]);
+                child(sent, 0).insert(1, [paragraph('stray'), paragraph('stray')]);
+              });
+              Y.applyUpdate(document, Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(document)), 'net');
+              expect(editor.mended()).toBe(1);
+              expect(put(editor)).toEqual(['tableCaption']);
+              expect(deep(child(block(), 0))).toEqual(before);
+              expect(editor.fragment.toString()).not.toContain('stray');
+              expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+              expect(open(copyOf(document)).mended()).toBe(0);
+            });
+
+            it('the spans of cells that have none, written on the cells that are there: no cell is another item', () => {
+              const origin = new Y.Doc();
+              origin
+                .getXmlFragment('default')
+                .push([paragraph('top'), blockOf(honest(4).map((each) => rowOf(each)))]);
+              const [da, db] = [copyOf(origin), copyOf(origin)];
+              const [a, b] = [open(da), open(db)];
+              const before = deep(a.fragment.get(1) as Y.XmlElement);
+              const hostile = copyOf(da, 1);
+              hostile.transact(() =>
+                child(hostile.getXmlFragment('default').get(1) as Y.XmlElement, 0).insert(2, [
+                  paragraph('stray'),
+                ]),
+              );
+              const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
+              Y.applyUpdate(da, update, 'net');
+              Y.applyUpdate(db, update, 'net');
+              // Two spans for each of the four cells, by each browser, and nothing else.
+              const spans = Array.from({ length: 4 }, () => ['@colspan', '@rowspan']).flat();
+              expect([put(a), put(b)]).toEqual([spans, spans]);
+              exchange(da, db, hostile);
+              expect([a.mended(), b.mended()]).toEqual([1, 1]);
+              expect(deep(a.fragment.get(1) as Y.XmlElement)).toEqual(before);
+              expect(a.fragment.toString()).toBe(b.fragment.toString());
+              expect(a.fragment.toString()).not.toContain('stray');
+              expect(open(copyOf(da)).mended()).toBe(0);
+            });
+
+            // KNOWN, AND STATED WHERE THE RULE IS (`closeNested` of table-bounds.ts):
+            // two that take the same thing out agree, and two that put something in
+            // each put in their own. Nothing of the writer's is doubled by it: what
+            // is put in is the empty paragraph a cell must hold.
+            it('by each browser that mends at once, its own: a cell left with nothing holds two empty paragraphs, and every browser the same', () => {
+              const origin = new Y.Doc();
+              origin
+                .getXmlFragment('default')
+                .push([paragraph('top'), blockOf(honest(2).map((each) => row(each)))]);
+              const [da, db] = [copyOf(origin), copyOf(origin)];
+              const [a, b] = [open(da), open(db)];
+              const before = (child(a.fragment.get(1) as Y.XmlElement, 0).toArray() as YNode[]).map(deep);
+              const hostile = copyOf(da, 1);
+              hostile.transact(() =>
+                child(hostile.getXmlFragment('default').get(1) as Y.XmlElement, 0).insert(1, [
+                  element('tableRow', {}, [cell([rowOf('stray')])]),
+                ]),
+              );
+              const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
+              Y.applyUpdate(da, update, 'net');
+              Y.applyUpdate(db, update, 'net');
+              expect([put(a), put(b)]).toEqual([['paragraph'], ['paragraph']]);
+              exchange(da, db, hostile);
+              expect([a.mended(), b.mended()]).toEqual([1, 1]);
+              expect(names(child(a.fragment.get(1) as Y.XmlElement, 0, 1, 0))).toEqual([
+                'paragraph',
+                'paragraph',
+              ]);
+              expect(a.text().textContent).toBe('tophonest 0.honest 1.caption');
+              const rows = (child(a.fragment.get(1) as Y.XmlElement, 0).toArray() as YNode[]).map(deep);
+              expect([rows[0], rows[2]]).toEqual(before);
+              expect(a.fragment.toString()).toBe(b.fragment.toString());
+              expect(yXmlFragmentToProseMirrorRootNode(a.fragment, schema).eq(a.text())).toBe(true);
+              expect(open(copyOf(da)).mended()).toBe(0);
+            });
+          });
+
+          // KNOWN, AND NOT MENDED HERE (measured 13 October 2026, and reported to
+          // the owner). A paragraph of the shared document may hold two texts side
+          // by side; a paragraph of the editor holds one run of text. The library's
+          // comparison makes the first text hold everything and deletes the second,
+          // wherever it looks at such a paragraph: here, since the mending compares
+          // the whole document, and as much at the next letter a writer types in
+          // that paragraph (`_prosemirrorChanged`). Two browsers that do it at once
+          // each put the words of the second text into the first. Measured, in both
+          // of these: "FIRST SECONDSECOND" in every browser.
+          //
+          // The two ways to it: something the schema leaves out stands between two
+          // texts of one paragraph, and is taken out; or the two texts stood side
+          // by side already, anywhere in a document in which anything is mended.
+          // Each test states what should hold, and is marked as one that fails.
+          it.fails.each([
+            ['a row between two texts of one paragraph, which goes', true],
+            ['two texts side by side in a paragraph, where something is mended elsewhere', false],
+          ])('the words of a text are kept once: %s', (_name, inside) => {
+            const origin = new Y.Doc();
+            origin
+              .getXmlFragment('default')
+              .push([
+                element('paragraph', {}, inside ? [words('FIRST ')] : [words('FIRST '), words('SECOND')]),
+                element('blockquote', {}, [paragraph('honest 0.'), paragraph('honest 1.')]),
+              ]);
+            const [da, db] = [copyOf(origin), copyOf(origin)];
+            const [a, b] = [open(da), open(db)];
+            expect([a.mended(), b.mended()]).toEqual([0, 0]);
+            const hostile = copyOf(da, 1);
             hostile.transact(() => {
-              for (let at = 9; at >= 1; at -= 1)
-                quoted(hostile.getXmlFragment('default')).insert(at, [rowOf('stray')]);
+              const fragment = hostile.getXmlFragment('default');
+              if (inside) (fragment.get(0) as Y.XmlElement).push([rowOf('stray'), words('SECOND')]);
+              else (fragment.get(1) as Y.XmlElement).insert(1, [rowOf('stray')]);
             });
             const update = Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(da));
             Y.applyUpdate(da, update, 'net');
             Y.applyUpdate(db, update, 'net');
-            type(c, 'honest 5.', 'C-TYPED ');
-            exchange(da, db, dc, hostile);
-            const text = a.text().textContent;
-            expect(new Set([a, b, c].map((editor) => editor.fragment.toString())).size).toBe(1);
-            expect(text).not.toContain('stray');
-            // Measured: 1,2,0,2,0,2,0,2,0,1.
-            expect(Array.from({ length: 10 }, (_, at) => times(text, `honest ${at}.`))).toEqual(
-              Array(10).fill(1),
+            exchange(da, db, hostile);
+            expect(a.fragment.toString()).toBe(b.fragment.toString());
+            expect(a.text().textContent).not.toContain('stray');
+            // Measured: 2.
+            expect(times(a.text().textContent, 'SECOND')).toBe(1);
+          });
+
+          it('is no part of what a writer’s own changes write: typing, and a paragraph put in, mend nothing', () => {
+            const [, kept, make] = SHAPES[2]!;
+            const editor = open(copyOf(made(make, kept)));
+            type(editor, 'honest 3.', 'typed ');
+            const view = editor.typed();
+            view.dispatch(
+              view.state.tr.insert(0, schema.nodes.paragraph!.create(null, schema.text('put in'))),
             );
-            // Measured: 0.
-            expect(times(text, 'C-TYPED')).toBe(1);
-            // Measured: six of the ten, among fourteen.
-            expect((quoted(a.fragment).toArray() as Y.XmlElement[]).map(item)).toEqual(before);
-          },
-        );
+            editor.binding._prosemirrorChanged(view.state.doc);
+            expect(editor.fragment.toString()).toContain('put in');
+            expect(editor.mended()).toBe(0);
+            expect(editor.undo.undoStack.length).toBeGreaterThan(0);
+          });
+
+          // The work on the largest: counted, and the same whatever the size.
+          it.each([10, 1000])(
+            'makes the text the same number of times and mends once, whatever the size: %i paragraphs with a row between each two',
+            (kept) => {
+              const [, , make, path, stray] = SHAPES[0]!;
+              const document = copyOf(made(make, kept));
+              const editor = open(document);
+              const hostile = strayed(document, path, kept, stray, 1, false);
+              const [built, asked] = [editor.dispatched(), vi.spyOn(schema, 'node')];
+              Y.applyUpdate(document, Y.encodeStateAsUpdate(hostile, Y.encodeStateVector(document)), 'net');
+              const work = asked.mock.calls.length;
+              asked.mockRestore();
+              expect(editor.mended()).toBe(1);
+              expect(editor.dispatched() - built).toBe(2);
+              // The nodes the schema is asked for, in the two makings: each child and stray a fixed number of times.
+              expect(work).toBeLessThanOrEqual(2 * 12 * kept);
+              deletionsOnly(editor);
+            },
+          );
+        });
       });
 
       // The review of pull request 34, B1: a block of a table that another rule
