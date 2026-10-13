@@ -1179,14 +1179,111 @@ describe('the tables in the cells of a table (R32)', () => {
           expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
         });
 
-        it('where three counts do not bring it inside the number the document is said to be one that cannot be shown, and the page is handed none of it', () => {
+        // The statement of a document that cannot be shown says "Nothing in the
+        // document was changed": so nothing is, where no deletion is known to do.
+        it('where three counts would not bring it inside the number, nothing is deleted: the document is said to be one that cannot be shown, and is as it was', () => {
           // Of 300, a hundred are kept however many go: 2,091 at each of the three counts.
           const document = crowded(300);
+          const before = bytes(document);
           const editor = open(document);
           expect(editor.unshown).toHaveBeenCalledTimes(1);
           expect(editor.most()).toBe(0);
-          // What was taken out stays out, and the document is nearer the number for the next browser.
-          expect(yTables(editor.fragment)).toBe(1990 + 1 + 300 - 2 * 91);
+          expect(editor.mended()).toBe(0);
+          expect(bytes(document)).toBe(before);
+          expect(yTables(editor.fragment)).toBe(1990 + 1 + 300);
+        });
+      });
+
+      // The review at f305ee1, S1: what was past the number was counted in
+      // tables and what went was counted in blocks. A hundred of the writer's
+      // tables and a table of 2,500 cells that each hold one: 2,601, and 601
+      // to go. The large table is one block, and its 2,500 are not found, being
+      // made again by the rule on depth: so the last 601 blocks that were found
+      // were all there were, and nothing was left.
+      describe('counts what goes in tables, and not in blocks', () => {
+        /** A table of 2,500 cells, each holding a table that holds a table a level too deep. */
+        const large = () =>
+          blockOf(
+            Array.from({ length: 25 }, () =>
+              element(
+                'tableRow',
+                {},
+                Array.from({ length: 100 }, () =>
+                  element('tableCell', {}, [
+                    paragraph(''),
+                    blockOf(
+                      [
+                        element('tableRow', {}, [
+                          element('tableCell', {}, [paragraph(''), small('too-deep')]),
+                        ]),
+                      ],
+                      words(''),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+            words('the large one'),
+          );
+        const with100 = (where: 'before' | 'after') => {
+          const document = holding(100);
+          const fragment = document.getXmlFragment('default');
+          fragment.insert(where === 'before' ? 1 : fragment.length - 1, [large()]);
+          return document;
+        };
+
+        it.each(['before', 'after'] as const)(
+          'a table that holds 2,500 goes alone, %s the writer’s hundred, and every one of those stays',
+          (where) => {
+            const editor = open(with100(where));
+            expect(editor.unshown).not.toHaveBeenCalled();
+            expect(editor.most()).toBe(100);
+            expect(tableCount(editor.text())).toBe(100);
+            expect(texts(editor)).toEqual(Array.from({ length: 100 }, (_, at) => `t${at}`));
+            expect(editor.text().textContent).not.toContain('the large one');
+            expect(editor.text().textContent).toContain('KEEP-THIS');
+            // One block went, in one change that holds deletions alone.
+            expect(editor.mended()).toBe(1);
+            expect(Y.decodeUpdate(editor.mends()[0]!).structs).toEqual([]);
+            expect(yTables(editor.fragment)).toBe(100);
+            // And a second browser comes to the same.
+            const second = open(with100(where));
+            expect(texts(second)).toEqual(texts(editor));
+          },
+        );
+
+        it('takes the tables in the cells of a table one by one where they are found, and leaves the table they stand in: exactly two thousand stay', () => {
+          // 1,989 tables, then one that holds thirty in its cells (31), then ten more: 2,030.
+          const document = holding(1989);
+          const fragment = document.getXmlFragment('default');
+          fragment.insert(fragment.length - 1, [
+            blockOf(
+              [
+                element(
+                  'tableRow',
+                  {},
+                  Array.from({ length: 30 }, (_, at) =>
+                    element('tableCell', {}, [paragraph(''), small(`in-${at}`)]),
+                  ),
+                ),
+              ],
+              words('holds-thirty'),
+            ),
+            ...Array.from({ length: 10 }, (_, at) => small(`put-last-${at}`)),
+          ]);
+          const editor = open(document);
+          expect(editor.unshown).not.toHaveBeenCalled();
+          // Thirty are past it: the ten last, and the last twenty of the thirty in
+          // the cells. The table they stood in stays, with the first ten.
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(texts(editor).slice(-11)).toEqual([
+            't1988',
+            ...Array.from({ length: 10 }, (_, at) => `in-${at}`),
+          ]);
+          expect(editor.text().textContent).toContain('holds-thirty');
+          expect(editor.text().textContent).not.toContain('put-last');
+          expect(editor.mended()).toBe(1);
+          expect(Y.decodeUpdate(editor.mends()[0]!).structs).toEqual([]);
         });
       });
 

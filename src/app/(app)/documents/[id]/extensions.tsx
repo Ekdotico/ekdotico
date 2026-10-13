@@ -58,7 +58,7 @@ import {
   type ProsemirrorBinding,
 } from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
 import { LightbulbIcon, StickyNoteIcon, TriangleAlertIcon } from '@ekdotico/domico/icons';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
@@ -896,11 +896,25 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
  * first table that went and the last: of twenty paragraphs, in two browsers
  * at once, ten were doubled and six were gone.)
  *
- * A table in a cell that the bound on cells made again, with fewer rows, is
- * not the node the library made of its element, and is not among those found
- * here. It stays; the count is taken again after the deletion (`holdBinding`,
- * three times at most), and where there are not enough tables to be found the
- * document is one that cannot be shown.
+ * WHAT GOES IS COUNTED IN TABLES, AND NOT IN BLOCKS (the review at f305ee1).
+ * A block that is found may hold many tables, in the cells of its own: the
+ * blocks are taken from the last, and each takes from what is still past the
+ * number as many tables as its node holds, until nothing is past it; and
+ * those that then need not go are given back, the last first. Before, one
+ * block was taken for one table: a writer's hundred tables went, with a table
+ * of 2,500 cells that each held one, for the 601 that were to go. Now that
+ * table goes alone, wherever it stands among the writer's.
+ *
+ * NOTHING IS DELETED UNLESS THE DELETION IS KNOWN TO DO (the same review). A
+ * table that goes from a cell makes room there for one the bound on cells had
+ * left out, and a table in a cell that was made again, with fewer rows, is
+ * not the node the library made of its element and is not found: so the
+ * count after a deletion is not known before it. It is found out on a copy
+ * of the shared document: the deletion, the count again, a second deletion,
+ * and a third count. Where the third is inside the number, the blocks that
+ * went from the copy are those to delete, in one change. Where it is not,
+ * nothing is deleted and the answer is null: the document cannot be shown,
+ * and the statement that says so says truly that nothing in it was changed.
  *
  * Before the text is built for the page, and not after, because that text is
  * what must not be laid out.
@@ -909,17 +923,54 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
  * that arrives, a few milliseconds for the largest document there is. A count
  * kept by the changes, if it ever shows in a profile.
  */
-function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFragment, at: number][] {
-  type Element = Y.XmlFragment & { nodeName?: unknown };
+function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFragment, at: number][] | null {
+  const first = tablesPast(shared, schema);
+  if (first.length === 0) return [];
+  // The copy: the same elements, each known in both by the item it is.
+  const name = [...shared.doc!.share].find(([, type]) => (type as unknown) === shared)![0];
+  const copy = new Y.Doc();
+  try {
+    Y.applyUpdate(copy, Y.encodeStateAsUpdate(shared.doc!));
+    const copied = copy.getXmlFragment(name);
+    const going = new Set<string>();
+    let past = first.map(([, , element]) => itemOf(element));
+    for (let count = 1; past.length > 0; count += 1) {
+      if (count === 3) return null;
+      for (const each of past) going.add(each);
+      const here = new Set(past);
+      takeOut(tableBlocks(copied, schema).filter(([, , element]) => here.has(itemOf(element))));
+      past = tablesPast(copied, schema).map(([, , element]) => itemOf(element));
+    }
+    return tableBlocks(shared, schema)
+      .filter(([, , element]) => going.has(itemOf(element)))
+      .map(([parent, at]) => [parent, at]);
+  } finally {
+    copy.destroy();
+  }
+}
+
+type SharedElement = Y.XmlFragment & { nodeName?: unknown; _item?: Y.Item | null };
+/** The item an element of a shared document is: the same in every copy of the document. */
+const itemOf = (element: SharedElement) => {
+  // Every element that stands in a document is an item of it.
+  const { client, clock } = (element._item as Y.Item).id;
+  return `${client}:${clock}`;
+};
+
+/** The blocks of a table in a shared document, each with the element that holds it and its place there, in the order of the document. */
+function tableBlocks(
+  shared: Y.XmlFragment,
+  schema: Schema,
+): [parent: Y.XmlFragment, at: number, element: SharedElement][] {
   const block = Object.values(schema.nodes).find(
     (type) => type.contentMatch.defaultType?.spec.tableRole === 'table',
   )?.name;
-  const blocks: [parent: Y.XmlFragment, at: number, element: Element][] = [];
+  const blocks: [Y.XmlFragment, number, SharedElement][] = [];
   // What is still to be looked at, the first on top: never a function that
   // calls itself, on a document that may be any depth.
-  const waiting: [parent: Y.XmlFragment, at: number, child: Element][] = [];
+  const waiting: [Y.XmlFragment, number, SharedElement][] = [];
   const open = (parent: Y.XmlFragment) => {
-    const children = parent.toArray() as Element[];
+    const children = parent.toArray() as SharedElement[];
     for (let at = children.length - 1; at >= 0; at -= 1) waiting.push([parent, at, children[at]!]);
   };
   open(shared);
@@ -929,12 +980,18 @@ function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFra
     if (next[2].nodeName === block) blocks.push(next);
     open(next[2]);
   }
+  return blocks;
+}
+
+/** The blocks to take out of a shared document as it stands, for the tables its text holds past the number: one count. */
+function tablesPast(shared: Y.XmlFragment, schema: Schema): ReturnType<typeof tableBlocks> {
+  const blocks = tableBlocks(shared, schema);
   if (blocks.length <= TABLE_FLOOD_MOST) return [];
   const { doc, mapping } = initProseMirrorDoc(shared, schema) as unknown as {
     doc: PMNode;
-    mapping: Map<unknown, unknown>;
+    mapping: Map<unknown, PMNode | undefined>;
   };
-  const past = tableCount(doc) - TABLE_FLOOD_MOST;
+  let past = tableCount(doc) - TABLE_FLOOD_MOST;
   if (past <= 0) return [];
   // The blocks of a table that the text holds, as the nodes they are.
   const kept = new Set<unknown>();
@@ -942,10 +999,41 @@ function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFra
     if (node.firstChild?.type.spec.tableRole === 'table') kept.add(node);
     return tableCount(node) > 0;
   });
-  return blocks
-    .filter(([, , element]) => kept.has(mapping.get(element)))
-    .slice(-past)
-    .map(([parent, at]) => [parent, at]);
+  const found = blocks.filter(([, , element]) => kept.has(mapping.get(element)));
+  const holds = (at: number) => tableCount(mapping.get(found[at]![2])!);
+  // From the last, each for as many tables as its node holds.
+  let from = found.length;
+  while (from > 0 && past > 0) {
+    from -= 1;
+    past -= holds(from);
+  }
+  // And none that need not go: where a block of many tables came after
+  // smaller ones in the taking, those are given back, the last first, for as
+  // long as what is taken still covers what is past the number. (`past` is
+  // now how far the taking went beyond it, as zero or less.)
+  const taken: typeof found = [];
+  for (let at = found.length - 1; at >= from; at -= 1) {
+    if (past + holds(at) <= 0) past += holds(at);
+    else taken.unshift(found[at]!);
+  }
+  return taken;
+}
+
+/** Deletes blocks of a table from the shared document they stand in. They are given in the order of the document. */
+function takeOut(blocks: readonly (readonly [parent: Y.XmlFragment, at: number, ...unknown[]])[]): void {
+  blocks[0]?.[0].doc!.transact(() => {
+    // From the last, so that no place moves before it is used; and those
+    // that stand side by side in one deletion, since each deletion counts
+    // its way to its place.
+    let end = blocks.length;
+    for (let at = blocks.length - 1; at >= 0; at -= 1) {
+      const [parent, place] = blocks[at]!;
+      const before = blocks[at - 1];
+      if (before && before[0] === parent && before[1] === place - 1) continue;
+      parent.delete(place, end - at);
+      end = at;
+    }
+  }, MEND);
 }
 
 /**
@@ -1046,27 +1134,15 @@ export function holdBinding(view: EditorView, unshown: () => void): () => void {
           if (unstray() && !writes()) owed = true;
           // R58, and before the text is built for the same reason: the text
           // of a flood of tables is not to be laid out.
-          // Three times at most: the deletion, the count again, and once more
-          // where a table that was not found has since become one that is.
-          for (let pass = 1; ; pass += 1) {
-            const past = floodOfTables(binding.type, schema);
-            if (past.length === 0) break;
-            if (!writes() || pass === 3) throw new Error('editor: more tables than a page lays out');
+          // One change, or none: where no deletion is known to bring the
+          // document inside the number, nothing is deleted.
+          const past = floodOfTables(binding.type, schema);
+          if (past === null || (past.length > 0 && !writes()))
+            throw new Error('editor: more tables than a page lays out');
+          if (past.length > 0) {
             flooding = true;
             try {
-              binding.doc.transact(() => {
-                // From the last, so that no place moves before it is used;
-                // and those that stand side by side in one deletion, since
-                // each deletion counts its way to its place.
-                let end = past.length;
-                for (let at = past.length - 1; at >= 0; at -= 1) {
-                  const [parent, place] = past[at]!;
-                  const before = past[at - 1];
-                  if (before && before[0] === parent && before[1] === place - 1) continue;
-                  parent.delete(place, end - at);
-                  end = at;
-                }
-              }, MEND);
+              takeOut(past);
             } finally {
               flooding = false;
             }
