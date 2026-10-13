@@ -51,7 +51,12 @@ import {
   type NodeViewProps,
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import { updateYFragment, ySyncPluginKey, type ProsemirrorBinding } from '@tiptap/y-tiptap';
+import {
+  updateYFragment,
+  ySyncPluginKey,
+  yXmlFragmentToProseMirrorRootNode,
+  type ProsemirrorBinding,
+} from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
 import type * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
@@ -64,6 +69,9 @@ import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
 import {
   TABLE_CELLS_MOST,
+  TABLE_COUNT_MOST,
+  TABLE_FLOOD_MOST,
+  tableCount,
   TABLE_DEPTH_MOST,
   TABLE_MOST,
   closeNested,
@@ -810,9 +818,24 @@ export function mayApply(transaction: Transaction, editable: boolean): boolean {
  * should be; if one is, it can still be written in, and deleted from.
  */
 export function holdsTables(transaction: Transaction, before: PMNode): boolean {
+  return tableRefusal(transaction, before) === null;
+}
+
+/**
+ * Why a transaction is not applied, where it is for a bound on tables, and
+ * null where it is applied: `room`, where it would take a table past the
+ * bounds it shares with the tables in its cells (R32); `count`, where it
+ * would leave the document with more than `TABLE_COUNT_MOST` tables and more
+ * than it had (R58). So one that adds no table is applied whatever the
+ * document holds: a document with more than the number is written in, and
+ * deleted from, and takes no table more.
+ */
+export function tableRefusal(transaction: Transaction, before: PMNode): 'room' | 'count' | null {
   const binding = transaction.getMeta(ySyncPluginKey) as { isChangeOrigin?: boolean } | undefined;
-  if (!transaction.docChanged || binding?.isChangeOrigin === true) return true;
-  return !tablesIn(transaction.doc).past || tablesIn(before).past;
+  if (!transaction.docChanged || binding?.isChangeOrigin === true) return null;
+  if (tablesIn(transaction.doc).past && !tablesIn(before).past) return 'room';
+  const count = tableCount(transaction.doc);
+  return count > TABLE_COUNT_MOST && count > tableCount(before) ? 'count' : null;
 }
 
 // The origin of a mending of the shared document. Not one the undo manager
@@ -839,6 +862,57 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
 }
 
 /**
+ * The tables of a shared document that are past `TABLE_FLOOD_MOST` (R58),
+ * each as the element that holds its block and the block's place in it; none
+ * where the document is inside the number.
+ *
+ * WHAT IS COUNTED IS WHAT THE SCHEMA KEEPS (the review of pull request 34,
+ * B1). The blocks of a table are first counted as the shared document holds
+ * them, which is all the schema can keep and often more: one in a paragraph
+ * or a caption, one a level too deep, one past the cells of the table it
+ * stands in, is left out by another rule and is no table of the document.
+ * Only where that count is past the number is the text made, here and for
+ * the count alone, as the schema makes it; and only where the tables IN IT
+ * are past the number does anything go: as many blocks as it is past by, the
+ * last in the order of the document. A block the schema would have left out
+ * may be among them, and then the count is taken again; so this is asked
+ * until it answers with none (`holdBinding`).
+ *
+ * Before the text is built for the page, and not after, because that text is
+ * what must not be laid out.
+ *
+ * ponytail: every element of the shared document is visited at each change
+ * that arrives, a few milliseconds for the largest document there is; and a
+ * document past the first count is made twice. A count kept by the changes,
+ * if either ever shows in a profile.
+ */
+function floodOfTables(shared: Y.XmlFragment, schema: Schema): [parent: Y.XmlFragment, at: number][] {
+  type Element = Y.XmlFragment & { nodeName?: unknown };
+  const block = Object.values(schema.nodes).find(
+    (type) => type.contentMatch.defaultType?.spec.tableRole === 'table',
+  )?.name;
+  const blocks: [Y.XmlFragment, number][] = [];
+  // What is still to be looked at, the first on top: never a function that
+  // calls itself, on a document that may be any depth.
+  const waiting: [parent: Y.XmlFragment, at: number, child: Element][] = [];
+  const open = (parent: Y.XmlFragment) => {
+    const children = parent.toArray() as Element[];
+    for (let at = children.length - 1; at >= 0; at -= 1) waiting.push([parent, at, children[at]!]);
+  };
+  open(shared);
+  for (let next = waiting.pop(); next; next = waiting.pop()) {
+    const [parent, at, child] = next;
+    // Text has no name, and holds no table.
+    if (typeof child.nodeName !== 'string') continue;
+    if (child.nodeName === block) blocks.push([parent, at]);
+    open(child);
+  }
+  if (blocks.length <= TABLE_FLOOD_MOST) return [];
+  const past = tableCount(yXmlFragmentToProseMirrorRootNode(shared, schema)) - TABLE_FLOOD_MOST;
+  return past > 0 ? blocks.slice(-past) : [];
+}
+
+/**
  * Holds the collaboration binding to two things, at the three functions
  * through which the shared document and the text of the editor meet
  * (`ProsemirrorBinding` of @tiptap/y-tiptap 3.0.9: `_forceRerender` at the
@@ -860,18 +934,51 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
  * library's own comparison, which removes the children that were not made and
  * leaves the node they were in. It is not this member's change, and is in no
  * history of undo.
+ *
+ * ONLY A BROWSER THAT CAN EDIT THE DOCUMENT WRITES TO IT (the review of pull
+ * request 34). A mending is a change to the shared document, and one made
+ * where the document cannot be edited is sent to a server that takes nothing
+ * from that connection: it reaches no one, and the page says "Syncing" for
+ * good. So where the text cannot be edited nothing is mended. The text is
+ * still made without what the schema leaves out, which no one types into
+ * there. A document past the flood of tables cannot be shown without taking
+ * tables out, and is said to be one that cannot be shown. And what was not
+ * mended is mended when the text can be edited again, the connection having
+ * come back or the read-only state ended: the function this returns is called
+ * at each change of the view, and then makes the text again from the shared
+ * document and mends it, before this member types anything into it.
  */
-export function holdBinding(view: EditorView, unshown: () => void): void {
+export function holdBinding(view: EditorView, unshown: () => void): () => void {
   const { binding } = ySyncPluginKey.getState(view.state) as { binding: ProsemirrorBinding };
   const { schema } = view.state;
+  // What stands in for a view in the tests has no such property, and can edit.
+  const writes = () => (view as { editable?: boolean }).editable !== false;
+  /** Takes what stands directly in the shared document where it cannot. True where there was any. */
+  const unstray = () => {
+    const stray = strays(binding.type, schema);
+    if (stray.length > 0 && writes()) {
+      binding.doc.transact(() => {
+        for (const at of stray.reverse()) binding.type.delete(at, 1);
+      }, MEND);
+    }
+    return stray.length > 0;
+  };
+  /** Writes the text over the shared document, by the library's own comparison. */
+  const mend = () => {
+    // A mapping of its own: the binding's says each node is the one it made,
+    // which is what the comparison must not take on trust here.
+    const fresh = { mapping: new Map(), isOMark: new Map() };
+    binding.doc.transact(() => updateYFragment(binding.doc, binding.type, view.state.doc, fresh), MEND);
+  };
   let failed = false;
+  // Whether a mending was left unwritten because the text could not be edited.
+  let owed = false;
   const held =
     <Given extends unknown[]>(run: (...given: Given) => void, builds: boolean) =>
     (...given: Given) => {
       if (failed) return;
       try {
         if (builds) {
-          MENDED.delete(schema);
           // Before the text is built, and not after as below: the library
           // makes the document itself without asking the schema, so what
           // stands directly in it where it cannot is not left out. A row is
@@ -879,19 +986,33 @@ export function holdBinding(view: EditorView, unshown: () => void): void {
           // next thing this member types writes that table over the row, as
           // this member's change; and text is a fault of the building, which
           // closed the document in every tab.
-          const stray = strays(binding.type, schema);
-          if (stray.length > 0) {
+          if (unstray() && !writes()) owed = true;
+          // R58, and before the text is built for the same reason: the text
+          // of a flood of tables is not to be laid out.
+          for (let past = floodOfTables(binding.type, schema); past.length > 0;) {
+            if (!writes()) throw new Error('editor: more tables than a page lays out');
             binding.doc.transact(() => {
-              for (const at of stray.reverse()) binding.type.delete(at, 1);
+              // From the last, so that no place moves before it is used; and
+              // those that stand side by side in one deletion, since each
+              // deletion counts its way to its place.
+              let end = past.length;
+              for (let at = past.length - 1; at >= 0; at -= 1) {
+                const [parent, place] = past[at]!;
+                const before = past[at - 1];
+                if (before && before[0] === parent && before[1] === place - 1) continue;
+                parent.delete(place, end - at);
+                end = at;
+              }
             }, MEND);
+            past = floodOfTables(binding.type, schema);
           }
+          // What the count above left out is not what the building leaves out.
+          MENDED.delete(schema);
         }
         run(...given);
         if (builds && MENDED.delete(schema)) {
-          // A mapping of its own: the binding's says each node is the one it
-          // made, which is what the comparison must not take on trust here.
-          const fresh = { mapping: new Map(), isOMark: new Map() };
-          binding.doc.transact(() => updateYFragment(binding.doc, binding.type, view.state.doc, fresh), MEND);
+          if (writes()) mend();
+          else owed = true;
         }
       } catch {
         failed = true;
@@ -901,6 +1022,14 @@ export function holdBinding(view: EditorView, unshown: () => void): void {
   binding._forceRerender = held(binding._forceRerender.bind(binding), true);
   binding._observeFunction = held(binding._observeFunction as (...given: unknown[]) => void, true);
   binding._prosemirrorChanged = held(binding._prosemirrorChanged.bind(binding), false);
+  return () => {
+    if (!owed || !writes() || failed) return;
+    owed = false;
+    // The whole text again, from the shared document: what was left out of
+    // it is left out again, and this time it is mended. Once the change of
+    // the view that this is called in is done, and not inside it.
+    setTimeout(() => binding._forceRerender(), 0);
+  };
 }
 
 /**
@@ -952,7 +1081,7 @@ function settleInCell(editor: Editor): void {
  * instead, which is a selection and no content: the first letter typed at it
  * makes the paragraph, as this writer's change.
  *
- * AWAITS THE OWNER (new behaviour of four keys; reported with the pull
+ * Approved by the owner on 13 October 2026 (new behaviour of four keys; reported with the pull
  * request). As at the top of a document, where the arrow up from a table that
  * begins it gives the same cursor before the table:
  *
@@ -1009,6 +1138,12 @@ function besideTable(editor: Editor, direction: 'up' | 'down' | 'left' | 'right'
  */
 const COUNTS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 export const TABLE_NO_ROOM = `The table has no room for this. A table and the tables in its cells hold ${TABLE_CELLS_MOST.toLocaleString('en-GB')} cells, ${COUNTS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep.`;
+/**
+ * The words for a table that was not added because the document holds as many
+ * as a writer may bring it to (R58). Approved in form by the owner on 13
+ * October 2026, the number following the constant.
+ */
+export const TABLE_NO_MORE = `The document has no room for another table. A document holds ${TABLE_COUNT_MOST.toLocaleString('en-GB')} tables.`;
 
 const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
   name: 'closed',
@@ -1030,7 +1165,8 @@ const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
       new Plugin({
         filterTransaction: (transaction, state) => {
           if (!mayApply(transaction, this.editor.isEditable)) return false;
-          const held = holdsTables(transaction, state.doc);
+          const refusal = tableRefusal(transaction, state.doc);
+          const held = refusal === null;
           // NFR-IC-19 (WCAG 3.3.1, 4.1.3): a change that is not made is said
           // to be so. Of this writer's own asking only: not what the binding
           // brings, and not what a plugin appends, which is the table
@@ -1041,7 +1177,7 @@ const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
             transaction.getMeta('appendedTransaction') === undefined;
           if (!held && asked) {
             said = true;
-            this.options.noRoom(TABLE_NO_ROOM);
+            this.options.noRoom(refusal === 'count' ? TABLE_NO_MORE : TABLE_NO_ROOM);
           } else if (held && transaction.docChanged && said) {
             said = false;
             this.options.noRoom(null);
@@ -1157,7 +1293,7 @@ export const CODE_COLOURS_MOST = 50_000;
  * (the owner's decision R23 of 12 October 2026, specification row D133:
  * "50,000, and say so in the block's header"). No requirement gives the
  * words: written under the Expression Guidelines, with the number as it is
- * above. AWAITS THE OWNER'S APPROVAL.
+ * above. Approved by the owner on 13 October 2026.
  */
 export const CODE_UNCOLOURED = `Syntax colours are not shown in a code block longer than ${CODE_COLOURS_MOST.toLocaleString('en-GB')} characters.`;
 // What the library reads from an answer: the nodes to colour. None.
@@ -1272,8 +1408,17 @@ export function extensions(
         const start = sync?.spec.view;
         if (!sync || !start) throw new Error('editor: the collaboration binding was not found');
         sync.spec.view = (view) => {
-          holdBinding(view, unshown);
-          return start(view);
+          const settle = holdBinding(view, unshown);
+          const made = start(view);
+          // At each change of the view, the one that makes the text editable
+          // among them: what was owed to the shared document is mended then.
+          return {
+            ...made,
+            update: (...given) => {
+              made.update?.(...given);
+              settle();
+            },
+          };
         };
         return plugins;
       },
