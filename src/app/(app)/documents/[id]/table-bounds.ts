@@ -68,7 +68,7 @@ export const TABLE_DEPTH_MOST = 2;
 /**
  * The most tables a writer may bring a document to, a table in a cell counted
  * as one more (the owner's decision R58 of 13 October 2026: "refuse only,
- * never delete, at 100"; specification rows D173 and P17, pending).
+ * never delete, at 100"; specification rows D182 and D184, pending).
  *
  * REFUSE ONLY. A change of the writer's own that would leave the document
  * with more tables than this, and more than it had, is not applied
