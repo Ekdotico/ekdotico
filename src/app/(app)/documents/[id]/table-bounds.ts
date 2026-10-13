@@ -103,7 +103,7 @@ export const TABLE_COUNT_MOST = 100;
  * The most tables a document is opened with: past it, the tables that are
  * last in the order of the document are left out and taken out of the shared
  * document, as the rows and the cells past their bounds are (`floodOfTables`
- * of ./extensions.tsx; `withoutTablesPast` below). Against a flood and nothing
+ * of ./extensions.tsx). Against a flood and nothing
  * else: a client that is no editor can send sixty thousand tables in under 5
  * MB, and a page that is asked to draw them does not answer.
  *
@@ -183,40 +183,6 @@ export function tableCount(node: PMNode): number {
     TABLES.set(node, count);
   }
   return count;
-}
-
-/** A node without the tables past the first `left.tables` of it, or null where it is the block of one of those. */
-function first(node: PMNode, left: { tables: number }): PMNode | null {
-  const count = tableCount(node);
-  // No table in it, or all of them inside what is left: as it is.
-  if (count <= left.tables) {
-    left.tables -= count;
-    return node;
-  }
-  // The block of a table goes with its table and its caption.
-  if (role(node.firstChild ?? node) === 'table' && left.tables === 0) return null;
-  if (role(node) === 'table') left.tables -= 1;
-  const kept: PMNode[] = [];
-  node.forEach((child) => {
-    const held = first(child, left);
-    if (held) kept.push(held);
-  });
-  // A cell or a quotation that held nothing else holds an empty paragraph.
-  const content = Fragment.from(kept);
-  return node.type.validContent(content)
-    ? node.copy(content)
-    : node.type.createAndFill(node.attrs, content, node.marks);
-}
-
-/**
- * A document with the first `most` of its tables and none of the others, a
- * table in a cell counted in its place: the text that is written over a shared
- * document that holds a flood of them (`floodOfTables` of ./extensions.tsx).
- * Each table that goes, goes with its block and its caption, and with the
- * tables in its cells; nothing else of the document is changed.
- */
-export function withoutTablesPast(doc: PMNode, most: number): PMNode {
-  return first(doc, { tables: most }) ?? doc;
 }
 
 /**
