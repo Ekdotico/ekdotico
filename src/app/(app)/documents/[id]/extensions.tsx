@@ -1036,6 +1036,15 @@ function tablesPast(shared: Y.XmlFragment, schema: Schema): ReturnType<typeof ta
 }
 
 /**
+ * An element of the shared document, told from text by what it carries and
+ * not by its class: were a second copy of Yjs ever loaded, `instanceof` would
+ * take every element for text, and `leftOut` would then take out every child
+ * of a parent that holds no text.
+ */
+const isElement = (child: unknown): child is Y.XmlElement =>
+  typeof (child as { nodeName?: unknown }).nodeName === 'string';
+
+/**
  * What stands in the shared document and not in the text the binding has just
  * built of it: the children the schema left out (`closeSchema`), each with the
  * element it stands in and its place there, in the order of the document.
@@ -1068,7 +1077,7 @@ function leftOut(
     const stay = new Map<unknown, PMNode>();
     node.forEach((child) => stay.set(firstOf(child), child));
     parent.toArray().forEach((child, at) => {
-      if (!(child instanceof Y.XmlElement)) {
+      if (!isElement(child)) {
         if (!node.inlineContent) going.push([parent, at]);
       } else if (stay.has(mapping.get(child))) visit(child, stay.get(mapping.get(child))!);
       else going.push([parent, at]);
@@ -1078,7 +1087,7 @@ function leftOut(
   // stand there is gone before the text is built (`strays`).
   for (const child of shared.toArray()) {
     const made = mapping.get(child);
-    if (child instanceof Y.XmlElement && made) visit(child, made as PMNode);
+    if (isElement(child) && made) visit(child, made as PMNode);
   }
   return going;
 }
