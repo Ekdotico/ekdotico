@@ -896,14 +896,28 @@ function strays(shared: Y.XmlFragment, schema: Schema): number[] {
  * first table that went and the last: of twenty paragraphs, in two browsers
  * at once, ten were doubled and six were gone.)
  *
- * WHAT GOES IS COUNTED IN TABLES, AND NOT IN BLOCKS (the review at f305ee1).
- * A block that is found may hold many tables, in the cells of its own: the
- * blocks are taken from the last, and each takes from what is still past the
- * number as many tables as its node holds, until nothing is past it; and
- * those that then need not go are given back, the last first. Before, one
- * block was taken for one table: a writer's hundred tables went, with a table
- * of 2,500 cells that each held one, for the 601 that were to go. Now that
- * table goes alone, wherever it stands among the writer's.
+ * WHAT GOES IS EVERY TABLE PAST THE NUMBER, EACH COUNTED ONCE (the reviews at
+ * f305ee1 and at 02063b5). The tables of the text are numbered in its order,
+ * a table before the tables in its cells (`tablesPast`). A block that was
+ * found goes where its table's number is past `TABLE_FLOOD_MOST`, with all it
+ * holds; a table in one of its cells is not taken as well. So a table numbered
+ * inside the number stays though tables in its cells are past it, and only
+ * those go: it straddles the number, and keeps the first of them.
+ *
+ * One case is not exact. A table in a cell that another rule made again (the
+ * rule on depth left a table out of it, or the bound on cells took rows from
+ * it) is not the node the library made of its element, and cannot be deleted
+ * by itself. Where such a table is numbered past the number, the block round
+ * it that was found goes instead, whole, though its own number is inside; and
+ * its tables are then not counted, so that those after it are numbered as if
+ * it had not been there. A table of 2,500 cells that each hold such a table
+ * goes alone, and a writer's hundred tables stay, before it or after it.
+ *
+ * (Two countings were tried before this one. One block for one table took a
+ * writer's hundred tables with that table of 2,500, for 601 that were to go.
+ * Each block for as many tables as it holds, from the last, counted a table
+ * twice where a block and blocks in it were both taken, fell short at every
+ * count, and left a document of 25 tables of 101 unshown.)
  *
  * NOTHING IS DELETED UNLESS THE DELETION IS KNOWN TO DO (the same review). A
  * table that goes from a cell makes room there for one the bound on cells had
@@ -991,32 +1005,30 @@ function tablesPast(shared: Y.XmlFragment, schema: Schema): ReturnType<typeof ta
     doc: PMNode;
     mapping: Map<unknown, PMNode | undefined>;
   };
-  let past = tableCount(doc) - TABLE_FLOOD_MOST;
-  if (past <= 0) return [];
-  // The blocks of a table that the text holds, as the nodes they are.
-  const kept = new Set<unknown>();
-  doc.descendants((node) => {
-    if (node.firstChild?.type.spec.tableRole === 'table') kept.add(node);
-    return tableCount(node) > 0;
-  });
-  const found = blocks.filter(([, , element]) => kept.has(mapping.get(element)));
-  const holds = (at: number) => tableCount(mapping.get(found[at]![2])!);
-  // From the last, each for as many tables as its node holds.
-  let from = found.length;
-  while (from > 0 && past > 0) {
-    from -= 1;
-    past -= holds(from);
-  }
-  // And none that need not go: where a block of many tables came after
-  // smaller ones in the taking, those are given back, the last first, for as
-  // long as what is taken still covers what is past the number. (`past` is
-  // now how far the taking went beyond it, as zero or less.)
-  const taken: typeof found = [];
-  for (let at = found.length - 1; at >= from; at -= 1) {
-    if (past + holds(at) <= 0) past += holds(at);
-    else taken.unshift(found[at]!);
-  }
-  return taken;
+  if (tableCount(doc) <= TABLE_FLOOD_MOST) return [];
+  // The nodes the library made of the blocks: one of them that is in the text is a block that was found.
+  const found = new Set<unknown>(blocks.map(([, , element]) => mapping.get(element)));
+  const going = new Set<unknown>();
+  // The tables of the text, numbered as it has them: a table before the
+  // tables in its cells. `round` is the block that was found nearest round
+  // the node, the one that can be deleted for what stands in it.
+  let number = 0;
+  const visit = (node: PMNode, round: PMNode | null): void => {
+    if (tableCount(node) === 0 || going.has(round)) return;
+    if (node.firstChild?.type.spec.tableRole !== 'table') return node.forEach((child) => visit(child, round));
+    const before = number;
+    number += 1;
+    if (found.has(node)) {
+      // Past the number: it goes, with what it holds, which is not looked at.
+      if (number > TABLE_FLOOD_MOST) return void going.add(node);
+      node.forEach((child) => visit(child, node));
+      // Taken for a table in it that could not be (below): none of its tables is counted.
+      if (going.has(node)) number = before;
+    } else if (number > TABLE_FLOOD_MOST && round) going.add(round);
+    else node.forEach((child) => visit(child, round));
+  };
+  visit(doc, null);
+  return blocks.filter(([, , element]) => going.has(mapping.get(element)));
 }
 
 /** Deletes blocks of a table from the shared document they stand in. They are given in the order of the document. */

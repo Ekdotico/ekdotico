@@ -1287,6 +1287,184 @@ describe('the tables in the cells of a table (R32)', () => {
         });
       });
 
+      // The review at 02063b5: where a block and blocks in its cells were both
+      // taken, its tables were counted twice, the deletion fell short at every
+      // count, and the document was left unshown, with every table found.
+      // Now every table has one number, in the order of the document, a table
+      // before the tables in its cells; and those past 2,000 go.
+      describe('keeps exactly the first two thousand tables in the order of the document', () => {
+        /** A table of a hundred cells in one row, each holding a table: 101 tables. */
+        const of101 = (name: string) =>
+          blockOf(
+            [
+              element(
+                'tableRow',
+                {},
+                Array.from({ length: 100 }, (_, at) =>
+                  element('tableCell', {}, [paragraph(''), small(`${name}n${at}.`)]),
+                ),
+              ),
+            ],
+            words(`${name}outer.`),
+          );
+        const has = (editor: ReturnType<typeof open>, written: string) =>
+          editor.text().textContent.includes(written);
+        /** What every such document comes to, in two browsers that open it, and in one that opens it afterwards. */
+        const shown = (make: () => Y.Doc) => {
+          const document = make();
+          const editor = open(document);
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.most()).toBe(2000);
+          expect(tableCount(editor.text())).toBe(2000);
+          expect(yTables(editor.fragment)).toBe(2000);
+          // One change, which holds deletions alone.
+          expect(editor.mends().map((update) => Y.decodeUpdate(update).structs)).toEqual([[]]);
+          expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+          const second = open(make());
+          expect(second.fragment.toString()).toBe(editor.fragment.toString());
+          // A browser that opens it afterwards writes nothing.
+          const later = new Y.Doc();
+          Y.applyUpdate(later, Y.encodeStateAsUpdate(document));
+          const before = bytes(later);
+          const third = open(later);
+          expect(third.mended()).toBe(0);
+          expect(bytes(later)).toBe(before);
+          expect(tableCount(third.text())).toBe(2000);
+          return editor;
+        };
+
+        it('twenty-five tables of 101 in the middle of the writer’s hundred: the first fifty of the writer’s, nineteen whole, and the twentieth with thirty of its hundred', () => {
+          const editor = shown(() => {
+            const document = holding(100);
+            // After the first line and fifty of the writer's tables.
+            document.getXmlFragment('default').insert(
+              51,
+              Array.from({ length: 25 }, (_, at) => of101(`L${at}`)),
+            );
+            return document;
+          });
+          // 50, and 19 of 101, are 1,969; the twentieth is 1,970, and the tables in its cells 1,971 to 2,070.
+          expect(texts(editor)).toEqual(Array.from({ length: 50 }, (_, at) => `t${at}`));
+          expect([has(editor, 'L18outer.'), has(editor, 'L18n99.')]).toEqual([true, true]);
+          expect([has(editor, 'L19outer.'), has(editor, 'L19n29.'), has(editor, 'L19n30.')]).toEqual([
+            true,
+            true,
+            false,
+          ]);
+          expect(has(editor, 'L20outer.')).toBe(false);
+          expect(has(editor, 'KEEP-THIS') && has(editor, 'after')).toBe(true);
+        });
+
+        it('three groups of eight tables of 101 among four single ones: the first three single ones, two groups, and of the third group three whole and one with seventy-seven', () => {
+          const editor = shown(() => {
+            const document = new Y.Doc();
+            document
+              .getXmlFragment('default')
+              .push([
+                paragraph('KEEP-THIS'),
+                ...[0, 1, 2].flatMap((group) => [
+                  small(`single${group}.`),
+                  ...Array.from({ length: 8 }, (_, at) => of101(`G${group}L${at}`)),
+                ]),
+                small('single3.'),
+                paragraph('after'),
+              ]);
+            return document;
+          });
+          // 1 and 808, twice, are 1,618; the third single one is 1,619; the fourth table of the third
+          // group is 1,923, and the tables in its cells 1,924 to 2,023.
+          expect(['single0.', 'single1.', 'single2.', 'single3.'].map((each) => has(editor, each))).toEqual([
+            true,
+            true,
+            true,
+            false,
+          ]);
+          expect([has(editor, 'G1L7n99.'), has(editor, 'G2L2n99.')]).toEqual([true, true]);
+          expect([has(editor, 'G2L3outer.'), has(editor, 'G2L3n76.'), has(editor, 'G2L3n77.')]).toEqual([
+            true,
+            true,
+            false,
+          ]);
+          expect(has(editor, 'G2L4outer.')).toBe(false);
+        });
+
+        it('a table past the number and the tables in its cells go together, once: two thousand single ones, a table that holds three, and one more', () => {
+          const editor = shown(() => {
+            const document = holding(2000);
+            const fragment = document.getXmlFragment('default');
+            fragment.insert(fragment.length - 1, [
+              blockOf(
+                [
+                  element(
+                    'tableRow',
+                    {},
+                    Array.from({ length: 3 }, (_, at) =>
+                      element('tableCell', {}, [paragraph(''), small(`in-${at}`)]),
+                    ),
+                  ),
+                ],
+                words('holds-three'),
+              ),
+              small('put-last'),
+            ]);
+            return document;
+          });
+          expect(texts(editor)).toEqual(Array.from({ length: 2000 }, (_, at) => `t${at}`));
+          expect(has(editor, 'holds-three')).toBe(false);
+        });
+
+        it('several tables whose cells hold tables that were made again, among single ones: each goes whole where one of its tables is past the number, and what follows is numbered without it', () => {
+          /** A table of `cells` cells, each holding a table that holds a table a level too deep: made again, and not found. */
+          const remade = (name: string, cells: number) =>
+            blockOf(
+              [
+                element(
+                  'tableRow',
+                  {},
+                  Array.from({ length: cells }, () =>
+                    element('tableCell', {}, [
+                      paragraph(''),
+                      blockOf(
+                        [
+                          element('tableRow', {}, [
+                            element('tableCell', {}, [paragraph(''), small('too-deep')]),
+                          ]),
+                        ],
+                        words(''),
+                      ),
+                    ]),
+                  ),
+                ),
+              ],
+              words(`${name}.`),
+            );
+          const document = holding(1900);
+          const fragment = document.getXmlFragment('default');
+          // After the writer's 1,900: one of 51 (to 1,951), one of 81 (to 2,032), one of 41, and five single ones.
+          fragment.insert(fragment.length - 1, [
+            remade('first', 50),
+            remade('second', 80),
+            remade('third', 40),
+            ...Array.from({ length: 5 }, (_, at) => small(`put-last-${at}`)),
+          ]);
+          const editor = open(document);
+          expect(editor.unshown).not.toHaveBeenCalled();
+          // The second straddles the number and cannot lose the tables in its cells one by one: it
+          // goes whole. Then the third is 1,952 to 1,992, and the five are 1,993 to 1,997.
+          expect(tableCount(editor.text())).toBe(1997);
+          expect(['first.', 'second.', 'third.'].map((each) => has(editor, each))).toEqual([
+            true,
+            false,
+            true,
+          ]);
+          expect(texts(editor).slice(-6)).toEqual([
+            't1899',
+            ...Array.from({ length: 5 }, (_, at) => `put-last-${at}`),
+          ]);
+          expect(editor.most()).toBeLessThanOrEqual(2000);
+        });
+      });
+
       // The re-review of pull request 35: the text without the tables was
       // written over the shared document by the library's comparison, which
       // deleted and put in again everything between the first table that went
