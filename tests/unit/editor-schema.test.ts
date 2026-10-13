@@ -18,6 +18,7 @@ import * as Y from 'yjs';
 import {
   ATTRIBUTE_RULES,
   CODE_COLOURS_MOST,
+  CODE_UNCOLOURED,
   TABLE_MOST,
   closeSchema,
   codeColours,
@@ -660,7 +661,7 @@ describe('the tables in the cells of a table (R32)', () => {
         config: {
           addProseMirrorPlugins(this: {
             editor: { isEditable: boolean };
-            options: { noRoom(is: boolean): void };
+            options: { noRoom(words: string | null): void };
           }): Plugin[];
         };
       };
@@ -673,7 +674,9 @@ describe('the tables in the cells of a table (R32)', () => {
     }
 
     // The review of pull request 28, S5: a refusal said nothing (WCAG 3.3.1, 4.1.3).
-    it('is said to be refused, once, until the next change the writer makes; a repair and another client’s change say nothing', () => {
+    // And the re-review, finding d: the words outlived their cause, and a second refusal was not heard.
+    it('is said to be refused each time it is, until the document next changes, whoever changes it; a repair and another client’s change say nothing', () => {
+      const W = TABLE_NO_ROOM;
       const { plugin, noRoom } = closedPlugin();
       let held = EditorState.create({
         schema,
@@ -682,7 +685,12 @@ describe('the tables in the cells of a table (R32)', () => {
         ).doc,
         plugins: [plugin],
       });
-      const third = () => held.tr.insert(inside(held.doc, 'deep') + 5, blockOfRows(rowsOf(1, 1)));
+      // After the one paragraph that holds text, whatever it holds by now.
+      const third = () =>
+        held.tr.insert(
+          inside(held.doc, held.doc.textContent) + held.doc.textContent.length + 1,
+          blockOfRows(rowsOf(1, 1)),
+        );
       // What a plugin appends, as the table library's repair is, and what the binding brings.
       held.applyTransaction(third().setMeta('appendedTransaction', held.tr));
       held.applyTransaction(third().setMeta(ySyncPluginKey, { isChangeOrigin: false }));
@@ -697,18 +705,34 @@ describe('the tables in the cells of a table (R32)', () => {
         ).doc,
         plugins: [plugin],
       });
-      // The writer's own: said at the first refusal, and not again at the second and the third.
+      // The writer's own: said at each refusal, so that the second is heard as the first was.
       for (let asked = 0; asked < 3; asked += 1) held.applyTransaction(third());
-      expect(noRoom.mock.calls).toEqual([[true]]);
-      // A move of the cursor is no change, and the words stay.
+      expect(noRoom.mock.calls).toEqual([[W], [W], [W]]);
+      // A move of the cursor is no change to the document, and the words stay.
       held = held.applyTransaction(held.tr.setSelection(TextSelection.create(held.doc, 1))).state;
       // A repair that is refused meanwhile says nothing, and takes nothing back.
       held.applyTransaction(third().setMeta('appendedTransaction', held.tr));
-      expect(noRoom.mock.calls).toEqual([[true]]);
+      expect(noRoom.mock.calls).toEqual([[W], [W], [W]]);
       // The next change the writer makes takes the words away, once.
       held = held.applyTransaction(held.tr.insertText('typed', inside(held.doc, 'deep'))).state;
       held = held.applyTransaction(held.tr.insertText('more', inside(held.doc, 'typeddeep'))).state;
-      expect(noRoom.mock.calls).toEqual([[true], [false]]);
+      expect(noRoom.mock.calls).toEqual([[W], [W], [W], [null]]);
+
+      // And so does a change that is not the writer's: another client's, or
+      // the writer's own undo, both of which the binding brings; and one that
+      // a plugin appends.
+      for (const [meta, value] of [
+        [ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: false }],
+        [ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: true }],
+        ['appendedTransaction', held.tr],
+      ] as const) {
+        noRoom.mockClear();
+        held.applyTransaction(third());
+        held = held.applyTransaction(
+          held.tr.insertText('x', inside(held.doc, held.doc.textContent)).setMeta(meta, value),
+        ).state;
+        expect(noRoom.mock.calls).toEqual([[W], [null]]);
+      }
     });
 
     it('says it in the owner’s words, with the two bounds as they are', () => {
@@ -1351,6 +1375,14 @@ describe('a change to a document that cannot be edited now (FR-ED-18)', () => {
 // keystroke, every block of the document being coloured again each time.
 describe('the colours of a code block', () => {
   const code = 'const a = "b" + 1; // c\n'.repeat(3000).slice(0, CODE_COLOURS_MOST);
+
+  // The owner's decision R23 (specification row D133): "50,000, and say so in the block's header".
+  it('are said to be left off in words that carry the bound as it is', () => {
+    // Written out here, and not taken from the code under test. The words await the owner's approval.
+    expect(CODE_UNCOLOURED).toBe(
+      'Syntax colours are not shown in a code block longer than 50,000 characters.',
+    );
+  });
 
   it('are given to a block of 50,000 characters, and to none that is longer', () => {
     expect(CODE_COLOURS_MOST).toBe(50_000);

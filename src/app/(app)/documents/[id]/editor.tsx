@@ -18,7 +18,7 @@ import { DocumentConnection, syncStatus, type Ending, type Held } from '../../..
 import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
-import { BLOCK_CONTROLS, Editable, SLASH_HINT, TABLE_NO_ROOM, copyText, extensions } from './extensions.tsx';
+import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
@@ -85,6 +85,9 @@ const UNSHOWN = {
   href: '/',
   link: 'Documents',
 };
+// How long the region of a refusal stands empty before its words are written:
+// long enough for a screen reader to have seen it empty.
+const HEARD_AFTER_MS = 150;
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
 // Before it, the sentence that tells of the slash palette (`SLASH_HINT`): the
@@ -146,10 +149,31 @@ function Text({
   // Whether the focus was last in the surface: the text, the toolbar, a
   // block's controls, the dialog of a link.
   const within = useRef(false);
-  // Whether the last change the writer asked for was refused for the room of a
-  // table (./extensions.tsx, `Closed`). Said until the next change is made.
-  const [noRoom, setNoRoom] = useState(false);
-  const all = useMemo(() => extensions(document, onUnshown, setNoRoom), [document, onUnshown]);
+  // The words of a change the writer asked for that was refused for the room
+  // of a table, and how many times running (./extensions.tsx, `Closed`). They
+  // stand until the document next changes.
+  const [refusal, setRefusal] = useState<{ words: string; times: number } | null>(null);
+  const refuse = useCallback(
+    (words: string | null) =>
+      setRefusal((was) => (words === null ? null : { words, times: (was?.times ?? 0) + 1 })),
+    [],
+  );
+  const all = useMemo(() => extensions(document, onUnshown, refuse), [document, onUnshown, refuse]);
+  // What a screen reader is given of a refusal: one region that is in the page
+  // throughout, emptied and then written at each refusal, so that a second
+  // refusal in the same words is heard as the first was. The design package
+  // gives the reasons where it does the same (`OptionList`): a region put in
+  // the page with its text in it is not certain to be spoken, and one whose
+  // text does not change says nothing.
+  const heard = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const region = heard.current;
+    if (!region) return;
+    region.textContent = '';
+    if (!refusal) return;
+    const timer = setTimeout(() => (region.textContent = refusal.words), HEARD_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [refusal]);
 
   const editor = useEditor({
     extensions: all,
@@ -214,13 +238,15 @@ function Text({
         {KEYS}
       </p>
       {/* NFR-IC-19: a change that was not made is said to be so, in words that
-          are seen and, when the screen reader next falls silent, heard. No
-          fault of the writer's, and the focus stays in the text. */}
-      {noRoom ? (
-        <FormFault tone="neutral" announce="polite">
-          <p>{TABLE_NO_ROOM}</p>
+          are seen, here, and heard, from the region below, when the screen
+          reader next falls silent. No fault of the writer's, and the focus
+          stays in the text. */}
+      {refusal ? (
+        <FormFault tone="neutral" announce="off">
+          <p>{refusal.words}</p>
         </FormFault>
       ) : null}
+      <span ref={heard} role="status" className="sr-only" />
       <div
         ref={surface}
         className={styles.surface}

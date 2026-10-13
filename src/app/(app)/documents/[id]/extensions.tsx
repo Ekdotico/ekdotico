@@ -38,6 +38,7 @@ import Superscript from '@tiptap/extension-superscript';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { Placeholder } from '@tiptap/extensions';
 import { Fragment, type Node as PMNode, type NodeType, type Schema } from '@tiptap/pm/model';
+import { GapCursor } from '@tiptap/pm/gapcursor';
 import { Plugin, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 import { TableMap } from '@tiptap/pm/tables';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
@@ -210,6 +211,14 @@ function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
         <span role="status" className={copied === 'refused' ? undefined : 'sr-only'}>
           {copied === 'yes' ? 'Code copied' : copied === 'refused' ? CODE_NOT_COPIED : ''}
         </span>
+        {/* R23: a block past the length is shown without its colours, and the
+            header says so for as long as it is: to every reader of the
+            block, whether or not the block can be edited. A statement that
+            stands, and no announcement: it is read with the header when the
+            block is come to, and says nothing while the code is typed. The
+            length is the one the colourer is given, the characters of the
+            block, which is its size. */}
+        {node.content.size > CODE_COLOURS_MOST ? <span>{CODE_UNCOLOURED}</span> : null}
       </BlockControls>
       {/* FR-ED-03: "Code blocks shall not be subject to spell-checking". */}
       <pre spellCheck={false}>
@@ -930,6 +939,69 @@ function settleInCell(editor: Editor): void {
 }
 
 /**
+ * An arrow key out of a table that begins or ends a cell (R32; the re-review
+ * of pull request 28, WCAG 2.1.1). True where the key was taken.
+ *
+ * A cell that holds a table and nothing after it has no text of its own to
+ * put the cursor in, and the arrow keys step from a table to the nearest
+ * text, which is in the next cell: so no key reached the place beside the
+ * table, and nothing could be written there. Such a cell is made by another
+ * client or a stored document; a table from the palette or a paste is
+ * followed by a paragraph. Nothing is added for it, since every browser would
+ * add its own. The key puts the library's own cursor between blocks there
+ * instead, which is a selection and no content: the first letter typed at it
+ * makes the paragraph, as this writer's change.
+ *
+ * AWAITS THE OWNER (new behaviour of four keys; reported with the pull
+ * request). As at the top of a document, where the arrow up from a table that
+ * begins it gives the same cursor before the table:
+ *
+ * - Down in the caption of a table in a cell, and Right at the end of that
+ *   caption, where no text follows the table in the cell: the cursor after
+ *   the table, in the cell.
+ * - Up in the first line of a cell of the first row of a table in a cell, and
+ *   Left at the start of its first cell, where no text is before the table in
+ *   the cell: the cursor before the table, in the cell.
+ *
+ * "No text" is the library's own rule for where its cursor may stand
+ * (`GapCursor.valid`): at the edge of the cell, or against another table, and
+ * never against a paragraph, where the keys stay the table library's and go
+ * to that paragraph. Asked before the table library's own arrows, which would
+ * take the key.
+ */
+function besideTable(editor: Editor, direction: 'up' | 'down' | 'left' | 'right'): boolean {
+  const { selection, tr } = editor.state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return false;
+  const { $head } = selection;
+  const role = (node: PMNode | null | undefined) => String(node?.type.spec.tableRole);
+  const forward = direction === 'down' || direction === 'right';
+  // The innermost block of a table round the cursor that stands in a cell.
+  let depth = $head.depth - 1;
+  while (
+    depth > 1 &&
+    !(role($head.node(depth).firstChild) === 'table' && /cell$/.test(role($head.node(depth - 1))))
+  )
+    depth -= 1;
+  if (depth <= 1) return false;
+  if (forward) {
+    // In the caption, which is the last line of the block.
+    if ($head.depth !== depth + 1 || role($head.parent) === 'table') return false;
+  } else {
+    // In the first row of the table, at the first text of a cell; for Left, of the first cell.
+    for (let inner = depth; inner < $head.depth; inner += 1) {
+      const row = inner === depth + 2;
+      if ($head.index(inner) > 0 && !(row && direction === 'up')) return false;
+    }
+    if (role($head.node(depth + 1)) !== 'table') return false;
+  }
+  if (!editor.view.endOfTextblock(direction)) return false;
+  const $beside = tr.doc.resolve(forward ? $head.after(depth) : $head.before(depth));
+  if (!(GapCursor as unknown as { valid($pos: typeof $beside): boolean }).valid($beside)) return false;
+  editor.view.dispatch(tr.setSelection(new GapCursor($beside)).scrollIntoView());
+  return true;
+}
+
+/**
  * The words for a change that was not made because a table has no room for it
  * (`holdsTables`). The requirements give none: the sentence is the one the
  * owner approved (R63 of 12 October 2026; its register row is pending). The
@@ -938,7 +1010,7 @@ function settleInCell(editor: Editor): void {
 const COUNTS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 export const TABLE_NO_ROOM = `The table has no room for this. A table and the tables in its cells hold ${TABLE_CELLS_MOST.toLocaleString('en-GB')} cells, ${COUNTS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep.`;
 
-const Closed = Extension.create<{ noRoom: (is: boolean) => void }>({
+const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
   name: 'closed',
   addOptions() {
     return { noRoom: () => {} };
@@ -947,10 +1019,13 @@ const Closed = Extension.create<{ noRoom: (is: boolean) => void }>({
     closeSchema(this.editor.schema);
   },
   addProseMirrorPlugins() {
-    // Whether the last change this writer asked for was refused for the room
-    // of a table. `noRoom` is told when that becomes so and when it stops
-    // being so, and at no other time.
-    let refused = false;
+    // Whether the words of a refusal stand. `noRoom` is given the words at
+    // each refusal, so that a second one is heard as the first was, and null
+    // when the document next changes, whoever changes it: the refusal was of
+    // one change to the document as it then was (the re-review of pull request
+    // 28: the words outlived their cause, through another client's change and
+    // the writer's own undo, which arrives as the binding's).
+    let said = false;
     return [
       new Plugin({
         filterTransaction: (transaction, state) => {
@@ -964,14 +1039,23 @@ const Closed = Extension.create<{ noRoom: (is: boolean) => void }>({
             transaction.docChanged &&
             !transaction.getMeta(ySyncPluginKey) &&
             transaction.getMeta('appendedTransaction') === undefined;
-          if (asked && refused === held) this.options.noRoom((refused = !held));
+          if (!held && asked) {
+            said = true;
+            this.options.noRoom(TABLE_NO_ROOM);
+          } else if (held && transaction.docChanged && said) {
+            said = false;
+            this.options.noRoom(null);
+          }
           return held;
         },
         // R32: a table that a paste or a drop of this writer's leaves at the
         // end of a cell is followed by an empty paragraph, as one from the
-        // palette is (./slash-palette.tsx), and in the same step of undo.
-        // Never for a cell as another client or a stored document made it:
-        // that would be an addition every browser writes for itself.
+        // palette is (./slash-palette.tsx), and in the same step of undo. So
+        // is a table that already ended its cell, where the paste changed
+        // anything inside that table (`tablesEndingCells` says why). Never
+        // for a cell as another client or a stored document made it, in whose
+        // table this writer pasted nothing: that would be an addition every
+        // browser writes for itself.
         appendTransaction: (transactions, before, state) => {
           const pasted = transactions.some(
             (each) => each.docChanged && (each.getMeta('paste') || each.getMeta('uiEvent') === 'drop'),
@@ -1068,6 +1152,14 @@ const lowlight = createLowlight(common);
  * block that changed, if a document of many long blocks is ever written.
  */
 export const CODE_COLOURS_MOST = 50_000;
+/**
+ * What the header of a code block says while the block is past that length
+ * (the owner's decision R23 of 12 October 2026, specification row D133:
+ * "50,000, and say so in the block's header"). No requirement gives the
+ * words: written under the Expression Guidelines, with the number as it is
+ * above. AWAITS THE OWNER'S APPROVAL.
+ */
+export const CODE_UNCOLOURED = `Syntax colours are not shown in a code block longer than ${CODE_COLOURS_MOST.toLocaleString('en-GB')} characters.`;
 // What the library reads from an answer: the nodes to colour. None.
 const UNCOLOURED = { type: 'root', children: [] };
 /** `lowlight`, which answers with no colours for code past the bound. */
@@ -1082,13 +1174,13 @@ export const codeColours = {
 /**
  * The extensions of the editor, bound to the document of one connection.
  * `unshown` is told, once, that the document cannot be built here (`holdBinding`).
- * `noRoom` is told when a change of the writer's is refused for the room of a
+ * `noRoom` is given the words each time a change of the writer's is refused for the room of a
  * table, and when the next one is not (`Closed`).
  */
 export function extensions(
   document: Y.Doc,
   unshown: () => void = () => {},
-  noRoom: (is: boolean) => void = () => {},
+  noRoom: (words: string | null) => void = () => {},
 ) {
   return [
     StarterKit.configure({
@@ -1149,7 +1241,16 @@ export function extensions(
             if (taken) settleInCell(this.editor);
             return taken;
           };
-        return { ...keys, Tab: settled('Tab'), 'Shift-Tab': settled('Shift-Tab') };
+        return {
+          ...keys,
+          Tab: settled('Tab'),
+          'Shift-Tab': settled('Shift-Tab'),
+          // Out of a table that begins or ends a cell (`besideTable`).
+          ArrowDown: () => besideTable(this.editor, 'down'),
+          ArrowRight: () => besideTable(this.editor, 'right'),
+          ArrowUp: () => besideTable(this.editor, 'up'),
+          ArrowLeft: () => besideTable(this.editor, 'left'),
+        };
       },
     }),
     TableRow.extend({ content: `(tableCell | tableHeader){0,${TABLE_MOST}}` }),

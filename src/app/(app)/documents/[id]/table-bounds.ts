@@ -205,11 +205,19 @@ const cell = (node: PMNode) => role(node) === 'cell' || role(node) === 'header_c
 const endsInTable = (node: PMNode) => cell(node) && role(node.lastChild?.firstChild ?? node) === 'table';
 
 /**
- * The end of every cell of `after` that ends in a table and did not in
- * `before`: where a paragraph is put after a table that this writer's change
- * left at the end of a cell (`Closed` of ./extensions.tsx). A cell is the
- * same cell while nothing in it changed, so one that already ended in a table
- * is left as it was, whoever made it so.
+ * The end of every cell of `after` whose last child is the block of a table
+ * that is not the last child of a cell of `before`: where a paragraph is put
+ * after a table that this writer's paste left at the end of a cell (`Closed`
+ * of ./extensions.tsx).
+ *
+ * The table is known by the node, and a node is the same only while nothing
+ * in it changed. So this is every cell that the paste made end in a table,
+ * AND every cell that ended in one already where the paste changed anything
+ * inside that table: plain text pasted into a cell of a table that ends its
+ * cell gives that cell a paragraph too (the re-review of pull request 28).
+ * That is kept: the paste is the writer's own change in that cell, and the
+ * paragraph is in the same step of undo. A cell that ends in a table in which
+ * the paste changed nothing is left as it was, whoever made it so.
  */
 export function tablesEndingCells(before: PMNode, after: PMNode): number[] {
   const ended = new WeakSet<PMNode>();

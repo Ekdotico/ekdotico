@@ -2596,6 +2596,193 @@ test('a key typed in a table whose cells hold tables, ten thousand cells in all,
   await expect(noRoom).toHaveCount(0);
 });
 
+// The re-review of pull request 28, finding d: the words of a refusal stayed
+// through another client's change and the writer's own undo, and a second
+// refusal in the same words was not heard.
+test('the words of a refusal are heard at each refusal, and go when the document next changes, whoever changes it', async ({
+  page,
+}) => {
+  test.slow();
+  // Written out here, and not taken from the code under test.
+  const WORDS =
+    'The table has no room for this. A table and the tables in its cells hold 10,000 cells, two levels deep.';
+  const figure =
+    '<figure class="ekd-table"><table><tbody><tr><td><p>PASTED</p></td></tr></tbody></table><figcaption class="ekd-table-caption">pasted caption</figcaption></figure>';
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  await doc.focus();
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('table')).toHaveCount(2);
+  await place(doc.locator('figure figure td').first());
+  // Everything the region a screen reader hears is given, from here on.
+  await page.evaluate(() => {
+    const region = [...document.querySelectorAll('[role="status"]')].find(
+      (each) => !each.closest('[role="textbox"]') && each.classList.contains('sr-only'),
+    )!;
+    const heard = ((window as unknown as { heard: string[] }).heard = [] as string[]);
+    new MutationObserver(() => heard.push(region.textContent ?? '')).observe(region, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+  });
+  const heard = () => page.evaluate(() => (window as unknown as { heard: string[] }).heard);
+  // Seen, in the page, and heard, in the region: the same words in both.
+  const said = page.getByText(WORDS, { exact: true });
+  await expect(said).toHaveCount(0);
+
+  // A table a level too deep is not pasted, twice: the words are given to the
+  // region twice, with the region empty between, so that the second is heard.
+  await paste(page, figure);
+  await expect(said).toHaveCount(2);
+  await expect(page.getByRole('status').filter({ hasText: WORDS })).toHaveCount(1);
+  await expect(doc).toBeFocused();
+  await paste(page, figure);
+  await expect.poll(heard).toEqual([WORDS, '', WORDS]);
+  await expect(said).toHaveCount(2);
+  await expect(doc.locator('table')).toHaveCount(2);
+
+  // A move of the cursor is no change to the document: the words stay.
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowLeft');
+  await expect(said).toHaveCount(2);
+  // Another client's change takes them away.
+  const other = await connectAs(page.context(), id);
+  other.provider.document.getXmlFragment('default').push([paragraph('theirs')]);
+  await expect(doc).toContainText('theirs');
+  await expect(said).toHaveCount(0);
+  other.close();
+  // And so does the writer's own undo, which arrives as the binding's change.
+  await paste(page, figure);
+  await expect(said).toHaveCount(2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(doc.locator('table')).toHaveCount(1);
+  await expect(said).toHaveCount(0);
+  expect((await heard()).filter(Boolean)).toEqual([WORDS, WORDS, WORDS]);
+});
+
+// The re-review of pull request 28 (WCAG 2.1.1): a cell that holds a table and
+// nothing else, as another client or a stored document makes one, had no place
+// the keyboard reached beside the table.
+test('from a table that is all a cell holds, the arrow keys reach the place beside it, where a letter makes the paragraph', async ({
+  page,
+}) => {
+  test.slow();
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  await enter(page);
+  const id = await openNew(page);
+  const doc = text(page);
+  const other = await connectAs(page.context(), id);
+  const fragment = other.provider.document.getXmlFragment('default');
+  fragment.insert(0, [
+    gridOf(
+      2,
+      3,
+      (row, column) =>
+        row === 0 && column === 1
+          ? [gridOf(2, 2, () => [paragraph('in')], 'inner caption')]
+          : [paragraph(`o${row}.${column}`)],
+      'outer caption',
+    ),
+  ]);
+  await expect(doc.locator('table')).toHaveCount(2);
+  // With a cell of text on each side of it and a row below: where the table library's own arrows would go.
+  const cell = doc.locator('table').first().locator(':scope > tbody > tr > td').nth(1);
+  const shared = () =>
+    ((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlElement)
+      .get(0)
+      .toString()
+      .replace(/ (col|row)span="1"/g, '');
+  const before = shared();
+  /** Where the editor holds the cursor: the kind of selection, and the blocks round it. */
+  const cursor = () =>
+    doc.evaluate((element) => {
+      const { editor } = element as unknown as {
+        editor: {
+          state: {
+            selection: {
+              toJSON(): { type: string };
+              $from: {
+                depth: number;
+                node(depth: number): { type: { name: string } };
+                index(depth: number): number;
+              };
+            };
+          };
+        };
+      };
+      const { $from } = editor.state.selection;
+      const round = Array.from({ length: $from.depth + 1 }, (_, depth) => $from.node(depth).type.name);
+      return `${editor.state.selection.toJSON().type} in ${round.at(-1)} at ${$from.index($from.depth)}, ${round.filter((name) => name === 'table').length} deep`;
+    });
+
+  // Down from the caption of the inner table: the cursor between blocks, after the table, in the cell.
+  await place(cell.locator('figcaption'));
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 1, 1 deep');
+  // A selection and no content: the shared document holds what it held.
+  expect(shared()).toBe(before);
+  // From there the menu of the table round the cell is reached, and acts on it.
+  await page.keyboard.press('Alt+F10');
+  await expect(
+    doc
+      .locator('figure')
+      .first()
+      .locator(':scope > [data-block-controls]')
+      .getByRole('button', { name: 'Table' }),
+  ).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(doc).toBeFocused();
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 1, 1 deep');
+  // The first letter makes the paragraph, as the writer's own change.
+  await page.keyboard.type('beside');
+  await expect(cell.locator(':scope > p')).toHaveText('beside');
+  await expect(cell.locator(':scope > :last-child')).toHaveJSProperty('tagName', 'P');
+  await expect.poll(shared).toContain('<paragraph>beside</paragraph></tablecell>');
+  await expect(cell.locator('table td')).toHaveCount(4);
+  await expect(cell.locator('figcaption')).toHaveText('inner caption');
+  // One undo takes the paragraph away, and the cell is as the other client made it.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(cell.locator(':scope > p')).toHaveCount(0);
+  await expect.poll(shared).toBe(before);
+
+  // Right at the end of the caption does the same.
+  await placeAtEnd(cell.locator('figcaption'));
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 1, 1 deep');
+  // Up from the first row of the inner table, and Left at the start of its
+  // first cell: the cursor before the table, in the cell.
+  await place(cell.locator('table td').nth(1));
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(cursor).toBe('gapcursor in tableCell at 0, 1 deep');
+  await place(cell.locator('table td').first());
+  // Left through the two letters of the cell, and once more at its start: a
+  // key is pressed only once the editor holds the cursor where the last put it.
+  await expect(async () => {
+    if ((await held(cell.locator('table td').first())).inside) await page.keyboard.press('ArrowLeft');
+    expect(await cursor()).toBe('gapcursor in tableCell at 0, 1 deep');
+  }).toPass({ intervals: [20, 50] });
+  await page.keyboard.type('before');
+  await expect(cell.locator(':scope > :first-child')).toHaveText('before');
+  // With text of its own before the table, the keys are the library's again:
+  // Up from the first row goes to that text.
+  await place(cell.locator('table td').first());
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(cursor).toMatch(/^text in paragraph at \d, 1 deep$/);
+  // And in the second row of the inner table, Up stays in that table.
+  await place(cell.locator('table td').nth(2));
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(cursor).toMatch(/^text in paragraph at \d, 2 deep$/);
+  await screens(page, 'editor-beside-table');
+  other.close();
+  expect(faults).toEqual([]);
+});
+
 // The third review: the library makes the document itself without asking the
 // schema. Text directly in it closed the document in every tab, and a row was
 // shown as a table that the next keystroke wrote over it as the member's own.
@@ -2690,6 +2877,98 @@ test('a code block past the bound is shown without the colours of its language, 
   await expect.poll(() => stored.toString().length).toBeGreaterThan(long.length + 'typed-in '.length);
   expect(stored.getAttribute('language')).toBe('javascript');
   peer.close();
+});
+
+// The owner's decision R23 of 12 October 2026 (specification row D133):
+// "50,000, and say so in the block's header". The block was shown without its
+// colours, and nothing said so.
+test('the header of a code block says that the block is shown without colours while it is past 50,000 characters, to every reader, and stops when it is not', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  // Written out here, and not taken from the code under test. The words await the owner's approval.
+  const WORDS = 'Syntax colours are not shown in a code block longer than 50,000 characters.';
+  const person = await enter(page);
+  const id = await openNew(page);
+  const peer = await connectAs(page.context(), id);
+  const fragment = peer.provider.document.getXmlFragment('default');
+  // Two blocks of code as it is written: one of 50,000 characters to the letter, and one of 50,001.
+  const code = 'const a = "b" + 1; // c\n'.repeat(3000).slice(0, 50_000);
+  expect(code).toHaveLength(50_000);
+  fragment.push([
+    element('codeBlock', { language: 'javascript' }, [words(code)]),
+    element('codeBlock', { language: 'javascript' }, [words(`${code}Z`)]),
+    paragraph('END-OF-DOCUMENT'),
+  ]);
+  const doc = text(page);
+  await expect(doc).toContainText('END-OF-DOCUMENT', { timeout: 30_000 });
+  const blocks = doc.locator('.ekd-code');
+  await expect(blocks).toHaveCount(2);
+  const said = (within: Locator) => within.locator('.ekd-code-header').getByText(WORDS, { exact: true });
+  await expect(said(blocks.nth(0))).toHaveCount(0);
+  await expect(said(blocks.nth(1))).toBeVisible();
+  // A statement that stands, in the header with the block's controls, and no
+  // announcement: it is in no live region, and the one live region of the
+  // header, which says that the code was copied, is empty.
+  await expect(blocks.nth(1)).toMatchAriaSnapshot(`
+    - combobox "Code language"
+    - button "Copy"
+    - status
+    - text: ${WORDS}
+  `);
+  expect(
+    await said(blocks.nth(1)).evaluate((element) => element.closest('[role="status"], [aria-live]')),
+  ).toBeNull();
+  await expectNoSidewaysScroll(page);
+  await screens(page, 'editor-code-uncoloured');
+
+  // A second reader of the document is told the same.
+  const second = await browser.newContext();
+  const other = await second.newPage();
+  await other.goto('/sign-in');
+  await signIn(other, person);
+  await expect(other.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  await other.goto(page.url());
+  const theirs = text(other).locator('.ekd-code');
+  await expect(theirs).toHaveCount(2, { timeout: 30_000 });
+  await expect(said(theirs.nth(0))).toHaveCount(0);
+  await expect(said(theirs.nth(1))).toBeVisible();
+
+  // A letter more in the block that was at the length, and it says so too; the
+  // letter taken away again, and it stops. The same in the other reader's page.
+  const first = fragment
+    .toArray()
+    .filter((each) => (each as Y.XmlElement).nodeName === 'codeBlock')[0] as Y.XmlElement;
+  (first.get(0) as Y.XmlText).insert(50_000, 'Z');
+  await expect(said(blocks.nth(0))).toBeVisible();
+  await expect(said(theirs.nth(0))).toBeVisible();
+  (first.get(0) as Y.XmlText).delete(50_000, 1);
+  await expect(said(blocks.nth(0))).toHaveCount(0);
+  await expect(said(theirs.nth(0))).toHaveCount(0);
+  // And by the writer's own key: the last letter of the longer block deleted, in the page.
+  await placeAtEnd(blocks.nth(1).locator('code'));
+  await page.keyboard.press('Backspace');
+  await expect(said(blocks.nth(1))).toHaveCount(0);
+  await expect(said(theirs.nth(1))).toHaveCount(0);
+  await page.keyboard.type('Y');
+  await expect(said(blocks.nth(1))).toBeVisible();
+  await expect(said(theirs.nth(1))).toBeVisible();
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await second.close();
+  peer.close();
+
+  // In a view that cannot be edited the statement is there as well: the
+  // connection is lost, and the document is read-only until it returns.
+  await stopCollab();
+  try {
+    await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 15_000 });
+    await expect(doc).toHaveAttribute('aria-readonly', 'true');
+    await expect(said(blocks.nth(1))).toBeVisible();
+    await expect(said(blocks.nth(0))).toHaveCount(0);
+  } finally {
+    await startCollab();
+  }
 });
 
 // The owner's decision of 12 October 2026. Before it the member was told
