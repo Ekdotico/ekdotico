@@ -1536,6 +1536,20 @@ export const CODE_UNCOLOURED = `Syntax colours are not shown in a code block lon
  */
 export const CODE_COLOURS_LONGEST = 200;
 /**
+ * The longest that the colourings of one pass over the document may take
+ * together, in milliseconds (D183, and the review of pull request 38). The
+ * library colours every block again at each key in any of them, so blocks
+ * each within the time above would add up; and on opening, each block that
+ * fails costs its whole first colouring. Once a pass has spent this, the
+ * blocks after it in the pass are not tried, and are shown without colours as
+ * if they had taken too long.
+ *
+ * 200 ms, as for one block, from the same measurement: it holds six blocks of
+ * 50 KB of the dearest ordinary code, or some thirty of 10 KB, and bounds the
+ * colouring of one key at this plus the one block that crosses it.
+ */
+export const CODE_COLOURS_PASS_LONGEST = 200;
+/**
  * What the header of a code block says while its colouring is not shown for
  * D183. No requirement gives the words: written under the Expression
  * Guidelines, and the owner's to approve.
@@ -1565,31 +1579,55 @@ function edited(was: string, now: string) {
  * the document stays open and editable. The library colours every block again
  * at each keystroke, so such code is remembered, and so is each edit of it
  * (`edited`), and it is not coloured again: one slow colouring for the block,
- * and not one a key. Code rewritten past half of it is tried afresh, and the
- * document opened again tries every block afresh.
+ * and not one a key. Nor is a block that a pass comes to after it has spent
+ * `CODE_COLOURS_PASS_LONGEST`. Code rewritten past half of it is tried
+ * afresh, and the document opened again tries every block afresh.
  *
- * ponytail: a colouring runs to its end before it is measured, so a block
- * still costs its first colouring, and one that never ends holds the page.
+ * ponytail: a colouring runs to its end before it is measured, so the block
+ * that crosses the budget still costs its whole colouring, and one that never
+ * ends holds the page.
  * Colouring in a worker abandons one as it runs, if such content is met.
  */
 export function codeColours(colourer = lowlight, now = () => performance.now()) {
-  const uncoloured: string[] = [];
+  let uncoloured: string[] = [];
   const held = (code: string) => uncoloured.findIndex((was) => edited(was, code));
+  // One pass of the library over the blocks of the document, in one
+  // transaction (`pass`, from the plugin before the library's): whether it
+  // coloured, what its colourings took together, and the remembered code
+  // that a block of it held. Not one task: a task can hold several
+  // transactions, the sync of a change and then its repair.
+  let current = { asked: false, spent: 0, held: new Set<number>() };
+  /** Ends a pass, and begins the next: called before the library may colour the blocks again. */
+  function pass() {
+    // A pass that coloured asked of every block of the document. Code that no
+    // block held is forgotten: its block was deleted, or rewritten past half.
+    // So the list is never longer than the failing blocks.
+    if (current.asked) uncoloured = uncoloured.filter((_, index) => current.held.has(index));
+    current = { asked: false, spent: 0, held: new Set<number>() };
+  }
   function colour(code: string, colouring: () => ReturnType<typeof lowlight.highlight>) {
     if (code.length > CODE_COLOURS_MOST) return UNCOLOURED;
+    current.asked = true;
     const at = held(code);
     if (at !== -1) {
       uncoloured[at] = code;
+      current.held.add(at);
       return UNCOLOURED;
     }
-    const start = now();
-    try {
-      const colours = colouring();
-      if (now() - start <= CODE_COLOURS_LONGEST) return colours;
-    } catch {
-      // The block is shown without colours, and its header says so.
+    // Past the budget of the pass the block is not tried: shown without
+    // colours, and remembered as one that took too long.
+    if (current.spent < CODE_COLOURS_PASS_LONGEST) {
+      const start = now();
+      try {
+        const colours = colouring();
+        if (now() - start <= CODE_COLOURS_LONGEST) return colours;
+      } catch {
+        // The block is shown without colours, and its header says so.
+      } finally {
+        current.spent += now() - start;
+      }
     }
-    uncoloured.push(code);
+    current.held.add(uncoloured.push(code) - 1);
     return UNCOLOURED;
   }
   return {
@@ -1598,6 +1636,7 @@ export function codeColours(colourer = lowlight, now = () => performance.now()) 
     highlightAuto: (code: string) => colour(code, () => colourer.highlightAuto(code)),
     /** Whether this code is shown without colours because its colouring threw or took too long. */
     failed: (code: string) => held(code) !== -1,
+    pass,
   };
 }
 export type CodeColours = ReturnType<typeof codeColours>;
@@ -1650,6 +1689,13 @@ export function extensions(
     CodeBlockLowlight.extend({
       addNodeView() {
         return ReactNodeViewRenderer(CodeBlockView);
+      },
+      // Before the library's own plugin, whose state is worked out after this
+      // one's in every transaction: each begins a pass of the colourer.
+      addProseMirrorPlugins() {
+        const colours = this.options.lowlight as CodeColours;
+        const begin = () => colours.pass();
+        return [new Plugin({ state: { init: begin, apply: begin } }), ...(this.parent?.() ?? [])];
       },
     }).configure({ lowlight: codeColours(), defaultLanguage: 'plaintext' }),
     Callout,
