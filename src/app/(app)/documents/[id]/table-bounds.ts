@@ -23,29 +23,33 @@
 //
 // KNOWN, AND LEFT (the review of pull request 28; reported to the owner):
 //
-// - Near the bound, an undo can cost another writer's rows for good. One
-//   writer deletes a large table from a cell, another then adds rows to a
-//   table further down, and the first undoes: the large table is back, the
-//   count is past the bound, and what is left out is the last in the order of
-//   the document, which is the other writer's rows. They are taken out of the
-//   shared document as no one's change, so neither writer's undo brings them
-//   back.
+// - Near the bound, an undo can take a table past it. One writer deletes a
+//   large table from a cell, another then adds rows to a table further down,
+//   and the first undoes: the large table would be back and the count past
+//   the bound. The collaboration server refuses that undo (src/lib/collab/shape.ts),
+//   and the first writer's tab is held read-only with the text kept; so does
+//   a row that two writers add at once to a table of 99. Before the server
+//   held the bounds, the other writer's rows were taken out instead.
 // - A table can be left with a row a cell short. Where rows are left out of a
 //   table in a cell and a cell above reached down into them, or where a client
 //   sends such a table at 9,999 cells, the table library's repair adds the
 //   missing cell; where that would pass the bound the repair is not applied
 //   (`holdsTables`), at this key and at every later one, and the table stays as
 //   it is until a cell is deleted somewhere in the outermost table.
-// - The collaboration server holds none of these bounds: it reads the size and the
-//   depth of a document and nothing else.
+// - The collaboration server holds the bounds of a table (register D171, D172;
+//   src/lib/collab/shape.ts), and not the number of tables of a document.
+//   What is left out here is what a document stored before it held them, or
+//   sent by a client of an earlier release, can still bring.
 import { Fragment, type Node as PMNode, type ResolvedPos } from '@tiptap/pm/model';
+import { TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST } from '../../../../lib/collab/shape.ts';
 
-// The bounds are this file's: the Docs give none (reported for the register).
-/** The most rows of a table, and the most cells of a row. */
-export const TABLE_MOST = 100;
-/** The most cells of a table and of every table in its cells, together. */
-export const TABLE_CELLS_MOST = TABLE_MOST * TABLE_MOST;
-/**
+// Named with the server's rules, which the browser and the server hold alike
+// (FR-ED-09; register D134, D171, D172):
+// - `TABLE_MOST`: the most rows of a table, and the most cells of a row.
+// - `TABLE_CELLS_MOST`: the most cells of a table and of every table in its cells, together.
+// - `TABLE_DEPTH_MOST`, which follows.
+export { TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST };
+/*
  * The most levels of table, one in a cell of another, the outermost counted:
  * a table in a cell of a table, and no table in a cell of that one.
  *
@@ -61,10 +65,9 @@ export const TABLE_CELLS_MOST = TABLE_MOST * TABLE_MOST;
  * with, so for as long as one tab of an earlier release has a document open,
  * that tab leaves out the tables past ITS bound and takes them out of the
  * shared document, for everyone. A higher bound is safe only once no browser
- * runs the lower one: released in two steps, or with the server holding the
- * bound, which it does not.
+ * runs the lower one: released in two steps. The server holds the bound now,
+ * so a higher one is also refused by a server that runs the lower.
  */
-export const TABLE_DEPTH_MOST = 2;
 /**
  * The most tables a writer may bring a document to, a table in a cell counted
  * as one more (the owner's decision R58 of 13 October 2026: "refuse only,

@@ -37,8 +37,11 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
       TOO_LARGE: 'too-large',
       TOO_DEEP: 'too-deep',
       TOO_DANGLING: 'too-dangling',
+      // Register D170, D180 and D171: one for each rule of the shape of a document.
+      INCOMPLETE: 'incomplete',
+      TABLE_BOUNDS: 'table-bounds',
     });
-    expect(new Set(Object.values(REFUSAL)).size).toBe(9);
+    expect(new Set(Object.values(REFUSAL)).size).toBe(11);
   });
 });
 
