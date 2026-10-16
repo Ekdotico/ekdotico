@@ -397,6 +397,57 @@ describe('what the editor writes is taken, and without the copy', () => {
   });
 });
 
+describe('an update that sends again what the server holds in part (the review of pull request 39)', () => {
+  /**
+   * One member in two updates: a first piece is sent and taken; then a second
+   * piece, merged by the member's document with the first into one struct,
+   * and `made` after it, sent against the state from before the first.
+   */
+  function twice(
+    server: Y.Doc,
+    into: (fragment: Y.XmlFragment) => Y.XmlElement | Y.XmlFragment,
+    made: () => Y.XmlElement,
+  ) {
+    const member = peerOf(server);
+    const before = Y.encodeStateVector(member);
+    const list = into(member.getXmlFragment('default')) as Y.XmlElement;
+    list.insert(list.length, ['first piece'] as never);
+    Y.applyUpdate(server, sentBy(member, server));
+    member.transact(() => {
+      list.insert(list.length, ['second piece'] as never);
+      list.insert(list.length, [made()]);
+    });
+    const update = Y.encodeStateAsUpdate(member, before);
+    // The first struct begins before the server's clock and ends past it.
+    const [first] = Y.decodeUpdate(update).structs;
+    const had = Y.getState(server.store, member.clientID);
+    expect(first!.id.clock < had && first!.id.clock + first!.length > had).toBe(true);
+    return update;
+  }
+
+  it('a 101st row is refused', () => {
+    const server = opened(doc(grid(100, 2)));
+    const update = twice(
+      server,
+      (fragment) => (fragment.get(0) as Y.XmlElement).get(0) as Y.XmlElement,
+      () => row([cell(para()), cell(para())]),
+    );
+    expect(withoutTheCopy(server, update)).toBe(false);
+    expect(answer(server, update)).toBe('table');
+  });
+
+  it('an empty table block in the document itself is refused', () => {
+    const server = opened(doc(p('x')));
+    const update = twice(
+      server,
+      (fragment) => fragment,
+      () => block([]),
+    );
+    expect(withoutTheCopy(server, update)).toBe(false);
+    expect(answer(server, update)).toBe('incomplete');
+  });
+});
+
 describe('an update that Yjs does not take in whole is answered on a copy', () => {
   it('the structs of two clients', () => {
     const server = opened(doc(p('x')));

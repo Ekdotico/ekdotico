@@ -255,13 +255,31 @@ type Parent = Shared | Y.Item | typeof ROOT | null;
 /**
  * `shapeOf` without the copy, or undefined where it cannot be said so. It
  * answers for an update that Yjs takes in whole and at once: the structs of
- * one client, in a run that begins where the document has that client and
- * has no gap, each naming only what the document holds or what comes before
- * it in the run, and none of a client the document waits for. That is what a
- * browser sends. Where each item goes is then read as Yjs reads it
- * (`Item.getMissing`, `Item.integrate` of Yjs 13.6.33): by its parent, or by
- * the item to its left or right; to nowhere where one of those is collected;
- * and deleted where the update deletes it or what it stands in.
+ * one client, in a run that begins exactly where the document has that client
+ * and has no gap, each naming only what the document holds or what comes
+ * before it in the run, and none of a client the document waits for. That is
+ * what a browser sends.
+ *
+ * EXACTLY, AND NOT EARLIER (the review of pull request 39). A run that begins
+ * earlier can hold a struct the document has in part, of which Yjs applies
+ * the rest; two pieces sent once and again merged into one struct are such a
+ * struct. An item named by a clock in that rest would be read here as the
+ * struct the document does not hold whole, which a decoded update gives no
+ * parent, and would go nowhere where Yjs puts it in its parent. Beginning
+ * exactly at the document's clock, every struct of the run is new and read
+ * here in order, and every clock below it is the document's own: so each
+ * identifier names either a struct of the document or one this function has
+ * already placed. Any other run is the copy's.
+ *
+ * Where each item goes is then read as Yjs reads it (`Item.getMissing`,
+ * `Item.integrate` of Yjs 13.6.33): by its parent, or by the item to its left
+ * or right; to nowhere where one of those is collected; and deleted where the
+ * update deletes it or what it stands in. Not counted: a delete set that the
+ * document holds waiting (`store.pendingDs`), which Yjs tries again at every
+ * update and which can delete what this update brings. That can only delete,
+ * so it can leave an element this update made without its content, which is
+ * the emptying that D180 accepts the server does not refuse; and it can make
+ * a table smaller than counted here, never larger.
  *
  * The order of the children of an element the update creates is read off it
  * where each was put right after the one before (no item to its right, and no
@@ -275,7 +293,7 @@ export function withoutCopy(
   const { store } = document;
   const client = structs[0]!.id.client;
   const had = Y.getState(store, client);
-  if (structs[0]!.id.clock > had || store.pendingStructs?.missing.has(client)) return undefined;
+  if (structs[0]!.id.clock !== had || store.pendingStructs?.missing.has(client)) return undefined;
   let clock = structs[0]!.id.clock;
   for (const struct of structs) {
     if (struct instanceof Y.Skip || struct.id.client !== client || struct.id.clock !== clock)
@@ -318,7 +336,7 @@ export function withoutCopy(
   const gained = new Map<Y.Item | Shared, Y.Item[]>();
   const made: Y.Item[] = [];
   for (const item of structs) {
-    if (!(item instanceof Y.Item) || item.id.clock < had) continue;
+    if (!(item instanceof Y.Item)) continue;
     const { origin, rightOrigin } = item;
     const ids = [origin, rightOrigin, item.parent instanceof Y.ID ? item.parent : null];
     const found = ids.map((id) => (id ? named(id, item.id.clock) : null));
