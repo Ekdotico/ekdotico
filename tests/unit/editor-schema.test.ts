@@ -2,10 +2,12 @@
 // every attribute of every node and mark has one rule, and the schema applies
 // it wherever a node or a mark is made, so that no plugin, node view or
 // rendering is handed a value another client chose freely.
-import { getSchema } from '@tiptap/core';
+import { getExtensionField, getSchema } from '@tiptap/core';
 import { DOMSerializer, type Node as PMNode, type Schema } from '@tiptap/pm/model';
 import { EditorState, TextSelection, type Plugin, type Transaction } from '@tiptap/pm/state';
 import { TableMap } from '@tiptap/pm/tables';
+import type { DecorationSet } from '@tiptap/pm/view';
+import { common, createLowlight } from 'lowlight';
 import {
   prosemirrorJSONToYDoc,
   ySyncPlugin,
@@ -17,11 +19,14 @@ import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   ATTRIBUTE_RULES,
+  CODE_COLOURS_LONGEST,
   CODE_COLOURS_MOST,
+  CODE_NOT_COLOURED,
   CODE_UNCOLOURED,
   TABLE_MOST,
   closeSchema,
   codeColours,
+  type CodeColours,
   extensions,
   holdBinding,
   mayApply,
@@ -2939,23 +2944,165 @@ describe('the colours of a code block', () => {
   });
 
   it('are given to a block of 50,000 characters, and to none that is longer', () => {
+    const colours = codeColours();
     expect(CODE_COLOURS_MOST).toBe(50_000);
     expect(code).toHaveLength(CODE_COLOURS_MOST);
-    expect(codeColours.highlight('javascript', code).children.length).toBeGreaterThan(5000);
-    expect(codeColours.highlight('javascript', `${code}x`).children).toEqual([]);
-    // And where the block names no language the library knows.
-    expect(codeColours.highlightAuto(code).children.length).toBeGreaterThan(1000);
-    expect(codeColours.highlightAuto(`${code}x`).children).toEqual([]);
+    // Ordinary code at the length, timed by the real clock: well within the time (D183).
+    expect(colours.highlight('javascript', code).children.length).toBeGreaterThan(5000);
+    expect(colours.failed(code)).toBe(false);
+    expect(colours.highlight('javascript', `${code}x`).children).toEqual([]);
+    // And where the block names no language the library knows. Guessing the
+    // language of 50,000 characters takes most of a second, past the time.
+    expect(colours.highlightAuto(code.slice(0, 2000)).children.length).toBeGreaterThan(100);
+    expect(colours.highlightAuto(`${code}x`).children).toEqual([]);
   });
 
-  it('are asked of the bounded colourer by the editor’s own code block, which lists the languages as before', () => {
+  it('are asked of a bounded colourer by the editor’s own code block, which lists the languages as before', () => {
     const block = all.find((each) => each.name === 'codeBlock') as {
-      options: { lowlight: typeof codeColours };
+      options: { lowlight: CodeColours };
     };
-    // The library copies its options: the two functions are the ones it was given.
-    expect(block.options.lowlight.highlight).toBe(codeColours.highlight);
-    expect(block.options.lowlight.highlightAuto).toBe(codeColours.highlightAuto);
-    expect(codeColours.listLanguages()).toContain('typescript');
-    expect(codeColours.registered('javascript')).toBe(true);
+    expect(block.options.lowlight.highlight('javascript', `${code}x`).children).toEqual([]);
+    expect(block.options.lowlight.failed('const a = 1;')).toBe(false);
+    expect(block.options.lowlight.listLanguages()).toContain('typescript');
+    expect(block.options.lowlight.registered('javascript')).toBe(true);
+  });
+});
+
+// Register row D183: "A colouring of a code block that fails, or that takes
+// too long, shows the block without syntax colours." The review of pull
+// request 34 found content whose colouring threw, so that the document could
+// not be shown, and content whose colouring took seconds at each key. Here a
+// fault is put into the colourer instead: code that holds THROWS throws, and
+// code that holds SLOW takes the time it is given on a clock the test holds.
+describe('a colouring of a code block that fails or takes too long', () => {
+  const lowlight = createLowlight(common);
+  const honest = 'const a = "b" + 1; // c\n'.repeat(200);
+  // Code of its own, and not the honest code with the fault added: an edit of
+  // a block is taken for that block.
+  const slowCode = `${'let b = [1, 2, 3].map((c) => c * 2);\n'.repeat(100)}SLOW`;
+
+  function faulty(slowFor: number) {
+    let time = 0;
+    const asked: string[] = [];
+    const colourer = {
+      ...lowlight,
+      highlight(language: string, code: string) {
+        asked.push(code);
+        if (code.includes('THROWS')) throw new Error('Could not highlight with `Highlight.js`');
+        if (code.includes('SLOW')) time += slowFor;
+        return lowlight.highlight(language, code);
+      },
+    };
+    return { colours: codeColours(colourer, () => time), asked };
+  }
+
+  /** The colouring plugin of the editor's own code block, given `colours`. */
+  function colouring(colours: CodeColours) {
+    const block = all.find((each) => each.name === 'codeBlock')!;
+    const add = getExtensionField<() => Plugin[]>(block, 'addProseMirrorPlugins', {
+      name: block.name,
+      options: { ...block.options, lowlight: colours },
+      storage: {},
+      editor: {} as never,
+      type: schema.nodes.codeBlock!,
+    });
+    return add().find((plugin) => (plugin as unknown as { key: string }).key.startsWith('lowlight'))!;
+  }
+
+  /** The document of these code blocks, in JavaScript, as the editor holds it with its colours. */
+  function shown(colours: CodeColours, ...codes: string[]) {
+    const plugin = colouring(colours);
+    const doc = schema.node(
+      'doc',
+      null,
+      codes.map((code) => schema.node('codeBlock', { language: 'javascript' }, [schema.text(code)])),
+    );
+    return { plugin, state: EditorState.create({ schema, doc, plugins: [plugin] }) };
+  }
+
+  /** How many coloured pieces each code block of the document has. */
+  function coloured(plugin: Plugin, state: EditorState) {
+    const pieces: number[] = [];
+    state.doc.forEach((node, offset) => {
+      pieces.push((plugin.getState(state) as DecorationSet).find(offset, offset + node.nodeSize).length);
+    });
+    return pieces;
+  }
+
+  it('are said to be left off in words of their own', () => {
+    // Written out here, and not taken from the code under test. The words are the owner's to approve.
+    expect(CODE_NOT_COLOURED).toBe(
+      'Syntax colours are not shown in this code block. Colouring its code took too long or could not complete.',
+    );
+  });
+
+  it('that throws is caught: the document is shown, that block without colours and every other block with them', () => {
+    const { colours } = faulty(0);
+    const thrown = `${'function f(g) { return g ?? null; }\n'.repeat(100)}THROWS`;
+    let made: ReturnType<typeof shown> | undefined;
+    expect(() => (made = shown(colours, honest, thrown, honest))).not.toThrow();
+    const [first, second, third] = coloured(made!.plugin, made!.state);
+    expect(first).toBeGreaterThan(100);
+    expect(second).toBe(0);
+    expect(third).toBe(first);
+    expect(colours.failed(thrown)).toBe(true);
+    expect(colours.failed(honest)).toBe(false);
+  });
+
+  it(`that takes longer than ${CODE_COLOURS_LONGEST} ms is not used, and the block is shown without colours`, () => {
+    expect(CODE_COLOURS_LONGEST).toBe(200);
+    const { colours } = faulty(CODE_COLOURS_LONGEST + 1);
+    const { plugin, state } = shown(colours, honest, slowCode);
+    const [first, second] = coloured(plugin, state);
+    expect(first).toBeGreaterThan(100);
+    expect(second).toBe(0);
+    expect(colours.failed(slowCode)).toBe(true);
+    expect(colours.failed(honest)).toBe(false);
+  });
+
+  it(`that takes ${CODE_COLOURS_LONGEST} ms to the millisecond is used`, () => {
+    const { colours } = faulty(CODE_COLOURS_LONGEST);
+    const { plugin, state } = shown(colours, slowCode);
+    expect(coloured(plugin, state)[0]).toBeGreaterThan(100);
+    expect(colours.failed(slowCode)).toBe(false);
+  });
+
+  it('that took too long is abandoned: the block is not coloured again at each key typed in it, nor at each typed in another block', () => {
+    const { colours, asked } = faulty(5000);
+    const made = shown(colours, slowCode, honest);
+    let state = made.state;
+    expect(asked.filter((code) => code.includes('SLOW'))).toHaveLength(1);
+    // Keys typed in the slow block, at its end, at its end again and in its
+    // middle, and then in the honest block after it.
+    const slowEnd = () => state.doc.child(0).nodeSize - 1;
+    for (const [at, key] of [
+      [slowEnd, 'x'],
+      [slowEnd, 'y'],
+      [() => 100, 'z'],
+      [() => slowEnd() + 5, 'w'],
+    ] as const) {
+      state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, at())).insertText(key));
+      const [first, second] = coloured(made.plugin, state);
+      expect(first).toBe(0);
+      expect(second).toBeGreaterThan(100);
+    }
+    expect(asked.filter((code) => code.includes('SLOW'))).toHaveLength(1);
+    const now = state.doc.child(0).textContent;
+    expect(now).toContain('xy');
+    expect(now).toContain('z');
+    expect(colours.failed(now)).toBe(true);
+    // The honest block, edited, was coloured afresh each time and kept its colours.
+    expect(state.doc.child(1).textContent).toContain('w');
+    expect(colours.failed(state.doc.child(1).textContent)).toBe(false);
+  });
+
+  it('that took too long is tried afresh where the code is rewritten past half of it', () => {
+    const { colours, asked } = faulty(5000);
+    expect(colours.highlight('javascript', slowCode).children).toEqual([]);
+    expect(colours.failed(slowCode)).toBe(true);
+    const rewritten = 'let b = 2;\n'.repeat(300);
+    expect(colours.highlight('javascript', rewritten).children.length).toBeGreaterThan(100);
+    expect(colours.failed(rewritten)).toBe(false);
+    expect(asked).toEqual([slowCode, rewritten]);
   });
 });
