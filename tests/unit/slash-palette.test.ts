@@ -1411,4 +1411,19 @@ describe('the limits of a document in the palette (D182, D192)', () => {
     type(withTable, '/');
     expect(listed(withTable)).toEqual(ALL);
   });
+
+  // The review of pull request 42: the change as the palette would make it is asked, not the block alone.
+  it('lists at 4,999, after text at the end, no block the palette follows with a paragraph: that would make 5,001', () => {
+    const atEnd = editorOf(paragraph(), ...many(4998, () => paragraph()));
+    atEnd.commands.setTextSelection(atEnd.state.doc.content.size - 1);
+    type(atEnd, 'a /');
+    const followed = new Set(['horizontalRule', 'pageBreak', 'tableOfContents', 'tableBlock']);
+    expect(listed(atEnd)).toEqual(
+      SLASH_COMMANDS.filter(({ inserts }) => !followed.has(inserts.type)).map(({ name }) => name),
+    );
+    // Chosen in place of an empty paragraph, a divider brings no more, and is listed.
+    const alone = editorOf(paragraph(), ...many(4998, () => paragraph()));
+    type(alone, '/');
+    expect(listed(alone)).toEqual(ALL);
+  });
 });

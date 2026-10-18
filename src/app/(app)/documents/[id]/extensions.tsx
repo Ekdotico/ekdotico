@@ -57,12 +57,13 @@ import * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
 import { LightbulbIcon, StickyNoteIcon, TriangleAlertIcon } from '@ekdotico/domico/icons';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
+import { shapeOf } from '../../../../lib/collab/shape.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
 import styles from './editor.module.css';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
-import { limitRefusal } from './block-limits.ts';
+import { limitRefusal, overLimits } from './block-limits.ts';
 import { CODE_NOT_COLOURED, codeColours } from './code-colours.ts';
 import {
   TABLE_MOST,
@@ -938,7 +939,10 @@ function takeOut(blocks: readonly (readonly [parent: Y.XmlFragment, at: number, 
  *
  * NO MENDING THAT WOULD PASS 5 MB IS WRITTEN (register D180, the browser's
  * half): `unrepairable` is told, once, and the tab is read-only, with nothing
- * written, rather than sending what the server would refuse.
+ * written, rather than sending what the server would refuse. Nor one the
+ * server would refuse for the shape of the document (`shapeOf`): where the
+ * filled text is past a limit of the document, it opens to deletions alone
+ * instead, and the mending is written once deletions bring it back under.
  *
  * FOR THE ONE WHO BUILDS SHARING: WHAT THIS COSTS A READER. No role that only
  * reads exists yet. A reader's browser is one that cannot edit, so it writes
@@ -998,13 +1002,33 @@ export function holdBinding(
    * a copy first and measured as the server measures a document: where it
    * would pass, nothing is written, and the tab is read-only (`unrepairable`).
    */
+  //
+  // NOR ONE THAT THE SERVER WOULD REFUSE FOR THE SHAPE OF A DOCUMENT (the
+  // review of pull request 42). Emptying an element is never refused (D180),
+  // so a client can empty a quote or a table's block in a document at a limit;
+  // the filling that every browser then writes would pass the limit, be
+  // refused, and hold every tab on opening, with no one left to delete. The
+  // copy is asked as the server asks (`shapeOf`). Where it would be refused,
+  // nothing is written and the tab is not held: the text, filled, is past the
+  // limit, so it opens to deletions alone with the statement of the limit
+  // (`overLimits`, `limitRefusal` of ./block-limits.ts). Each change of the
+  // writer's is then written as a mending of the whole text, asked again
+  // (`shaped`): nothing until the deletions bring it back under, and then the
+  // deletions and the filling together. Where the text is past no limit, the
+  // refusal is of a rule this browser cannot answer, and the tab is read-only
+  // as for 5 MB.
   const mend = () => {
     const going = leftOut(binding.type, binding.mapping);
     const copy = new Y.Doc();
     try {
       Y.applyUpdate(copy, Y.encodeStateAsUpdate(binding.doc));
       repair(copy, going);
-      if (Y.encodeStateAsUpdate(copy).byteLength > DOCUMENT_BYTES_MOST) {
+      const fits = Y.encodeStateAsUpdate(copy).byteLength <= DOCUMENT_BYTES_MOST;
+      const refused =
+        fits && shapeOf(binding.doc, Y.encodeStateAsUpdate(copy, Y.encodeStateVector(binding.doc))) !== null;
+      shaped = refused && overLimits(view.state.doc).length > 0;
+      if (shaped) return;
+      if (!fits || refused) {
         unrepaired = true;
         unrepairable();
         return;
@@ -1014,6 +1038,8 @@ export function holdBinding(
     }
     repair(binding.doc, going);
   };
+  // Whether the last mending was not written because the server would refuse it, the text being past a limit.
+  let shaped = false;
   let failed = false;
   // Whether a mending was left unwritten because the text could not be edited.
   let owed = false;
@@ -1052,8 +1078,11 @@ export function holdBinding(
   binding._observeFunction = held(binding._observeFunction as (...given: unknown[]) => void, true);
   const changed = held(binding._prosemirrorChanged.bind(binding), false);
   // Where the repair was not written, nothing of the text is: it holds what
-  // the shared document does not.
-  binding._prosemirrorChanged = (...given) => (unrepaired ? undefined : changed(...given));
+  // the shared document does not. Where the server would have refused it,
+  // the text, deletions alone, is written with it once the server would not.
+  const remend = held(mend, false);
+  binding._prosemirrorChanged = (...given) =>
+    unrepaired ? undefined : shaped ? remend() : changed(...given);
   return () => {
     if (!owed || !writes() || failed || unrepaired) return;
     owed = false;

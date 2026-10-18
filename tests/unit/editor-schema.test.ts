@@ -31,7 +31,7 @@ import {
   limitRefusal,
   overLimits,
 } from '../../src/app/(app)/documents/[id]/block-limits.ts';
-import { LIMITS } from '../../src/lib/collab/shape.ts';
+import { LIMITS, shapeOf } from '../../src/lib/collab/shape.ts';
 import {
   TABLE_CELLS_MOST,
   TABLE_COUNT_MOST,
@@ -1909,6 +1909,107 @@ describe('the tables in the cells of a table (R32)', () => {
         editor.binding._prosemirrorChanged(view.state.doc);
         expect(editor.fragment.toString()).not.toContain('typed');
       });
+    });
+
+    // The review of pull request 42: a client empties an element in a document at a limit, which the
+    // server takes (D180); the filling every browser wrote would pass the limit, be refused, and hold
+    // every tab. It is not written: the tab opens to deletions alone, and a deletion lets it through.
+    describe('and a mending that the server would refuse for a limit of the document', () => {
+      const replica = (document: Y.Doc) => {
+        const made = new Y.Doc();
+        Y.applyUpdate(made, Y.encodeStateAsUpdate(document));
+        return made;
+      };
+      /** The document after a member's update that the server takes, and that update. */
+      const emptied = (document: Y.Doc, change: (fragment: Y.XmlFragment) => void) => {
+        const member = replica(document);
+        member.transact(() => change(member.getXmlFragment('default')));
+        const update = Y.encodeStateAsUpdate(member, Y.encodeStateVector(document));
+        expect(shapeOf(document, update)).toBeNull();
+        Y.applyUpdate(document, update);
+        return document;
+      };
+      const CASES = [
+        [
+          '5,000 blocks, a quote emptied',
+          () => {
+            const document = new Y.Doc();
+            document
+              .getXmlFragment('default')
+              .push([
+                element('blockquote', {}, [paragraph('q')]),
+                ...Array.from({ length: 4999 }, () => paragraph('x')),
+              ]);
+            return emptied(document, (fragment) => {
+              (fragment.get(0) as Y.XmlElement).delete(0, 1);
+              fragment.push([paragraph('added')]);
+            });
+          },
+          'This document holds 5,001 blocks, more than our current limit per document (5,000). It is read-only until it is back under the limit. You can still delete blocks.',
+        ],
+        [
+          '100 tables, a table block emptied',
+          () => {
+            const document = new Y.Doc();
+            document
+              .getXmlFragment('default')
+              .push([paragraph('x'), ...Array.from({ length: 100 }, () => blockOf([rowOf('c')]))]);
+            return emptied(document, (fragment) => {
+              (fragment.get(1) as Y.XmlElement).delete(0, 2);
+              fragment.push([blockOf([rowOf('added')])]);
+            });
+          },
+          'This document holds 101 tables, more than our current limit per document (100). It is read-only until it is back under the limit. You can still delete tables.',
+        ],
+      ] as const;
+
+      it.each(CASES)(
+        '%s: not written and not held, deletions alone, and a block deleted lets it through',
+        (_, made, statement) => {
+          const document = made();
+          const before = bytes(document);
+          const editor = open(document);
+          expect(editor.unrepairable).not.toHaveBeenCalled();
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.mended()).toBe(0);
+          expect(bytes(document)).toBe(before);
+          // The filled text is past the limit: the statement, and deletions alone.
+          expect(overLimits(editor.text())).toEqual([statement]);
+          const view = editor.typed();
+          // The first and the last place in text: after a letter.
+          const written: number[] = [];
+          view.state.doc.descendants((node, pos) => {
+            if (node.isTextblock && node.textContent) written.push(pos + 1 + node.content.size);
+          });
+          expect(limitRefusal(view.state.tr.insertText('typed', written[0]!), view.state.doc)).toBe(
+            statement,
+          );
+          // A second honest browser is not held either, and writes nothing.
+          const second = open(replica(document));
+          expect([second.unrepairable.mock.calls.length, second.mended()]).toEqual([0, 0]);
+          // A letter deleted leaves it past: nothing is written, not even the letter.
+          const letter = view.state.tr.delete(written.at(-1)! - 1, written.at(-1)!);
+          expect(limitRefusal(letter, view.state.doc)).toBeNull();
+          view.dispatch(letter);
+          editor.binding._prosemirrorChanged(view.state.doc);
+          expect(editor.mended()).toBe(0);
+          expect(bytes(document)).toBe(before);
+          // The last block deleted brings it back to the limit: the deletion and the filling are written
+          // together, and the server takes them.
+          const server = replica(document);
+          const { doc } = view.state;
+          const block = view.state.tr.delete(doc.content.size - doc.lastChild!.nodeSize, doc.content.size);
+          expect(limitRefusal(block, doc)).toBeNull();
+          view.dispatch(block);
+          editor.binding._prosemirrorChanged(view.state.doc);
+          expect(editor.mended()).toBe(1);
+          expect(shapeOf(server, editor.mends()[0]!)).toBeNull();
+          expect(overLimits(editor.text())).toEqual([]);
+          expect(editor.unrepairable).not.toHaveBeenCalled();
+          // What the binding builds of the shared document now needs no filling.
+          expect(open(replica(document)).mended()).toBe(0);
+        },
+      );
     });
 
     // The review of pull request 34: a browser that cannot edit the document wrote a mending to it.

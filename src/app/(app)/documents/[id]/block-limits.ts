@@ -8,10 +8,12 @@
 // (`limitRefusal`, asked by `Closed` of ./extensions.tsx). Nothing a document
 // holds is ever taken out for a limit.
 //
-// A DOCUMENT PAST A LIMIT ALREADY (D184), stored before the limit or by a tab
-// of an earlier release, opens read-only with a statement that names the count
-// and the limit (`overLimits`), and becomes editable once it is back under
-// every limit. While it is past one, the text stays editable for deletions
+// A DOCUMENT PAST A LIMIT ALREADY (D184), stored before the limit, by a tab
+// of an earlier release, or filled by this browser where a client emptied an
+// element (`mend` of ./extensions.tsx), opens to deletions alone, with a
+// statement that names the count and the limit (`overLimits`; its words, the
+// owner's, call that read-only), and is fully editable again once it is back
+// under every limit. While it is past one, the text stays editable for deletions
 // alone: a change of the writer's is applied only where every step of it
 // deletes and puts nothing in (`deletesOnly`), so that tables, blocks, items
 // and text can be taken out with the keyboard, by cutting, or by the menu of a
