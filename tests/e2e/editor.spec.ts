@@ -7,6 +7,7 @@ import { expect, test, type Locator, type Page } from './fixtures.ts';
 import * as Y from 'yjs';
 import {
   expectNoSidewaysScroll,
+  mailFor,
   newPerson,
   screens,
   signIn,
@@ -17,6 +18,7 @@ import {
   type Person,
 } from './account.ts';
 import { connectAs, startCollab, stopCollab } from './collab.ts';
+import { invite, INVITATION_LINK, shareNew } from './sharing.ts';
 
 // One collaboration server for the file, and one test at a time: a test stops it.
 test.describe.configure({ mode: 'serial' });
@@ -3999,4 +4001,38 @@ test('a document stored with more than 100 tables opens to deletions alone, says
   await page.keyboard.type('written again');
   await expect(text(page)).toContainText('written again');
   await expect(status(page, 'In sync')).toBeVisible();
+});
+
+// FR-ED-19, FR-ED-39: a Viewer, who holds the role through an accepted
+// invitation (FR-ED-21), reads what the Owner writes, and the editor offers
+// the Viewer no writing; the server discards what such a connection sends
+// (tests/integration/collab.test.ts, "discards every update received on a
+// connection held as Viewer"). Here, beside the other tests of the server.
+test('a Viewer reads what the Owner writes, in an editor that does not write', async ({ page, browser }) => {
+  test.slow();
+  await enter(page);
+  const id = await shareNew(page);
+  const viewer = newPerson();
+  const other = await browser.newContext();
+  const theirs = await other.newPage();
+  await enter(theirs, viewer);
+  await invite(page, [viewer.email], 'Viewer');
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  const { found: link } = await mailFor(viewer.email, INVITATION_LINK);
+  await theirs.goto(new URL(link).pathname);
+  await theirs.getByRole('button', { name: 'Accept' }).click();
+  await theirs.waitForURL(`**/documents/${id}`);
+
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
+  await page.goto(`/documents/${id}`);
+  await expect(text(page)).toHaveAttribute('aria-readonly', 'false');
+  await text(page).click();
+  await page.keyboard.type('Written by the Owner');
+  await expect(text(theirs)).toContainText('Written by the Owner');
+  // What the Viewer types goes nowhere.
+  await text(theirs).click();
+  await theirs.keyboard.type('Written by the Viewer');
+  await expect(text(theirs)).not.toContainText('Written by the Viewer');
+  await other.close();
 });

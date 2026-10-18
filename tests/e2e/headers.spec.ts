@@ -132,11 +132,15 @@ test('every page, every route and every other answer carries the policy and the 
       `/reset-password/${TOKEN}`,
       `/sign-in/link/${TOKEN}`,
       `/sign-up/${TOKEN}`,
+      // FR-ED-21: the link of a document invitation, whose page needs a session.
+      `/invitations/${TOKEN}`,
     ].sort(),
   );
   for (const path of tokenPages) {
-    const response = await request.get(path);
-    expect(response.status(), path).toBe(200);
+    // Without a session the invitation's page is the way to sign in, which keeps the word too.
+    const behindASession = path.startsWith('/invitations/');
+    const response = await request.get(path, behindASession ? { maxRedirects: 0 } : {});
+    expect(response.status(), path).toBe(behindASession ? 307 : 200);
     expect(
       response
         .headersArray()

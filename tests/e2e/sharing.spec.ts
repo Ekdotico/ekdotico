@@ -1,29 +1,21 @@
-// Sharing a document (FR-ED-21, FR-ED-37, FR-ED-39, FR-ED-42): inviting from
-// the sharing settings, the uniform confirmation, the email and the
-// notification, accepting and declining, revoking and sending again, expiry,
-// the limit of ten people, and a Viewer's editor that does not write.
-import { spawnSync } from 'node:child_process';
+// Sharing a document (FR-ED-21, FR-ED-37, FR-ED-42): inviting from the
+// sharing settings, the uniform confirmation, the email and the notification,
+// accepting and declining, revoking and sending again, expiry, and the limit
+// of ten people. A Viewer's editor that does not write (FR-ED-39) needs the
+// collaboration server, and is in tests/e2e/editor.spec.ts.
 import { expect, test, type Page } from './fixtures.ts';
 import { mailFor, newPerson, signUp, type Person } from './account.ts';
-import { startCollab, stopCollab } from './collab.ts';
-import { APP_ORIGIN, AUTH_SECRET } from './origin.ts';
-
-test.beforeAll(startCollab);
-test.afterAll(stopCollab);
-
-// The fixed texts of FR-ED-21 and FR-ED-37, written out here and not taken from the code under test.
-const CONFIRMATION = (address: string) =>
-  `Invitation created for ${address}. Ekdotico sends an invitation only to an address that belongs to an account. If this address does, the person receives an email and a notification.`;
-const LIMIT =
-  'This document has reached its limit of ten people. Remove a collaborator or revoke an invitation to invite another.';
-// The texts for the owner's approval (docs/plan/slice-13.md, §5).
-const NO_LONGER_OPEN =
-  'This invitation is no longer open. It was accepted, declined, or revoked, or it expired.';
-const NOT_OPEN_TO_ACCOUNT =
-  'This invitation is not open to this account. An invitation can be accepted only by the account that holds the address it was sent to.';
-
-const text = (page: Page) => page.getByRole('textbox', { name: 'Document text' });
-const LINK = /https?:\/\/[^\s]+\/invitations\/[A-Za-z0-9_-]{43}/;
+import {
+  CONFIRMATION,
+  expire,
+  invite,
+  INVITATION_LINK,
+  LIMIT,
+  NO_LONGER_OPEN,
+  NOT_OPEN_TO_ACCOUNT,
+  pendingRow,
+  shareNew,
+} from './sharing.ts';
 
 async function enter(page: Page, person: Person = newPerson()) {
   await signUp(page, person);
@@ -32,46 +24,7 @@ async function enter(page: Page, person: Person = newPerson()) {
   return person;
 }
 
-/** A new document, and its sharing settings open. Resolves with the document's identifier. */
-async function shareNew(page: Page): Promise<string> {
-  await page.getByRole('button', { name: 'New document' }).click();
-  await page.getByRole('link', { name: 'Untitled document' }).first().click();
-  await expect(text(page)).toBeVisible();
-  const id = /\/documents\/([0-9a-f-]{36})$/.exec(page.url())![1]!;
-  await page.getByRole('link', { name: 'Sharing' }).click();
-  await expect(page.getByRole('heading', { level: 1, name: 'Sharing' })).toBeVisible();
-  return id;
-}
-
-async function invite(page: Page, addresses: string[], role: 'Editor' | 'Viewer' = 'Editor') {
-  await page.getByRole('textbox', { name: 'Email addresses' }).fill(addresses.join('\n'));
-  await page.getByRole('radio', { name: role }).check();
-  await page.getByRole('button', { name: 'Invite' }).click();
-}
-
-const pendingRow = (page: Page, address: string) =>
-  page.getByRole('group', { name: 'Pending invitations' }).getByRole('row').filter({ hasText: address });
-
-function expire(address: string) {
-  const ran = spawnSync('node', ['tests/e2e/expire-invitation.ts', address], {
-    env: {
-      ...process.env,
-      FOUNDING_TEAM_EMAILS: '',
-      APP_ORIGIN,
-      DATABASE_URL: process.env.E2E_DATABASE_URL,
-      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
-      AUTH_SECRET,
-    },
-    encoding: 'utf8',
-    timeout: 30_000,
-  });
-  expect(ran.status, ran.stderr).toBe(0);
-}
-
-test('an invitation by email and notification, accepted as Viewer, whose editor does not write', async ({
-  page,
-  browser,
-}) => {
+test('an invitation by email and notification, accepted as Viewer', async ({ page, browser }) => {
   test.slow();
   const owner = await enter(page);
   const id = await shareNew(page);
@@ -101,7 +54,7 @@ test('an invitation by email and notification, accepted as Viewer, whose editor 
   await expect(header).toHaveAccessibleName('Notifications');
 
   // The email carries the link; the link opens the invitation for this account alone.
-  const { found: link } = await mailFor(invitee.email, LINK);
+  const { found: link } = await mailFor(invitee.email, INVITATION_LINK);
   const path = new URL(link).pathname;
   await page.goto(path);
   await expect(page.getByText(NOT_OPEN_TO_ACCOUNT)).toBeVisible();
@@ -111,13 +64,6 @@ test('an invitation by email and notification, accepted as Viewer, whose editor 
   await theirs.getByRole('button', { name: 'Accept' }).click();
   await theirs.waitForURL(`**/documents/${id}`);
 
-  // FR-ED-39: the Viewer reads and does not write; the Owner writes.
-  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
-  await page.goto(`/documents/${id}`);
-  await expect(text(page)).toHaveAttribute('aria-readonly', 'false');
-  await text(page).click();
-  await page.keyboard.type('Written by the Owner');
-  await expect(text(theirs)).toContainText('Written by the Owner');
   // The shared document is in the Viewer's list, without the Owner's controls.
   await theirs.goto('/');
   await expect(theirs.getByRole('link', { name: 'Untitled document' })).toBeVisible();
@@ -149,7 +95,7 @@ test('declined, revoked, sent again, and expired invitations', async ({ page, br
   await expect(theirs.getByText('There are no notifications.')).toBeVisible();
 
   // Revoked: the link is no longer open.
-  const revokedLink = new URL((await mailFor(revoked.email, LINK)).found).pathname;
+  const revokedLink = new URL((await mailFor(revoked.email, INVITATION_LINK)).found).pathname;
   await pendingRow(page, revoked.email).getByRole('button', { name: 'Revoke' }).click();
   await expect(page.getByRole('status')).toHaveText(`Invitation to ${revoked.email} revoked.`);
   await expect(pendingRow(page, revoked.email)).toHaveCount(0);
@@ -157,12 +103,12 @@ test('declined, revoked, sent again, and expired invitations', async ({ page, br
   await expect(pages[1]!.getByText(NO_LONGER_OPEN)).toBeVisible();
 
   // Sent again: a new link, and the first no longer open.
-  const firstLink = new URL((await mailFor(again.email, LINK)).found).pathname;
+  const firstLink = new URL((await mailFor(again.email, INVITATION_LINK)).found).pathname;
   await pendingRow(page, again.email).getByRole('button', { name: 'Send again' }).click();
   await expect(page.getByRole('status')).toHaveText(CONFIRMATION(again.email));
   let secondLink = firstLink;
   await expect
-    .poll(async () => (secondLink = new URL((await mailFor(again.email, LINK)).found).pathname))
+    .poll(async () => (secondLink = new URL((await mailFor(again.email, INVITATION_LINK)).found).pathname))
     .not.toBe(firstLink);
   await pages[2]!.goto(firstLink);
   await expect(pages[2]!.getByText(NO_LONGER_OPEN)).toBeVisible();
@@ -170,7 +116,7 @@ test('declined, revoked, sent again, and expired invitations', async ({ page, br
   await expect(pages[2]!.getByRole('button', { name: 'Accept' })).toBeVisible();
 
   // Expired: no longer open, and out of the list and the count.
-  const expiringLink = new URL((await mailFor(expiring.email, LINK)).found).pathname;
+  const expiringLink = new URL((await mailFor(expiring.email, INVITATION_LINK)).found).pathname;
   expire(expiring.email);
   await pages[3]!.goto(expiringLink);
   await expect(pages[3]!.getByText(NO_LONGER_OPEN)).toBeVisible();

@@ -4,7 +4,7 @@
 // next.config.ts; the pages are those of the proxy's list. A token page added
 // to the one and not to the other fails here.
 import { describe, expect, it } from 'vitest';
-import config, { TOKEN_PAGES } from '../../next.config.ts';
+import config, { SESSION_TOKEN_PAGES, TOKEN_PAGES } from '../../next.config.ts';
 
 import { SESSIONLESS } from '../../src/proxy.ts';
 
@@ -14,7 +14,9 @@ describe('the pages whose address holds a token', () => {
       ({ methods, path }) => methods.includes('GET') && path.includes('[token]') && !path.startsWith('/api/'),
     ).map(({ path }) => path.replace('[token]', ':token'));
     expect(pages.length).toBeGreaterThan(0);
-    expect([...TOKEN_PAGES].sort()).toEqual(pages.sort());
+    // With the one page of a token behind a session, which the proxy's list does not hold (FR-ED-21).
+    expect(SESSION_TOKEN_PAGES).toEqual(['/invitations/:token']);
+    expect([...TOKEN_PAGES].sort()).toEqual([...pages, ...SESSION_TOKEN_PAGES].sort());
   });
 
   it('are each answered with Referrer-Policy: no-referrer, and with nothing weaker', async () => {
