@@ -51,6 +51,7 @@ import {
   storeFinalState,
   storeState,
 } from '../lib/collab/state.ts';
+import { shapeOf, type Shape } from '../lib/collab/shape.ts';
 import { db } from '../lib/db.ts';
 import { authorise } from '../lib/documents/access.ts';
 import { faultOf } from '../lib/fault.ts';
@@ -691,7 +692,7 @@ export function createCollabServer(store: ServerSettings) {
         throw refuse(REFUSAL.LIMITED);
       }
       if (connection.readOnly) return;
-      let past: Limit | null;
+      let past: Limit | Shape | null;
       try {
         assertUpdate(payload);
         // The limits of a document (src/lib/collab/state.ts): an update that
@@ -700,7 +701,12 @@ export function createCollabServer(store: ServerSettings) {
         // is awaited between its answer and the library's applying the update.
         let limits = keepers.get(document);
         if (!limits) keepers.set(document, (limits = limitsOf(document)));
-        past = limits(payload);
+        // Then the shape (src/lib/collab/shape.ts; register D170, D171, D180),
+        // of an update inside the limits, so that one the limits refuse costs
+        // nothing more. One the shape refuses was counted by the keeper as let
+        // through, which leaves its numbers higher than the document: a
+        // measure, and nothing else.
+        past = limits(payload) ?? shapeOf(document, payload);
       } catch {
         // An object, which the library reads a close code from, and with no
         // message for it to print: what Yjs throws can quote the update.
@@ -714,8 +720,16 @@ export function createCollabServer(store: ServerSettings) {
         // The client is told which limit, and does not send the same again
         // (src/lib/collab/protocol.ts).
         // One reason for each limit, so that the words the page shows are true.
+        // A rule of the shape is logged as a limit is: NFR-SE-19 has no kind of
+        // its own for it, and its list is closed.
         throw refuse(
-          { size: REFUSAL.TOO_LARGE, depth: REFUSAL.TOO_DEEP, waiting: REFUSAL.TOO_DANGLING }[past],
+          {
+            size: REFUSAL.TOO_LARGE,
+            depth: REFUSAL.TOO_DEEP,
+            waiting: REFUSAL.TOO_DANGLING,
+            incomplete: REFUSAL.INCOMPLETE,
+            table: REFUSAL.TABLE_BOUNDS,
+          }[past],
         );
       }
     },

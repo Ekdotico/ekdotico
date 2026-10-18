@@ -18,7 +18,14 @@ import { DocumentConnection, syncStatus, type Ending, type Held } from '../../..
 import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import pageStyles from '../../../pages.module.css';
 import styles from './editor.module.css';
-import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
+import {
+  BLOCK_CONTROLS,
+  Editable,
+  SLASH_HINT,
+  TABLE_PAST_BOUNDS,
+  copyText,
+  extensions,
+} from './extensions.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
@@ -71,6 +78,12 @@ const HELD: Record<Held, string> = {
   [REFUSAL.TOO_DEEP]: 'A change in this tab would nest the content more than 50 levels deep',
   [REFUSAL.TOO_DANGLING]:
     'A change in this tab refers to content that this document does not hold, so it cannot be applied',
+  // A rule of the shape of a document (register D170, D180): this editor
+  // makes every block whole, so the words are for a client that does not.
+  // For the owner's approval.
+  [REFUSAL.INCOMPLETE]:
+    'A change in this tab adds a block without the content it must hold, so it cannot be applied',
+  [REFUSAL.TABLE_BOUNDS]: TABLE_PAST_BOUNDS,
 };
 const HELD_TEXT =
   'The server did not take the change, and the document is read-only in this tab. The changes that were not sent are shown here and nowhere else. Copy the text to keep it, then reload the document from the server. Reloading discards the changes that were not sent.';

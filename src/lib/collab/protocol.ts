@@ -87,6 +87,16 @@ export const REFUSAL = {
   TOO_DEEP: 'too-deep',
   /** The third: the change refers to content the document does not hold, and more of it than may wait. */
   TOO_DANGLING: 'too-dangling',
+  /**
+   * What this client sent would break a rule of the shape of a document
+   * (src/lib/collab/shape.ts), and is refused as a change past a limit is,
+   * with the same consequences for the client. `incomplete`: it creates an
+   * element without the content the editor's schema requires of it (register
+   * D170, D180). `table-bounds`: it takes a table past a bound (D171, D172).
+   * The two names are provisional, for the owner's approval.
+   */
+  INCOMPLETE: 'incomplete',
+  TABLE_BOUNDS: 'table-bounds',
 } as const;
 
 export type Refusal = (typeof REFUSAL)[keyof typeof REFUSAL];

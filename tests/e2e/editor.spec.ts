@@ -12,6 +12,7 @@ import {
   signIn,
   signUp,
   storeNested,
+  storeState,
   watchOrigins,
   type Person,
 } from './account.ts';
@@ -1994,36 +1995,42 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
 
 // The second review of pull request 20, finding C. Before it, each of these
 // tables was deleted whole, for everyone, by the first client that opened it.
-test('a table past the bound of the schema is laid out with the bound, and the page answers', async ({
+test('a table past the bound of the schema is refused by the server, and one stored before is laid out with the bound, and the page answers', async ({
   page,
 }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(120_000);
   await enter(page);
   const id = await openNew(page);
   await text(page).click();
   await page.keyboard.type('Written before.');
   await expect(status(page, 'In sync')).toBeVisible();
+  const past = () => [
+    tableOf(
+      Array.from({ length: 101 }, () => element('tableRow', {}, [cellWith({}, 'row')])),
+      'too many rows',
+    ),
+    tableOf(
+      [
+        element(
+          'tableRow',
+          {},
+          Array.from({ length: 101 }, () => cellWith({}, 'cell')),
+        ),
+      ],
+      'too many cells',
+    ),
+    paragraph('The end.'),
+  ];
+  // Sent by another client, it is refused (register D171): the page never receives it.
+  const refused = await connectAs(page.context(), id);
+  await holds(refused, 'Written before.');
+  refused.provider.document.transact(() => refused.provider.document.getXmlFragment('default').push(past()));
+  await page.waitForTimeout(2000);
+  await expect(text(page)).not.toContainText('The end.');
+  refused.close();
+  // Stored as a document could hold it before the server held the bounds.
+  await storedWith(page, id, (fragment) => fragment.push(past()));
   const hostile = await connectAs(page.context(), id);
-  await holds(hostile, 'Written before.');
-  hostile.provider.document.transact(() => {
-    hostile.provider.document.getXmlFragment('default').push([
-      tableOf(
-        Array.from({ length: 101 }, () => element('tableRow', {}, [cellWith({}, 'row')])),
-        'too many rows',
-      ),
-      tableOf(
-        [
-          element(
-            'tableRow',
-            {},
-            Array.from({ length: 101 }, () => cellWith({}, 'cell')),
-          ),
-        ],
-        'too many cells',
-      ),
-      paragraph('The end.'),
-    ]);
-  });
   const held = async () => {
     await expect(text(page)).toContainText('The end.');
     await expect(text(page).locator('table')).toHaveCount(2);
@@ -2468,8 +2475,8 @@ test('a table in a cell that another client takes past the bounds is brought ins
   const doc = text(page);
   await doc.click();
   await page.keyboard.type('Written before.');
-  const hostile = await connectAs(page.context(), id);
-  const fragment = hostile.provider.document.getXmlFragment('default');
+  let hostile = await connectAs(page.context(), id);
+  let fragment = hostile.provider.document.getXmlFragment('default');
   // The writer's table, sixty by sixty, and what the writer writes in it.
   fragment.push([
     gridOf(60, 60, (row, column) => [paragraph(`w${row}.${column}`)], 'the writer’s'),
@@ -2483,22 +2490,33 @@ test('a table in a cell that another client takes past the bounds is brought ins
 
   // Another client puts four by four in every cell, 57,600 cells more, and in
   // one of them a table a level too deep.
-  const cellAt = (row: number, column: number) =>
-    (((fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).get(row) as Y.XmlElement).get(
+  const cellAt = (row: number, column: number, within = fragment) =>
+    (((within.get(1) as Y.XmlElement).get(0) as Y.XmlElement).get(row) as Y.XmlElement).get(
       column,
     ) as Y.XmlElement;
-  hostile.provider.document.transact(() => {
+  const putIn = (within: Y.XmlFragment) => {
     for (let row = 0; row < 60; row += 1)
       for (let column = 0; column < 60; column += 1)
-        cellAt(row, column).push([
+        cellAt(row, column, within).push([
           gridOf(4, 4, (inner, across) =>
             row + column + inner + across === 0
               ? [paragraph('two'), gridOf(1, 1, () => [paragraph('THREE-DEEP')])]
               : [paragraph('')],
           ),
         ]);
+  };
+  // Sent, it is refused by the server (register D171): the page never receives it.
+  hostile.provider.document.transact(() => putIn(fragment));
+  await page.waitForTimeout(3000);
+  await expect(doc.locator('table')).toHaveCount(1);
+  hostile.close();
+  // Stored as a document could hold it before the server held the bounds.
+  await storedWith(page, id, (stored) => {
+    putIn(stored);
+    expect(cellsIn(stored)).toBe(61_201);
   });
-  expect(cellsIn(fragment)).toBe(61_201);
+  hostile = await connectAs(page.context(), id);
+  fragment = hostile.provider.document.getXmlFragment('default');
 
   // The page holds the bound: the writer's 3,600 cells, and the first four
   // hundred of the tables put in them, in the order of the document.
@@ -2594,6 +2612,100 @@ test('a key typed in a table whose cells hold tables, ten thousand cells in all,
   await expect(doc).toBeFocused();
   await page.keyboard.type('f');
   await expect(noRoom).toHaveCount(0);
+});
+
+// Register D170, D171 and D180: the collaboration server refuses an update
+// that creates a block without the content it must hold, or takes a table past
+// a bound (src/lib/collab/shape.ts). Nothing a writer does in the editor is such
+// an update, and a refusal would hold the tab read-only with "A change in this
+// tab…", so each step is taken, sent and stored.
+test('the server refuses nothing a writer does: writing, a list, pasting, a table at its bounds, a table in a cell, undo and redo', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  const held = page.getByText(/A change in this tab/);
+  const figure = (rows: string, caption: string) =>
+    `<figure class="ekd-table"><table><tbody>${rows}</tbody></table><figcaption class="ekd-table-caption">${caption}</figcaption></figure>`;
+  const full = figure(
+    Array.from(
+      { length: 100 },
+      (_, row) =>
+        `<tr>${Array.from({ length: 100 }, (__, column) => `<td><p>${row}.${column}</p></td>`).join('')}</tr>`,
+    ).join(''),
+    'full table',
+  );
+  const nested = figure(
+    `<tr><td><p>outer</p>${figure('<tr><td><p>inner</p></td><td><p>inner two</p></td></tr>', 'inner table')}</td><td><p>beside</p></td></tr>`,
+    'outer table',
+  );
+
+  await doc.click();
+  await page.keyboard.type('Written first.');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('- one');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('two');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await expect(doc.locator('table')).toHaveCount(1);
+  await page.keyboard.type('in the palette table');
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  await placeAtEnd(doc.getByText('Written first.'));
+  await paste(
+    page,
+    `<ul><li><p>pasted item</p></li></ul><blockquote><p>pasted quote</p></blockquote>${nested}<p>After the tables.</p>`,
+  );
+  await expect(doc.locator('td')).toHaveCount(9 + 4);
+  await expect(status(page, 'In sync')).toBeVisible();
+
+  // Undo until no table is left, and redo until both are back, each step sent as it is made.
+  const cells = () => doc.locator('td').count();
+  for (let presses = 0; presses < 40 && (await cells()) > 0; presses += 1) {
+    await page.keyboard.press('ControlOrMeta+z');
+  }
+  await expect(doc.locator('td')).toHaveCount(0);
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  for (let presses = 0; presses < 40 && (await cells()) < 9 + 4; presses += 1) {
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+  }
+  await expect(doc.locator('td')).toHaveCount(9 + 4);
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await expect(held).toHaveCount(0);
+
+  // A table at its bounds, pasted, and a key in its last cell, undone and done again.
+  await placeAtEnd(doc.getByText('After the tables.'));
+  await paste(page, full);
+  await expect(doc.locator('td')).toHaveCount(9 + 4 + 10_000, { timeout: 60_000 });
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await placeAtEnd(doc.getByText('99.99', { exact: true }));
+  await page.waitForTimeout(600);
+  await page.keyboard.type(' typed at the bound');
+  await expect(doc.getByText('99.99 typed at the bound')).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(doc.getByText('99.99', { exact: true })).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect(doc.getByText('99.99 typed at the bound')).toBeVisible();
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await expect(held).toHaveCount(0);
+
+  // The server took and stored every step.
+  await page.reload();
+  await expect(doc.locator('td')).toHaveCount(9 + 4 + 10_000, { timeout: 60_000 });
+  for (const written of [
+    '99.99 typed at the bound',
+    'pasted item',
+    'pasted quote',
+    'inner two',
+    'in the palette table',
+  ])
+    await expect(doc.getByText(written)).toBeVisible();
+  await expect(held).toHaveCount(0);
 });
 
 // The owner's decision R58 of 13 October 2026: "refuse only, never delete, at
@@ -3496,6 +3608,25 @@ const fragment = (provider: { document: Y.Doc }) => provider.document.getXmlFrag
  */
 const holds = (client: { provider: { document: Y.Doc } }, words: string) =>
   expect.poll(() => fragment(client.provider), { message: `the client holds ${words}` }).toContain(words);
+
+/**
+ * Stores the document as it is with `change` made to it, as a document could
+ * be stored before the collaboration server held the shape of a document
+ * (src/lib/collab/shape.ts), and opens it again. The page leaves it first, so
+ * that the server stores what it holds and lets go of it.
+ */
+async function storedWith(page: Page, id: string, change: (fragment: Y.XmlFragment) => void) {
+  const reader = await connectAs(page.context(), id);
+  const copy = new Y.Doc();
+  Y.applyUpdate(copy, Y.encodeStateAsUpdate(reader.provider.document));
+  reader.close();
+  copy.transact(() => change(copy.getXmlFragment('default')));
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  await page.waitForTimeout(3500);
+  storeState(id, Y.encodeStateAsUpdate(copy));
+  await page.goto(`/documents/${id}`);
+}
 
 // The owner's decision of 12 October 2026: a key held down is never limited.
 // The editor sends at once what a bucket of 8 messages, refilled at 4 a
