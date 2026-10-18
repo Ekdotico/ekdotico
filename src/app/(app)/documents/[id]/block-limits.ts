@@ -173,10 +173,12 @@ export function overLimits(doc: PMNode): string[] {
  * a document, of a cell, of a callout.
  */
 export const deletesOnly = (transaction: Transaction) =>
-  transaction.steps.every((step) => {
+  transaction.steps.every((step, at) => {
     if (!(step instanceof ReplaceStep)) return false;
     if (step.slice.size === 0) return true;
-    let nothing = step.from < step.to;
+    // Or at the end of the document, where the editor keeps an empty paragraph
+    // after a last block that is not one (the trailing node of the starter kit).
+    let nothing = step.from < step.to || step.from === transaction.docs[at]!.content.size;
     step.slice.content.forEach((node) => {
       if (node.type.name !== 'paragraph' || node.content.size > 0) nothing = false;
     });

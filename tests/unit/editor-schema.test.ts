@@ -1079,6 +1079,9 @@ describe('the tables in the cells of a table (R32)', () => {
         expect(limitRefusal(all, more.doc)).toBeNull();
         // A paragraph split in two, by Enter, puts a paragraph in.
         expect(limitRefusal(more.tr.split(3), more.doc)).toBe(statement);
+        // The empty paragraph the editor keeps at the end of a document is put in; elsewhere it is not.
+        expect(limitRefusal(more.tr.insert(more.doc.content.size, p()), more.doc)).toBeNull();
+        expect(limitRefusal(more.tr.insert(0, p()), more.doc)).toBe(statement);
         expect(limitRefusal(more.tr.insertText('typed', 1), more.doc)).toBe(statement);
         expect(limitRefusal(more.tr.delete(7, 7 + table().nodeSize).insert(0, table()), more.doc)).toBe(
           statement,

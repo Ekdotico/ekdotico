@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { EditorContent, useEditor, useEditorState, type Editor as TextEditor } from '@tiptap/react';
+import { EditorContent, useEditor, type Editor as TextEditor } from '@tiptap/react';
 import type { EditorView } from '@tiptap/pm/view';
 import type * as Y from 'yjs';
 import { tabbableWithin } from '@ekdotico/domico/a11y';
@@ -242,10 +242,16 @@ function Text({
 
   // A document past a limit already (register D184; ./block-limits.ts): it
   // can only be deleted from until it is back under, and is told so.
-  const over = useEditorState({
-    editor,
-    selector: ({ editor: current }) => (current ? overLimits(current.state.doc).join('\n') : ''),
-  });
+  // Read when the editor is told of, and at each transaction after: what the
+  // binding built before then is read at once, and not missed.
+  const [over, setOver] = useState('');
+  useEffect(() => {
+    if (!editor) return;
+    const read = () => setOver(overLimits(editor.state.doc).join('\n'));
+    read();
+    editor.on('transaction', read);
+    return () => void editor.off('transaction', read);
+  }, [editor]);
 
   // FR-ED-18: read-only in the error state, and editable again when the
   // connection returns. The focus stays in the text: a region that stops being
