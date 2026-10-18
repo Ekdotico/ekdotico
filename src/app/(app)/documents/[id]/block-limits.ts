@@ -176,13 +176,17 @@ export const deletesOnly = (transaction: Transaction) =>
   transaction.steps.every((step, at) => {
     if (!(step instanceof ReplaceStep)) return false;
     if (step.slice.size === 0) return true;
-    // Or at the end of the document, where the editor keeps an empty paragraph
-    // after a last block that is not one (the trailing node of the starter kit).
-    let nothing = step.from < step.to || step.from === transaction.docs[at]!.content.size;
-    step.slice.content.forEach((node) => {
-      if (node.type.name !== 'paragraph' || node.content.size > 0) nothing = false;
-    });
-    return nothing;
+    // One empty paragraph, and only where it is all that its parent is left
+    // with, or at the end of the document, where the editor keeps one after a
+    // last block that is not one (the trailing node of the starter kit). Not
+    // blank lines pasted over a selection (the review of pull request 41).
+    const { content, openStart, openEnd } = step.slice;
+    const paragraph = content.firstChild;
+    if (content.childCount !== 1 || openStart || openEnd || paragraph!.type.name !== 'paragraph')
+      return false;
+    if (paragraph!.content.size > 0) return false;
+    if (step.from === step.to) return step.from === transaction.docs[at]!.content.size;
+    return (transaction.docs[at + 1] ?? transaction.doc).resolve(step.from).parent.childCount === 1;
   });
 
 /**

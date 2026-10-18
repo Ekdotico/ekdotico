@@ -174,34 +174,44 @@ const COUNTED_LIMITS = [...new Set(COUNTED.values())];
 const pastCounts = (before: Map<Limit, number>, after: Map<Limit, number>) =>
   COUNTED_LIMITS.find((limit) => pastLimit(limit, before.get(limit) ?? 0, after.get(limit) ?? 0)) ?? null;
 
-/** What the limits of lists count, of a list and the lists in its items: the most items of one, and how deep they stand. */
+/** What the limits of lists count of one list: its items, and how deep it stands, the outermost counted. */
 interface Lists {
   listItems: number;
   listDepth: number;
 }
-const NO_LISTS: Lists = { listItems: 0, listDepth: 0 };
-function listsIn<Node>(tree: Tree<Node>, list: Node): Lists {
-  const found = { ...NO_LISTS };
+/** Each list of an outermost list, itself among them, with what the limits count of it. */
+function listsIn<Node>(tree: Tree<Node>, list: Node): Map<Node, Lists> {
+  const found = new Map<Node, Lists>();
   const left: [Node, number][] = [[list, 0]];
   for (let next = left.pop(); next; next = left.pop()) {
     const [node, round] = next;
     let above = round;
     if (LISTS.has(tree.name(node) ?? '')) {
       above += 1;
-      found.listDepth = Math.max(found.listDepth, above);
       let items = 0;
       for (const child of tree.children(node)) if (tree.name(child) === 'listItem') items += 1;
-      found.listItems = Math.max(found.listItems, items);
+      found.set(node, { listItems: items, listDepth: above });
     }
     for (const child of tree.children(node)) left.push([child, above]);
   }
   return found;
 }
-/** The first limit of lists that one of the lists passes, each given before and after, and further than before. */
-const pastLists = (lists: [before: Lists, after: Lists][]) =>
-  (['listItems', 'listDepth'] as const).find((limit) =>
-    lists.some(([before, after]) => pastLimit(limit, before[limit], after[limit])),
-  ) ?? null;
+/**
+ * The first limit of lists that a list passes, and further than that same
+ * list was before (the review of pull request 41: not the most of all the
+ * lists round it, which let a new list past the limit stand beside a list
+ * stored past it). `same` names a list as it was before, or nothing for one
+ * the update made.
+ */
+function pastLists<Node>(
+  outermost: { before: Map<unknown, Lists>; after: Map<Node, Lists>; same: (list: Node) => unknown }[],
+): 'listItems' | 'listDepth' | null {
+  for (const limit of ['listItems', 'listDepth'] as const)
+    for (const { before, after, same } of outermost)
+      for (const [list, now] of after)
+        if (pastLimit(limit, before.get(same(list))?.[limit] ?? 0, now[limit])) return limit;
+  return null;
+}
 
 /** The bytes of the text of a code block (`textBytes`). */
 function codeBytesIn<Node>(tree: Tree<Node>, block: Node): number {
@@ -314,13 +324,48 @@ const AS_IT_IS: Tree<Shared> = {
   },
   strings: (text) => stringsOf(text),
 };
+type DeleteSet = ReturnType<typeof Y.decodeUpdate>['ds'];
+/** The ranges of a delete set of one client, each a clock and a length. */
+const rangesOf = (deleted: DeleteSet, client: number): { clock: number; len: number }[] =>
+  (deleted as unknown as { clients: Map<number, { clock: number; len: number }[]> }).clients.get(client) ??
+  [];
+/**
+ * What is left of the text of an item where `deleted` deletes part of it: a
+ * delete set can delete any part of an item, and Yjs merges typing into long
+ * items (the review of pull request 41). Pieces in UTF-16, as the item holds them.
+ */
+function* survives(item: Y.Item, deleted?: DeleteSet): Iterable<string> {
+  const { str } = item.content as Y.ContentString;
+  if (!deleted) return yield str;
+  const { client, clock } = item.id;
+  let from = 0;
+  for (const range of rangesOf(deleted, client).toSorted((a, b) => a.clock - b.clock)) {
+    const start = Math.max(range.clock - clock, from);
+    const end = Math.min(range.clock + range.len - clock, str.length);
+    if (end <= start) continue;
+    if (start > from) yield str.slice(from, start);
+    from = end;
+  }
+  if (from < str.length) yield str.slice(from);
+}
 /** The pieces of a text that are not deleted, nor deleted by `deleted`. */
-function* stringsOf(text: Shared, deleted?: ReturnType<typeof Y.decodeUpdate>['ds']): Iterable<string> {
+function* stringsOf(text: Shared, deleted?: DeleteSet): Iterable<string> {
   for (let item = text._start; item; item = item.right) {
-    if (item.deleted || !(item.content instanceof Y.ContentString)) continue;
-    if (!deleted || !Y.isDeleted(deleted, item.id)) yield item.content.str;
+    if (!item.deleted && item.content instanceof Y.ContentString) yield* survives(item, deleted);
   }
 }
+const HIGH = (unit: number) => unit >= 0xd800 && unit < 0xdc00;
+const LOW = (unit: number) => unit >= 0xdc00 && unit < 0xe000;
+/**
+ * Whether an item of text would be split between the two halves of a pair
+ * of UTF-16 units at `at` units into it, which Yjs answers by putting U+FFFD
+ * for each half: three bytes for each where the pair was four.
+ */
+const splitsPair = (item: Y.Item | Y.GC | undefined, at: number) => {
+  if (!(item instanceof Y.Item) || !(item.content instanceof Y.ContentString)) return false;
+  const { str } = item.content;
+  return at > 0 && at < str.length && HIGH(str.charCodeAt(at - 1)) && LOW(str.charCodeAt(at));
+};
 /** The outermost of the named round a shared type, itself among them, or null. */
 function outermost(type: Shared, names: ReadonlySet<string>): Shared | null {
   let found: Shared | null = null;
@@ -414,7 +459,11 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
     const list = pastLists(
       [...lists].map((each) => {
         const before = was(document, each);
-        return [before ? listsIn(AS_IT_IS, before) : NO_LISTS, listsIn(AS_IT_IS, each)];
+        return {
+          before: before ? listsIn(AS_IT_IS, before) : new Map(),
+          after: listsIn(AS_IT_IS, each),
+          same: (one: Shared) => was(document, one),
+        };
       }),
     );
     if (list) return list;
@@ -519,6 +568,22 @@ export function withoutCopy(
   /** The children each element of the update or of the document gains, in the order of the run. */
   const gained = new Map<Y.Item | Shared | string, Y.Item[]>();
   const made: Y.Item[] = [];
+  // The items that stand where they are put, whatever part of them the update deletes.
+  const placed = new Set<Y.Item>();
+  // A deletion that begins or ends between the two halves of a pair, in an
+  // item of text of the document or of the update, is the copy's (`splitsPair`).
+  for (const [deleting, ranges] of (
+    ds as unknown as { clients: Map<number, { clock: number; len: number }[]> }
+  ).clients) {
+    for (const { clock: from, len } of ranges) {
+      for (const edge of [from, from + len]) {
+        const id = Y.createID(deleting, edge);
+        const item =
+          edge < Y.getState(store, deleting) ? Y.getItem(store, id) : named(id, Number.MAX_SAFE_INTEGER);
+        if (item && splitsPair(item, edge - item.id.clock)) return undefined;
+      }
+    }
+  }
   for (const item of structs) {
     if (!(item instanceof Y.Item)) continue;
     const { origin, rightOrigin } = item;
@@ -542,13 +607,13 @@ export function withoutCopy(
       parent = parents.has(above) ? above : (above.content.type as Shared);
     parents.set(item, parent);
     keys.set(item, key);
-    alive.set(
-      item,
-      parent !== null &&
-        standsIn(parent) &&
-        !Y.isDeleted(ds, item.id) &&
-        !(item.content instanceof Y.ContentDeleted),
-    );
+    const stands = parent !== null && standsIn(parent) && !(item.content instanceof Y.ContentDeleted);
+    if (stands) placed.add(item);
+    alive.set(item, stands && !Y.isDeleted(ds, item.id));
+    // Where it is put inside an item of text of the document, between the two
+    // halves of a pair, Yjs puts U+FFFD for each: the copy's to count.
+    if (left && splitsPair(left, origin!.clock - left.id.clock + 1)) return undefined;
+    if (right && splitsPair(right, rightOrigin!.clock - right.id.clock)) return undefined;
     if (parent === null || key !== null) continue;
     if (nameOf(item) !== null) made.push(item);
     const list = gained.get(parent) ?? [];
@@ -571,7 +636,7 @@ export function withoutCopy(
     *strings(text) {
       if (!(text instanceof Y.Item)) yield* stringsOf(text, ds);
       for (const item of gained.get(text) ?? []) {
-        if (alive.get(item) && item.content instanceof Y.ContentString) yield item.content.str;
+        if (placed.has(item) && item.content instanceof Y.ContentString) yield* survives(item, ds);
       }
     },
   };
@@ -605,7 +670,8 @@ export function withoutCopy(
   }
   // Text written into a code block, in a text that is there or that the update made.
   for (const item of structs) {
-    if (!(item instanceof Y.Item) || !alive.get(item) || !(item.content instanceof Y.ContentString)) continue;
+    if (!(item instanceof Y.Item) || !placed.has(item) || !(item.content instanceof Y.ContentString))
+      continue;
     const text = parents.get(item)!;
     const block =
       text instanceof Y.Item
@@ -629,10 +695,11 @@ export function withoutCopy(
     if (count) return count;
   }
   const list = pastLists(
-    [...lists].map((each) => [
-      each instanceof Y.Item ? NO_LISTS : listsIn(AS_IT_IS, each),
-      listsIn(after, each),
-    ]),
+    [...lists].map((each) => ({
+      before: each instanceof Y.Item ? new Map<Shared, Lists>() : listsIn(AS_IT_IS, each),
+      after: listsIn(after, each),
+      same: (one: Node) => one,
+    })),
   );
   if (list) return list;
   for (const block of code) {

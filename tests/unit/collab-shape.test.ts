@@ -712,3 +712,116 @@ describe('an update that takes the document past a limit, and further than it wa
     ).toBe('codeBytes');
   });
 });
+
+// The review of pull request 41: what the fast path counted of code and of lists.
+describe('the fast path counts as Yjs applies (the review of pull request 41)', () => {
+  const KB500 = 500 * 1024;
+  const code = (text: string): Json => ({
+    type: 'codeBlock',
+    attrs: { language: 'plaintext' },
+    ...(text ? { content: [{ type: 'text', text }] } : {}),
+  });
+  const textOf = (fragment: Y.XmlFragment) => (fragment.get(0) as Y.XmlElement).get(0) as Y.XmlText;
+  const item = (...content: Json[]): Json => ({
+    type: 'listItem',
+    content: content.length ? content : [p()],
+  });
+  const list = (...items: Json[]): Json => ({ type: 'bulletList', content: items });
+  const many = (count: number) => Array.from({ length: count }, () => item());
+
+  it('a deletion of part of an item of text counts only that part: deleting one character does not let 400 KB in', () => {
+    const full = opened(doc(code('a'.repeat(KB500))));
+    expect(textOf(full.getXmlFragment('default'))._start!.length).toBe(KB500);
+    const update = sent(full, (fragment) => {
+      textOf(fragment).delete(0, 1);
+      textOf(fragment).insert(1000, 'b'.repeat(400 * 1024));
+    });
+    expect(withoutTheCopy(full, update)).toBe(true);
+    expect(answer(full, update)).toBe('codeBytes');
+  });
+
+  it('typing over a character in the middle of a block at its limit is taken, as the editor writes it and as a client does', () => {
+    const text = 'a'.repeat(KB500);
+    const full = opened(doc(code(text)));
+    const middle = KB500 / 2;
+    const typed = edited(full, doc(code(`${text.slice(0, middle)}k${text.slice(middle + 1)}`)));
+    expect(withoutTheCopy(full, typed)).toBe(true);
+    expect(answer(full, typed)).toBeNull();
+    const direct = sent(full, (fragment) => {
+      textOf(fragment).delete(middle, 1);
+      textOf(fragment).insert(middle, 'k');
+    });
+    expect(withoutTheCopy(full, direct)).toBe(true);
+    expect(answer(full, direct)).toBeNull();
+  });
+
+  it('a pair of UTF-16 units split by what is put between its halves is answered on the copy, which counts U+FFFD for each half', () => {
+    // 100 emoji of four bytes, and 150 bytes short of the limit.
+    const near = opened(doc(code(`${'😀'.repeat(100)}${'a'.repeat(KB500 - 150 - 400)}`)));
+    const split = sent(near, (fragment) => {
+      for (let at = 199; at > 0; at -= 2) textOf(fragment).insert(at, 'x');
+    });
+    // Counted as four bytes a pair, 100 bytes in: inside the limit; Yjs makes it 300.
+    expect(withoutTheCopy(near, split)).toBe(false);
+    expect(answer(near, split)).toBe('codeBytes');
+    // A deletion that ends between the halves of a pair, with a key typed, is the copy's too.
+    const cut = sent(near, (fragment) => {
+      textOf(fragment).delete(0, 1);
+      textOf(fragment).insert(500, 'z');
+    });
+    expect(withoutTheCopy(near, cut)).toBe(false);
+    expect(answer(near, cut)).toBeNull();
+  });
+
+  it('each list is compared with itself: a new list past the limit beside one stored past it is refused', () => {
+    const stored = opened(doc(list(item(p('a'), list(...many(1500))), item(p('b')))));
+    const beside = edited(
+      stored,
+      doc(list(item(p('a'), list(...many(1500))), item(p('b'), list(...many(1001))))),
+    );
+    expect(withoutTheCopy(stored, beside)).toBe(true);
+    expect(answer(stored, beside)).toBe('listItems');
+    const nest = (levels: number): Json => (levels === 1 ? list(item()) : list(item(p(), nest(levels - 1))));
+    const deep = opened(doc(list(item(p('a'), nest(12)), item(p('b')))));
+    const deeper = edited(deep, doc(list(item(p('a'), nest(12)), item(p('b'), nest(10)))));
+    expect(withoutTheCopy(deep, deeper)).toBe(true);
+    expect(answer(deep, deeper)).toBe('listDepth');
+  });
+
+  it('fuzz: random keys, pastes and deletions in a code block near its limit are answered alike with and without the copy', () => {
+    let seed = 41;
+    const random = (below: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return Math.floor(seed / 65536) % below;
+    };
+    const CHARACTERS = ['a', 'é', '€', '😀', '\n'];
+    const server = opened(
+      doc(code(`${'😀'.repeat(300)}${'é'.repeat(500)}${'a'.repeat(KB500 - 3000 - 1200)}`)),
+    );
+    let fast = 0;
+    let refused = 0;
+    for (let round = 0; round < 150; round += 1) {
+      const update = sent(server, (fragment) => {
+        const text = textOf(fragment);
+        for (let op = random(3) + 1; op > 0; op -= 1) {
+          if (random(2) === 0 && text.length > 0) {
+            const at = random(text.length);
+            text.delete(at, Math.min(random(500) + 1, text.length - at));
+          } else {
+            const written = Array.from(
+              { length: random(800) + 1 },
+              () => CHARACTERS[random(CHARACTERS.length)],
+            ).join('');
+            text.insert(random(text.length + 1), written);
+          }
+        }
+      });
+      if (Y.decodeUpdate(update).structs.length > 0 && withoutTheCopy(server, update)) fast += 1;
+      if (answer(server, update) === null) Y.applyUpdate(server, update);
+      else refused += 1;
+    }
+    expect(fast).toBeGreaterThan(50);
+    expect(refused).toBeGreaterThan(10);
+    expect(refused).toBeLessThan(140);
+  });
+});
