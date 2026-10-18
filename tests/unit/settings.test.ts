@@ -298,6 +298,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'PASSWORD_MIN_LENGTH',
     'PASSWORD_MAX_LENGTH',
     'ADMISSION_INVITATION_DAYS',
+    'DOCUMENT_INVITATION_DAYS',
     'TWO_FACTOR_STEP_SECONDS',
     'TWO_FACTOR_WRONG_CODES',
   ])('refuses 0 as %s', (name) => {
@@ -322,6 +323,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(least).toMatchObject({ sessionMaxSeconds: 1, trustedProxyCount: 0, cookieCacheSeconds: 0 });
     expect(least.admissionInvitationDays).toBe(1);
     expect(loadSettings(env).admissionInvitationDays).toBe(30);
+    expect(loadSettings(env).documentInvitationDays).toBe(14);
   });
 
   // FR-AU-81, NFR-SE-07: a lock that ended while its failures were still

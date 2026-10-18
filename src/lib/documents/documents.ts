@@ -6,7 +6,7 @@ import { db } from '../db.ts';
 import { fieldText } from '../field-text.ts';
 import { istorico } from '../istorico/index.ts';
 import { ensurePersonalWorkspace } from '../workspace.ts';
-import { defaultPermissionSet } from './permissions.ts';
+import { COLLABORATOR_ROLE, defaultPermissionSet, holds } from './permissions.ts';
 
 /** FR-ED-35, verbatim: the title a document has where none is given. */
 export const DEFAULT_TITLE = 'Untitled document';
@@ -116,19 +116,34 @@ export async function createDocument(userId: string): Promise<DocumentSummary> {
 /**
  * The documents of this account "across all workspaces" (API design,
  * "Documents"): those it is the Owner of, which in α 0.1.0 are all in its
- * personal workspace. The documents it holds another role on join with the
- * slice that builds sharing. A deleted document is in no list (FR-ED-36).
+ * personal workspace, and those it holds another role on through an accepted
+ * invitation (FR-ED-19). A deleted document is in no list (FR-ED-36).
  *
  * The order is the owner's decision of 8 October 2026: the newest first, by
  * the time of creation, which is the date the list shows. Two documents of
  * one instant keep one order between them, by their identifiers.
  */
-export async function listDocuments(userId: string): Promise<DocumentSummary[]> {
+export async function listDocuments(userId: string): Promise<ListedDocument[]> {
   const documents = await db().document.findMany({
-    where: { ownerId: userId, deletedAt: null },
+    where: { deletedAt: null, OR: [{ ownerId: userId }, { collaborators: { some: { userId } } }] },
+    include: { collaborators: { where: { userId }, select: { role: true } } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
-  return documents.map(summary);
+  return documents.map(({ collaborators, ...document }) => {
+    const role = document.ownerId === userId ? 'owner' : COLLABORATOR_ROLE[collaborators[0]!.role];
+    // What the list offers to this account: the routes decide again (FR-ED-39).
+    return {
+      ...summary(document),
+      canRename: holds(document.permissionSet, role, 'document.rename'),
+      canDelete: holds(document.permissionSet, role, 'document.delete'),
+    };
+  });
+}
+
+/** A row of the list: the summary, and which of its controls the account's role holds. */
+export interface ListedDocument extends DocumentSummary {
+  canRename: boolean;
+  canDelete: boolean;
 }
 
 /**

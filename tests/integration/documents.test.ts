@@ -451,8 +451,18 @@ describe('the list of documents (FR-ED-35; API design, "Documents")', () => {
     expect(Object.keys(answer)).toEqual(['documents']);
     expect(answer.documents.map((document: { id: string }) => document.id)).toEqual([second, first]);
     for (const document of answer.documents) {
-      expect(Object.keys(document)).toEqual(['id', 'title', 'recording', 'createdAt', 'updatedAt']);
+      expect(Object.keys(document)).toEqual([
+        'id',
+        'title',
+        'recording',
+        'createdAt',
+        'updatedAt',
+        'canRename',
+        'canDelete',
+      ]);
       expect(document.recording).toBe('UNRECORDED');
+      // The Owner's controls (FR-ED-44): a document shared with the account may hold neither.
+      expect([document.canRename, document.canDelete]).toEqual([true, true]);
     }
     expect(answer.documents[1].createdAt).toBe('2026-01-01T00:00:00.000Z');
 
@@ -702,7 +712,7 @@ describe('a handler made by documentRoute (NFR-SE-04, NFR-SE-02, NFR-SE-17 (c))'
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0]).toHaveLength(1);
     const call = handler.mock.calls[0]![0] as Record<string, unknown>;
-    expect(Object.keys(call).sort()).toEqual(['document', 'request', 'role', 'session']);
+    expect(Object.keys(call).sort()).toEqual(['document', 'params', 'request', 'role', 'session']);
     expect(call.request).toBe(asked);
     expect(Object.keys(call.session as object).sort()).toEqual(['sessionId', 'userId']);
     expect((call.session as { userId: string }).userId).toBe(owner.id);

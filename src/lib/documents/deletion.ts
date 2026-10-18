@@ -22,6 +22,7 @@ import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import type { DocumentRow } from './access.ts';
 import { summary, type DocumentSummary } from './documents.ts';
+import { endInvitationsOf } from './sharing.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // A claim of a permanent deletion that is this old was not finished: its
@@ -94,6 +95,8 @@ export async function deleteDocument(
       data: { deletedAt: now, deletedById: userId },
     });
     if (count !== 1) return false;
+    // FR-ED-37: "deleting the document revokes its pending invitations"; FR-ED-42: their notifications go.
+    await endInvitationsOf(transaction, document.id, now);
     await securityLogIn(transaction, { kind: 'document_deleted', userId, documentId: document.id });
     return true;
   });

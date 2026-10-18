@@ -43,6 +43,13 @@ const PERMISSION: Record<string, Permission> = {
   'src/app/api/documents/[id]/route.ts PATCH': 'document.rename', // FR-ED-35, FR-ED-44
   'src/app/api/documents/[id]/route.ts DELETE': 'document.delete', // FR-ED-36: the Owner
   'src/app/api/documents/[id]/restore/route.ts POST': 'document.delete', // FR-ED-36: "deleting and restoring"
+  // FR-ED-37, FR-ED-44: inviting, sending again, revoking, and seeing the pending invitations.
+  'src/app/api/documents/[id]/invitations/route.ts POST': 'document.collaborators.invite',
+  'src/app/api/documents/[id]/invitations/[invitationId]/route.ts DELETE': 'document.collaborators.invite',
+  'src/app/api/documents/[id]/invitations/[invitationId]/resend/route.ts POST':
+    'document.collaborators.invite',
+  // API design: "List the document's collaborators and their roles".
+  'src/app/api/documents/[id]/collaborators/route.ts GET': 'document.collaborators.view',
 };
 
 // The handlers that act on a DELETED document: each is made by

@@ -101,6 +101,8 @@ export interface Settings {
   admissionSecret: string | undefined;
   /** FR-AU-89 (a): how long an admission invitation stays open. */
   admissionInvitationDays: number;
+  /** FR-ED-37: how long a document invitation stays pending, "14 days … (an initial value)". */
+  documentInvitationDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
   securityLogRetentionDays: number;
   /** FR-ED-36: how long a deleted document is retained, and can be restored, before it is deleted permanently. */
@@ -345,6 +347,7 @@ export function loadSettings(env: Env = process.env): Settings {
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
+    documentInvitationDays: wholeNumber(env, 'DOCUMENT_INVITATION_DAYS', 14, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     deletedDocumentRetentionDays,
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',

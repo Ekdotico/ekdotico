@@ -9,6 +9,17 @@
 export const ROLES = ['owner', 'editor', 'reviewer', 'viewer'] as const;
 export type DocumentRole = (typeof ROLES)[number];
 
+/** The role of a `DocumentCollaborator` row, as the database writes it, and as everything else does. */
+export const COLLABORATOR_ROLE = { EDITOR: 'editor', REVIEWER: 'reviewer', VIEWER: 'viewer' } as const;
+
+/** FR-ED-19, as a person reads it: the names of the roles. */
+export const ROLE_NAME: Record<DocumentRole, string> = {
+  owner: 'Owner',
+  editor: 'Editor',
+  reviewer: 'Reviewer',
+  viewer: 'Viewer',
+};
+
 /**
  * A cell of the table, as the table writes it: `yes` is its tick and `no` its
  * dash, both fixed; `never` is fixed too; `on` and `off` are the defaults of

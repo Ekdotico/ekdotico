@@ -230,8 +230,10 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
   // NFR-SE-07: requests to API routes, for each authenticated user. Signing
   // out is not held back by it: it "ends the session at once" (FR-AU-84), and
   // a session can be ended once.
+  // "The page an invitation link opens is counted here, which protects
+  // invitation links against guessing (FR-ED-21)" (NFR-SE-07).
   const signsOut = method === 'POST' && pathname === `${IDENTITY_BASE_PATH}/sign-out`;
-  if (pathname.startsWith('/api/') && !signsOut) {
+  if ((pathname.startsWith('/api/') || pathname.startsWith('/invitations/')) && !signsOut) {
     progress.stage = 'limit';
     const limit = await takeLimit('API_PER_USER', session.userId);
     if (!limit.ok) {
