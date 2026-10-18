@@ -78,6 +78,13 @@ export function awarenessTooLong(message: Uint8Array): boolean {
   return type !== null && type[0] === AWARENESS_MESSAGE && message.length - type[1] > AWARENESS_MAX_BYTES;
 }
 
+/** Whether this message, as a client sent it, is of the awareness type (and not whether it reads to its end). */
+export function isAwareness(message: Uint8Array): boolean {
+  const name = varUint(message, 0);
+  const type = name && varUint(message, name[1] + name[0]);
+  return !!type && type[0] === AWARENESS_MESSAGE;
+}
+
 /**
  * The client identifiers an awareness message speaks for, in the order it
  * writes them (y-protocols `encodeAwarenessUpdate`: a count, then for each a

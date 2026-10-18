@@ -110,6 +110,24 @@ describe('the places of a document', () => {
     expect(places.hold(taken)).toBe(true);
   });
 
+  it('drops the places that wait for a connection where their load failed, and no other', () => {
+    const places = new Places();
+    const connected = places.reserve(DOCUMENT)!;
+    expect(places.hold(connected)).toBe(true);
+    const waiting = [places.reserve(DOCUMENT)!, places.reserve(DOCUMENT)!, places.reserve(DOCUMENT)!];
+    const other = places.reserve(OTHER)!;
+    expect(places.count(DOCUMENT)).toBe(4);
+    places.dropPending(DOCUMENT);
+    // The one that has a connection stays, another document is not touched.
+    expect(places.count(DOCUMENT)).toBe(1);
+    expect(places.count(OTHER)).toBe(1);
+    expect(places.reserve(DOCUMENT)!.slot).toBe(connected.slot + 1);
+    // A handshake that comes back is given a place again where there is room, and has none where there is not.
+    expect(places.hold(waiting[2]!)).toBe(true);
+    places.hold(other);
+    places.dropPending('3f2b8c1e-0000-4000-8000-000000000000');
+  });
+
   it('refuses a limit that would let two connections share a colour (FR-ED-17)', () => {
     expect(() => new Places(COLLABORATOR_COLOURS + 1)).toThrow();
     expect(() => new Places(0)).toThrow();

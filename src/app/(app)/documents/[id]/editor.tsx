@@ -450,8 +450,8 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
   }
 
   const status = syncStatus(state);
-  // FR-ED-40 (b): what the server says the role holds now, once it has said; until then, what the page was opened with.
-  const mayEdit = state.notice ? state.notice.canEdit : canEdit;
+  // FR-ED-40 (b), FR-ED-41: what the server says the connection may do, at each handshake and at each change of role; until it has said, what the page was opened with.
+  const mayEdit = state.canEdit ?? canEdit;
   return (
     <Stack gap={4}>
       {state.phase === 'held' && state.held ? (

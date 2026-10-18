@@ -44,6 +44,7 @@ import { Places, type Place } from '../lib/collab/places.ts';
 import {
   awarenessClients,
   awarenessTooLong,
+  isAwareness,
   CONNECTIONS_PER_DOCUMENT,
   displayNameOf,
   pinAwareness,
@@ -329,27 +330,32 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     };
 
     const sessions = new Map<string, SessionRow>();
-    try {
-      const ids = [...new Set(open.map(({ connection }) => connection.context.sessionId))];
-      const rows = await within(
-        RECHECK_READ_MS,
-        db().session.findMany({
-          where: { id: { in: ids } },
-          select: {
-            id: true,
-            userId: true,
-            createdAt: true,
-            expiresAt: true,
-            user: { select: { email: true } },
-          },
-        }),
-      );
-      for (const { id, userId, createdAt, expiresAt, user } of rows) {
-        sessions.set(id, { userId, createdAt, expiresAt, accountStands: user.email !== null });
+    const ids = [...new Set(open.map(({ connection }) => connection.context.sessionId))];
+    // Read twice at most before every connection of the run is given up: one query that fails is
+    // no reason to drop them all, and an outage fails the second as it failed the first.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const rows = await within(
+          RECHECK_READ_MS,
+          db().session.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              userId: true,
+              createdAt: true,
+              expiresAt: true,
+              user: { select: { email: true } },
+            },
+          }),
+        );
+        for (const { id, userId, createdAt, expiresAt, user } of rows) {
+          sessions.set(id, { userId, createdAt, expiresAt, accountStands: user.email !== null });
+        }
+        break;
+      } catch (error) {
+        console.error(`collab: re-check not read for sessions (${faultOf(error)})`);
+        if (attempt === 2 || stopping) return unreadable(open);
       }
-    } catch (error) {
-      console.error(`collab: re-check not read for sessions (${faultOf(error)})`);
-      return unreadable(open);
     }
 
     // The same user in several tabs of one document is one reading.
@@ -800,6 +806,9 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // `onDisconnect`, which runs only after the messages being processed.
       // (`onDisconnect` gives it back too, for a connection that was closed
       // before this hook ran.)
+      // Closed before this hook ran (the socket went while the document loaded): `onDisconnect`
+      // gives its place back, and there is no connection to hold it for.
+      if (!connection.document.hasConnection(connection)) return;
       if (!places.hold(context.place)) {
         // Its place expired while it was made, and was taken by another: it
         // has none, and the client asks again.
@@ -807,6 +816,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         return;
       }
       connection.onClose(() => places.release(context.place));
+      // FR-ED-40 (b), FR-ED-41: the role of this connection, told at every
+      // connection and not only at a change. A client that was away while its
+      // role changed learns it here (its scope says whether it may edit, and
+      // this says in which role); one that was not takes it for what it knows.
+      connection.sendStateless(roleNotice({ role: context.role, canEdit: !isReadOnly(context) }));
       const at = ended.get(documentName);
       if (at === undefined || Date.now() - at > ENDED_MEMORY_MS) return;
       let reason: Refusal | undefined;
@@ -852,7 +866,10 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // and a document that is not destroyed keeps its timer, and so itself,
       // for as long as the process runs.
       document.destroy();
-      // NFR-PE-05: no connection will be made, so nothing else gives the place back.
+      // NFR-PE-05: no connection will be made, so nothing else gives the place back. The
+      // handshakes that were waiting for the same load fail with it, and the library calls this
+      // hook for one of them: the places of the others would count until they expire.
+      places.dropPending(documentName);
       places.release(context.place);
       throw refuse(REFUSAL.UNAVAILABLE);
     },
@@ -900,8 +917,9 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       if (awarenessTooLong(update)) throw {};
       // The identifiers of an awareness message are noted for `beforeHandleAwareness`, which
       // runs for this same message: the connection's messages are handled one at a time.
-      const clients = awarenessClients(update);
-      if (clients) speaking.set(connection, new Set(clients));
+      // An awareness message that does not read to its end speaks for no one (the library may
+      // still decode it): the set of the message before is never the set of this one.
+      if (isAwareness(update)) speaking.set(connection, new Set(awarenessClients(update) ?? []));
     },
 
     /**
@@ -922,11 +940,14 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
      * A read-only connection is counted too: the hook runs before the library
      * looks at the flag.
      *
-     * AND NOTHING MORE IS DONE FOR A READ-ONLY CONNECTION. The library applies
-     * nothing it sends (MessageReceiver.ts tests the flag before each of the
-     * two), so there is nothing to check; and a check of what is never applied
-     * would let a Viewer cost the copy of a document at its limit, and leave
-     * the keeper's numbers higher than the document with every message.
+     * A READ-ONLY CONNECTION'S UPDATE IS CHECKED TOO. The library tests the
+     * flag only after this hook has returned, and the re-check can make a
+     * connection editable in that gap (FR-ED-40 (b), FR-ED-41): an update
+     * that was let through unchecked because the flag was set when it was read
+     * would then be applied. The price is that a Viewer's forged update costs
+     * what an Editor's does, which the limit of messages bounds, and that the
+     * keeper's numbers stand higher than the document by what was never
+     * applied: a measure, and nothing else.
      *
      * Counted for the user and not for the connection: a count on the
      * connection begins again with the next one, and a user may hold as many
@@ -935,13 +956,12 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
      * a limit; the client waits before it asks for the document again
      * (src/lib/collab/protocol.ts).
      */
-    async beforeSync({ type, payload, document, documentName, context, connection }) {
+    async beforeSync({ type, payload, document, documentName, context }) {
       if (type === messageYjsSyncStep1) return;
       if (!takeMessage(context.userId).ok) {
         void logMessageLimitReached(context.userId);
         throw refuse(REFUSAL.LIMITED);
       }
-      if (connection.readOnly) return;
       let past: Limit | Shape | null;
       try {
         assertUpdate(payload);

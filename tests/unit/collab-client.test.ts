@@ -78,6 +78,7 @@ async function opened() {
   await vi.advanceTimersByTimeAsync(10);
   const socket = Socket.all.at(-1)!;
   socket.receive(new Uint8Array([9]).buffer); // a ping: the socket is taken for connected
+  socket.receive(authenticated('read-write')); // the scope of the handshake (an Editor's)
   socket.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
   socket.receive(toFrame(8, 1)); // the acknowledgement of our second step
   await vi.advanceTimersByTimeAsync(0);
@@ -319,6 +320,10 @@ const AUTH = 2;
 const STATELESS = 5;
 /** A frame that says the server refused this document, and why. */
 const refusal = (reason: string) => toFrame(AUTH, 1, reason.length, ...new TextEncoder().encode(reason));
+/** A frame that says the server accepted this document, with its scope: `read-write` or `readonly`. */
+function authenticated(scope: 'read-write' | 'readonly') {
+  return toFrame(AUTH, 2, scope.length, ...new TextEncoder().encode(scope));
+}
 /** A frame that carries a stateless message from the server. */
 const stateless = (payload: string) => {
   const text = new TextEncoder().encode(payload);
@@ -428,6 +433,66 @@ describe('the role of an open connection changes (FR-ED-40 (b), FR-ED-41)', () =
     expect(connection.getState().phase).toBe('connected');
     expect(asks(socket)).toHaveLength(0);
     connection.stop();
+  });
+
+  // A socket that was lost and opened again by the library is accepted again, with the scope the role holds
+  // then: the server's re-check, which saw no change, sends no notice for it.
+  describe('after a reconnection', () => {
+    it('is editable or read-only as the scope of the new handshake says, in either direction, and says the role', async () => {
+      const { connection, socket } = await opened();
+      expect(connection.getState().canEdit).toBe(true);
+
+      // An Editor whose role was taken while the laptop slept.
+      socket.receive(authenticated('readonly'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.getState().canEdit).toBe(false);
+      socket.receive(stateless(notice('viewer', false)));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.getState()).toMatchObject({
+        canEdit: false,
+        notice: { role: 'viewer', canEdit: false },
+      });
+      // The library synchronises after a reconnection itself: no request is added.
+      expect(asks(socket)).toHaveLength(0);
+
+      // A Viewer who was made an Editor while away, and is not left read-only until the page is reloaded.
+      socket.receive(authenticated('read-write'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.getState().canEdit).toBe(true);
+      // The statement that no longer holds is taken away at once.
+      expect(connection.getState().notice).toBeUndefined();
+      socket.receive(stateless(notice('editor', true)));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.getState()).toMatchObject({
+        canEdit: true,
+        notice: { role: 'editor', canEdit: true },
+      });
+      connection.stop();
+    });
+
+    it('says nothing where the role is what the tab showed', async () => {
+      const { connection, socket } = await opened();
+      for (let times = 0; times < 2; times++) {
+        socket.receive(authenticated('read-write'));
+        socket.receive(stateless(notice('editor', true)));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(connection.getState()).toMatchObject({ canEdit: true });
+        expect(connection.getState().notice).toBeUndefined();
+      }
+      connection.stop();
+    });
+
+    it('says a change from one role that cannot edit to another', async () => {
+      const { connection, socket } = await opened();
+      socket.receive(authenticated('readonly'));
+      socket.receive(stateless(notice('viewer', false)));
+      await vi.advanceTimersByTimeAsync(0);
+      socket.receive(authenticated('readonly'));
+      socket.receive(stateless(notice('reviewer', false)));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.getState().notice).toEqual({ role: 'reviewer', canEdit: false });
+      connection.stop();
+    });
   });
 
   it('is gone with the connection: a new one is told its role afresh', async () => {

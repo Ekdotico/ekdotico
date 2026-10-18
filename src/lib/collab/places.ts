@@ -107,6 +107,19 @@ export class Places {
     if (slots?.size === 0) this.byDocument.delete(place.documentId);
   }
 
+  /**
+   * Drops every place of the document that has no connection yet. A load that
+   * failed fails every handshake that waited for it, and the library tells of
+   * it once; a handshake that is still to come back is given a place again
+   * by `hold` where there is room, or is closed as a connection with none.
+   */
+  dropPending(documentId: string): void {
+    const slots = this.byDocument.get(documentId);
+    if (!slots) return;
+    for (const [slot, entry] of slots) if (entry.until !== null) slots.delete(slot);
+    if (slots.size === 0) this.byDocument.delete(documentId);
+  }
+
   /** How many places the document holds now, for the tests and the statement of a refusal. */
   count(documentId: string): number {
     if (!this.byDocument.has(documentId)) return 0;

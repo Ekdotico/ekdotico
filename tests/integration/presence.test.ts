@@ -214,6 +214,8 @@ async function three(local: Local) {
   for (const key of ['owner', 'editor', 'viewer'] as const) {
     clients[key] = sockets[key].open(id);
     await clients[key].synced;
+    // The server tells each connection its role as it is made (FR-ED-40 (b)).
+    await until(() => clients[key].notices.length === 1);
   }
   return { id, owner, editor, viewer, sockets, clients };
 }
@@ -725,16 +727,18 @@ describe('the re-check of open connections (FR-ED-41, NFR-SE-03 (e))', () => {
       expect(connection.readOnly).toBe(true);
       expect(connection.context.role).toBe('viewer');
       expect(connection.context.permissions).not.toContain('document.content.edit');
-      const notice = await until(() => clients.editor.notices.at(-1));
-      expect(readRoleNotice(notice)).toEqual({ role: 'viewer', canEdit: false });
+      // The role it was told at its connection, and now the change.
+      await until(() => clients.editor.notices.length === 2);
+      expect(readRoleNotice(clients.editor.notices[0]!)).toEqual({ role: 'editor', canEdit: true });
+      expect(readRoleNotice(clients.editor.notices[1]!)).toEqual({ role: 'viewer', canEdit: false });
 
       // What it sends now is discarded (NFR-SE-03 (a)): an update, as a frame past the editor's own controls.
       sockets.editor.socket.webSocket!.send(sent(id, SYNC, 2, forgedUpdate('written as a Viewer')));
       await sleep(300);
       expect(held.getArray('changes').toArray()).toEqual(['written as an Editor']);
-      // The others are told nothing.
-      expect(clients.owner.notices).toEqual([]);
-      expect(clients.viewer.notices).toEqual([]);
+      // The others are told nothing more than the role each was told at its connection.
+      expect(clients.owner.notices).toHaveLength(1);
+      expect(clients.viewer.notices).toHaveLength(1);
 
       // An Editor again: editable in place, told, and what it writes now is applied.
       await db().documentCollaborator.update({
@@ -745,8 +749,8 @@ describe('the re-check of open connections (FR-ED-41, NFR-SE-03 (e))', () => {
       expect(connectionOf(local, id, editor.id)).toBe(connection);
       expect(connection.readOnly).toBe(false);
       expect(connection.context.role).toBe('editor');
-      await until(() => clients.editor.notices.length === 2);
-      expect(readRoleNotice(clients.editor.notices[1]!)).toEqual({ role: 'editor', canEdit: true });
+      await until(() => clients.editor.notices.length === 3);
+      expect(readRoleNotice(clients.editor.notices[2]!)).toEqual({ role: 'editor', canEdit: true });
       clients.editor.changes.push(['written as an Editor again']);
       await until(() => held.getArray('changes').toArray().includes('written as an Editor again'));
     } finally {
@@ -766,7 +770,7 @@ describe('the re-check of open connections (FR-ED-41, NFR-SE-03 (e))', () => {
       expect(after).toHaveLength(3);
       expect(before.every((each) => after.includes(each))).toBe(true);
       expect(after.map((each) => [each.readOnly, each.context.role])).toEqual(flags);
-      for (const each of Object.values(clients)) expect(each.notices).toEqual([]);
+      for (const each of Object.values(clients)) expect(each.notices).toHaveLength(1);
     } finally {
       await local.stop();
     }
@@ -811,7 +815,7 @@ describe('the re-check of open connections (FR-ED-41, NFR-SE-03 (e))', () => {
 
       // The sessions cannot be read: every connection is closed.
       const again = vi.spyOn(console, 'error').mockImplementation(() => {});
-      vi.spyOn(db().session, 'findMany').mockRejectedValueOnce(quoting);
+      vi.spyOn(db().session, 'findMany').mockRejectedValue(quoting);
       await local.recheck();
       expect(connectionsOf(local, id)).toHaveLength(0);
       expect(again.mock.calls.flat().join('\n')).toContain('re-check not read for sessions (Error)');
@@ -865,5 +869,191 @@ describe('the re-check of open connections (FR-ED-41, NFR-SE-03 (e))', () => {
     expect(timer.hasRef()).toBe(false);
     await collab.stop();
     expect(cleared.mock.calls.map(([each]) => each)).toContain(timer);
+  });
+
+  it('reads the sessions again once before it gives up every connection of the run', async () => {
+    const local = await inProcess();
+    try {
+      const { id } = await three(local);
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      // One query that fails drops no one: the second answers.
+      const rows = vi.spyOn(db().session, 'findMany').mockRejectedValueOnce(new Error('a blip'));
+      await local.recheck();
+      expect(rows).toHaveBeenCalledTimes(2);
+      expect(connectionsOf(local, id)).toHaveLength(3);
+      expect(errors.mock.calls.flat().join('\n')).toContain('re-check not read for sessions (Error)');
+      // Two that fail, one after the other, do.
+      rows.mockRejectedValue(new Error('an outage'));
+      await local.recheck();
+      expect(connectionsOf(local, id)).toHaveLength(0);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+// What the review of this slice found (FR-ED-40 (b), FR-ED-41, NFR-PE-05, NFR-SE-03).
+describe('after the review', () => {
+  it('gives back the places of every handshake that waited for a load that failed', async () => {
+    const local = await inProcess();
+    try {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      // A slow load that fails: the three handshakes below wait for the same one, and the library tells
+      // of its failure once.
+      vi.spyOn(db().document, 'findUniqueOrThrow').mockImplementationOnce((async () => {
+        await sleep(500);
+        throw new Error('the load failed');
+      }) as never);
+      const attempts = [1, 2, 3].map(() => connect(local.port, owner.cookie));
+      for (const each of attempts) each.open(id);
+      await until(() =>
+        attempts.every((each) => each.framesFor(id).some((frame) => frame.rest === denied('unavailable'))),
+      );
+      expect(local.placesOf(id)).toBe(0);
+      // And the document is opened at the next attempt, in the first slot.
+      await connect(local.port, owner.cookie).open(id).synced;
+      expect(slotsOf(local, id)).toEqual([1]);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('gives the place back where the name of the account cannot be read', async () => {
+    const local = await inProcess();
+    try {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const real = db().user.findUnique.bind(db().user);
+      // Only the reading of the name and the address: the library reads the account for the session too.
+      vi.spyOn(db().user, 'findUnique').mockImplementation(((args: { select?: Record<string, boolean> }) =>
+        args?.select?.name && args.select.email && Object.keys(args.select).length === 2
+          ? Promise.reject(new Error(`Failing row contains (${owner.email}).`))
+          : real(args as never)) as never);
+      const failing = connect(local.port, owner.cookie);
+      failing.open(id);
+      await until(() => failing.framesFor(id).some((frame) => frame.rest === denied('unavailable')));
+      expect(local.placesOf(id)).toBe(0);
+      expect(errors.mock.calls.flat().join('\n')).toContain('collab: account failed (Error)');
+      expect(errors.mock.calls.flat().join('\n')).not.toContain(owner.email);
+      vi.restoreAllMocks();
+      await connect(local.port, owner.cookie).open(id).synced;
+      expect(slotsOf(local, id)).toEqual([1]);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('lets an awareness message that does not read to its end speak for no one, and not for whom the message before spoke for', async () => {
+    const local = await inProcess();
+    try {
+      const { id, sockets, clients } = await three(local);
+      const ownerId = clientIdOf(clients.owner);
+      const first = cursorAt(clients.owner.provider);
+      clients.owner.provider.setAwarenessField('cursor', first);
+      await until(() => stateOf(clients.viewer, ownerId)?.cursor);
+
+      // A message with an identifier written in 6 bytes (valid for the library, which decodes it) and the
+      // Owner's own, with a cursor of another kind and a clock that is newer than any.
+      const ydoc = new Y.Doc();
+      const fake = new Awareness(ydoc);
+      const other = { anchor: { tname: 'other' }, head: { tname: 'other' } };
+      for (const each of [2 ** 40, ownerId]) {
+        fake.states.set(each, { cursor: other });
+        fake.meta.set(each, { clock: 100_000, lastUpdated: Date.now() });
+      }
+      const update = encodeAwarenessUpdate(fake, [2 ** 40, ownerId]);
+      fake.destroy();
+      sockets.owner.socket.webSocket!.send(sent(id, AWARENESS, update));
+      await sleep(500);
+      // Nothing of that message was passed on.
+      expect(stateOf(clients.viewer, ownerId)?.cursor).toEqual(first);
+      expect(stateOf(clients.viewer, 2 ** 40)).toBeUndefined();
+      expect(local.hocuspocus.documents.get(id)!.awareness.getStates().get(ownerId)?.cursor).toEqual(first);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('checks the update of a read-only connection as it checks an Editor’s, since the flag can change before the library reads it', async () => {
+    const local = await inProcess();
+    try {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { id, viewer, sockets } = await three(local);
+      expect(connectionOf(local, id, viewer.id)!.readOnly).toBe(true);
+      // Bytes that are no update: an Editor's connection is closed for them, and a Viewer's now is.
+      sockets.viewer.socket.webSocket!.send(sent(id, SYNC, 2, Uint8Array.from([1, 2, 3])));
+      await until(() => connectionOf(local, id, viewer.id) === undefined);
+      expect(local.placesOf(id)).toBe(2);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  describe('a client whose socket was lost and opened again by the library', () => {
+    /** The editor of a document, as `DocumentConnection` makes it, over a socket the test can close. */
+    async function reconnecting(local: Local, holder: Person, id: string) {
+      const { DocumentConnection } = await import('../../src/lib/collab/client.ts');
+      const made: WebSocket[] = [];
+      class Socket extends WebSocket {
+        constructor(url: string) {
+          super(url, { headers: { cookie: holder.cookie, origin: ORIGIN } } as never);
+          made.push(this);
+        }
+      }
+      const connection = new DocumentConnection({
+        url: `ws://127.0.0.1:${local.port}${COLLAB_PATH}`,
+        documentId: id,
+        errorAfterMs: 60_000,
+        probe: async () => 200,
+        WebSocketPolyfill: Socket,
+      });
+      connection.start();
+      await until(() => connection.getState().phase === 'connected');
+      return { connection, made };
+    }
+
+    it(
+      'is read-only where its role was taken meanwhile, editable where it was given, and told which',
+      { timeout: 90_000 },
+      async () => {
+        const local = await inProcess();
+        try {
+          const owner = await person('Ada Owner');
+          const editor = await person('Ben Editor');
+          const id = await documentOf(owner.id);
+          await grant(id, editor.id, 'EDITOR');
+          const { connection, made } = await reconnecting(local, editor, id);
+          try {
+            expect(connection.getState().canEdit).toBe(true);
+            expect(connection.getState().notice).toBeUndefined();
+
+            // The role is taken while the socket is lost, and the re-check (which is not run: its period is
+            // long here) has seen nothing: the new handshake alone says so.
+            const where = { documentId_userId: { documentId: id, userId: editor.id } };
+            await db().documentCollaborator.update({ where, data: { role: 'VIEWER' } });
+            made.at(-1)!.close();
+            await until(() => connection.getState().canEdit === false, 20_000);
+            await until(() => connection.getState().notice?.role === 'viewer');
+            expect(connection.getState().notice).toEqual({ role: 'viewer', canEdit: false });
+            expect(connectionOf(local, id, editor.id)!.readOnly).toBe(true);
+
+            // And given back while it is lost again.
+            await db().documentCollaborator.update({ where, data: { role: 'EDITOR' } });
+            made.at(-1)!.close();
+            await until(() => connection.getState().canEdit === true, 20_000);
+            await until(() => connection.getState().notice?.role === 'editor');
+            expect(connection.getState().notice).toEqual({ role: 'editor', canEdit: true });
+            expect(connectionOf(local, id, editor.id)!.readOnly).toBe(false);
+          } finally {
+            connection.stop();
+          }
+        } finally {
+          await local.stop();
+        }
+      },
+    );
   });
 });

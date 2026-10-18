@@ -13,6 +13,7 @@ import {
   COLLABORATOR_COLOURS,
   CONNECTIONS_PER_DOCUMENT,
   displayNameOf,
+  isAwareness,
   isSlot,
   pinAwareness,
   readCursor,
@@ -240,5 +241,23 @@ describe('the clients an awareness message speaks for (`awarenessClients`)', () 
     expect(awarenessClients(message(Uint8Array.from([50, 1, 1, 2, 123, 125])))).toBeNull();
     // A state that is longer than the update.
     expect(awarenessClients(message(Uint8Array.from([1, 1, 1, 100, 123, 125])))).toBeNull();
+    // A client identifier written in more than the 5 bytes of a number of 32 bits.
+    const six = [0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
+    expect(awarenessClients(message(Uint8Array.from([1, ...six, 1, 2, 123, 125])))).toBeNull();
+  });
+});
+
+describe('the type of an awareness message (`isAwareness`)', () => {
+  it('is read from the type alone, whether or not the message reads to its end', () => {
+    expect(isAwareness(message(update(7)))).toBe(true);
+    // The one whose identifier is longer than 5 bytes is awareness and speaks for no one.
+    const six = [0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
+    const odd = message(Uint8Array.from([1, ...six, 1, 2, 123, 125]));
+    expect(isAwareness(odd)).toBe(true);
+    expect(awarenessClients(odd)).toBeNull();
+    const sync = message(update(7));
+    sync[1 + 36] = 0;
+    expect(isAwareness(sync)).toBe(false);
+    expect(isAwareness(new Uint8Array())).toBe(false);
   });
 });
