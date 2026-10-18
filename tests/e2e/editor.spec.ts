@@ -4040,6 +4040,119 @@ test('a Viewer reads what the Owner writes, in an editor that does not write', a
   await other.close();
 });
 
+/** A varint of the collaboration protocol (lib0): the value, and where the next field begins. */
+function varUint(bytes: Buffer, at: number): [value: number, next: number] {
+  let value = 0;
+  for (let shift = 0; ; shift += 7) {
+    const byte = bytes[at++]!;
+    value |= (byte & 0x7f) << shift;
+    if (byte < 0x80) return [value, at];
+  }
+}
+/**
+ * One frame the page sent to the collaboration server: the document's name, the type of the
+ * message (0 is a synchronisation), and for that the step (0 asks for what the server holds, 1
+ * answers with what the page holds, 2 is an update) with the update that goes with the answer.
+ */
+function frameOf(payload: Buffer | string): { type: number; step?: number; update?: Buffer } {
+  const bytes = Buffer.from(payload as Buffer);
+  const [nameLength, afterLength] = varUint(bytes, 0);
+  const [type, afterType] = varUint(bytes, afterLength + nameLength);
+  if (type !== 0) return { type };
+  const [step, afterStep] = varUint(bytes, afterType);
+  const [length, start] = varUint(bytes, afterStep);
+  return { type, step, update: bytes.subarray(start, start + length) };
+}
+
+// D185, D190 (S13-1): a browser that cannot edit shows what the schema can show of the document,
+// and writes nothing to it. Text standing directly in the document is what the schema cannot
+// show: a Viewer was shown "This document could not be shown" until an editor's browser removed it.
+test('a Viewer is shown what the schema can show of a document with text standing directly in it, sends nothing, and follows an editor’s repair', async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const faults: string[] = [];
+  await enter(page);
+  const id = await shareNew(page);
+  const viewer = newPerson();
+  const other = await browser.newContext();
+  const theirs = await other.newPage();
+  theirs.on('pageerror', (error) => faults.push(String(error)));
+  await enter(theirs, viewer);
+  await invite(page, [viewer.email], 'Viewer');
+  const { found: link } = await mailFor(viewer.email, INVITATION_LINK);
+  await theirs.goto(new URL(link).pathname);
+  await theirs.getByRole('button', { name: 'Accept' }).click();
+  await theirs.waitForURL(`**/documents/${id}`);
+
+  // The Owner writes a paragraph, and leaves: no editor's browser is open to repair what follows.
+  await page.goto(`/documents/${id}`);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const hostile = await connectAs(page.context(), id);
+  await holds(hostile, 'Written before.');
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  const shared = hostile.provider.document.getXmlFragment('default');
+  hostile.provider.document.transact(() => {
+    shared.push([paragraph('KEEP-THIS')]);
+    shared.insert(1, [element('tableRow', {}, [cellWith({}, 'stray-row')]), words('stray-text')]);
+  });
+  const watching = await connectAs(page.context(), id);
+  const held = () => fragment(watching.provider);
+  await expect.poll(held).toContain('stray-text');
+  hostile.close();
+
+  // The Viewer opens it: the paragraphs, and not the statement.
+  const sent: ReturnType<typeof frameOf>[] = [];
+  theirs.on('websocket', (socket) => socket.on('framesent', ({ payload }) => sent.push(frameOf(payload))));
+  await theirs.goto(`/documents/${id}`);
+  await expect(text(theirs)).toContainText('Written before.');
+  await expect(text(theirs)).toContainText('KEEP-THIS');
+  await expect(text(theirs)).not.toContainText('stray');
+  await expect(theirs.getByText('This document could not be shown')).toHaveCount(0);
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  // A click and a selection are changes of the view, and are written nowhere.
+  await text(theirs).getByText('KEEP-THIS').click();
+  await theirs.keyboard.press('Shift+ArrowLeft');
+  await theirs.waitForTimeout(1500);
+  // The frames were read: the browser did ask what the server holds.
+  expect(sent.some((message) => message.type === 0 && message.step === 0)).toBe(true);
+  // It sent no update, and what it answered with adds nothing to what the server holds: applied to
+  // the server's state, which `watching` holds, it changes neither the clients nor the deletions.
+  const server = Buffer.from(Y.encodeStateAsUpdate(watching.provider.document));
+  for (const message of sent) {
+    expect(message.step).not.toBe(2);
+    if (message.step !== 1) continue;
+    const applied = new Y.Doc();
+    Y.applyUpdate(applied, server);
+    Y.applyUpdate(applied, message.update!);
+    expect(Buffer.from(Y.encodeStateAsUpdate(applied))).toEqual(server);
+  }
+  // And the shared document still holds what the schema leaves out: no repair was written.
+  expect(held()).toContain('stray-text');
+  expect(held()).toContain('stray-row');
+
+  // An editor's browser opens the document and repairs it: the stray text leaves the shared
+  // document, the Viewer's text is as it was, and follows what the Owner then writes.
+  await page.goto(`/documents/${id}`);
+  await expect(text(page)).toContainText('KEEP-THIS');
+  await expect.poll(held).not.toContain('stray');
+  await expect(text(theirs)).toContainText('Written before.');
+  await expect(text(theirs)).toContainText('KEEP-THIS');
+  await text(page).click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type(' After the repair.');
+  await expect(text(theirs)).toContainText('After the repair.');
+  await expect(theirs.getByText('This document could not be shown')).toHaveCount(0);
+  expect(faults).toEqual([]);
+  watching.close();
+  await other.close();
+});
+
 // The review of pull request 42: a client empties a table block in a document of 100 tables, which
 // the server takes (D180). The filling every browser makes would bring 101, and the server would
 // refuse it and hold every tab. It is not written: each tab opens to deletions alone, and is not held.

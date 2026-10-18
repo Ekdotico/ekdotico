@@ -51,7 +51,12 @@ import {
   type NodeViewProps,
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import { updateYFragment, ySyncPluginKey, type ProsemirrorBinding } from '@tiptap/y-tiptap';
+import {
+  updateYFragment,
+  ySyncPluginKey,
+  yXmlFragmentToProseMirrorRootNode,
+  type ProsemirrorBinding,
+} from '@tiptap/y-tiptap';
 import { common, createLowlight } from 'lowlight';
 import * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
@@ -944,12 +949,10 @@ function takeOut(blocks: readonly (readonly [parent: Y.XmlFragment, at: number, 
  * filled text is past a limit of the document, it opens to deletions alone
  * instead, and the mending is written once deletions bring it back under.
  *
- * FOR THE ONE WHO BUILDS SHARING: WHAT THIS COSTS A READER. No role that only
- * reads exists yet. A reader's browser is one that cannot edit, so it writes
- * nothing, and shows the text without what the schema leaves out. A document
- * with text standing directly in it is answered with "This document could not
- * be shown" until a browser that can edit has mended it (Q45, D190: owed
- * before sharing).
+ * A READER'S BROWSER DOES NOT COME HERE (`followShared`; register D185, D190).
+ * A browser that holds no role that edits is built without this binding,
+ * which writes to the shared document in more places than the mending: it
+ * makes the text of a copy of the document, and shows that.
  */
 // `MAX_STATE_BYTES` of src/lib/collab/state.ts, a module of the server:
 // tests/unit/editor-schema.test.ts holds the two together.
@@ -1081,8 +1084,18 @@ export function holdBinding(
   // the shared document does not. Where the server would have refused it,
   // the text, deletions alone, is written with it once the server would not.
   const remend = held(mend, false);
-  binding._prosemirrorChanged = (...given) =>
-    unrepaired ? undefined : shaped ? remend() : changed(...given);
+  binding._prosemirrorChanged = (...given) => {
+    // Where the text cannot be edited, nothing is written back: the plugin of
+    // the binding calls this at each change of the view, and what it writes
+    // here skips the checks of `mend` (5 MB, the shape of the document). The
+    // text is made again from the shared document, and mended with them, when
+    // it can be edited (the function returned below).
+    if (!writes()) {
+      owed = true;
+      return undefined;
+    }
+    return unrepaired ? undefined : shaped ? remend() : changed(...given);
+  };
   return () => {
     if (!owed || !writes() || failed || unrepaired) return;
     owed = false;
@@ -1092,6 +1105,183 @@ export function holdBinding(
     setTimeout(() => binding._forceRerender(), 0);
   };
 }
+
+/**
+ * The text of what the schema can show of a shared document, for a browser
+ * that cannot edit it (register D185, D190; docs/plan/reader-view.md). It is
+ * made of a COPY of the document: the library deletes from the document it is
+ * given whatever fails to build, and a reader's browser writes nothing to the
+ * shared one. What stands directly in the copy where it cannot (`strays`) is
+ * taken out of the copy first, as an editor's browser takes it out of the
+ * shared document, and then the text is made by the library's own function
+ * over the closed schema (`closeSchema`). So a reader is shown what an editor
+ * will show once it has mended. A document left with nothing is the schema's
+ * empty one. A fault of the making (quotes nested ten thousand deep) is thrown.
+ */
+export function shownOf(shared: Y.Doc, schema: Schema): PMNode {
+  const copy = shownCopy(shared, schema);
+  try {
+    return copy.show();
+  } finally {
+    copy.stop();
+  }
+}
+
+// The origin of what is applied to the copy from the shared document: anything else written to it is this browser's own.
+const FED = 'fed';
+
+/**
+ * The copy that `shownOf` makes the text of, kept between texts so that it is
+ * made once and then fed each update of the shared document (a copy of a 5 MB
+ * document costs a tenth of a second, which a writer who types makes many
+ * times a second). It is kept only while it is the shared document: where
+ * taking out what stands where it cannot, or the library's own making, wrote
+ * anything to it (a deletion that the shared document does not hold), it is
+ * put away, and the next text is made of a new copy, so that it never drifts.
+ * `held` is the copy, for the tests. `stop` puts it away.
+ */
+export function shownCopy(shared: Y.Doc, schema: Schema) {
+  let copy: Y.Doc | undefined;
+  const feed = (update: Uint8Array) => {
+    if (copy) Y.applyUpdate(copy, update, FED);
+  };
+  const drop = () => {
+    shared.off('update', feed);
+    copy?.destroy();
+    copy = undefined;
+  };
+  return {
+    held: () => copy,
+    stop: drop,
+    show(): PMNode {
+      if (!copy) {
+        copy = new Y.Doc();
+        Y.applyUpdate(copy, Y.encodeStateAsUpdate(shared), FED);
+        shared.on('update', feed);
+      }
+      const made = copy;
+      let written = false;
+      const note = (_update: Uint8Array, origin: unknown) => {
+        if (origin !== FED) written = true;
+      };
+      made.on('update', note);
+      try {
+        const fragment = made.getXmlFragment(FRAGMENT_NAME);
+        for (const at of strays(fragment, schema).reverse()) fragment.delete(at, 1);
+        const root = yXmlFragmentToProseMirrorRootNode(fragment, schema);
+        const whole = root.type.createAndFill(null, root.content);
+        if (!whole) throw new Error('editor: the document cannot be made whole');
+        return whole;
+      } catch (fault) {
+        written = true;
+        throw fault;
+      } finally {
+        made.off('update', note);
+        if (written) drop();
+      }
+    },
+  };
+}
+
+/**
+ * What a change of the text that the shared document made is marked with: the
+ * meta of the binding, which the filters of `Closed` read as what arrives and
+ * not as the writer's own change, and no history of undo.
+ */
+export const arrives = (tr: Transaction) =>
+  tr.setMeta('addToHistory', false).setMeta(ySyncPluginKey, { isChangeOrigin: true });
+
+/**
+ * Shows the text of the shared document in `view`, now and after each change
+ * of the document, whoever made it: the way a reader's browser follows an
+ * editor, and follows the repair when one is written. Nothing is written to
+ * the shared document, which is only read. Returns the function that stops it.
+ *
+ * The change to the view is the smallest that makes the text equal, so that a
+ * selection in a part that did not change stays where it is. It carries the
+ * meta of the binding (`arrives`). A text that cannot be made is told to
+ * `unshown`, once, and nothing more is shown.
+ *
+ * AT MOST ONE TEXT IN `max(100 ms, 4 times what the last cost)`, the first at
+ * once and the last after the rest (a reviewer measured a tenth of a second
+ * for a document of 5 MB, and separate messages of the socket are not one
+ * moment): a writer who types eight times a second does not take the page of a
+ * reader.
+ */
+export function followShared(view: EditorView, document: Y.Doc, unshown: () => void): () => void {
+  let over = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let last = Number.NEGATIVE_INFINITY;
+  let cost = 0;
+  const copy = shownCopy(document, view.state.schema);
+  const run = () => {
+    let next: PMNode;
+    try {
+      next = copy.show();
+    } catch {
+      over = true;
+      copy.stop();
+      unshown();
+      return;
+    }
+    const start = view.state.doc.content.findDiffStart(next.content);
+    if (start === null) return;
+    try {
+      let { a, b } = view.state.doc.content.findDiffEnd(next.content)!;
+      const overlap = start - Math.min(a, b);
+      if (overlap > 0) {
+        a += overlap;
+        b += overlap;
+      }
+      view.dispatch(arrives(view.state.tr.replace(start, a, next.slice(start, b))));
+    } catch {
+      // Not made by the smallest change: the whole text is, below.
+    }
+    if (!view.state.doc.eq(next)) {
+      view.dispatch(arrives(view.state.tr.replaceWith(0, view.state.doc.content.size, next.content)));
+    }
+  };
+  const show = () => {
+    timer = undefined;
+    if (over) return;
+    last = Date.now();
+    const began = performance.now();
+    run();
+    cost = performance.now() - began;
+  };
+  const changed = () => {
+    if (timer !== undefined || over) return;
+    timer = setTimeout(show, Math.max(0, last + Math.max(100, 4 * cost) - Date.now()));
+  };
+  document.on('update', changed);
+  show();
+  return () => {
+    over = true;
+    clearTimeout(timer);
+    document.off('update', changed);
+    copy.stop();
+  };
+}
+
+/** The editor of a reader: the text follows the shared document and is never written to it (`followShared`). */
+// What stops the following of each editor. Not the extension's storage, which an extension shares
+// between the editors made of it (a second editor made of the same extensions would take the first's).
+const FOLLOWING = new WeakMap<object, () => void>();
+const ReaderView = Extension.create<{ document: Y.Doc; unshown: () => void }>({
+  name: 'readerView',
+  addOptions() {
+    // Given by `extensions`.
+    return { document: undefined as unknown as Y.Doc, unshown: () => {} };
+  },
+  onCreate() {
+    FOLLOWING.get(this.editor)?.();
+    FOLLOWING.set(this.editor, followShared(this.editor.view, this.options.document, this.options.unshown));
+  },
+  onDestroy() {
+    FOLLOWING.get(this.editor)?.();
+    FOLLOWING.delete(this.editor);
+  },
+});
 
 /**
  * Tab and Shift+Tab into a cell that holds a table (R32). The library selects
@@ -1322,12 +1512,15 @@ const lowlight = createLowlight(common);
  * `noRoom` is given the words each time a change of the writer's is refused for the bounds of a
  * table or a limit of the document, and null when the next one is not (`Closed`).
  * `unrepairable` is told, once, that a mending was not written because it would pass 5 MB.
+ * `reads` is true for a browser that cannot edit the document: it has no binding to the shared
+ * document, and shows what the schema can show of it, writing nothing (`followShared`).
  */
 export function extensions(
   document: Y.Doc,
   unshown: () => void = () => {},
   noRoom: (words: string | null) => void = () => {},
   unrepairable: () => void = () => {},
+  reads = false,
 ) {
   return [
     StarterKit.configure({
@@ -1419,30 +1612,33 @@ export function extensions(
       placeholder: ({ node }) => (node.type.name === 'tableCaption' ? 'Caption' : ''),
     }),
     EmptyPrompt,
-    Collaboration.extend({
-      addProseMirrorPlugins() {
-        const plugins = this.parent?.() ?? [];
-        // The binding is held before its plugin starts it, as the library
-        // itself reaches the plugin of undo: by the function that starts it.
-        const sync = plugins.find((plugin) => plugin.spec.key === ySyncPluginKey);
-        const start = sync?.spec.view;
-        if (!sync || !start) throw new Error('editor: the collaboration binding was not found');
-        sync.spec.view = (view) => {
-          const settle = holdBinding(view, unshown, unrepairable);
-          const made = start(view);
-          // At each change of the view, the one that makes the text editable
-          // among them: what was owed to the shared document is mended then.
-          return {
-            ...made,
-            update: (...given) => {
-              made.update?.(...given);
-              settle();
-            },
-          };
-        };
-        return plugins;
-      },
-    }).configure({ document, field: FRAGMENT_NAME }),
+    // A browser that cannot edit is built without the binding (`followShared`).
+    reads
+      ? ReaderView.configure({ document, unshown })
+      : Collaboration.extend({
+          addProseMirrorPlugins() {
+            const plugins = this.parent?.() ?? [];
+            // The binding is held before its plugin starts it, as the library
+            // itself reaches the plugin of undo: by the function that starts it.
+            const sync = plugins.find((plugin) => plugin.spec.key === ySyncPluginKey);
+            const start = sync?.spec.view;
+            if (!sync || !start) throw new Error('editor: the collaboration binding was not found');
+            sync.spec.view = (view) => {
+              const settle = holdBinding(view, unshown, unrepairable);
+              const made = start(view);
+              // At each change of the view, the one that makes the text editable
+              // among them: what was owed to the shared document is mended then.
+              return {
+                ...made,
+                update: (...given) => {
+                  made.update?.(...given);
+                  settle();
+                },
+              };
+            };
+            return plugins;
+          },
+        }).configure({ document, field: FRAGMENT_NAME }),
     Closed.configure({ noRoom }),
     Shortcuts,
     MarkdownInput,

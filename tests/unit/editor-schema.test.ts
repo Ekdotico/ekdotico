@@ -13,15 +13,19 @@ import {
   yXmlFragmentToProseMirrorRootNode,
   type ProsemirrorBinding,
 } from '@tiptap/y-tiptap';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   ATTRIBUTE_RULES,
   TABLE_MOST,
   closeSchema,
+  arrives,
   extensions,
+  followShared,
   holdBinding,
   mayApply,
+  shownCopy,
+  shownOf,
 } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import { DOCUMENT_BYTES_MOST } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import {
@@ -2046,6 +2050,37 @@ describe('the tables in the cells of a table (R32)', () => {
         expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
       });
 
+      // The review of pull request 44: the plugin of the binding writes the text back at each change of the
+      // view, and that skipped the checks of the mending (5 MB, the shape of the document). A click changes
+      // no node the binding made, which the library skips, so the change here is one that got past the
+      // filter of the editor and is in the text: it is not written, and the text is made again, mended, later.
+      it('writes nothing at a change of the view either, and has what is owed mended, with its checks, when it can be edited', async () => {
+        const document = holding(1);
+        const editor = open(document, false);
+        const peer = peerOf(document);
+        ((peer.fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).push([paragraph('not a row')]);
+        peer.send();
+        const arrived = bytes(document);
+        const written: unknown[] = [];
+        document.on('update', (_update: Uint8Array, origin: unknown) => {
+          if (origin !== 'peer') written.push(origin);
+        });
+        // As the plugin of the binding does at each change of the view.
+        const view = editor.typed();
+        editor.binding._prosemirrorChanged(editor.text());
+        view.dispatch(view.state.tr.insertText('typed ', 1));
+        editor.binding._prosemirrorChanged(view.state.doc);
+        expect(written).toEqual([]);
+        expect(bytes(document)).toBe(arrived);
+        expect(editor.fragment.toString()).toContain('not a row');
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.mended()).toBeGreaterThan(0);
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        expect(editor.fragment.toString()).not.toContain('typed');
+        expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+      });
+
       it('mends what is owed before what the member types is written, so that it is not the member’s to undo', async () => {
         const document = holding(1);
         const editor = open(document, false);
@@ -2667,5 +2702,389 @@ describe('a change to a document that cannot be edited now (FR-ED-18)', () => {
   it('is applied where it is another client’s, and a transaction that changes nothing always is', () => {
     expect(mayApply(typed().setMeta(ySyncPluginKey, { isChangeOrigin: true }), false)).toBe(true);
     expect(mayApply(state.tr, false)).toBe(true);
+  });
+});
+
+// Register D185, D190 (S13-1, answered on 18 October 2026): a browser that cannot edit a
+// document shows what the schema can show of it, built from the shared document, and
+// writes nothing to it, no repair and no update. When an editor's browser repairs the
+// document, the reader's view follows (docs/plan/reader-view.md).
+describe('a browser that cannot edit the document', () => {
+  // The reader shows at most once in a tenth of a second: time is the test's.
+  beforeEach(() => void vi.useFakeTimers());
+  afterEach(() => void vi.useRealTimers());
+  const tick = () => vi.advanceTimersByTimeAsync(1000);
+  const state = (document: Y.Doc) => Buffer.from(Y.encodeStateAsUpdate(document)).toString('base64');
+  const copy = (document: Y.Doc) => {
+    const made = new Y.Doc();
+    Y.applyUpdate(made, Y.encodeStateAsUpdate(document));
+    return made;
+  };
+  /** A reader's view, as the editor holds it (`followShared`), and every update that left the shared document. */
+  function reading(document: Y.Doc) {
+    let current = EditorState.create({ schema });
+    let dispatched = 0;
+    const view = {
+      get state() {
+        return current;
+      },
+      dispatch(transaction: Transaction) {
+        dispatched += 1;
+        current = current.apply(transaction);
+      },
+    };
+    // What this browser sent: every update of the document that did not come from the peer.
+    const sent: unknown[] = [];
+    document.on('update', (_update: Uint8Array, origin: unknown) => {
+      if (origin !== 'peer') sent.push(origin);
+    });
+    const unshown = vi.fn();
+    const stop = followShared(view as never, document, unshown);
+    return {
+      view,
+      unshown,
+      sent,
+      stop,
+      text: () => current.doc,
+      dispatched: () => dispatched,
+      // As a click or a drag in the text changes the view.
+      selects: () => view.dispatch(current.tr.setSelection(TextSelection.create(current.doc, 2))),
+    };
+  }
+  const base = () => {
+    const document = new Y.Doc();
+    document.getXmlFragment('default').push([paragraph('before'), paragraph('KEEP-THIS')]);
+    return document;
+  };
+
+  // What the schema leaves out, or fills, and what a reader is then shown.
+  const CASES: [string, (fragment: Y.XmlFragment) => void, string, ((doc: PMNode) => void)?][] = [
+    ['text standing directly in the document', (f) => f.insert(1, [words('stray')]), 'beforeKEEP-THIS'],
+    ['a row without a table', (f) => f.insert(1, [rowOf('stray')]), 'beforeKEEP-THIS'],
+    [
+      'a cell without a row',
+      (f) => f.insert(1, [element('tableCell', {}, [paragraph('stray')])]),
+      'beforeKEEP-THIS',
+    ],
+    [
+      'a table without its block',
+      (f) => f.insert(1, [element('table', {}, [rowOf('stray')])]),
+      'beforeKEEP-THIS',
+    ],
+    [
+      'a caption without a table',
+      (f) => f.insert(1, [element('tableCaption', {}, [words('stray')])]),
+      'beforeKEEP-THIS',
+    ],
+    [
+      'an item without a list',
+      (f) => f.insert(1, [element('listItem', {}, [paragraph('stray')])]),
+      'beforeKEEP-THIS',
+    ],
+    [
+      'a node of no type',
+      (f) => f.insert(1, [element('noSuchNode', {}, [words('stray')])]),
+      'beforeKEEP-THIS',
+    ],
+    [
+      'a node of no type in a quote',
+      (f) =>
+        f.push([
+          element('blockquote', {}, [paragraph('inner'), element('noSuchNode', {}, [words('stray')])]),
+        ]),
+      'beforeKEEP-THISinner',
+    ],
+    [
+      'a mark of no type',
+      (f) => f.push([paragraph('marked', { noSuchMark: { a: 1 } })]),
+      'beforeKEEP-THISmarked',
+    ],
+    [
+      'an emptied element',
+      (f) => f.push([element('blockquote')]),
+      'beforeKEEP-THIS',
+      (doc) => {
+        expect(doc.lastChild!.type.name).toBe('blockquote');
+        expect(doc.lastChild!.childCount).toBe(1);
+      },
+    ],
+    [
+      'a table past its bound',
+      (f) => f.push([blockOf(Array.from({ length: TABLE_MOST + 1 }, (_, at) => rowOf(`r${at}`)))]),
+      `beforeKEEP-THIS${Array.from({ length: TABLE_MOST }, (_, at) => `r${at}`).join('')}caption`,
+      (doc) => expect(doc.lastChild!.firstChild!.childCount).toBe(TABLE_MOST),
+    ],
+    [
+      'a document past the limit of tables',
+      (f) => f.push(Array.from({ length: 101 }, () => blockOf([rowOf('t')], words('')))),
+      `beforeKEEP-THIS${'t'.repeat(101)}`,
+      (doc) => expect(doc.childCount).toBe(103),
+    ],
+  ];
+
+  describe.each(CASES)('%s', (_, make, expected, check) => {
+    // (a) writes nothing, (b) shows what the schema can show.
+    it.each(['is in the document when it is opened', 'arrives in a document that is open'] as const)(
+      'is shown without it, and nothing is written, where it %s',
+      async (when) => {
+        const document = base();
+        const peer = peerOf(document);
+        if (when.startsWith('is in')) {
+          make(document.getXmlFragment('default'));
+        } else {
+          make(peer.fragment);
+        }
+        const reader = reading(document);
+        if (when.startsWith('arrives')) {
+          expect(reader.text().textContent).toBe('beforeKEEP-THIS');
+          peer.send();
+          await tick();
+        }
+        const arrived = state(document);
+        expect(reader.text().textContent).toBe(expected);
+        check?.(reader.text());
+        reader.selects();
+        await tick();
+        // Nothing left the shared document, and it holds what it held.
+        expect(reader.sent).toEqual([]);
+        expect(state(document)).toBe(arrived);
+        expect(reader.unshown).not.toHaveBeenCalled();
+        expect(reader.text().check()).toBeUndefined();
+        // And it is what an editor's browser shows once it has mended.
+        const editor = open(copy(document));
+        expect(editor.unshown).not.toHaveBeenCalled();
+        expect(editor.text().eq(reader.text())).toBe(true);
+      },
+    );
+
+    // (c) the reader follows the repair, and what the editor writes after it.
+    it('is repaired by an editor’s browser, and the reader’s view stays and follows', async () => {
+      const shared = base();
+      make(shared.getXmlFragment('default'));
+      const [theirs, mine] = [copy(shared), copy(shared)];
+      const reader = reading(theirs);
+      // What the editor's browser writes reaches the reader, as the server sends it.
+      mine.on('update', (update: Uint8Array) => Y.applyUpdate(theirs, update, 'peer'));
+      const before = reader.text();
+      const editor = open(mine);
+      await tick();
+      expect(editor.unshown).not.toHaveBeenCalled();
+      // Where the editor repaired the document, the repair arrived at the reader, and changed
+      // nothing it shows.
+      expect(state(theirs) !== state(shared)).toBe(editor.mended() > 0);
+      expect(reader.text().eq(before)).toBe(true);
+      const view = editor.typed();
+      view.dispatch(view.state.tr.insertText('typed ', 1));
+      editor.binding._prosemirrorChanged(view.state.doc);
+      await tick();
+      expect(reader.text().textContent).toContain('typed before');
+      expect(reader.text().eq(editor.text())).toBe(true);
+      expect(reader.sent).toEqual([]);
+    });
+  });
+
+  it('follows the repair that deletes what the reader was not shown, in a document that held it', async () => {
+    const shared = base();
+    shared.getXmlFragment('default').insert(1, [words('stray-text'), rowOf('stray-row')]);
+    const [theirs, mine] = [copy(shared), copy(shared)];
+    const reader = reading(theirs);
+    mine.on('update', (update: Uint8Array) => Y.applyUpdate(theirs, update, 'peer'));
+    expect(theirs.getXmlFragment('default').toString()).toContain('stray-text');
+    const before = reader.text();
+    open(mine);
+    await tick();
+    // The editor took them out of the shared document, and the reader's copy of it follows.
+    expect(mine.getXmlFragment('default').toString()).not.toContain('stray');
+    expect(theirs.getXmlFragment('default').toString()).not.toContain('stray');
+    expect(reader.text().eq(before)).toBe(true);
+    expect(reader.sent).toEqual([]);
+  });
+
+  it('makes the text once for the changes of one moment', async () => {
+    const document = base();
+    const peer = peerOf(document);
+    const reader = reading(document);
+    const first = reader.dispatched();
+    for (const written of ['one', 'two', 'three']) {
+      peer.fragment.push([paragraph(written)]);
+      peer.send();
+    }
+    await tick();
+    expect(reader.text().textContent).toBe('beforeKEEP-THISonetwothree');
+    expect(reader.dispatched() - first).toBe(1);
+  });
+
+  it('keeps a selection in a part that did not change', async () => {
+    const document = base();
+    const peer = peerOf(document);
+    const reader = reading(document);
+    reader.view.dispatch(
+      reader.view.state.tr.setSelection(TextSelection.create(reader.view.state.doc, 9, 12)),
+    );
+    peer.fragment.push([paragraph('after')]);
+    peer.send();
+    await tick();
+    const { from, to } = reader.view.state.selection;
+    expect([from, to]).toEqual([9, 12]);
+    expect(reader.text().textContent).toBe('beforeKEEP-THISafter');
+  });
+
+  it('shows the empty document where nothing but strays is held', async () => {
+    const document = new Y.Doc();
+    document.getXmlFragment('default').push([words('stray'), rowOf('stray')]);
+    const arrived = state(document);
+    const reader = reading(document);
+    expect(reader.text().toString()).toBe('doc(paragraph)');
+    expect(reader.sent).toEqual([]);
+    expect(state(document)).toBe(arrived);
+  });
+
+  it('says once that a document that cannot be built cannot, and writes nothing', async () => {
+    const document = base();
+    let parent: Y.XmlFragment = document.getXmlFragment('default');
+    document.transact(() => {
+      for (let level = 0; level < 10_000; level += 1) {
+        const quote = new Y.XmlElement('blockquote');
+        parent.insert(0, [quote]);
+        parent = quote;
+      }
+      parent.insert(0, [paragraph('deep')]);
+    });
+    const reader = reading(document);
+    expect(reader.unshown).toHaveBeenCalledTimes(1);
+    const peer = peerOf(document);
+    peer.fragment.push([paragraph('more')]);
+    peer.send();
+    await tick();
+    expect(reader.unshown).toHaveBeenCalledTimes(1);
+    expect(reader.sent).toEqual([]);
+    expect(reader.text().textContent).toBe('');
+  });
+
+  it('shows at most once in a tenth of a second however many updates arrive, and ends on the last', async () => {
+    const document = base();
+    const peer = peerOf(document);
+    const reader = reading(document);
+    const first = reader.dispatched();
+    // Two hundred separate messages, one every 10 ms: 2 seconds.
+    for (let at = 0; at < 200; at += 1) {
+      peer.fragment.push([paragraph(`p${at}`)]);
+      peer.send();
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    await tick();
+    expect(reader.text().textContent.endsWith('p199')).toBe(true);
+    expect(reader.dispatched() - first).toBeLessThanOrEqual(22);
+    expect(reader.sent).toEqual([]);
+  });
+
+  it('keeps one copy, fed by the shared document, and puts it away where it wrote to it, so that it never drifts', () => {
+    const document = base();
+    const peer = peerOf(document);
+    const held = shownCopy(document, schema);
+    held.show();
+    const first = held.held()!;
+    expect(state(first)).toBe(state(document));
+    // Fed, and the same copy.
+    peer.fragment.push([paragraph('one')]);
+    peer.send();
+    expect(held.held()).toBe(first);
+    expect(held.show().textContent).toBe('beforeKEEP-THISone');
+    expect(held.held()).toBe(first);
+    expect(state(first)).toBe(state(document));
+    // Text standing directly in the document is taken out of the copy and not of the document:
+    // the copy is put away, and holds nothing the shared document does not.
+    peer.fragment.insert(1, [words('stray')]);
+    peer.send();
+    expect(held.show().textContent).toBe('beforeKEEP-THISone');
+    expect(held.held()).toBeUndefined();
+    expect(document.getXmlFragment('default').toString()).toContain('stray');
+    // The next text is made of a new copy, and is the one that a new copy gives.
+    peer.fragment.push([paragraph('two')]);
+    peer.send();
+    expect(held.show().eq(shownOf(document, schema))).toBe(true);
+    expect(held.held()).toBeUndefined();
+    // Once the editor has taken the stray text out, the copy is kept again, and is the shared document.
+    peer.fragment.delete(1, 1);
+    peer.send();
+    held.show();
+    expect(held.held()).toBeDefined();
+    expect(state(held.held()!)).toBe(state(document));
+    peer.fragment.push([paragraph('three')]);
+    peer.send();
+    expect(state(held.held()!)).toBe(state(document));
+    expect(held.show().textContent).toBe('beforeKEEP-THISonetwothree');
+    held.stop();
+    expect(held.held()).toBeUndefined();
+  });
+
+  it('marks what it shows as what arrives, which an editor that cannot edit takes', () => {
+    const start = EditorState.create({ schema });
+    const typed = start.tr.insertText('x', 1);
+    expect(mayApply(typed, false)).toBe(false);
+    const shown = arrives(start.tr.insertText('x', 1));
+    expect(shown.docChanged).toBe(true);
+    expect(mayApply(shown, false)).toBe(true);
+    expect(limitRefusal(shown, start.doc)).toBeNull();
+    expect(shown.getMeta('addToHistory')).toBe(false);
+  });
+
+  it('follows from the creation of its editor to the destruction of it, whichever extension holds it', async () => {
+    const document = base();
+    const peer = peerOf(document);
+    const unshown = vi.fn();
+    const extension = extensions(document, unshown, undefined, undefined, true).find(
+      (each) => each.name === 'readerView',
+    )!;
+    let current = EditorState.create({ schema });
+    const editor = {
+      view: {
+        get state() {
+          return current;
+        },
+        dispatch: (transaction: Transaction) => void (current = current.apply(transaction)),
+      },
+    };
+    const context = { editor, options: extension.options };
+    const lifecycle = extension.config as unknown as Record<
+      'onCreate' | 'onDestroy',
+      (this: unknown) => void
+    >;
+    lifecycle.onCreate.call(context);
+    expect(current.doc.textContent).toBe('beforeKEEP-THIS');
+    peer.fragment.push([paragraph('one')]);
+    peer.send();
+    await tick();
+    expect(current.doc.textContent).toBe('beforeKEEP-THISone');
+    lifecycle.onDestroy.call(context);
+    peer.fragment.push([paragraph('two')]);
+    peer.send();
+    await tick();
+    expect(current.doc.textContent).toBe('beforeKEEP-THISone');
+  });
+
+  it('stops following when it is stopped', async () => {
+    const document = base();
+    const peer = peerOf(document);
+    const reader = reading(document);
+    reader.stop();
+    peer.fragment.push([paragraph('later')]);
+    peer.send();
+    await tick();
+    expect(reader.text().textContent).toBe('beforeKEEP-THIS');
+  });
+
+  it('has no binding to the shared document: the editor of a reader holds none of the library’s', () => {
+    const names = (list: ReturnType<typeof extensions>) => list.map((each) => each.name);
+    const reads = names(extensions(new Y.Doc(), undefined, undefined, undefined, true));
+    expect(reads).toContain('readerView');
+    expect(reads).not.toContain('collaboration');
+    const writes = names(extensions(new Y.Doc()));
+    expect(writes).toContain('collaboration');
+    expect(writes).not.toContain('readerView');
+    // The editor of a reader has the same schema as the editor of a writer.
+    expect(
+      Object.keys(getSchema(extensions(new Y.Doc(), undefined, undefined, undefined, true)).nodes),
+    ).toEqual(Object.keys(schema.nodes));
   });
 });

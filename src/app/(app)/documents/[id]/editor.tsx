@@ -147,12 +147,15 @@ function blockControls(view: EditorView): HTMLElement | null {
 function Text({
   document,
   editable,
+  reads,
   onEditor,
   onUnshown,
   onUnrepairable,
 }: {
   document: Y.Doc;
   editable: boolean;
+  /** This browser cannot edit the document, whatever the connection: it shows what the schema can show and writes nothing. */
+  reads: boolean;
   /** Told that the document cannot be built here: the text goes, and the page says so. */
   onUnshown: () => void;
   /** Told that a repair was not written because it would pass 5 MB: the text is read-only (D180). */
@@ -178,8 +181,8 @@ function Text({
     [],
   );
   const all = useMemo(
-    () => extensions(document, onUnshown, refuse, onUnrepairable),
-    [document, onUnshown, refuse, onUnrepairable],
+    () => extensions(document, onUnshown, refuse, onUnrepairable, reads),
+    [document, onUnshown, refuse, onUnrepairable, reads],
   );
   // What a screen reader is given of a refusal: one region that is in the page
   // throughout, emptied and then written at each refusal, so that a second
@@ -461,8 +464,11 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
       {/* FR-ED-18: read-only in the error state, "until the connection returns". */}
       {state.opened ? (
         <Text
+          // The extensions are made once for a browser that can edit, or for one that cannot.
+          key={canEdit ? 'w' : 'r'}
           document={connection.document}
           editable={canEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
+          reads={!canEdit}
           onEditor={keep}
           onUnshown={fail}
           onUnrepairable={unrepairable}
