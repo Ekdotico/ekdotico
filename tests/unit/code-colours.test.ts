@@ -13,6 +13,7 @@ import {
   CODE_COLOURS_FROM_POINT_MOST,
   CODE_COLOURS_LONGEST,
   CODE_COLOURS_MARGIN,
+  CODE_COLOURS_PIECES_MOST,
   CODE_COLOURS_STEP_MOST,
   CODE_COLOURS_WINDOW_MOST,
   CODE_NOT_COLOURED,
@@ -417,6 +418,44 @@ describe('the colours of a code block', () => {
       expect(opening).toBeLessThan(200);
       expect(blocks(state)[0]!.exact).toBe(true);
     }
+  });
+
+  // The second review of pull request 40: the decorations of every block's
+  // window were made afresh at each change, so 200 blocks of one-line JSON
+  // cost 5.7 s to open and 700 ms a key.
+  it('are kept to a bounded number of pieces in a document of many dense blocks, and given to a block that comes into view', () => {
+    const json = `[${Array.from({ length: 1000 }, (_, at) => `{"a":${at},"b":"c"}`).join(',')}]`.slice(
+      0,
+      20_000,
+    );
+    const dense = Array.from({ length: 200 }, (_, at): [string, string] => ['json', `${json}${at}`]);
+    let t = performance.now();
+    let state = open(...dense);
+    const opening = performance.now() - t;
+    const pieces = () => blocks(state).reduce((sum, block) => sum + block.spans.length, 0);
+    const bound = CODE_COLOURS_PIECES_MOST + CODE_COLOURS_WINDOW_MOST;
+    expect(pieces()).toBeGreaterThan(0);
+    expect(pieces()).toBeLessThanOrEqual(bound);
+    expect(blocks(state)[199]!.spans).toHaveLength(0);
+    const times: number[] = [];
+    for (let key = 0; key < 10; key += 1) {
+      t = performance.now();
+      state = typed(state, 0, 100 + key, '1');
+      times.push(performance.now() - t);
+    }
+    times.sort((a, b) => a - b);
+    console.log(
+      `200 blocks of 20 KB of one-line JSON: open ${opening.toFixed(0)} ms, ${pieces()} pieces, key median ${times[5]!.toFixed(1)} ms, worst ${times[9]!.toFixed(1)} ms`,
+    );
+    expect(opening).toBeLessThan(300);
+    expect(times[5]).toBeLessThan(60);
+    // Scrolled to the last block: it is coloured, and the first lose their colours.
+    const last = blocks(state)[199]!;
+    state = meta(state, { visible: [{ pos: last.pos, from: 0, to: 200 }], near: [last.pos] });
+    expect(blocks(state)[199]!.spans.length).toBeGreaterThan(100);
+    expect(blocks(state)[0]!.spans).toHaveLength(0);
+    expect(pieces()).toBeLessThanOrEqual(bound);
+    expect(painted(state, 199).slice(0, 200)).toEqual(oracle('json', blocks(state)[199]!.text).slice(0, 200));
   });
 
   it('are given in full to ordinary small blocks, as before, and kept so while they are typed in', () => {

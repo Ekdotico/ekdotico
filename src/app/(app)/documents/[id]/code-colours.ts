@@ -31,6 +31,22 @@
 // is used that took longer than `CODE_COLOURS_LONGEST` (D183): the block is
 // shown without colours, and its header says so.
 //
+// The decorations are made afresh at each change from the coloured pieces,
+// which are kept to `CODE_COLOURS_PIECES_MOST` beyond the window that crosses
+// it: blocks far from the view lose their colours, those that come into view
+// are coloured while there is room, and on opening the first blocks are, in
+// order, while there is room. In a document dense with long blocks, a block
+// in view past that room is shown without colours, and nothing says so.
+//
+// The ceilings left: each change reads the code of every block (its text,
+// compared with what it was), so a change costs time in proportion to all
+// the code of the document, which its limits bound at 5 MB. And where the
+// grammar does not come back to its top mode at the end of a line within
+// `CODE_COLOURS_STEP_MOST` characters, no restart point is found past there:
+// the windows past it keep their provisional colours, coloured from their
+// own start, for as long as the block is open. That is the price of a bound
+// on every step.
+//
 // The colours are inline decorations with the classes highlight.js writes
 // (`hljs-*`), so the design package's code.css colours them as before.
 import HighlightJS from 'highlight.js/lib/core';
@@ -63,6 +79,14 @@ export const CODE_COLOURS_SLICE = 8;
 export const CODE_COLOURS_WINDOW_MOST = 20_000;
 /** The longest colouring, in characters: a window coloured from a point further back is provisional. */
 export const CODE_COLOURS_FROM_POINT_MOST = 40_000;
+/**
+ * The most coloured pieces kept across the windows of all blocks, beyond the
+ * one window that crosses it: the decorations are made afresh from them at
+ * each change. A block far from the view (more than a window's height away)
+ * loses its colours, and one that comes into view is coloured while there is
+ * room. Chosen here, the owner's to approve: some ten milliseconds of making.
+ */
+export const CODE_COLOURS_PIECES_MOST = 20_000;
 /** The longest step of the idle work, in characters. */
 export const CODE_COLOURS_STEP_MOST = 16_000;
 /**
@@ -299,29 +323,52 @@ export interface Block {
   readonly exact: boolean;
   /** Whether a colouring threw or took too long: no colours until the document is opened again. */
   readonly failed: boolean;
+  /** Whether the window is coloured: false for a block far from the view, or past the pieces of `CODE_COLOURS_PIECES_MOST`. */
+  readonly shown: boolean;
 }
+
+/** A block without its colours, until it comes into view. */
+const hidden = (block: Block): Block => ({ ...block, spans: [], exact: true, shown: false });
+
+/** The coloured pieces of these blocks. */
+const piecesOf = (blocks: readonly Block[]) => blocks.reduce((sum, block) => sum + block.spans.length, 0);
 
 /** Whether the window of `block` can be coloured from a restart point. */
 const nearPoint = (block: Pick<Block, 'restarts' | 'from' | 'to'>) =>
   block.to - block.restarts.before(block.from) <= CODE_COLOURS_FROM_POINT_MOST;
 
 /** Colours a block's window from the point before it, or, where that is too far, from its own start. */
-function coloured(block: Omit<Block, 'spans' | 'exact'>): Block {
-  if (block.failed || block.language === 'plaintext') return { ...block, spans: [], exact: true };
+function coloured(block: Omit<Block, 'spans' | 'exact' | 'shown'>): Block {
+  if (block.failed || block.language === 'plaintext')
+    return { ...block, spans: [], exact: true, shown: true };
   const { restarts, from, to, text } = block;
   const exact = nearPoint(block);
   try {
     const { spans } = colour(block.language, text, exact ? restarts.before(from) : from, to);
-    return { ...block, spans: spans.filter((span) => span[1] > from), exact };
+    return { ...block, spans: spans.filter((span) => span[1] > from), exact, shown: true };
   } catch {
-    return { ...block, failed: true, spans: [], exact: true };
+    return { ...block, failed: true, spans: [], exact: true, shown: true };
   }
 }
 
-/** A block first met: its first lines, as if the top of it were seen. */
-function fresh(pos: number, language: string, text: string): Block {
+/** A block first met: its first lines, as if the top of it were seen; coloured where `shown`. */
+function fresh(pos: number, language: string, text: string, shown: boolean): Block {
   const [from, to] = bounded(0, linesAfter(text, 0, 2 * CODE_COLOURS_MARGIN));
-  return coloured({ pos, language, text, restarts: new Restarts(language, text), from, to, failed: false });
+  const block = { pos, language, text, restarts: new Restarts(language, text), from, to, failed: false };
+  return shown ? coloured(block) : hidden({ ...block, spans: [], exact: true, shown: false });
+}
+
+/** Colours, in order, the blocks `which` picks while the pieces of all of them are fewer than `CODE_COLOURS_PIECES_MOST`. */
+function withinPieces(blocks: Block[], which: (block: Block, at: number) => Block | null) {
+  let pieces = piecesOf(blocks);
+  blocks.forEach((block, at) => {
+    if (pieces >= CODE_COLOURS_PIECES_MOST) return;
+    const next = which(block, at);
+    if (!next) return;
+    pieces += next.spans.length - block.spans.length;
+    blocks[at] = next;
+  });
+  return blocks;
 }
 
 /** The block `was`, its text now `text`: the edit found by the text the two share at their ends. */
@@ -349,6 +396,9 @@ function edited(was: Block, pos: number, text: string): Block {
     return { ...was, pos, text, restarts: new Restarts(was.language, text), spans: [], failed: true };
   }
   const base = { pos, language: was.language, text, restarts, failed: was.failed };
+  // Out of view: not coloured.
+  if (!was.shown)
+    return { ...was, ...base, ...bounds(Math.min(was.from, text.length), Math.min(was.to, text.length)) };
   // After the window, which does not reach the end: nothing of it changes.
   if (start >= was.to && was.to < old.length) return { ...was, ...base };
   // Before it, and the grammar back in its top mode before it: the same
@@ -358,7 +408,7 @@ function edited(was: Block, pos: number, text: string): Block {
     const to = was.to + shift;
     if (back <= from) {
       const spans = was.spans.map(([a, b, classes]): Span => [a + shift, b + shift, classes]);
-      return { ...base, from, to, spans, exact: was.exact };
+      return { ...base, from, to, spans, exact: was.exact, shown: true };
     }
     return coloured({ ...base, from, to });
   }
@@ -394,8 +444,11 @@ export function moved(block: Block, seenFrom: number, seenTo: number): [number, 
 
 /** What a transaction may tell the plugin. */
 export type Meta =
-  /** The visible part of blocks, as offsets in each block's text. */
-  | { visible: { pos: number; from: number; to: number }[] }
+  /**
+   * The visible part of blocks, as offsets in each block's text; and, where
+   * given, the blocks near the view, the others losing their colours.
+   */
+  | { visible: { pos: number; from: number; to: number }[]; near?: number[] }
   /** The idle work collected points: settle provisional windows that they reach. */
   | { settle: true };
 
@@ -474,6 +527,7 @@ export function codeColours(language: (given: unknown) => string) {
     const texts = now.map(({ node }) => node.textContent);
     const pairs = paired(prev.blocks, texts);
     let changed = now.length !== prev.blocks.length;
+    const added = new Set<number>();
     const blocks = now.map(({ pos, node }, at): Block => {
       const was = pairs[at];
       const lang = language(node.attrs.language);
@@ -481,7 +535,8 @@ export function codeColours(language: (given: unknown) => string) {
       changed ||= was !== prev.blocks[at];
       if (!was || was.language !== lang) {
         changed = true;
-        return fresh(pos, lang, text);
+        added.add(at);
+        return fresh(pos, lang, text, false);
       }
       if (was.text === text) {
         changed ||= touched(tr, was.pos, was.pos + node.nodeSize);
@@ -490,6 +545,8 @@ export function codeColours(language: (given: unknown) => string) {
       changed = true;
       return edited(was, pos, text);
     });
+    // Blocks added: coloured while the pieces allow, the rest when they come into view.
+    if (added.size) withinPieces(blocks, (block, at) => (added.has(at) ? coloured(block) : null));
     return {
       blocks,
       decorations: changed ? decorationsOf(tr.doc, blocks) : prev.decorations.map(tr.mapping, tr.doc),
@@ -500,8 +557,12 @@ export function codeColours(language: (given: unknown) => string) {
     key: codeColoursKey,
     state: {
       init(_, state) {
-        const blocks = codeBlocks(state.doc).map(({ pos, node }) =>
-          fresh(pos, language(node.attrs.language), node.textContent),
+        // The first blocks while the pieces allow; the others when they come into view.
+        const blocks = withinPieces(
+          codeBlocks(state.doc).map(({ pos, node }) =>
+            fresh(pos, language(node.attrs.language), node.textContent, false),
+          ),
+          (block) => coloured(block),
         );
         return { blocks, decorations: decorationsOf(state.doc, blocks) };
       },
@@ -510,20 +571,35 @@ export function codeColours(language: (given: unknown) => string) {
         if (!tr.docChanged && !meta) return prev;
         const next = tr.docChanged ? rematch(prev, tr) : prev;
         if (!meta) return next;
-        let changed = false;
-        const blocks = next.blocks.map((block) => {
-          let after = block;
-          if ('settle' in meta) {
-            if (block.restarts.failed && !block.failed) after = { ...block, failed: true, spans: [] };
-            else if (!block.exact && nearPoint(block)) after = coloured(block);
-          } else {
-            const seen = meta.visible.find((each) => each.pos === block.pos);
+        let blocks: Block[];
+        if ('settle' in meta)
+          blocks = next.blocks.map((block) => {
+            if (block.restarts.failed && !block.failed) return { ...block, failed: true, spans: [] };
+            return block.shown && !block.exact && nearPoint(block) ? coloured(block) : block;
+          });
+        else {
+          // Blocks far from the view lose their colours first, so that the
+          // pieces go to the blocks in it.
+          // A coloured window moves as before; a block coming into view is
+          // coloured while the pieces allow.
+          const { near, visible } = meta;
+          const place = (block: Block) => {
+            const seen = visible.find((each) => each.pos === block.pos);
             const to = seen && moved(block, seen.from, seen.to);
-            if (to) after = coloured({ ...block, from: to[0], to: to[1] });
-          }
-          changed ||= after !== block;
-          return after;
-        });
+            return { seen, to };
+          };
+          blocks = next.blocks.map((block) => {
+            if (near && block.shown && !block.failed && !near.includes(block.pos)) return hidden(block);
+            const { to } = place(block);
+            return block.shown && to ? coloured({ ...block, from: to[0], to: to[1] }) : block;
+          });
+          withinPieces(blocks, (block) => {
+            const { seen, to } = place(block);
+            if (block.shown || !seen) return null;
+            return coloured({ ...block, from: to?.[0] ?? block.from, to: to?.[1] ?? block.to });
+          });
+        }
+        const changed = blocks.some((block, at) => block !== next.blocks[at]);
         return changed ? { blocks, decorations: decorationsOf(tr.doc, blocks) } : next;
       },
     },
@@ -548,17 +624,27 @@ function watch(view: EditorView) {
   let idle = 0;
   const idleCallbacks = typeof requestIdleCallback === 'function';
 
-  /** Tells the plugin of the visible part of each block whose window should move. */
+  /**
+   * Tells the plugin of the visible part of each block whose window should
+   * move or which should be coloured, and of the blocks near the view: within
+   * a window's height of it.
+   */
   function measure(still: boolean) {
     frame = 0;
     const height = window.innerHeight;
     const visible: { pos: number; from: number; to: number }[] = [];
+    const near: number[] = [];
+    let far = false;
     for (const block of codeColoursKey.getState(view.state)!.blocks) {
-      if (block.text.length > CODE_COLOURS_VERY_LARGE && !still) continue;
       const element = view.nodeDOM(block.pos);
       const code = element instanceof HTMLElement ? (element.querySelector('code') ?? element) : null;
-      if (!code) continue;
-      const box = code.getBoundingClientRect();
+      const box = code?.getBoundingClientRect();
+      const close = !!box && box.bottom > -height && box.top < 2 * height;
+      // While scrolling, a very large block is left as it is.
+      const waits = block.text.length > CODE_COLOURS_VERY_LARGE && !still;
+      if (close || (waits && block.shown)) near.push(block.pos);
+      else if (block.shown && !block.failed) far = true;
+      if (!code || !box || waits) continue;
       const top = Math.max(box.top, 0);
       const bottom = Math.min(box.bottom, height);
       if (bottom <= top) continue;
@@ -567,9 +653,10 @@ function watch(view: EditorView) {
       if (!first || !last) continue;
       const inside = (pos: number) => Math.min(Math.max(pos - block.pos - 1, 0), block.text.length);
       const seen = { pos: block.pos, from: inside(first.pos), to: inside(last.pos) };
-      if (moved(block, seen.from, seen.to)) visible.push(seen);
+      if ((!block.shown && !block.failed) || moved(block, seen.from, seen.to)) visible.push(seen);
     }
-    if (visible.length) view.dispatch(view.state.tr.setMeta(codeColoursKey, { visible } satisfies Meta));
+    if (visible.length || far)
+      view.dispatch(view.state.tr.setMeta(codeColoursKey, { visible, near } satisfies Meta));
   }
   const soon = () => (frame ||= requestAnimationFrame(() => measure(false)));
   function scrolled() {
