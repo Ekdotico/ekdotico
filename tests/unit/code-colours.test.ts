@@ -10,8 +10,13 @@ import { common, createLowlight } from 'lowlight';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  CODE_COLOURS_FROM_POINT_MOST,
+  CODE_COLOURS_LONGEST,
   CODE_COLOURS_MARGIN,
+  CODE_COLOURS_STEP_MOST,
+  CODE_COLOURS_WINDOW_MOST,
   CODE_NOT_COLOURED,
+  clock,
   codeColours,
   codeColoursKey,
   codeHighlighter,
@@ -256,7 +261,10 @@ describe('the colours of a code block', () => {
   });
 
   it('are shown at once where the points have not reached, and settle to exact when they do', () => {
-    const text = code(400_000);
+    // Plain lines first, with a stray end of comment on line 200, which a
+    // comment opened at the top runs to.
+    const plain = 'let y = 1; // w\n'.repeat(200);
+    const text = `${plain}*/\n${plain}${code(400_000)}`;
     const whole = oracle('javascript', text);
     let state = see(open(['javascript', text]), 0, 7000);
     let block = blocks(state)[0]!;
@@ -266,15 +274,121 @@ describe('the colours of a code block', () => {
     block = blocks(state)[0]!;
     expect(block.exact).toBe(true);
     expect(wrong(painted(state, 0), whole, block.from, block.to - 200)).toBe(0);
-    // A comment opened above the window by another client: provisional again, then exact.
-    const opened = `/*${text.replaceAll('*/', '* /')}`;
+    // A comment opened at the top by another client, running 200 lines: the
+    // points after the edit are dropped, so provisional again, then exact.
+    const opened = `/*${text}`;
     state = remote(state, 0, opened);
     expect(blocks(state)[0]!.exact).toBe(false);
     state = settled(state);
     block = blocks(state)[0]!;
     expect(block.exact).toBe(true);
     expect(wrong(painted(state, 0), oracle('javascript', opened), block.from, block.to - 200)).toBe(0);
-    expect(painted(state, 0)[block.from + 10]).toBe('hljs-comment');
+  });
+
+  // The review of pull request 40: a local key above the window that changes
+  // the grammar's state there left the window's old colours, marked exact.
+  it('are coloured again in the window for a key above it that changes what follows', () => {
+    const text = `${'const a = 1; // x\n'.repeat(150)}*/\n${'const b = 2; // y\n'.repeat(400)}`;
+    let state = see(settled(open(['javascript', text])), 0, 200);
+    expect(blocks(state)[0]!.from).toBeGreaterThan(0);
+    state = typed(state, 0, 0, '/*');
+    const exactly = (at: EditorState) => {
+      const block = blocks(at)[0]!;
+      if (block.exact)
+        expect(wrong(painted(at, 0), oracle('javascript', block.text), block.from, block.to - 200)).toBe(0);
+    };
+    exactly(state);
+    state = settled(state);
+    expect(blocks(state)[0]!.exact).toBe(true);
+    exactly(state);
+    expect(painted(state, 0)[blocks(state)[0]!.from + 5]).toBe('hljs-comment');
+  });
+
+  // The review of pull request 40: the window was bounded in lines and not
+  // characters, a window was coloured from its restart point however far
+  // back, an edit coloured the whole stretch between its points, and an idle
+  // step could be the whole block.
+  it('do not colour all of a long paste from another client at once, above the window or in it', () => {
+    const text = code(400_000);
+    let state = see(settled(open(['javascript', text])), 0, 3000);
+    const given = watchColourings();
+    const above = linesAfter(text, 0, 100);
+    state = remote(state, 0, text.slice(0, above) + code(200_000) + text.slice(above));
+    const now = blocks(state)[0]!;
+    const inside = Math.floor((now.from + now.to) / 2);
+    state = remote(state, 0, now.text.slice(0, inside) + code(200_000) + now.text.slice(inside));
+    expect(given.length).toBeGreaterThan(0);
+    expect(Math.max(...given.map((each) => each.length))).toBeLessThanOrEqual(CODE_COLOURS_FROM_POINT_MOST);
+  });
+
+  it('never colour more than a bounded number of characters at once, nor take long for a key, whatever the code', () => {
+    const json = `[${Array.from({ length: 60_000 }, (_, at) => `{"a":${at},"b":"c${at}"}`).join(',')}]`;
+    const hostile: [string, string, string][] = [
+      ['one line of JSON, 1.3 MB', 'json', json],
+      ['NDJSON lines of 400 characters', 'json', `${json.slice(1, 401)}\n`.repeat(2500)],
+      // A comment of two lines across every 64th line, to defeat the doubled stride.
+      [
+        'comments across the strides',
+        'javascript',
+        Array.from({ length: 16_000 }, (_, at) =>
+          at % 64 === 63 ? '/* a\n' : at % 64 === 0 && at ? 'b */ let x = 1;\n' : 'let y = "z"; // w\n',
+        ).join(''),
+      ],
+      ['a comment that never closes', 'javascript', `/*\n${'let y = "z"; // w\n'.repeat(50_000)}`],
+      [
+        'HTML with an inline script of 500 KB',
+        'xml',
+        `<p>a</p>\n<script>\n${'let y = "z"; // w\n'.repeat(28_000)}</script>\n<p>b</p>\n`,
+      ],
+    ];
+    for (const [name, language, text] of hostile) {
+      const given = watchColourings();
+      let t = performance.now();
+      let state = open([language, text]);
+      const opening = performance.now() - t;
+      expect(Math.max(...given.map((each) => each.length)), `${name}: opening`).toBeLessThanOrEqual(
+        CODE_COLOURS_FROM_POINT_MOST,
+      );
+      given.length = 0;
+      collectAll(state);
+      expect(Math.max(0, ...given.map((each) => each.length)), `${name}: an idle step`).toBeLessThanOrEqual(
+        CODE_COLOURS_STEP_MOST,
+      );
+      state = meta(state, { settle: true });
+      const lines = text.split('\n').length;
+      state = see(state, 0, Math.floor(lines / 2));
+      if (lines < 3) {
+        const block = blocks(state)[0]!;
+        state = meta(state, {
+          visible: [{ pos: block.pos, from: text.length / 2, to: text.length / 2 + 200 }],
+        });
+      }
+      const middle = Math.floor((blocks(state)[0]!.from + blocks(state)[0]!.to) / 2);
+      const times: number[] = [];
+      for (let key = 0; key < 10; key += 1) {
+        given.length = 0;
+        t = performance.now();
+        state = typed(state, 0, middle + key, 'q');
+        times.push(performance.now() - t);
+        expect(Math.max(0, ...given.map((each) => each.length)), `${name}: a key`).toBeLessThanOrEqual(
+          CODE_COLOURS_FROM_POINT_MOST,
+        );
+        // And the idle work after it, a step at a time.
+        given.length = 0;
+        collectAll(state);
+        expect(
+          Math.max(0, ...given.map((each) => each.length)),
+          `${name}: idle after a key`,
+        ).toBeLessThanOrEqual(CODE_COLOURS_STEP_MOST);
+      }
+      times.sort((a, b) => a - b);
+      console.log(
+        `${name}: open ${opening.toFixed(1)} ms, key median ${times[5]!.toFixed(1)} ms, worst ${times[9]!.toFixed(1)} ms`,
+      );
+      expect(times[5], name).toBeLessThan(60);
+      expect(blocks(state)[0]!.to - blocks(state)[0]!.from).toBeLessThanOrEqual(CODE_COLOURS_WINDOW_MOST);
+      vi.restoreAllMocks();
+    }
   });
 
   it('cost a bounded time per key in a block of 200 KB and of 1 MB', () => {
@@ -353,7 +467,7 @@ describe('a code block whose grammar throws', () => {
   it('is said in words of its own', () => {
     // Written out here, and not taken from the code under test. The owner's to approve (C1).
     expect(CODE_NOT_COLOURED).toBe(
-      'Syntax colours are not shown in this code block. Colouring its code could not complete. Reopen the document to try again.',
+      'Syntax colours are not shown in this code block. Colouring its code took too long or could not complete. Reopen the document to try again.',
     );
   });
 
@@ -385,6 +499,51 @@ describe('a code block whose grammar throws', () => {
     expect(blocks(state)[0]!.failed).toBe(true);
     expect(failedMark(state, 0)).toBe(true);
     expect(painted(state, 0).filter(Boolean)).toHaveLength(0);
+  });
+
+  // The review of pull request 40: blocks paired by their order took the mark
+  // of a failing block to the block that took its place.
+  it('keeps its mark when the blocks are put in another order, and gives it to no other block', () => {
+    faulty();
+    const honest = 'const a = "b" + 1; // c\n'.repeat(50);
+    const thrown = 'function f() { return "THROWS"; }\n';
+    let state = open(['javascript', honest], ['javascript', thrown]);
+    state = state.apply(
+      state.tr.replaceWith(0, state.doc.content.size, [
+        blockNode('javascript', thrown),
+        blockNode('javascript', honest),
+      ]),
+    );
+    expect(blocks(state).map((block) => block.failed)).toEqual([true, false]);
+    expect(failedMark(state, 1)).toBe(false);
+    expect(painted(state, 1)).toEqual(oracle('javascript', honest));
+  });
+
+  // D183 as D193 keeps it, and the review of pull request 40: a grammar slow
+  // on what it is given would cost its time at every key.
+  it(`or takes longer than ${CODE_COLOURS_LONGEST} ms is shown without colours and marked, and not tried again`, () => {
+    // A clock the test holds: code that holds SLOW takes 300 ms on it.
+    let time = 0;
+    vi.spyOn(clock, 'now').mockImplementation(() => time);
+    const highlight = codeHighlighter.highlight.bind(codeHighlighter);
+    let slow = 0;
+    vi.spyOn(codeHighlighter, 'highlight').mockImplementation(((text: string, options: never) => {
+      if (text.includes('SLOW')) {
+        time += CODE_COLOURS_LONGEST + 100;
+        slow += 1;
+      }
+      return highlight(text, options);
+    }) as never);
+    const honest = 'const a = "b" + 1; // c\n'.repeat(50);
+    let state = open(['javascript', honest], ['javascript', 'let s = "SLOW";\n']);
+    expect(blocks(state).map((block) => block.failed)).toEqual([false, true]);
+    expect(failedMark(state, 1)).toBe(true);
+    expect(painted(state, 0)).toEqual(oracle('javascript', honest));
+    expect(slow).toBe(1);
+    state = typed(state, 1, 3, 'x');
+    state = typed(state, 0, 3, 'y');
+    expect(slow).toBe(1);
+    expect(failedMark(state, 1)).toBe(true);
   });
 });
 

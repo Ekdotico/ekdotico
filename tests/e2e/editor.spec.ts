@@ -3106,7 +3106,7 @@ test('a code block whose colouring throws is shown without colours, its header s
   test.setTimeout(120_000);
   // Written out here, and not taken from the code under test. The words are the owner's to approve (C1).
   const WORDS =
-    'Syntax colours are not shown in this code block. Colouring its code could not complete. Reopen the document to try again.';
+    'Syntax colours are not shown in this code block. Colouring its code took too long or could not complete. Reopen the document to try again.';
   await page.addInitScript(() => {
     const exec = RegExp.prototype.exec;
     RegExp.prototype.exec = function (this: RegExp, given: string) {

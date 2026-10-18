@@ -1,24 +1,35 @@
 // The syntax colours of code blocks (FR-ED-03), shown however long the block
 // (the owner's decision of 18 October 2026, register row D193, which retires
-// the limit of D133 and reduces the fallback of D183 to a grammar that throws).
+// the limit of D133 and reduces the fallback of D183).
 //
 // Only the lines near the visible part of a block are coloured: its window,
-// the visible lines and `CODE_COLOURS_MARGIN` lines either side. highlight.js
-// cannot resume a colouring, but a colouring that ends in the language's top
-// mode (`!result._top.parent`) ends where a fresh start is exact. Such restart
+// the visible lines and `CODE_COLOURS_MARGIN` lines either side, and never
+// more than `CODE_COLOURS_WINDOW_MOST` characters. highlight.js cannot resume
+// a colouring, but a colouring that ends in the language's top mode
+// (`!result._top.parent`) ends where a fresh start is exact. Such restart
 // points are collected from the start of each block, about every
 // `CODE_COLOURS_EVERY` lines, in idle slices; a window is coloured from the
 // point before it, and so as a colouring of the whole block would colour it.
-// Until the points reach a window it is coloured from its own first line, and
-// those provisional colours settle when they do.
+// Where that point is not yet collected, or is further back than
+// `CODE_COLOURS_FROM_POINT_MOST` characters, the window is coloured from its
+// own start: provisional colours, which settle when the points reach it.
 //
 // A key colours again only its own block: the points after the edit are
 // dropped, the code from the point before it to the next point is coloured
-// again, and if the grammar is back in its top mode there the later points
-// stand, moved by the edit; then the window. A change from another client
-// (which replaces the whole document) is found again by the order of the code
-// blocks and by comparing their text, and leaves a window alone when it lies
-// outside it.
+// again (where that is no longer than `CODE_COLOURS_FROM_POINT_MOST`), and if
+// the grammar is back in its top mode there the later points stand, moved by
+// the edit; then the window. A change from another client (which replaces the
+// whole document) is found again by the text of the code blocks and by their
+// order, and leaves a window alone when it lies outside it.
+//
+// So no colouring is given more than `CODE_COLOURS_FROM_POINT_MOST`
+// characters, and one step of the idle work no more than
+// `CODE_COLOURS_STEP_MOST`. Where the grammar does not come back to its top
+// mode at the end of a line within that many characters (a long comment, a
+// long single line, a long script inside HTML), no point is found past it,
+// and the windows past it keep their provisional colours. And no colouring
+// is used that took longer than `CODE_COLOURS_LONGEST` (D183): the block is
+// shown without colours, and its header says so.
 //
 // The colours are inline decorations with the classes highlight.js writes
 // (`hljs-*`), so the design package's code.css colours them as before.
@@ -44,10 +55,27 @@ export const CODE_COLOURS_EVERY = 64;
 /** The time of one slice of idle work, in milliseconds. */
 export const CODE_COLOURS_SLICE = 8;
 /**
+ * The longest window, in characters: 240 lines of 80. Chosen here, as are the
+ * two below, so that one key colours at most twice
+ * `CODE_COLOURS_FROM_POINT_MOST` characters, a few milliseconds of ordinary
+ * code; the owner's to approve.
+ */
+export const CODE_COLOURS_WINDOW_MOST = 20_000;
+/** The longest colouring, in characters: a window coloured from a point further back is provisional. */
+export const CODE_COLOURS_FROM_POINT_MOST = 40_000;
+/** The longest step of the idle work, in characters. */
+export const CODE_COLOURS_STEP_MOST = 16_000;
+/**
+ * The longest one colouring may take, in milliseconds, before the block is
+ * shown without colours (D183, 16 October 2026: 200, seven times the dearest
+ * ordinary colouring of 50 KB). Its length is bounded above, so only a
+ * grammar slow on what it is given gets here.
+ */
+export const CODE_COLOURS_LONGEST = 200;
+/**
  * A block longer than this, in characters, moves its window only when
  * scrolling stops (D193, V1, "in a very large block"). The row gives no
- * number: chosen here, the owner's to approve, as the length past which
- * drawing a moved window takes longer than a frame in the measurements.
+ * number: chosen here, the owner's to approve.
  */
 export const CODE_COLOURS_VERY_LARGE = 100_000;
 /** How long scrolling has been still before it counts as stopped, in milliseconds. */
@@ -55,12 +83,11 @@ const SCROLL_STOPPED = 150;
 
 /**
  * What the header of a code block says while its colours are not shown
- * because its grammar threw (D183 as D193 reduces it). Adapted from the
- * owner's words of 18 October 2026 (C1), with "took too long" removed now
- * that nothing is abandoned for its time; the owner's to approve.
+ * because its grammar threw or took too long (D183, as D193 keeps it). The
+ * owner's words of 18 October 2026 (C1).
  */
 export const CODE_NOT_COLOURED =
-  'Syntax colours are not shown in this code block. Colouring its code could not complete. Reopen the document to try again.';
+  'Syntax colours are not shown in this code block. Colouring its code took too long or could not complete. Reopen the document to try again.';
 
 /** A coloured piece: from, to (offsets in the block's text), and its classes. */
 export type Span = readonly [number, number, string];
@@ -82,6 +109,17 @@ export function linesBefore(text: string, at: number, lines: number) {
   at = text.lastIndexOf('\n', at - 1) + 1;
   for (let i = 0; i < lines && at > 0; i += 1) at = text.lastIndexOf('\n', at - 2) + 1;
   return at;
+}
+
+/**
+ * [from, to), shortened to `CODE_COLOURS_WINDOW_MOST` characters around what
+ * is seen, [seenFrom, seenTo), where it is longer.
+ */
+function bounded(from: number, to: number, seenFrom = from, seenTo = from): [number, number] {
+  if (to - from <= CODE_COLOURS_WINDOW_MOST) return [from, to];
+  const spare = Math.max(0, CODE_COLOURS_WINDOW_MOST - (seenTo - seenFrom));
+  const start = Math.max(from, seenFrom - Math.floor(spare / 2));
+  return [start, Math.min(to, start + CODE_COLOURS_WINDOW_MOST)];
 }
 
 // ── Colouring ───────────────────────────────────────────────────────────────
@@ -127,17 +165,23 @@ function walk(node: TokenNode, at: number, classes: string, out: Span[]): number
   return at;
 }
 
+/** The clock colourings are timed by; the tests replace it. */
+export const clock = { now: () => performance.now() };
+
 /**
  * Colours `text` from `from` to `to` in `language`, as a colouring that starts
  * at `from` in the top mode. `top`: whether it ends in the top mode. Throws
- * where the grammar threw: highlight.js catches it and says so in the result.
+ * where the grammar threw (highlight.js catches it and says so in the
+ * result), and where the colouring took longer than `CODE_COLOURS_LONGEST`.
  */
 export function colour(language: string, text: string, from: number, to: number, spans = true) {
+  const start = clock.now();
   const result = codeHighlighter.highlight(text.slice(from, to), {
     language,
     ignoreIllegals: true,
   }) as unknown as Inside;
   if (result.errorRaised) throw result.errorRaised;
+  if (clock.now() - start > CODE_COLOURS_LONGEST) throw new Error('The colouring took too long.');
   const out: Span[] = [];
   if (spans) walk(result._emitter.rootNode, from, '', out);
   return { spans: out, top: !result._top.parent };
@@ -148,22 +192,29 @@ export function colour(language: string, text: string, from: number, to: number,
 /**
  * The restart points of one text in one language: offsets of line starts
  * where a colouring from the start of the text is in the top mode, so that a
- * colouring from there is exact. Collected from the start, a step at a time;
- * a cache of the text, so shared by every state that holds the same text.
+ * colouring from any of them is exact. Collected from the start, a step at a
+ * time; a cache of the text, so shared by every state that holds the same text.
  */
 export class Restarts {
   points = [0];
   done = false;
   failed = false;
-  // Lines in the next step: doubled while the grammar is not back in its top
-  // mode, so that a long comment costs its length twice and not its square.
+  /** No point is found after the last within a step: collecting stops there. */
+  stuck = false;
+  // Lines in the next step, doubled while the grammar is not back in its top
+  // mode; and where the last step from the last point ended.
   private stride = CODE_COLOURS_EVERY;
+  private tried = 0;
   readonly language: string;
   readonly text: string;
   constructor(language: string, text: string) {
     this.language = language;
     this.text = text;
     if (!text.length) this.done = true;
+  }
+  /** Whether there is more to collect. */
+  get collecting() {
+    return !this.done && !this.failed && !this.stuck;
   }
   /** The last point at or before `at`. */
   before(at: number) {
@@ -177,22 +228,28 @@ export class Restarts {
     }
     return points[low]!;
   }
-  /** Whether the points have reached `at`. */
-  reached(at: number) {
-    return this.done || this.points[this.points.length - 1]! >= at;
-  }
-  /** Collects towards the next point. */
+  /** Collects towards the next point: one colouring of at most `CODE_COLOURS_STEP_MOST` characters. */
   step() {
-    if (this.done || this.failed) return;
+    if (!this.collecting) return;
     const from = this.points[this.points.length - 1]!;
-    const to = linesAfter(this.text, from, this.stride);
+    let to = linesAfter(this.text, from, this.stride);
+    if (to - from > CODE_COLOURS_STEP_MOST)
+      to = this.text.lastIndexOf('\n', from + CODE_COLOURS_STEP_MOST - 1) + 1;
+    if (to <= from || to <= this.tried) {
+      this.stuck = true;
+      return;
+    }
     try {
       const { top } = colour(this.language, this.text, from, to, false);
       if (to === this.text.length) this.done = true;
       else if (top) {
         this.points.push(to);
         this.stride = CODE_COLOURS_EVERY;
-      } else this.stride *= 2;
+        this.tried = 0;
+      } else {
+        this.tried = to;
+        this.stride *= 2;
+      }
     } catch {
       this.failed = true;
     }
@@ -208,19 +265,20 @@ export class Restarts {
     const next = new Restarts(this.language, text);
     const shift = newEnd - oldEnd;
     const kept = this.points.filter((point) => point <= start);
+    next.points = kept;
+    next.done = !text.length;
     // A point is a line start: the first after the edit that still is one.
     const after = this.points.findIndex((point) => point > oldEnd);
-    next.points = kept;
-    next.done = false;
-    next.stride = this.stride;
     if (after === -1) return { restarts: next, back: Infinity };
+    const from = kept[kept.length - 1]!;
     const back = this.points[after]! + shift;
-    if (!colour(this.language, text, kept[kept.length - 1]!, back, false).top) {
-      next.stride = CODE_COLOURS_EVERY;
+    if (back - from > CODE_COLOURS_FROM_POINT_MOST || !colour(this.language, text, from, back, false).top)
       return { restarts: next, back: Infinity };
-    }
     next.points = kept.concat(this.points.slice(after).map((point) => point + shift));
     next.done = this.done;
+    next.stuck = this.stuck;
+    next.stride = this.stride;
+    next.tried = this.tried && this.tried + shift;
     return { restarts: next, back };
   }
 }
@@ -233,26 +291,27 @@ export interface Block {
   readonly language: string;
   readonly text: string;
   readonly restarts: Restarts;
-  /** The window, offsets of line starts (or the end) in the text. */
+  /** The window, offsets in the text. */
   readonly from: number;
   readonly to: number;
   readonly spans: readonly Span[];
   /** Whether the window was coloured from a restart point. */
   readonly exact: boolean;
-  /** Whether a colouring threw: no colours until the document is opened again. */
+  /** Whether a colouring threw or took too long: no colours until the document is opened again. */
   readonly failed: boolean;
 }
 
-/** Colours a block's window from the point before it, or, where the points are far from it, from its own start. */
+/** Whether the window of `block` can be coloured from a restart point. */
+const nearPoint = (block: Pick<Block, 'restarts' | 'from' | 'to'>) =>
+  block.to - block.restarts.before(block.from) <= CODE_COLOURS_FROM_POINT_MOST;
+
+/** Colours a block's window from the point before it, or, where that is too far, from its own start. */
 function coloured(block: Omit<Block, 'spans' | 'exact'>): Block {
   if (block.failed || block.language === 'plaintext') return { ...block, spans: [], exact: true };
   const { restarts, from, to, text } = block;
-  // A point that far before the window is near enough: the cost is that of
-  // a window more.
-  const exact = restarts.reached(from - (to - from));
-  const start = exact ? restarts.before(from) : from;
+  const exact = nearPoint(block);
   try {
-    const { spans } = colour(block.language, text, start, to);
+    const { spans } = colour(block.language, text, exact ? restarts.before(from) : from, to);
     return { ...block, spans: spans.filter((span) => span[1] > from), exact };
   } catch {
     return { ...block, failed: true, spans: [], exact: true };
@@ -261,20 +320,13 @@ function coloured(block: Omit<Block, 'spans' | 'exact'>): Block {
 
 /** A block first met: its first lines, as if the top of it were seen. */
 function fresh(pos: number, language: string, text: string): Block {
-  return coloured({
-    pos,
-    language,
-    text,
-    restarts: new Restarts(language, text),
-    from: 0,
-    to: linesAfter(text, 0, 2 * CODE_COLOURS_MARGIN),
-    failed: false,
-  });
+  const [from, to] = bounded(0, linesAfter(text, 0, 2 * CODE_COLOURS_MARGIN));
+  return coloured({ pos, language, text, restarts: new Restarts(language, text), from, to, failed: false });
 }
 
 /** The block `was`, its text now `text`: the edit found by the text the two share at their ends. */
 function edited(was: Block, pos: number, text: string): Block {
-  // A block whose grammar threw is not coloured again until the document is opened again.
+  // A block whose colouring failed is not coloured again until the document is opened again.
   if (was.failed) return { ...was, pos, text, restarts: new Restarts(was.language, text) };
   const old = was.text;
   const most = Math.min(old.length, text.length);
@@ -296,7 +348,7 @@ function edited(was: Block, pos: number, text: string): Block {
   } catch {
     return { ...was, pos, text, restarts: new Restarts(was.language, text), spans: [], failed: true };
   }
-  const base = { pos, language: was.language, text, restarts, failed: was.failed || restarts.failed };
+  const base = { pos, language: was.language, text, restarts, failed: was.failed };
   // After the window, which does not reach the end: nothing of it changes.
   if (start >= was.to && was.to < old.length) return { ...was, ...base };
   // Before it, and the grammar back in its top mode before it: the same
@@ -313,20 +365,29 @@ function edited(was: Block, pos: number, text: string): Block {
   // In it: the window stays where it was, and is coloured again. (It does
   // not grow to hold an edit that runs past it: the page measures what is
   // visible after every change, and moves it.)
-  const from = linesBefore(text, Math.min(was.from, text.length), 0);
-  const to =
-    was.to === old.length
-      ? text.length
-      : linesBefore(text, Math.min(text.length, Math.max(from, was.to + shift)), 0);
-  return coloured({ ...base, from, to });
+  const from = Math.min(was.from, text.length);
+  const to = was.to === old.length ? text.length : Math.min(text.length, Math.max(from, was.to + shift));
+  return coloured({ ...base, ...bounds(from, to) });
 }
+const bounds = (from: number, to: number) => {
+  const [a, b] = bounded(from, to);
+  return { from: a, to: b };
+};
 
-/** Where the window of `block` goes for the visible lines [seenFrom, seenTo), or null where it stays. */
+/** Where the window of `block` goes for the visible part [seenFrom, seenTo), or null where it stays. */
 export function moved(block: Block, seenFrom: number, seenTo: number): [number, number] | null {
   const { text } = block;
-  const near = [linesBefore(text, seenFrom, CODE_COLOURS_NEAR), linesAfter(text, seenTo, CODE_COLOURS_NEAR)];
-  if (block.from <= near[0]! && block.to >= near[1]!) return null;
-  return [linesBefore(text, seenFrom, CODE_COLOURS_MARGIN), linesAfter(text, seenTo, CODE_COLOURS_MARGIN)];
+  const quarter = CODE_COLOURS_WINDOW_MOST / 4;
+  const nearFrom = Math.max(linesBefore(text, seenFrom, CODE_COLOURS_NEAR), seenFrom - quarter);
+  const nearTo = Math.min(linesAfter(text, seenTo, CODE_COLOURS_NEAR), seenTo + quarter);
+  if (block.from <= nearFrom && block.to >= nearTo) return null;
+  const to = bounded(
+    linesBefore(text, seenFrom, CODE_COLOURS_MARGIN),
+    linesAfter(text, seenTo, CODE_COLOURS_MARGIN),
+    seenFrom,
+    seenTo,
+  );
+  return to[0] === block.from && to[1] === block.to ? null : to;
 }
 
 // ── The plugin ──────────────────────────────────────────────────────────────
@@ -355,11 +416,22 @@ function codeBlocks(doc: PMNode) {
   return found;
 }
 
-function decorationsOf(block: Block, size: number) {
-  const start = block.pos + 1;
-  if (block.failed) return [Decoration.node(block.pos, block.pos + size, {}, { codeColoursFailed: true })];
-  return block.spans.map(([from, to, classes]) =>
-    Decoration.inline(start + from, start + to, { class: classes }),
+/**
+ * The decorations of every block, made afresh: their number is bounded by
+ * the windows, and taking pieces out of a set one by one costs the square of
+ * their number.
+ */
+function decorationsOf(doc: PMNode, blocks: readonly Block[]) {
+  return DecorationSet.create(
+    doc,
+    blocks.flatMap((block) => {
+      const start = block.pos + 1;
+      if (block.failed)
+        return [Decoration.node(block.pos, start + block.text.length + 1, {}, { codeColoursFailed: true })];
+      return block.spans.map(([from, to, classes]) =>
+        Decoration.inline(start + from, start + to, { class: classes }),
+      );
+    }),
   );
 }
 
@@ -377,86 +449,82 @@ function touched(tr: Transaction, from: number, to: number) {
   return false;
 }
 
+/** The old blocks each new one continues: the same text first, then the rest in order. */
+function paired(old: readonly Block[], now: readonly string[]) {
+  const pairs = new Array<Block | undefined>(now.length);
+  const left = new Set(old);
+  const byText = new Map<string, Block[]>();
+  for (const block of old) byText.set(block.text, [...(byText.get(block.text) ?? []), block]);
+  now.forEach((text, at) => {
+    const same = byText.get(text)?.find((block) => left.has(block));
+    if (same) left.delete((pairs[at] = same));
+  });
+  const rest = [...left];
+  now.forEach((_, at) => (pairs[at] ??= rest.shift()));
+  return pairs;
+}
+
 /**
  * The plugin, given how a block's language is read from its attribute
  * (`language`, which names one of the list or `plaintext`).
  */
 export function codeColours(language: (given: unknown) => string) {
-  const read = (node: PMNode) => ({ language: language(node.attrs.language), text: node.textContent });
-
   function rematch(prev: CodeColoursState, tr: Transaction) {
     const now = codeBlocks(tr.doc);
-    const old = prev.blocks;
-    const pairs = new Array<Block | undefined>(now.length);
-    if (now.length === old.length) now.forEach((_, at) => (pairs[at] = old[at]));
-    else {
-      // Blocks added or taken away: the same text first, then by order.
-      const left = new Set(old);
-      const byText = new Map<string, Block[]>();
-      for (const block of old) byText.set(block.text, [...(byText.get(block.text) ?? []), block]);
-      now.forEach(({ node }, at) => {
-        const same = byText.get(node.textContent)?.find((block) => left.has(block));
-        if (same) left.delete((pairs[at] = same));
-      });
-      const rest = [...left];
-      now.forEach((_, at) => (pairs[at] ??= rest.shift()));
-    }
-    let decorations = prev.decorations.map(tr.mapping, tr.doc);
+    const texts = now.map(({ node }) => node.textContent);
+    const pairs = paired(prev.blocks, texts);
+    let changed = now.length !== prev.blocks.length;
     const blocks = now.map(({ pos, node }, at): Block => {
       const was = pairs[at];
-      const { language, text } = read(node);
-      let block: Block;
-      if (!was || was.language !== language) block = fresh(pos, language, text);
-      else if (was.text === text) {
-        block = was.pos === pos ? was : { ...was, pos };
-        if (!touched(tr, was.pos, was.pos + node.nodeSize)) return block;
-      } else block = edited(was, pos, text);
-      decorations = redraw(decorations, tr.doc, block, node.nodeSize);
-      return block;
+      const lang = language(node.attrs.language);
+      const text = texts[at]!;
+      changed ||= was !== prev.blocks[at];
+      if (!was || was.language !== lang) {
+        changed = true;
+        return fresh(pos, lang, text);
+      }
+      if (was.text === text) {
+        changed ||= touched(tr, was.pos, was.pos + node.nodeSize);
+        return was.pos === pos ? was : { ...was, pos };
+      }
+      changed = true;
+      return edited(was, pos, text);
     });
-    return { blocks, decorations };
-  }
-
-  function redraw(decorations: DecorationSet, doc: PMNode, block: Block, size: number) {
-    const stale = decorations.find(block.pos + 1, block.pos + size - 1);
-    return decorations.remove(stale).add(doc, decorationsOf(block, size));
+    return {
+      blocks,
+      decorations: changed ? decorationsOf(tr.doc, blocks) : prev.decorations.map(tr.mapping, tr.doc),
+    };
   }
 
   return new Plugin<CodeColoursState>({
     key: codeColoursKey,
     state: {
       init(_, state) {
-        const blocks = codeBlocks(state.doc).map(({ pos, node }) => {
-          const { language: lang, text } = read(node);
-          return fresh(pos, lang, text);
-        });
-        const decorations = DecorationSet.create(
-          state.doc,
-          blocks.flatMap((block) => decorationsOf(block, state.doc.nodeAt(block.pos)!.nodeSize)),
+        const blocks = codeBlocks(state.doc).map(({ pos, node }) =>
+          fresh(pos, language(node.attrs.language), node.textContent),
         );
-        return { blocks, decorations };
+        return { blocks, decorations: decorationsOf(state.doc, blocks) };
       },
       apply(tr, prev) {
         const meta = tr.getMeta(codeColoursKey) as Meta | undefined;
         if (!tr.docChanged && !meta) return prev;
-        let { blocks, decorations } = tr.docChanged ? rematch(prev, tr) : prev;
-        if (!meta) return { blocks, decorations };
-        const size = (block: Block) => tr.doc.nodeAt(block.pos)!.nodeSize;
-        blocks = blocks.map((block) => {
-          let next = block;
+        const next = tr.docChanged ? rematch(prev, tr) : prev;
+        if (!meta) return next;
+        let changed = false;
+        const blocks = next.blocks.map((block) => {
+          let after = block;
           if ('settle' in meta) {
-            if (block.restarts.failed && !block.failed) next = { ...block, failed: true, spans: [] };
-            else if (!block.exact && block.restarts.reached(block.from - (block.to - block.from)))
-              next = coloured(block);
+            if (block.restarts.failed && !block.failed) after = { ...block, failed: true, spans: [] };
+            else if (!block.exact && nearPoint(block)) after = coloured(block);
           } else {
             const seen = meta.visible.find((each) => each.pos === block.pos);
             const to = seen && moved(block, seen.from, seen.to);
-            if (to) next = coloured({ ...block, from: to[0], to: to[1] });
+            if (to) after = coloured({ ...block, from: to[0], to: to[1] });
           }
-          if (next !== block) decorations = redraw(decorations, tr.doc, next, size(next));
-          return next;
+          changed ||= after !== block;
+          return after;
         });
-        return { blocks, decorations };
+        return changed ? { blocks, decorations: decorationsOf(tr.doc, blocks) } : next;
       },
     },
     props: {
@@ -471,7 +539,7 @@ export function codeColours(language: (given: unknown) => string) {
 /** Runs every step of the idle work at once (for the tests: the page runs it in slices). */
 export function collectAll(state: EditorState) {
   for (const block of codeColoursKey.getState(state)!.blocks)
-    while (!block.failed && !block.restarts.done && !block.restarts.failed) block.restarts.step();
+    while (!block.failed && block.restarts.collecting) block.restarts.step();
 }
 
 function watch(view: EditorView) {
@@ -518,13 +586,10 @@ function watch(view: EditorView) {
       (a, b) => Number(a.exact) - Number(b.exact),
     );
     for (const block of blocks) {
-      while (!block.failed && !block.restarts.done && !block.restarts.failed && performance.now() < until)
-        block.restarts.step();
+      while (!block.failed && block.restarts.collecting && performance.now() < until) block.restarts.step();
     }
     const settle = blocks.some(
-      (block) =>
-        (block.restarts.failed && !block.failed) ||
-        (!block.exact && block.restarts.reached(block.from - (block.to - block.from))),
+      (block) => (block.restarts.failed && !block.failed) || (!block.exact && nearPoint(block)),
     );
     if (settle) view.dispatch(view.state.tr.setMeta(codeColoursKey, { settle: true } satisfies Meta));
     later();
@@ -533,7 +598,7 @@ function watch(view: EditorView) {
     if (idle) return;
     const left = codeColoursKey
       .getState(view.state)!
-      .blocks.some((block) => !block.restarts.done && !block.restarts.failed && !block.failed);
+      .blocks.some((block) => !block.failed && block.restarts.collecting);
     if (!left) return;
     idle = idleCallbacks ? requestIdleCallback(work, { timeout: 1000 }) : window.setTimeout(work, 1);
   }
