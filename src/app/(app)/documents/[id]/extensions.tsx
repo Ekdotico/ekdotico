@@ -1084,8 +1084,18 @@ export function holdBinding(
   // the shared document does not. Where the server would have refused it,
   // the text, deletions alone, is written with it once the server would not.
   const remend = held(mend, false);
-  binding._prosemirrorChanged = (...given) =>
-    unrepaired ? undefined : shaped ? remend() : changed(...given);
+  binding._prosemirrorChanged = (...given) => {
+    // Where the text cannot be edited, nothing is written back: the plugin of
+    // the binding calls this at each change of the view, and what it writes
+    // here skips the checks of `mend` (5 MB, the shape of the document). The
+    // text is made again from the shared document, and mended with them, when
+    // it can be edited (the function returned below).
+    if (!writes()) {
+      owed = true;
+      return undefined;
+    }
+    return unrepaired ? undefined : shaped ? remend() : changed(...given);
+  };
   return () => {
     if (!owed || !writes() || failed || unrepaired) return;
     owed = false;

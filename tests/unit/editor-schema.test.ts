@@ -2050,6 +2050,37 @@ describe('the tables in the cells of a table (R32)', () => {
         expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
       });
 
+      // The review of pull request 44: the plugin of the binding writes the text back at each change of the
+      // view, and that skipped the checks of the mending (5 MB, the shape of the document). A click changes
+      // no node the binding made, which the library skips, so the change here is one that got past the
+      // filter of the editor and is in the text: it is not written, and the text is made again, mended, later.
+      it('writes nothing at a change of the view either, and has what is owed mended, with its checks, when it can be edited', async () => {
+        const document = holding(1);
+        const editor = open(document, false);
+        const peer = peerOf(document);
+        ((peer.fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).push([paragraph('not a row')]);
+        peer.send();
+        const arrived = bytes(document);
+        const written: unknown[] = [];
+        document.on('update', (_update: Uint8Array, origin: unknown) => {
+          if (origin !== 'peer') written.push(origin);
+        });
+        // As the plugin of the binding does at each change of the view.
+        const view = editor.typed();
+        editor.binding._prosemirrorChanged(editor.text());
+        view.dispatch(view.state.tr.insertText('typed ', 1));
+        editor.binding._prosemirrorChanged(view.state.doc);
+        expect(written).toEqual([]);
+        expect(bytes(document)).toBe(arrived);
+        expect(editor.fragment.toString()).toContain('not a row');
+        editor.setEditable(true);
+        await new Promise((done) => setTimeout(done, 0));
+        expect(editor.mended()).toBeGreaterThan(0);
+        expect(editor.fragment.toString()).not.toContain('not a row');
+        expect(editor.fragment.toString()).not.toContain('typed');
+        expect(yXmlFragmentToProseMirrorRootNode(editor.fragment, schema).eq(editor.text())).toBe(true);
+      });
+
       it('mends what is owed before what the member types is written, so that it is not the member’s to undo', async () => {
         const document = holding(1);
         const editor = open(document, false);
