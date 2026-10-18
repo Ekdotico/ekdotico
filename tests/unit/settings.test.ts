@@ -272,6 +272,16 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(() => loadSettings({ ...env, COLLAB_ERROR_AFTER_MS: '0' })).toThrow(/COLLAB_ERROR_AFTER_MS/);
   });
 
+  // FR-ED-41: "at least once every 60 seconds": a setting may make it more often and never less.
+  it('re-checks every open connection every 60 seconds, and never less often', () => {
+    expect(settings.collabRecheckMs).toBe(60_000);
+    expect(loadSettings({ ...env, COLLAB_RECHECK_MS: '3000' }).collabRecheckMs).toBe(3000);
+    expect(loadSettings({ ...env, COLLAB_RECHECK_MS: '60000' }).collabRecheckMs).toBe(60_000);
+    for (const value of ['60001', '120000', '0', '-1', '1s', '1.5']) {
+      expect(() => loadSettings({ ...env, COLLAB_RECHECK_MS: value }), value).toThrow(/COLLAB_RECHECK_MS/);
+    }
+  });
+
   it('refuses a period of the storing too short for the write to fit in it', () => {
     expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '999' })).toThrow(/COLLAB_STORE_DELAY_MS/);
     expect(() => loadSettings({ ...env, COLLAB_STORE_DELAY_MS: '0' })).toThrow(/COLLAB_STORE_DELAY_MS/);

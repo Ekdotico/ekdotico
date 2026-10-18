@@ -2463,7 +2463,11 @@ describe('the limit of messages that carry an update: 600 in any minute for each
           asked.sockets += 1;
         }
         send(data: Parameters<WebSocket['send']>[0]) {
-          asked.frames += 1;
+          // What is asked of the server is the opening and the steps of a synchronisation. The
+          // client's awareness (FR-ED-17: its cursor, and the request for the others') goes with
+          // every opening, is no request for the document, and is not counted.
+          const { type } = frame(new Uint8Array(data as ArrayBuffer));
+          if (type !== 1 && type !== 3) asked.frames += 1;
           super.send(data);
         }
       }
@@ -2760,6 +2764,9 @@ describe('what is recorded for a connection, and a role that cannot edit (NFR-SE
         // Every permission of FR-ED-44 but the one the Owner never holds.
         permissions: Object.keys(PERMISSIONS).filter((permission) => permission !== 'document.leave'),
         sessionId: session.id,
+        // The place of NFR-PE-05 and the slot of the cursor (FR-ED-17), which are the server's own bookkeeping
+        // and not of the record of NFR-SE-03 (a): tests/integration/presence.test.ts.
+        place: { documentId: id, slot: 1, name: expect.any(String) },
       });
     } finally {
       await local.stop();

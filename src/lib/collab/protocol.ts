@@ -5,6 +5,7 @@
 //
 // Nothing here reads a setting, the database, or anything of Next.js or of
 // Node.js: it loads in a browser as it is.
+import { ROLES, type DocumentRole } from '../documents/permissions.ts';
 import type { Limit } from './shape.ts';
 
 /**
@@ -61,17 +62,30 @@ export const REFUSAL = {
    * as one message, which is refused in the same way while the minute lasts.
    */
   LIMITED: 'limited',
-  /** Reserved for the limit of ten connections (NFR-PE-05, FR-ED-18); not sent yet. */
+  /**
+   * The document holds its limit of connections (NFR-PE-05, FR-ED-18), and
+   * this one was not opened: the reason of the refusal of a document's
+   * authentication, sent after the authorisation and before any state of the
+   * document. The client shows the fixed statement of FR-ED-18, neither the
+   * reconnecting state nor the error state, and asks again no more often than
+   * once in 30 seconds.
+   */
   CAPACITY: 'capacity',
   /**
    * The account's access to the document has ended (FR-ED-40, FR-ED-41). It is
-   * the reason of the close of an open connection, sent so far for one event:
-   * the document was deleted (FR-ED-40 (c)). The client does not try again,
+   * the reason of the close of an open connection, sent for the deletion of
+   * the document (FR-ED-40 (c)) and, by the re-check of FR-ED-41, for a role
+   * that is gone and a document that is deleted. The client does not try again,
    * discards what the server had not acknowledged, leaves the document, and
    * states that access has ended, as no fault (FR-ED-41).
    */
   ACCESS_ENDED: 'access-ended',
-  /** Reserved for the end of the session the connection was opened under (NFR-SE-03 (b), (e)); not sent yet. */
+  /**
+   * The session the connection was opened under no longer stands (NFR-SE-03
+   * (e), FR-ED-41): its row is gone, or expired under either period of
+   * FR-AU-84, or its account is deleted. Sent by the re-check, which alone
+   * detects an expiry. The client does as for `access-ended`.
+   */
   SESSION_ENDED: 'session-ended',
   /**
    * What this client sent would take the document past one of its three
@@ -135,3 +149,38 @@ export const LIMIT_REFUSAL = {
   codeBytes: REFUSAL.CODE_BLOCK_TOO_LARGE,
   blocks: REFUSAL.TOO_MANY_BLOCKS,
 } as const satisfies Record<Limit, Refusal>;
+
+/**
+ * FR-ED-40 (b), (g), FR-ED-41: the role of an open connection changed, and
+ * the connection stays open. The server sends this as a stateless message
+ * (`Connection.sendStateless`); the editor makes itself editable or read-only
+ * and says the role. `canEdit` is what the server now holds of the connection:
+ * it is read-only at the protocol (NFR-SE-03 (a)) where it is false.
+ */
+export interface RoleNotice {
+  role: DocumentRole;
+  canEdit: boolean;
+}
+
+export function roleNotice({ role, canEdit }: RoleNotice): string {
+  return JSON.stringify({ kind: 'role', role, canEdit });
+}
+
+/**
+ * The notice a stateless message holds, or null for anything else: text that
+ * is not JSON, another kind, a role that is not one, a field more or fewer.
+ * Read field by field. A client sends this server nothing of the kind and no
+ * peer is relayed it, so it comes from the server alone.
+ */
+export function readRoleNotice(payload: string): RoleNotice | null {
+  let read: unknown;
+  try {
+    read = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (typeof read !== 'object' || read === null || Array.isArray(read)) return null;
+  const { kind, role, canEdit, ...rest } = read as Record<string, unknown>;
+  if (kind !== 'role' || Object.keys(rest).length > 0 || typeof canEdit !== 'boolean') return null;
+  return (ROLES as readonly unknown[]).includes(role) ? { role: role as DocumentRole, canEdit } : null;
+}
