@@ -223,7 +223,9 @@ function Text({
         role: 'textbox',
         'aria-multiline': 'true',
         'aria-label': 'Document text',
-        'aria-describedby': keys,
+        // A browser that cannot edit is not told the keys of a writer
+        // (owner's decision of 18 October 2026, D185).
+        ...(reads ? {} : { 'aria-describedby': keys }),
         'aria-readonly': String(readOnly.current),
         tabindex: '0',
       }),
@@ -272,14 +274,16 @@ function Text({
 
   return (
     <Editable.Provider value={editable}>
-      <p id={keys} className={pageStyles.meta}>
-        {KEYS}
-      </p>
+      {reads ? null : (
+        <p id={keys} className={pageStyles.meta}>
+          {KEYS}
+        </p>
+      )}
       {/* NFR-IC-19: a change that was not made is said to be so, in words that
           are seen, here, and heard, from the region below, when the screen
           reader next falls silent. No fault of the writer's, and the focus
           stays in the text. */}
-      {over ? (
+      {over && !reads ? (
         <FormFault tone="neutral" announce="polite">
           {over.split('\n').map((sentence) => (
             <p key={sentence}>{sentence}</p>

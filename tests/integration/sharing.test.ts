@@ -231,7 +231,12 @@ describe('the uniform answer (FR-ED-21)', () => {
     expect(reviewer.status).toBe(422);
     expect((await reviewer.json()).error.code).toBe('role_not_offered');
     expect((await invite(owner.cookie, id, ['not an address'])).status).toBe(422);
-    expect((await invite(owner.cookie, id, [])).status).toBe(422);
+    const empty = await invite(owner.cookie, id, []);
+    expect(empty.status).toBe(422);
+    // The owner's words of 18 October 2026, written out here: what was not done comes first.
+    expect((await empty.json()).error.message).toBe(
+      'No invitation was created. Enter 1 to 10 email addresses, one on each line, and choose a role.',
+    );
     expect(await invitationsOf(id)).toEqual([]);
   });
 });
