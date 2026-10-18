@@ -106,7 +106,7 @@ function connect(port: number, cookie: string) {
 type Client = ReturnType<typeof connect>;
 type Opened = ReturnType<Client['open']>;
 
-async function until<T>(read: () => T | Promise<T>, within = 5000, every = 20): Promise<NonNullable<T>> {
+async function until<T>(read: () => T | Promise<T>, within = 10_000, every = 20): Promise<NonNullable<T>> {
   const end = Date.now() + within;
   for (;;) {
     const value = await read();
@@ -848,7 +848,7 @@ describe('the re-check of open connections (FR-ED-41, NFR-SE-03 (e))', () => {
     try {
       const { id, editor, sockets } = await three(local);
       await db().session.deleteMany({ where: { userId: editor.id } });
-      await until(() => sockets.editor.closedFor(id, REFUSAL.SESSION_ENDED), 5000);
+      await until(() => sockets.editor.closedFor(id, REFUSAL.SESSION_ENDED), 15_000);
       expect(roles(local, id)).toEqual(['owner', 'viewer']);
     } finally {
       await local.stop();

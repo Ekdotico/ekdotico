@@ -3915,14 +3915,15 @@ test('a session that has ended is stated once, and the page does not connect aga
 }) => {
   await enter(page);
   await openNew(page);
-  // The connection is lost first, and the session ended after: the server's re-check (FR-ED-41,
-  // 3 seconds in these tests) cannot end it, so this is the other way a page learns that its
-  // session has ended. Every new handshake is refused, and the page must not go on asking.
-  await stopCollab();
   const other = await context.newPage();
   await other.goto('/');
   await other.getByRole('button', { name: 'Sign out' }).click();
   await expect(other).toHaveURL(/\/sign-in/);
+
+  // The connection is lost here, at once: the server's re-check (FR-ED-41, 3 seconds in these
+  // tests) would end it too, and the test after this one is that. Every new handshake is then
+  // refused, and the page must not go on asking.
+  await stopCollab();
   await startCollab();
   const statement = page.getByRole('status').filter({ hasText: 'The session has ended' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
