@@ -12,6 +12,13 @@ import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './ident
 
 // Every reading of a session by a route, counted: none is made for a request
 // of another origin. The functions themselves are the application's own.
+// `after` of Next.js exists only inside a request of the framework; the
+// invitation routes leave their email to it. Nothing it is given runs here.
+vi.mock('next/server', async (original) => ({
+  ...(await original<typeof import('next/server')>()),
+  after: () => {},
+}));
+
 const sessionReads = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../../src/lib/auth/session.ts', async (original) => {
   const actual = await original<typeof import('../../src/lib/auth/session.ts')>();
@@ -33,6 +40,7 @@ const { auth, db, valkey } = await load();
 const { proxy } = await import('../../src/proxy.ts');
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/onboarding.ts');
+const { hashToken } = await import('../../src/lib/token.ts');
 // Every handler that changes state and must check the origin, by `route METHOD`,
 // read from the route files (tests/routes.ts): a new one has no case below, and fails.
 const handlers = new Map(await mustCheckOrigin());
@@ -70,7 +78,7 @@ let people = 0;
 async function person() {
   const email = `owner${++people}@example.com`;
   const id = await createAccount(auth, email);
-  return { id, cookie: cookiesOf(await signIn(auth, email)) };
+  return { id, email, cookie: cookiesOf(await signIn(auth, email)) };
 }
 type Person = Awaited<ReturnType<typeof person>>;
 
@@ -89,9 +97,34 @@ interface Case {
   /** The state the request would change, read from the database. */
   state: (owner: Person, id: string) => Promise<unknown>;
   status: number;
+  /** The segments of the path, where they are more than the document's identifier. */
+  params?: (id: string) => Record<string, string>;
 }
 
 const live = async (owner: Person) => (await createDocument(owner.id)).id;
+
+// FR-ED-21: an invitation of a document of `from`, to `to`, pending, with a known token.
+const TOKEN = 'A'.repeat(43);
+async function invitation(from: string, to: string, token = TOKEN) {
+  const documentId = (await createDocument(from)).id;
+  const { id } = await db().documentInvitation.create({
+    data: {
+      documentId,
+      email: to,
+      role: 'VIEWER',
+      invitedById: from,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      // Sent: an invitation sent to no one cannot be answered (FR-ED-37).
+      emailClaimedAt: new Date(),
+    },
+  });
+  return { documentId, id };
+}
+/** Two identifiers carried as one, for a case whose path has two. */
+const pair = (id: string) => id.split(' ') as [string, string];
+const invitationState = async (id: string) =>
+  (await db().documentInvitation.findUniqueOrThrow({ where: { id: pair(id)[1] } })).state;
 
 const CASES: Case[] = [
   {
@@ -142,6 +175,74 @@ const CASES: Case[] = [
       }),
     status: 200,
   },
+  {
+    handler: 'src/app/api/documents/[id]/invitations/route.ts POST',
+    body: { emails: ['someone@example.com'], role: 'viewer' },
+    arrange: live,
+    path: (id) => `/api/documents/${id}/invitations`,
+    state: (_, id) => db().documentInvitation.count({ where: { documentId: id } }),
+    status: 201,
+  },
+  {
+    // It reads no body.
+    handler: 'src/app/api/documents/[id]/invitations/[invitationId]/route.ts DELETE',
+    arrange: async (owner) => {
+      const made = await invitation(owner.id, 'someone@example.com', `${TOKEN.slice(1)}B`);
+      return `${made.documentId} ${made.id}`;
+    },
+    path: (id) => `/api/documents/${pair(id)[0]}/invitations/${pair(id)[1]}`,
+    params: (id) => ({ id: pair(id)[0], invitationId: pair(id)[1] }),
+    state: (_, id) => invitationState(id),
+    status: 200,
+  },
+  {
+    handler: 'src/app/api/documents/[id]/invitations/[invitationId]/resend/route.ts POST',
+    arrange: async (owner) => {
+      const made = await invitation(owner.id, 'someone@example.com', `${TOKEN.slice(1)}C`);
+      return `${made.documentId} ${made.id}`;
+    },
+    path: (id) => `/api/documents/${pair(id)[0]}/invitations/${pair(id)[1]}/resend`,
+    params: (id) => ({ id: pair(id)[0], invitationId: pair(id)[1] }),
+    state: (_, id) => invitationState(id),
+    status: 201,
+  },
+  {
+    // The session's account is the one invited, by another account's document.
+    handler: 'src/app/api/invitations/[token]/[answer]/route.ts POST',
+    arrange: async (owner) => {
+      const made = await invitation((await person()).id, owner.email, `${TOKEN.slice(1)}D`);
+      return `${made.documentId} ${made.id}`;
+    },
+    path: () => `/api/invitations/${TOKEN.slice(1)}D/accept`,
+    params: () => ({ token: `${TOKEN.slice(1)}D`, answer: 'accept' }),
+    state: (_, id) => invitationState(id),
+    status: 200,
+  },
+  {
+    handler: 'src/app/api/invitations/received/[invitationId]/[answer]/route.ts POST',
+    arrange: async (owner) => {
+      const made = await invitation((await person()).id, owner.email, `${TOKEN.slice(1)}E`);
+      return `${made.documentId} ${made.id}`;
+    },
+    path: (id) => `/api/invitations/received/${pair(id)[1]}/decline`,
+    params: (id) => ({ invitationId: pair(id)[1], answer: 'decline' }),
+    state: (_, id) => invitationState(id),
+    status: 200,
+  },
+  {
+    handler: 'src/app/api/notifications/[id]/route.ts PATCH',
+    // A notification the list shows: of a pending invitation sent to the session's account.
+    arrange: async (owner) => {
+      const made = await invitation((await person()).id, owner.email, `${TOKEN.slice(1)}F`);
+      const notification = await db().notification.create({
+        data: { recipientId: owner.id, kind: 'document_invitation', payload: { invitationId: made.id } },
+      });
+      return notification.id;
+    },
+    path: (id) => `/api/notifications/${id}`,
+    state: async (_, id) => (await db().notification.findUniqueOrThrow({ where: { id } })).readAt,
+    status: 204,
+  },
 ];
 
 afterAll(async () => {
@@ -172,7 +273,8 @@ describe('a request of another origin, made to the handler itself (NFR-SE-17 (c)
         if (each.body !== undefined) sent.set('content-type', 'application/json');
         for (const [name, value] of Object.entries(headers)) if (value !== undefined) sent.set(name, value);
         const body = each.body === undefined ? undefined : JSON.stringify(each.body);
-        return call(new Request(ORIGIN + each.path(id), { method, headers: sent, body }), context(id));
+        const params = each.params ? { params: Promise.resolve(each.params(id)) } : context(id);
+        return call(new Request(ORIGIN + each.path(id), { method, headers: sent, body }), params as never);
       };
       const before = await each.state(owner, id);
       const logged = await entries();

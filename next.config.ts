@@ -9,13 +9,16 @@ import { COMPANION_HEADERS, STATIC_POLICY } from './src/lib/csp.ts';
  * hold (FR-AU-81 asks it of the link of a lock email; the owner's decision of
  * 8 October 2026 asks it of every page of a token). A page that joins the
  * proxy's list joins this one: tests/unit/token-pages.test.ts holds the two
- * together.
+ * together. So does the one page of a token that needs a session, that of a
+ * document invitation's link (FR-ED-21), named apart below.
  */
+export const SESSION_TOKEN_PAGES = ['/invitations/:token'];
 export const TOKEN_PAGES = [
   '/sign-in/link/:token',
   '/sign-up/:token',
   '/reset-password/:token',
   '/confirm-address/:token',
+  ...SESSION_TOKEN_PAGES,
 ];
 
 const onLocalhost = (url: string | undefined) =>

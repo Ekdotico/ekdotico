@@ -28,6 +28,9 @@ export interface DocumentItem {
   recording: 'RECORDED' | 'UNRECORDED';
   /** ISO 8601, UTC. */
   createdAt: string;
+  /** Whether the account's role holds the permission (FR-ED-44); a document shared with it may hold neither. */
+  canRename: boolean;
+  canDelete: boolean;
 }
 
 /** Where the list of deleted documents is (FR-ED-36): the application's choice, the Docs name no page. */
@@ -266,22 +269,26 @@ export function Documents({
                   </InBrowser>
                 </Stack>
                 <Cluster gap={2}>
-                  <Button
-                    variant="quiet"
-                    disabled={!ready}
-                    aria-describedby={`title-${document.id}`}
-                    onClick={() => setRenaming(document)}
-                  >
-                    Rename
-                  </Button>
-                  <Button
-                    variant="quiet"
-                    disabled={!ready}
-                    aria-describedby={`title-${document.id}`}
-                    onClick={() => setDeleting(document)}
-                  >
-                    Delete document
-                  </Button>
+                  {document.canRename ? (
+                    <Button
+                      variant="quiet"
+                      disabled={!ready}
+                      aria-describedby={`title-${document.id}`}
+                      onClick={() => setRenaming(document)}
+                    >
+                      Rename
+                    </Button>
+                  ) : null}
+                  {document.canDelete ? (
+                    <Button
+                      variant="quiet"
+                      disabled={!ready}
+                      aria-describedby={`title-${document.id}`}
+                      onClick={() => setDeleting(document)}
+                    >
+                      Delete document
+                    </Button>
+                  ) : null}
                 </Cluster>
               </Cluster>
             </li>

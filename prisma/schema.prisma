@@ -51,6 +51,11 @@ model User {
   personalWorkspace Workspace? @relation("PersonalWorkspace")
   // FR-ED-19: the documents the account is the Owner of.
   ownedDocuments    Document[] @relation("DocumentOwner")
+  // FR-ED-19, FR-ED-21, FR-ED-42: the roles held through an accepted
+  // invitation, the invitations made, and the notifications received.
+  collaborations    DocumentCollaborator[]
+  invitationsMade   DocumentInvitation[]   @relation("InvitedBy")
+  notifications     Notification[]
 }
 
 model Session {
@@ -276,7 +281,95 @@ model Document {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   owner     User      @relation("DocumentOwner", fields: [ownerId], references: [id], onDelete: Restrict)
 
+  collaborators DocumentCollaborator[]
+  invitations   DocumentInvitation[]
+
   @@index([ownerId, deletedAt])
+}
+
+// ─── Sharing (FR-ED-19, FR-ED-21, FR-ED-37; Data models, "Sharing") ─────────
+
+// A role other than the Owner's, held through an accepted invitation. The
+// Owner is Document.ownerId and has no row here. The permanent deletion of the
+// document deletes the row with it (FR-ED-36).
+model DocumentCollaborator {
+  id         String       @id @default(cuid())
+  documentId String       @db.Uuid
+  userId     String
+  role       DocumentRole
+  addedAt    DateTime     @default(now())
+  // When the current role was granted (FR-AU-92); set again whenever role changes.
+  roleSince  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([documentId, userId])
+  @@index([userId])
+}
+
+enum DocumentRole {
+  EDITOR
+  REVIEWER
+  VIEWER
+}
+
+// One row for every address an inviter enters (FR-ED-21, FR-ED-37). The token
+// of the link is stored only as its hash. emailClaimedAt is set before the one
+// email is handed to the service and a row with it set is never sent again; a
+// row whose address had no account keeps it null and is sent to no one.
+// "Expired" is derived from expiresAt, and written by the next write that
+// meets the row. By hand in the migration: one PENDING row for an address and
+// a document, and the address in lower case.
+//
+// Two departures from Data models (docs/plan/slice-13.md, S13-7): acceptedById,
+// since FR-ED-37 refuses "an address at which a user who holds a role on the
+// document accepted"; and the relation of invitedById.
+model DocumentInvitation {
+  id                String          @id @default(cuid())
+  documentId        String          @db.Uuid
+  email             String?
+  role              DocumentRole
+  invitedById       String
+  tokenHash         String          @unique
+  state             InvitationState @default(PENDING)
+  createdAt         DateTime        @default(now())
+  expiresAt         DateTime
+  respondedAt       DateTime?
+  acceptedById      String?
+  emailClaimedAt    DateTime?
+  reminderClaimedAt DateTime?
+
+  document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  invitedBy User     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@index([documentId, email])
+}
+
+enum InvitationState {
+  PENDING
+  ACCEPTED
+  DECLINED
+  REVOKED
+  EXPIRED
+}
+
+// In-application notifications (FR-ED-42). The payload carries identifiers and
+// never content: for an invitation, `{ "invitationId": … }`. A read
+// notification keeps its row; the row is deleted when its subject no longer
+// exists.
+model Notification {
+  id          String    @id @default(cuid())
+  recipientId String
+  kind        String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  readAt      DateTime?
+
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Restrict)
+
+  @@index([recipientId, readAt])
 }
 
 enum RecordingState {

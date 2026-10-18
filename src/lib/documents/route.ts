@@ -18,11 +18,13 @@ export interface DocumentCall {
   session: ValidSession;
   document: DocumentRow;
   role: DocumentRole;
+  /** The other segments of the path, as Next.js gives them (an invitation's identifier); never trusted, only looked up. */
+  params: Readonly<Record<string, string>>;
 }
 
 export type DocumentRoute = (
   request: Request,
-  context: { params: Promise<{ id: string }> },
+  context: { params: Promise<{ id: string } & Record<string, string>> },
 ) => Promise<Response>;
 
 /** Which of the two decisions of ./access.ts a handler rests on: a document that is not deleted, or one that is. */
@@ -75,14 +77,21 @@ function make(state: DocumentState, permission: Permission, handler: Handler): D
       const { session } = validation;
       if (!session) return await notAdmitted(validation);
 
-      const { id } = await params;
+      const segments = await params;
+      const { id } = segments;
       const access =
         state === 'live'
           ? await authorise(session.userId, id, permission)
           : await authoriseDeleted(session.userId, id);
       if (access.outcome !== 'allowed') return await refusal(access, session.userId, id);
 
-      return await handler({ request, session, document: access.document, role: access.role });
+      return await handler({
+        request,
+        session,
+        document: access.document,
+        role: access.role,
+        params: segments,
+      });
     } catch (error) {
       return fault('documents', error);
     }

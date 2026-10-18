@@ -17,23 +17,27 @@ export type LimitResult = { ok: true } | { ok: false; retryAfterSeconds: number 
 
 // One script, so that the check and the count are one step whichever instance
 // asks. The clock is Valkey's, so the instances need not agree on the time.
-// It returns 0 where the event is admitted, and otherwise the milliseconds
-// until one more would be.
+// It returns 0 where the events are admitted, all of them, and otherwise the
+// milliseconds until they would be. ARGV[4] is how many events at once (one
+// request that creates several invitations, NFR-SE-07): all are counted, or
+// none. More at once than the limit allows ever is refused for its window.
 const SCRIPT = `
 local time = redis.call('TIME')
 local now = time[1] * 1000 + math.floor(time[2] / 1000)
 local max = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
+local amount = tonumber(ARGV[4])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - window)
 local count = redis.call('ZCARD', KEYS[1])
-if count < max then
+if amount > max then return window end
+if count + amount <= max then
   if ARGV[3] ~= '' then
-    redis.call('ZADD', KEYS[1], now, ARGV[3])
+    for i = 1, amount do redis.call('ZADD', KEYS[1], now, ARGV[3] .. ':' .. i) end
     redis.call('PEXPIRE', KEYS[1], window)
   end
   return 0
 end
-local leaving = redis.call('ZRANGE', KEYS[1], count - max, count - max, 'WITHSCORES')
+local leaving = redis.call('ZRANGE', KEYS[1], count + amount - max - 1, count + amount - max - 1, 'WITHSCORES')
 return leaving[2] + window - now
 `;
 
@@ -57,6 +61,8 @@ export async function limitWith(
   name: LimitName,
   key: string,
   count: boolean,
+  amount = 1,
+  member: string = randomUUID(),
 ): Promise<LimitResult> {
   // ponytail: EVAL sends the script on each call; defineCommand (EVALSHA) if that ever shows in a profile.
   const reply = await client.eval(
@@ -65,16 +71,42 @@ export async function limitWith(
     storageKey(name, key),
     limit.max,
     limit.windowSeconds * 1000,
-    count ? randomUUID() : '',
+    count ? member : '',
+    Math.max(1, Math.trunc(amount)),
   );
   // Nothing but the number 0 admits: an empty or absent reply is a refusal.
   if (reply === 0) return { ok: true };
   return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil(Number(reply) / 1000) || 1) };
 }
 
-/** Counts one event against the limit unless it is already reached. A refused event is not counted. */
-export function takeLimit(name: LimitName, key: string): Promise<LimitResult> {
-  return limitWith(valkey(), settings().limits[name], name, key, true);
+/**
+ * Counts `amount` events (one by default) against the limit unless they would
+ * pass it. Refused events are not counted, and are refused together.
+ */
+export function takeLimit(name: LimitName, key: string, amount = 1): Promise<LimitResult> {
+  return limitWith(valkey(), settings().limits[name], name, key, true, amount);
+}
+
+/**
+ * As `takeLimit`, for events counted before the work they stand for is done:
+ * where they are admitted, `giveBack` uncounts exactly them, for the caller to
+ * call where the work then fails (NFR-SE-07, "invitations created").
+ */
+export async function takeLimitReturnable(
+  name: LimitName,
+  key: string,
+  amount = 1,
+): Promise<{ ok: true; giveBack: () => Promise<void> } | { ok: false; retryAfterSeconds: number }> {
+  const member = randomUUID();
+  const result = await limitWith(valkey(), settings().limits[name], name, key, true, amount, member);
+  if (!result.ok) return result;
+  const members = Array.from({ length: Math.max(1, Math.trunc(amount)) }, (_, n) => `${member}:${n + 1}`);
+  return {
+    ok: true,
+    giveBack: async () => {
+      await valkey().zrem(storageKey(name, key), ...members);
+    },
+  };
 }
 
 /** Whether the limit is reached, without counting anything. */

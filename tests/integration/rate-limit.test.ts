@@ -120,6 +120,22 @@ describe('takeLimit', { timeout: 30_000 }, () => {
     expect(await takeLimit('RESET_PER_EMAIL', address())).toEqual(OK);
     expect(await takeLimit('RESET_PER_ADDRESS', key)).toEqual(OK);
   });
+
+  // NFR-SE-07, "invitations created": one request may create several (S13-5).
+  it('counts several events at once, all of them or none', async () => {
+    const limit = { max: 5, windowSeconds: 60 };
+    const key = address();
+    expect(await limitWith(valkey(), limit, 'INVITATIONS_PER_USER', key, true, 3)).toEqual(OK);
+    // Three more would pass five: refused whole, and none of them counted.
+    expect(await limitWith(valkey(), limit, 'INVITATIONS_PER_USER', key, true, 3)).toEqual(REFUSED);
+    expect(await limitWith(valkey(), limit, 'INVITATIONS_PER_USER', key, true, 2)).toEqual(OK);
+    expect(await limitWith(valkey(), limit, 'INVITATIONS_PER_USER', key, true, 1)).toEqual(REFUSED);
+    // More at once than the limit ever allows is refused for its window.
+    expect(await limitWith(valkey(), limit, 'INVITATIONS_PER_USER', address(), true, 6)).toEqual({
+      ok: false,
+      retryAfterSeconds: 60,
+    });
+  });
 });
 
 describe('a limit across instances (NFR-SC-04)', () => {

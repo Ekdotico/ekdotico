@@ -12,7 +12,7 @@ import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { isRetained } from './deletion.ts';
-import { holds, type DocumentRole, type Permission } from './permissions.ts';
+import { COLLABORATOR_ROLE, holds, type DocumentRole, type Permission } from './permissions.ts';
 
 /** A document's row as every query but one reads it: without its content (src/lib/db.ts). */
 export type DocumentRow = Omit<Document, 'yjsState'>;
@@ -38,12 +38,23 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NO_DOCUMENT = '00000000-0000-0000-0000-000000000000';
 
 /**
- * FR-ED-19: the role the user holds on the document, or null. The Owner is
- * `Document.ownerId`. The other roles are held through an accepted invitation
- * (FR-ED-21) and join here with the slice that builds sharing.
+ * The document with this identifier and the role this user holds on it, in
+ * one query. FR-ED-19: the Owner is `Document.ownerId`; every other role is a
+ * row of `DocumentCollaborator`, made by an accepted invitation (FR-ED-21).
  */
-function roleOf(document: DocumentRow, userId: string): DocumentRole | null {
-  return document.ownerId === userId ? 'owner' : null;
+async function documentAndRole(
+  id: string,
+  userId: string,
+): Promise<{ document: DocumentRow | null; role: DocumentRole | null }> {
+  const found = await db().document.findUnique({
+    where: { id },
+    include: { collaborators: { where: { userId }, select: { role: true } } },
+  });
+  if (!found) return { document: null, role: null };
+  const { collaborators, ...document } = found;
+  const held = collaborators[0]?.role;
+  const role = document.ownerId === userId ? 'owner' : held ? COLLABORATOR_ROLE[held] : null;
+  return { document, role };
 }
 
 /**
@@ -66,8 +77,8 @@ export async function authorise(
   const id = typeof documentId === 'string' && UUID.test(documentId) ? documentId : NO_DOCUMENT;
   // One query whatever the outcome, so that "no such document" and "no access"
   // differ in nothing a caller can measure.
-  const document = await db().document.findUnique({ where: { id } });
-  const role = document && document.deletedAt === null ? roleOf(document, userId) : null;
+  const { document, role: held } = await documentAndRole(id, userId);
+  const role = document && document.deletedAt === null ? held : null;
   if (!document || !role) return { outcome: 'not_found' };
   if (!holds(document.permissionSet, role, permission)) return { outcome: 'forbidden' };
   return { outcome: 'allowed', role, document };
@@ -94,8 +105,8 @@ export async function authoriseDeleted(
 ): Promise<Exclude<Access, { outcome: 'forbidden' }>> {
   const id = typeof documentId === 'string' && UUID.test(documentId) ? documentId : NO_DOCUMENT;
   // One query whatever the outcome, as above.
-  const document = await db().document.findUnique({ where: { id } });
-  const role = document && isRetained(document, now) ? roleOf(document, userId) : null;
+  const { document, role: held } = await documentAndRole(id, userId);
+  const role = document && isRetained(document, now) ? held : null;
   if (!document || !role || !holds(document.permissionSet, role, 'document.delete')) {
     return { outcome: 'not_found' };
   }

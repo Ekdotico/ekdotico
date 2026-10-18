@@ -10,6 +10,7 @@
 // here: it arrives over the collaboration connection, which authorises the
 // account again (FR-AU-08).
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { cache } from 'react';
 import { notFound } from 'next/navigation';
 import { Cluster, PageHeading, Stack, Tooltip } from '@ekdotico/domico/components';
@@ -54,6 +55,8 @@ export default async function DocumentPage({ params }: Props) {
         {document.recording === 'UNRECORDED' ? (
           <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
         ) : null}
+        {/* FR-ED-21, FR-ED-37: the sharing settings, for every role. */}
+        <Link href={`/documents/${document.id}/sharing`}>Sharing</Link>
       </Cluster>
       <DocumentView
         documentId={document.id}

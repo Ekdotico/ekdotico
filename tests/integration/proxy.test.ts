@@ -363,6 +363,9 @@ describe('every other path, with a session', () => {
     // Another user, and a page, are not held back.
     expect(passed(await call('GET', '/api/documents', (await person()).cookie))).toBe(true);
     for (let n = 0; n < 6; n++) expect(passed(await call('GET', '/documents/1', cookie))).toBe(true);
+    // Except the page an invitation link opens, which is counted with the API
+    // (NFR-SE-07, FR-ED-21: "protects invitation links against guessing").
+    expect((await call('GET', `/invitations/${'A'.repeat(43)}`, cookie)).status).toBe(429);
 
     const entries = await logged('rate_limit_reached');
     expect(entries).toHaveLength(1);
