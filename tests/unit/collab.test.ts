@@ -51,8 +51,9 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
       LIST_TOO_LONG: 'list-too-long',
       LIST_TOO_DEEP: 'list-too-deep',
       CODE_BLOCK_TOO_LARGE: 'code-block-too-large',
+      TOO_MANY_BLOCKS: 'too-many-blocks',
     });
-    expect(new Set(Object.values(REFUSAL)).size).toBe(21);
+    expect(new Set(Object.values(REFUSAL)).size).toBe(22);
   });
 });
 

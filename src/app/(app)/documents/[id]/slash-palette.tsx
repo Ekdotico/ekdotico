@@ -22,7 +22,7 @@
 'use client';
 
 import { Extension, type Editor, type Range } from '@tiptap/core';
-import type { ResolvedPos } from '@tiptap/pm/model';
+import type { Node as PMNode, ResolvedPos } from '@tiptap/pm/model';
 import { Plugin, PluginKey, Selection, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { ReplaceStep } from '@tiptap/pm/transform';
 import type { EditorView } from '@tiptap/pm/view';
@@ -43,7 +43,7 @@ import {
   type Block,
   type SlashCommand,
 } from '../../../../lib/editor/slash-commands.ts';
-import { passesLimits } from './block-limits.ts';
+import { limitRefusal, passesLimits } from './block-limits.ts';
 import { tableRoom, tablesIn } from './table-bounds.ts';
 
 /** The id of the list, which the text names while the list shows a row. */
@@ -190,11 +190,18 @@ function stands(state: EditorState, range: Range, block: Block): boolean {
     const brings = tablesIn(made);
     if (brings.levels > room.levels || brings.cells > room.cells) return false;
   }
-  if (passesLimits(state.doc, state.schema.nodeFromJSON(block), $from)) return false;
   const index = $from.index(-1);
-  return alone($from, range)
+  const fits = alone($from, range)
     ? $from.node(-1).canReplaceWith(index, index + 1, type)
     : $from.node(-1).canReplaceWith(index + 1, index + 1, type);
+  if (!fits) return false;
+  // The block itself at its limit (at the total, nothing is listed), and the
+  // change as it would be made, with the paragraph that may follow the block
+  // (the review of pull request 42: a divider at 4,999 brought 5,001).
+  const node = state.schema.nodeFromJSON(block);
+  return (
+    !passesLimits(state.doc, node, $from) && limitRefusal(putting(state, range, node), state.doc) === null
+  );
 }
 
 const offered = (state: EditorState, range: Range, commands: readonly SlashCommand[]) =>
@@ -282,12 +289,23 @@ export function chooseSlashCommand(editor: Editor, name: string): void {
   const shown = slashPalette(state);
   const command = SLASH_COMMANDS.find((each) => each.name === name);
   if (!command || !shown.options.some(({ id }) => id === name)) return;
-  const { from, to } = shown.range;
+  const tr = putting(state, shown.range, state.schema.nodeFromJSON(command.inserts));
+  // Undo joins what is typed within half a second into one step (FR-ED-16,
+  // over Yjs). The choice begins a step of its own, so that undoing it leaves
+  // the `/` and the query as they were typed.
+  (
+    yUndoPluginKey.getState(state) as { undoManager?: { stopCapturing(): void } } | undefined
+  )?.undoManager?.stopCapturing();
+  editor.view.dispatch(tr.setMeta(CHOSEN, true));
+}
+
+/** The change that puts a block where the command of `range` stands (`chooseSlashCommand`). */
+function putting(state: EditorState, range: Range, node: PMNode): Transaction {
+  const { from, to } = range;
   const $from = state.doc.resolve(from);
-  const node = state.schema.nodeFromJSON(command.inserts);
   const tr = state.tr;
   let at = from + 1;
-  if (alone($from, shown.range)) {
+  if (alone($from, range)) {
     at = $from.before();
     tr.replaceWith(at, $from.after(), node);
   } else {
@@ -317,14 +335,7 @@ export function chooseSlashCommand(editor: Editor, name: string): void {
     tr.insert($after.pos, paragraph.create());
   }
   if (node.isLeaf) cursor = $after.pos;
-  tr.setSelection(Selection.near(tr.doc.resolve(cursor), 1)).scrollIntoView();
-  // Undo joins what is typed within half a second into one step (FR-ED-16,
-  // over Yjs). The choice begins a step of its own, so that undoing it leaves
-  // the `/` and the query as they were typed.
-  (
-    yUndoPluginKey.getState(state) as { undoManager?: { stopCapturing(): void } } | undefined
-  )?.undoManager?.stopCapturing();
-  editor.view.dispatch(tr.setMeta(CHOSEN, true));
+  return tr.setSelection(Selection.near(tr.doc.resolve(cursor), 1)).scrollIntoView();
 }
 
 /**

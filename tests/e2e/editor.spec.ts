@@ -2607,7 +2607,10 @@ test('a key typed in a table whose cells hold tables, ten thousand cells in all,
     false,
   ]);
   // Tab in the last cell would add a row: it adds none, and the page says so.
-  const noRoom = page.getByRole('status').filter({ hasText: 'The table has no room for this.' });
+  const noRoom = page.getByRole('status').filter({
+    hasText:
+      'We cannot add this. A table and the tables in its cells hold 10,000 cells, two levels deep, and this surpasses our current limits.',
+  });
   await expect(noRoom).toHaveCount(0);
   await page.keyboard.press('Tab');
   await expect(noRoom).toBeVisible();
@@ -4035,4 +4038,53 @@ test('a Viewer reads what the Owner writes, in an editor that does not write', a
   await theirs.keyboard.type('Written by the Viewer');
   await expect(text(theirs)).not.toContainText('Written by the Viewer');
   await other.close();
+});
+
+// The review of pull request 42: a client empties a table block in a document of 100 tables, which
+// the server takes (D180). The filling every browser makes would bring 101, and the server would
+// refuse it and hold every tab. It is not written: each tab opens to deletions alone, and is not held.
+test('a table block emptied by a client at 100 tables holds no honest tab: each opens to deletions alone, and deleting brings it back', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const member = await connectAs(page.context(), id);
+  await holds(member, 'Written before.');
+  const shared = member.provider.document;
+  const one = (written: string) => tableOf([element('tableRow', {}, [cellWith({}, written)])], 'caption');
+  shared.transact(() => shared.getXmlFragment('default').push(Array.from({ length: 100 }, () => one('c'))));
+  await expect(text(page).locator('table')).toHaveCount(100);
+  // One table block emptied and a table added: 100 still, as the server counts.
+  shared.transact(() => {
+    const fragment = shared.getXmlFragment('default');
+    (fragment.get(1) as Y.XmlElement).delete(0, 2);
+    fragment.push([one('added')]);
+  });
+  const statement =
+    'This document holds 101 tables, more than our current limit per document (100). It is read-only until it is back under the limit. You can still delete tables.';
+  const held = 'The server did not take the change';
+  await expect(text(page)).toContainText('added');
+  await expect(page.getByText(statement)).toHaveCount(1);
+  await expect(page.getByText(held)).toHaveCount(0);
+  // A second tab opened now is not held either.
+  const second = await page.context().newPage();
+  await second.goto(`/documents/${id}`);
+  await expect(second.getByText(statement)).toHaveCount(1);
+  await expect(status(second, 'In sync')).toBeVisible();
+  await expect(second.getByText(held)).toHaveCount(0);
+  // Everything deleted in the first tab: the deletion is written with the filling, and both tabs are back under.
+  await text(page).click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Backspace');
+  await expect(page.getByText(statement)).toHaveCount(0);
+  await expect(second.getByText(statement)).toHaveCount(0);
+  await expect(status(page, 'In sync')).toBeVisible();
+  await expect(page.getByText(held)).toHaveCount(0);
+  await expect(second.getByText(held)).toHaveCount(0);
+  member.close();
+  await second.close();
 });

@@ -27,10 +27,11 @@ import { DOCUMENT_BYTES_MOST } from '../../src/app/(app)/documents/[id]/extensio
 import {
   TABLE_NO_ROOM,
   TABLE_PASTE_NO_ROOM,
+  countsOf,
   limitRefusal,
   overLimits,
 } from '../../src/app/(app)/documents/[id]/block-limits.ts';
-import { LIMITS } from '../../src/lib/collab/shape.ts';
+import { LIMITS, shapeOf } from '../../src/lib/collab/shape.ts';
 import {
   TABLE_CELLS_MOST,
   TABLE_COUNT_MOST,
@@ -750,7 +751,7 @@ describe('the tables in the cells of a table (R32)', () => {
     it('says it in the owner’s words, with the two bounds as they are', () => {
       // Written out here, and not taken from the code under test.
       expect(TABLE_NO_ROOM).toBe(
-        'The table has no room for this. A table and the tables in its cells hold 10,000 cells, two levels deep.',
+        'We cannot add this. A table and the tables in its cells hold 10,000 cells, two levels deep, and this surpasses our current limits.',
       );
     });
   });
@@ -893,6 +894,7 @@ describe('the tables in the cells of a table (R32)', () => {
         listItems: 1000,
         listDepth: 10,
         codeBytes: 500 * 1024,
+        blocks: 5000,
       });
       expect(DOCUMENT_BYTES_MOST).toBe(MAX_STATE_BYTES);
     });
@@ -917,13 +919,13 @@ describe('the tables in the cells of a table (R32)', () => {
       ).toBeNull();
     });
 
-    it('a paste that takes a table past its bounds is refused in the owner’s words of D178, and a command in the words before them', () => {
+    it('a paste that takes a table past its bounds is refused in the owner’s words of D178, and a command in his words of the same day', () => {
       // Written out here, and not taken from the code under test.
       expect(TABLE_PASTE_NO_ROOM).toBe(
         'We cannot paste this table. A table and the tables in its cell hold 10,000 cells, two levels deep and this surpasses our current limits.',
       );
       expect(TABLE_NO_ROOM).toBe(
-        'The table has no room for this. A table and the tables in its cells hold 10,000 cells, two levels deep.',
+        'We cannot add this. A table and the tables in its cells hold 10,000 cells, two levels deep, and this surpasses our current limits.',
       );
       const nested = (inner: PMNode) =>
         schema.node('tableBlock', null, [
@@ -1037,6 +1039,128 @@ describe('the tables in the cells of a table (R32)', () => {
         expect(limitRefusal(pasted(room.tr.insert(0, code('c'.repeat(KB500 + 1)))), room.doc)).toBe(
           'We cannot add this code block. Our current limit per code block is 500 KB.',
         );
+      });
+    });
+
+    // The owner's decision of 18 October 2026 (D192): every block outside the cells of tables, a table one.
+    describe('the total of 5,000 blocks', () => {
+      const ADD = 'We cannot add this block. Our current limit per document is 5,000 blocks.';
+      const paragraphs = (count: number) => Array.from({ length: count }, () => p());
+      /** A document of `count` blocks: the first paragraph and paragraphs after it. */
+      const blocks = (count: number, ...more: PMNode[]) =>
+        EditorState.create({ schema, doc: docOf(...more, ...paragraphs(count - 1 - more.length)) });
+      const item = (...content: PMNode[]) => schema.node('listItem', null, content.length ? content : [p()]);
+      const list = (...items: PMNode[]) => schema.node('bulletList', null, items);
+      /** A table of `rows` rows of `columns` cells, each holding what `cell` makes. */
+      const grid = (rows: number, columns: number, cell = () => [p('a'), p('b')]) =>
+        schema.node('tableBlock', null, [
+          schema.node(
+            'table',
+            null,
+            Array.from({ length: rows }, () =>
+              schema.node(
+                'tableRow',
+                null,
+                Array.from({ length: columns }, () => schema.node('tableCell', null, cell())),
+              ),
+            ),
+          ),
+          schema.node('tableCaption'),
+        ]);
+
+      it('counts each block written in or put down once: an item, a quote and a callout by what they hold, a table as one', () => {
+        const total = (...content: PMNode[]) => countsOf(schema.node('doc', null, content)).blocks;
+        expect(total(p(), schema.node('heading', { level: 2 }))).toBe(2);
+        // Three items, one with a second paragraph and a list of two in it: six lines, six blocks.
+        expect(total(list(item(), item(p(), p(), list(item(), item())), item()))).toBe(6);
+        expect(total(schema.node('blockquote', null, [p(), p()]))).toBe(2);
+        expect(total(schema.node('callout', null, [p()]))).toBe(1);
+        expect(
+          total(
+            schema.node('codeBlock', null, [schema.text('x')]),
+            schema.node('horizontalRule'),
+            schema.node('pageBreak'),
+            schema.node('tableOfContents'),
+          ),
+        ).toBe(4);
+        // A table of 30 cells of two paragraphs each, a table in one of them: one block.
+        expect(total(grid(5, 6, () => [p(), grid(1, 1)]))).toBe(1);
+      });
+
+      it('a document of 5,000 takes every change that adds no block, and refuses one more, added or pasted, in the owner’s words', () => {
+        const at = blocks(5000);
+        expect(countsOf(at.doc).blocks).toBe(5000);
+        expect(overLimits(at.doc)).toEqual([]);
+        expect(limitRefusal(at.tr.insertText('typed', 1), at.doc)).toBeNull();
+        expect(limitRefusal(at.tr.delete(1, 3), at.doc)).toBeNull();
+        // Two paragraphs joined, and a paragraph replaced by a table, a list or a quote: no block more.
+        expect(limitRefusal(at.tr.join(7), at.doc)).toBeNull();
+        expect(limitRefusal(at.tr.replaceWith(7, 9, table()), at.doc)).toBeNull();
+        expect(limitRefusal(at.tr.replaceWith(7, 9, list(item())), at.doc)).toBeNull();
+        expect(
+          limitRefusal(at.tr.replaceWith(7, 9, schema.node('blockquote', null, [p()])), at.doc),
+        ).toBeNull();
+        // Enter, a divider, and an item added to a list are one block more.
+        expect(limitRefusal(at.tr.split(3), at.doc)).toBe(ADD);
+        expect(limitRefusal(at.tr.insert(7, schema.node('horizontalRule')), at.doc)).toBe(ADD);
+        const listed = blocks(5000, list(item()));
+        expect(limitRefusal(listed.tr.insert(listed.doc.child(0).nodeSize + 1, item()), listed.doc)).toBe(
+          ADD,
+        );
+        expect(limitRefusal(pasted(at.tr.insert(7, [p(), p(), p()])), at.doc)).toBe(
+          'We cannot paste this. It holds 3 blocks, and our current limit per document is 5,000.',
+        );
+        // At 4,999 the 5,000th is taken; and what another client sends, or an undo, is the server's to hold.
+        const under = blocks(4999);
+        expect(limitRefusal(under.tr.split(3), under.doc)).toBeNull();
+        expect(
+          limitRefusal(at.tr.split(3).setMeta(ySyncPluginKey, { isChangeOrigin: true }), at.doc),
+        ).toBeNull();
+      });
+
+      it('a table with thousands of paragraphs in its cells counts as one: its cells take paragraphs, the document does not', () => {
+        // 1,000 cells of two paragraphs, and 4,999 blocks besides: 5,000.
+        const full = blocks(5000, grid(50, 20));
+        expect(countsOf(full.doc).blocks).toBe(5000);
+        expect(overLimits(full.doc)).toEqual([]);
+        let cell = 0;
+        full.doc.descendants((node, pos) => {
+          if (!cell && node.type.name === 'tableCell') cell = pos + 1;
+        });
+        expect(limitRefusal(full.tr.insert(cell, [p(), p(), p()]), full.doc)).toBeNull();
+        expect(limitRefusal(full.tr.split(cell + 2), full.doc)).toBeNull();
+        expect(limitRefusal(full.tr.insert(0, p()), full.doc)).toBe(ADD);
+      });
+
+      it('a document past it opens to deletions alone, told so in the owner’s words, until it is back at 5,000', () => {
+        const more = blocks(5010);
+        const [statement] = overLimits(more.doc);
+        expect(statement).toBe(
+          'This document holds 5,010 blocks, more than our current limit per document (5,000). It is read-only until it is back under the limit. You can still delete blocks.',
+        );
+        expect(limitRefusal(more.tr.delete(1, 3), more.doc)).toBeNull();
+        expect(limitRefusal(more.tr.insertText('typed', 1), more.doc)).toBe(statement);
+        const back = more.apply(more.tr.delete(7, 7 + 10 * 2));
+        expect(countsOf(back.doc).blocks).toBe(5000);
+        expect(limitRefusal(back.tr.insertText('typed', 1), back.doc)).toBeNull();
+      });
+
+      it('is cheap at each key in a document of 5,000 blocks and a full table', () => {
+        let at = blocks(
+          5000,
+          grid(100, 100, () => [p('a')]),
+        );
+        const keys = 300;
+        const started = performance.now();
+        for (let key = 0; key < keys; key += 1) {
+          const typed = at.tr.insertText('k', 2);
+          expect(limitRefusal(typed, at.doc)).toBeNull();
+          at = at.apply(typed);
+        }
+        const each = (performance.now() - started) / keys;
+        // Measured for the report of the commit; the bound allows a loaded machine.
+        console.info(`the limits at each key: ${each.toFixed(3)} ms`);
+        expect(each).toBeLessThan(25);
       });
     });
 
@@ -1785,6 +1909,107 @@ describe('the tables in the cells of a table (R32)', () => {
         editor.binding._prosemirrorChanged(view.state.doc);
         expect(editor.fragment.toString()).not.toContain('typed');
       });
+    });
+
+    // The review of pull request 42: a client empties an element in a document at a limit, which the
+    // server takes (D180); the filling every browser wrote would pass the limit, be refused, and hold
+    // every tab. It is not written: the tab opens to deletions alone, and a deletion lets it through.
+    describe('and a mending that the server would refuse for a limit of the document', () => {
+      const replica = (document: Y.Doc) => {
+        const made = new Y.Doc();
+        Y.applyUpdate(made, Y.encodeStateAsUpdate(document));
+        return made;
+      };
+      /** The document after a member's update that the server takes, and that update. */
+      const emptied = (document: Y.Doc, change: (fragment: Y.XmlFragment) => void) => {
+        const member = replica(document);
+        member.transact(() => change(member.getXmlFragment('default')));
+        const update = Y.encodeStateAsUpdate(member, Y.encodeStateVector(document));
+        expect(shapeOf(document, update)).toBeNull();
+        Y.applyUpdate(document, update);
+        return document;
+      };
+      const CASES = [
+        [
+          '5,000 blocks, a quote emptied',
+          () => {
+            const document = new Y.Doc();
+            document
+              .getXmlFragment('default')
+              .push([
+                element('blockquote', {}, [paragraph('q')]),
+                ...Array.from({ length: 4999 }, () => paragraph('x')),
+              ]);
+            return emptied(document, (fragment) => {
+              (fragment.get(0) as Y.XmlElement).delete(0, 1);
+              fragment.push([paragraph('added')]);
+            });
+          },
+          'This document holds 5,001 blocks, more than our current limit per document (5,000). It is read-only until it is back under the limit. You can still delete blocks.',
+        ],
+        [
+          '100 tables, a table block emptied',
+          () => {
+            const document = new Y.Doc();
+            document
+              .getXmlFragment('default')
+              .push([paragraph('x'), ...Array.from({ length: 100 }, () => blockOf([rowOf('c')]))]);
+            return emptied(document, (fragment) => {
+              (fragment.get(1) as Y.XmlElement).delete(0, 2);
+              fragment.push([blockOf([rowOf('added')])]);
+            });
+          },
+          'This document holds 101 tables, more than our current limit per document (100). It is read-only until it is back under the limit. You can still delete tables.',
+        ],
+      ] as const;
+
+      it.each(CASES)(
+        '%s: not written and not held, deletions alone, and a block deleted lets it through',
+        (_, made, statement) => {
+          const document = made();
+          const before = bytes(document);
+          const editor = open(document);
+          expect(editor.unrepairable).not.toHaveBeenCalled();
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.mended()).toBe(0);
+          expect(bytes(document)).toBe(before);
+          // The filled text is past the limit: the statement, and deletions alone.
+          expect(overLimits(editor.text())).toEqual([statement]);
+          const view = editor.typed();
+          // The first and the last place in text: after a letter.
+          const written: number[] = [];
+          view.state.doc.descendants((node, pos) => {
+            if (node.isTextblock && node.textContent) written.push(pos + 1 + node.content.size);
+          });
+          expect(limitRefusal(view.state.tr.insertText('typed', written[0]!), view.state.doc)).toBe(
+            statement,
+          );
+          // A second honest browser is not held either, and writes nothing.
+          const second = open(replica(document));
+          expect([second.unrepairable.mock.calls.length, second.mended()]).toEqual([0, 0]);
+          // A letter deleted leaves it past: nothing is written, not even the letter.
+          const letter = view.state.tr.delete(written.at(-1)! - 1, written.at(-1)!);
+          expect(limitRefusal(letter, view.state.doc)).toBeNull();
+          view.dispatch(letter);
+          editor.binding._prosemirrorChanged(view.state.doc);
+          expect(editor.mended()).toBe(0);
+          expect(bytes(document)).toBe(before);
+          // The last block deleted brings it back to the limit: the deletion and the filling are written
+          // together, and the server takes them.
+          const server = replica(document);
+          const { doc } = view.state;
+          const block = view.state.tr.delete(doc.content.size - doc.lastChild!.nodeSize, doc.content.size);
+          expect(limitRefusal(block, doc)).toBeNull();
+          view.dispatch(block);
+          editor.binding._prosemirrorChanged(view.state.doc);
+          expect(editor.mended()).toBe(1);
+          expect(shapeOf(server, editor.mends()[0]!)).toBeNull();
+          expect(overLimits(editor.text())).toEqual([]);
+          expect(editor.unrepairable).not.toHaveBeenCalled();
+          // What the binding builds of the shared document now needs no filling.
+          expect(open(replica(document)).mended()).toBe(0);
+        },
+      );
     });
 
     // The review of pull request 34: a browser that cannot edit the document wrote a mending to it.

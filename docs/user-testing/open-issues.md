@@ -101,3 +101,24 @@ Add an entry whenever the owner decides something provisionally. When a point ha
 - Whether any text is lost.
 
 **What would change the decision.** If writers meet it in ordinary work, or lose text when they do, the server could take the change and the browser of its writer refuse only what passes, or the tab could reload by itself and keep the text.
+
+## Undoing a deletion in a document already past a limit (D184)
+
+**Where the behaviour lives:** the collaboration server's rules on the limits of a document, `src/lib/collab/shape.ts`; the deletions-only state of the browser, `src/app/(app)/documents/[id]/block-limits.ts`; the held state of the editor, `src/app/(app)/documents/[id]/editor.tsx`.
+
+**What happens.** A document already past a limit (more than 5,000 blocks, more than 100 tables, and so on), stored before the limit or by an earlier release, opens to deletions alone. Where the writer deletes a block and then undoes the deletion, the undo puts the block back, which takes the document further past the limit than it is after the deletion. The browser lets an undo through, as it does every change of the collaboration binding; the server refuses it, and the writer's tab goes read-only with the statement of that limit ("We cannot apply this change. Our current limit per document is 5,000 blocks, and this change passes it.", and the like for each limit), the text kept so that it can be copied before the document is reloaded.
+
+**Decided as built** on 18 October 2026: accepted for the α line, to be observed in user testing.
+
+**Alternatives considered:**
+
+- The server takes an undo that brings back no more than the document held when it was opened. The server cannot tell an undo from any other change, so this would let a document grow back to its stored size by any change.
+- The browser refuses the undo itself, in the words of the limit, and keeps the tab editable.
+
+**Watch for:**
+
+- Whether a writer ever opens a document past a limit in α, which only a document stored before the limits can be.
+- Whether the writer undoes a deletion there, understands the statement, copies the text, and reloads.
+- Whether any text is lost.
+
+**What would change the decision.** If writers meet it and lose text or are confused, the browser refuses the undo itself and keeps the tab editable.

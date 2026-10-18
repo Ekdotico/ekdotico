@@ -4,7 +4,8 @@
 // table past a bound; what the editor writes is taken.
 import { getSchema } from '@tiptap/core';
 import { Node as PMNode } from '@tiptap/pm/model';
-import { prosemirrorJSONToYDoc, updateYFragment } from '@tiptap/y-tiptap';
+import { prosemirrorJSONToYDoc, updateYFragment, yXmlFragmentToProseMirrorRootNode } from '@tiptap/y-tiptap';
+import { countsOf } from '../../src/app/(app)/documents/[id]/block-limits.ts';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { extensions } from '../../src/app/(app)/documents/[id]/extensions.tsx';
@@ -534,6 +535,7 @@ describe('an update that takes the document past a limit, and further than it wa
       listItems: 1000,
       listDepth: 10,
       codeBytes: 500 * 1024,
+      blocks: 5000,
     });
   });
 
@@ -828,6 +830,211 @@ describe('the fast path counts as Yjs applies (the review of pull request 41)', 
       expect(refused).toBeLessThan(140);
     },
   );
+});
+
+// The owner's decision of 18 October 2026 (D192): 5,000 blocks, outside the cells of tables, a table one.
+describe('an update that takes the document past 5,000 blocks, and further than it was, is refused (D192)', () => {
+  const paragraphs = (count: number) => Array.from({ length: count }, () => p());
+  /** A document of `count` blocks: what is given, and paragraphs after it. */
+  const blocks = (count: number, ...more: Json[]) => doc(...more, ...paragraphs(count - more.length));
+  const item = (...content: Json[]): Json => ({
+    type: 'listItem',
+    content: content.length ? content : [p()],
+  });
+  const list = (...items: Json[]): Json => ({ type: 'bulletList', content: items });
+  const quote = (...content: Json[]): Json => ({ type: 'blockquote', content });
+  /** The browser's count of the blocks of a document on the server (block-limits.ts). */
+  const browserCount = (server: Y.Doc) =>
+    countsOf(yXmlFragmentToProseMirrorRootNode(server.getXmlFragment('default'), schema)).blocks;
+
+  it('the 5,000th block is taken and the 5,001st refused, from the editor and from a client that is no editor, without the copy', () => {
+    const under = opened(blocks(4999));
+    const last = edited(under, blocks(5000));
+    expect(withoutTheCopy(under, last)).toBe(true);
+    expect(answer(under, last)).toBeNull();
+    const at = opened(blocks(5000));
+    expect(browserCount(at)).toBe(5000);
+    const more = edited(at, blocks(5001));
+    expect(withoutTheCopy(at, more)).toBe(true);
+    expect(answer(at, more)).toBe('blocks');
+    // An item added to a list, a paragraph to a quote, and a divider: each one more.
+    const holding = opened(blocks(5000, list(item()), quote(p())));
+    for (const json of [
+      blocks(5000, list(item(), item()), quote(p())),
+      blocks(5000, list(item()), quote(p(), p())),
+      blocks(5001, list(item()), quote(p()), { type: 'horizontalRule' }),
+    ])
+      expect(answer(holding, edited(holding, json))).toBe('blocks');
+    expect(
+      answer(
+        at,
+        sent(at, (fragment) => fragment.push([para()])),
+      ),
+    ).toBe('blocks');
+  });
+
+  it('a document of 5,000 takes every change that adds no block: typing, deleting, a paragraph made a table, a list or a quote', () => {
+    const at = opened(blocks(5000, p('first')));
+    const typed = sent(at, (fragment) =>
+      ((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlText).insert(0, 'k'),
+    );
+    expect(withoutTheCopy(at, typed)).toBe(true);
+    expect(answer(at, typed)).toBeNull();
+    expect(answer(at, edited(at, blocks(4999, p('first'))))).toBeNull();
+    for (const instead of [table([tr([td()])]), list(item()), quote(p())]) {
+      const update = edited(at, blocks(5000, p('first'), instead));
+      expect(withoutTheCopy(at, update)).toBe(true);
+      expect(answer(at, update)).toBeNull();
+    }
+  });
+
+  it('a table with thousands of paragraphs in its cells is one block: its cells take more, the document does not', () => {
+    // 1,000 cells of two paragraphs, and 4,999 blocks besides.
+    const full = blocks(
+      5000,
+      grid(50, 20, () => td(p('a'), p('b'))),
+    );
+    const server = opened(full);
+    expect(browserCount(server)).toBe(5000);
+    const inCell = sent(server, (fragment) => {
+      const first = ((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlElement).get(0) as Y.XmlElement;
+      (first.get(0) as Y.XmlElement).push([para(), para(), para()]);
+    });
+    expect(withoutTheCopy(server, inCell)).toBe(true);
+    expect(answer(server, inCell)).toBeNull();
+    expect(
+      answer(
+        server,
+        sent(server, (fragment) => fragment.push([para()])),
+      ),
+    ).toBe('blocks');
+  });
+
+  // Known, and accepted for α by the owner (docs/user-testing/open-issues.md): the undo of a
+  // deletion in a document past the limit takes it past again, and is refused.
+  it('a document past it takes typing and deleting, and no block more, not even the undo of that deletion', () => {
+    const server = opened(blocks(5010, p('first')));
+    expect(
+      answer(
+        server,
+        sent(server, (fragment) => ((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlText).insert(0, 'k')),
+      ),
+    ).toBeNull();
+    const writer = peerOf(server);
+    const undo = new Y.UndoManager(writer.getXmlFragment('default'), { captureTimeout: 0 });
+    writer.getXmlFragment('default').delete(1, 1);
+    const deleted = sentBy(writer, server);
+    expect(answer(server, deleted)).toBeNull();
+    Y.applyUpdate(server, deleted);
+    undo.undo();
+    expect(answer(server, sentBy(writer, server))).toBe('blocks');
+    const swapped = sent(server, (fragment) => {
+      fragment.delete(1, 1);
+      fragment.push([para()]);
+    });
+    expect(withoutTheCopy(server, swapped)).toBe(true);
+    expect(answer(server, swapped)).toBeNull();
+  });
+
+  it('a new document, whose content the server does not hold yet, is counted too', () => {
+    const empty = new Y.Doc();
+    const update = sent(empty, (fragment) => fragment.push(Array.from({ length: 5001 }, () => para())));
+    expect(withoutTheCopy(empty, update)).toBe(true);
+    expect(answer(empty, update)).toBe('blocks');
+    expect(
+      answer(
+        empty,
+        sent(empty, (fragment) => fragment.push(Array.from({ length: 5000 }, () => para()))),
+      ),
+    ).toBeNull();
+  });
+
+  it(
+    'fuzz: random blocks added and deleted round 5,000, in lists, quotes and cells, are answered alike with and without the copy, and as the browser counts',
+    { timeout: 60_000 },
+    () => {
+      let seed = 192;
+      const random = (below: number) => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return Math.floor(seed / 65536) % below;
+      };
+      const server = opened(
+        blocks(4990, p('first'), list(item(), item()), quote(p()), grid(3, 3), list(item(p(), list(item())))),
+      );
+      /** The top-level elements of a name. */
+      const named = (fragment: Y.XmlFragment, name: string) =>
+        fragment
+          .toArray()
+          .filter((each): each is Y.XmlElement => each instanceof Y.XmlElement && each.nodeName === name);
+      const pick = <T>(from: T[]) => from[random(from.length)];
+      let before = browserCount(server);
+      let [fast, refused] = [0, 0];
+      for (let round = 0; round < 80; round += 1) {
+        const peer = peerOf(server);
+        const fragment = peer.getXmlFragment('default');
+        peer.transact(() => {
+          for (let op = random(3) + 1; op > 0; op -= 1) {
+            const kind = random(7);
+            if (kind === 0)
+              fragment.insert(
+                random(fragment.length + 1),
+                Array.from({ length: random(8) + 1 }, () => para()),
+              );
+            else if (kind === 1 && fragment.length > 6) {
+              const at = random(fragment.length - 1);
+              fragment.delete(at, Math.min(random(5) + 1, fragment.length - at - 1));
+            } else if (kind === 2) {
+              const table = pick(named(fragment, 'tableBlock'));
+              const cells =
+                table &&
+                (((table.get(0) as Y.XmlElement).get(0) as Y.XmlElement).toArray() as Y.XmlElement[]);
+              if (cells) pick(cells)!.push(Array.from({ length: random(4) + 1 }, () => para()));
+            } else if (kind === 3) {
+              const into = pick(named(fragment, 'bulletList'));
+              into?.insert(random(into.length + 1), [element('listItem', [para()])]);
+            } else if (kind === 4) {
+              const into = pick(named(fragment, 'blockquote'));
+              into?.insert(random(into.length + 1), [para()]);
+            } else if (kind === 5)
+              fragment.insert(random(fragment.length + 1), [element('blockquote', [para(), para()])]);
+            else
+              fragment.insert(random(fragment.length + 1), [
+                random(2) ? blockOf(2, 2) : element('bulletList', [element('listItem', [para()])]),
+              ]);
+          }
+        });
+        const update = sentBy(peer, server);
+        const after = browserCount(peer);
+        if (Y.decodeUpdate(update).structs.length > 0 && withoutTheCopy(server, update)) fast += 1;
+        const shape = answer(server, update);
+        expect(shape === 'blocks').toBe(after > 5000 && after > before);
+        if (shape === null) {
+          Y.applyUpdate(server, update);
+          before = after;
+        } else {
+          expect(shape).toBe('blocks');
+          refused += 1;
+        }
+      }
+      expect(fast).toBeGreaterThan(40);
+      expect(refused).toBeGreaterThan(5);
+      expect(refused).toBeLessThan(75);
+    },
+  );
+
+  it('is cheap at each block added to a document of 5,000 blocks and a full table', () => {
+    const server = opened(blocks(4999, grid(TABLE_MOST, TABLE_MOST)));
+    const updates = Array.from({ length: 50 }, (_, at) =>
+      sent(server, (fragment) => fragment.insert(1 + at, [para()])),
+    );
+    for (const update of updates) expect(withoutTheCopy(server, update)).toBe(true);
+    const started = performance.now();
+    for (const update of updates) expect(shapeOf(server, update)).toBeNull();
+    const each = (performance.now() - started) / updates.length;
+    // Measured for the report of the commit; the bound allows a loaded machine.
+    console.info(`the shape of a paragraph added: ${each.toFixed(3)} ms`);
+    expect(each).toBeLessThan(50);
+  });
 });
 
 // The re-review of pull request 41: what is left of each item was found by
