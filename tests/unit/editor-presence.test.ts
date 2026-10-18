@@ -50,11 +50,13 @@ afterEach(() => vi.unstubAllGlobals());
 const caret = (user: unknown) => caretOf(user) as unknown as Fake;
 
 describe('the caret and the label of another person', () => {
-  it('draws the name as text, in the label above the caret, in the class of the slot', () => {
+  it('carries the name for the label above the caret, in the class of the slot, and holds no text', () => {
     const drawing = caret({ name: 'Ada Owner', slot: 3 });
     expect(drawing.className.split(' ')).toEqual(['caret', 'slot3']);
-    expect(drawing.children).toHaveLength(1);
-    expect(drawing.children[0]).toMatchObject({ className: 'label', textContent: 'Ada Owner' });
+    expect(drawing.attributes['data-name']).toBe('Ada Owner');
+    // The label is drawn by the stylesheet from the attribute: the text of the editor holds no one's name.
+    expect(drawing.children).toHaveLength(0);
+    expect(drawing.textContent).toBe('');
   });
 
   it('draws a slot of each of the colours, in its own class', () => {
@@ -68,13 +70,13 @@ describe('the caret and the label of another person', () => {
     expect(caret({ name: 'Ada', slot: 1 }).attributes['aria-hidden']).toBe('true');
   });
 
-  // A name is a person's, and a person can choose anything for it: it is text, never markup.
-  it('sets a name as text and never as markup', () => {
+  // A name is a person's, and a person can choose anything for it: it is an attribute, never markup.
+  it('sets a name as an attribute and never as markup', () => {
     const name = '<img src=x onerror=alert(1)>';
     const drawing = caret({ name, slot: 2 });
-    expect(drawing.children[0]!.textContent).toBe(name);
-    // Only `createElement` and `textContent` build it: nothing is parsed.
-    expect(made.map((each) => each.tag)).toEqual(['span', 'span']);
+    expect(drawing.attributes['data-name']).toBe(name);
+    // Only `createElement` and `setAttribute` build it: nothing is parsed.
+    expect(made.map((each) => each.tag)).toEqual(['span']);
   });
 });
 

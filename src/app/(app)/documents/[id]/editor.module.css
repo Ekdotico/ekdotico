@@ -30,7 +30,7 @@
 
 /* The cursor of another person (FR-ED-17), drawn by the application from the
    design package's collaborator slots ("Collaborator" in the token catalogue):
-   a caret, and the name above it as text, so that the colour is never the only
+   a caret, and the name above it (the caret's ::after, from its data-name, so that the name is not part of the text of the editor), so that the colour is never the only
    sign. The caret is a hairline in the slot's solid; the label is the slot's
    ink on the slot's solid, which the package measures at 4.5:1 in every
    palette; the selection is the slot's own wash, which it measures over the five
@@ -45,7 +45,8 @@
   word-break: normal;
 }
 
-.label {
+.caret::after {
+  content: attr(data-name);
   position: absolute;
   inset-block-end: 100%;
   inset-inline-start: 0;
@@ -64,7 +65,7 @@
 .slot1 {
   border-inline-start-color: var(--collab-1);
 }
-.slot1 .label {
+.slot1::after {
   background-color: var(--collab-1);
   color: var(--collab-1-ink);
 }
@@ -74,7 +75,7 @@
 .slot2 {
   border-inline-start-color: var(--collab-2);
 }
-.slot2 .label {
+.slot2::after {
   background-color: var(--collab-2);
   color: var(--collab-2-ink);
 }
@@ -84,7 +85,7 @@
 .slot3 {
   border-inline-start-color: var(--collab-3);
 }
-.slot3 .label {
+.slot3::after {
   background-color: var(--collab-3);
   color: var(--collab-3-ink);
 }
@@ -94,7 +95,7 @@
 .slot4 {
   border-inline-start-color: var(--collab-4);
 }
-.slot4 .label {
+.slot4::after {
   background-color: var(--collab-4);
   color: var(--collab-4-ink);
 }
@@ -104,7 +105,7 @@
 .slot5 {
   border-inline-start-color: var(--collab-5);
 }
-.slot5 .label {
+.slot5::after {
   background-color: var(--collab-5);
   color: var(--collab-5-ink);
 }
@@ -114,7 +115,7 @@
 .slot6 {
   border-inline-start-color: var(--collab-6);
 }
-.slot6 .label {
+.slot6::after {
   background-color: var(--collab-6);
   color: var(--collab-6-ink);
 }
@@ -124,7 +125,7 @@
 .slot7 {
   border-inline-start-color: var(--collab-7);
 }
-.slot7 .label {
+.slot7::after {
   background-color: var(--collab-7);
   color: var(--collab-7-ink);
 }
@@ -134,7 +135,7 @@
 .slot8 {
   border-inline-start-color: var(--collab-8);
 }
-.slot8 .label {
+.slot8::after {
   background-color: var(--collab-8);
   color: var(--collab-8-ink);
 }
@@ -144,7 +145,7 @@
 .slot9 {
   border-inline-start-color: var(--collab-9);
 }
-.slot9 .label {
+.slot9::after {
   background-color: var(--collab-9);
   color: var(--collab-9-ink);
 }
@@ -154,7 +155,7 @@
 .slot10 {
   border-inline-start-color: var(--collab-10);
 }
-.slot10 .label {
+.slot10::after {
   background-color: var(--collab-10);
   color: var(--collab-10-ink);
 }

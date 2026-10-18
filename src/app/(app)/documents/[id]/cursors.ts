@@ -29,9 +29,12 @@ export function drawn(current: number, other: number, state: { user?: unknown } 
 }
 
 /**
- * The caret of a person and the label above it. The name is set as text, so
- * that nothing a name holds is read as markup. Both are hidden from a screen
- * reader: a name inside the text would be read as part of it, and what a
+ * The caret of a person, and the label above it, which is the caret's
+ * `::after` and shows the attribute `data-name`. The name is set as an
+ * attribute, so that nothing a name holds is read as markup, and is drawn by
+ * the stylesheet and not placed in the text: the text of the editor, which is
+ * what the page's `innerText` and the tests read, is the document's and holds
+ * no one's name. The caret is hidden from a screen reader as well: what a
  * screen reader is told of who is present is another question
  * (docs/plan/slice-14.md, S14-6).
  */
@@ -40,10 +43,7 @@ export function caretOf(user: unknown): HTMLElement {
   const caret = document.createElement('span');
   caret.className = `${styles.caret} ${who ? (styles[`slot${who.slot}`] ?? '') : ''}`;
   caret.setAttribute('aria-hidden', 'true');
-  const label = document.createElement('span');
-  label.className = styles.label ?? '';
-  label.textContent = who?.name ?? '';
-  caret.append(label);
+  caret.setAttribute('data-name', who?.name ?? '');
   return caret;
 }
 

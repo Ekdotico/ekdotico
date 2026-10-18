@@ -404,8 +404,14 @@ test('two browsers that edit one document converge', async ({ page, browser }) =
   await Promise.all([page.keyboard.type('11111'), other.keyboard.type('22222')]);
   await expect(text(page).locator('p').first()).toContainText('22222');
   await expect(text(other).locator('p').first()).toContainText('11111');
+  // The paragraphs' own text: the other tab's caret, at the end of a paragraph, makes the browser
+  // add a line break to `innerText` (the library's separator for a widget there), and is no text.
   await expect
-    .poll(async () => (await text(page).innerText()) === (await text(other).innerText()))
+    .poll(
+      async () =>
+        (await text(page).locator('p').allTextContents()).join('|') ===
+        (await text(other).locator('p').allTextContents()).join('|'),
+    )
     .toBe(true);
   await second.close();
 });
@@ -4278,16 +4284,19 @@ test('each of two people sees the other’s cursor under the other’s name, in 
       },
       [name, property],
     );
-  /** The label of a person's cursor in this page's text, and what the browser draws it with. */
-  const label = (on: Page, name: string) =>
-    text(on).locator('[aria-hidden="true"] > span').filter({ hasText: name });
+  /** The caret of a person's cursor in this page's text: the label above it is its `::after`, from `data-name`. */
+  const label = (on: Page, name: string) => text(on).locator(`[aria-hidden="true"][data-name="${name}"]`);
   const drawnWith = (on: Page, name: string) =>
-    label(on, name).evaluate((element) => ({
-      ground: getComputedStyle(element).backgroundColor,
-      ink: getComputedStyle(element).color,
-      caret: getComputedStyle(element.parentElement!).borderInlineStartColor,
-      caretWidth: getComputedStyle(element.parentElement!).borderInlineStartWidth,
-    }));
+    label(on, name).evaluate((element) => {
+      const above = getComputedStyle(element, '::after');
+      return {
+        shown: above.content,
+        ground: above.backgroundColor,
+        ink: above.color,
+        caret: getComputedStyle(element).borderInlineStartColor,
+        caretWidth: getComputedStyle(element).borderInlineStartWidth,
+      };
+    });
 
   await text(page).click();
   await page.keyboard.type('Written by the Owner.');
@@ -4300,11 +4309,13 @@ test('each of two people sees the other’s cursor under the other’s name, in 
   // And not itself.
   await expect(label(page, 'Ada Owner')).toHaveCount(0);
   await expect(label(theirs, 'Bea Editor')).toHaveCount(0);
-  // The name is text, as the label of the caret, and neither is read to a screen reader.
-  await expect(label(page, 'Bea Editor')).toHaveText('Bea Editor');
+  // The name is the label of the caret, drawn from the attribute, and is no part of the text of the editor.
+  await expect(text(page)).toHaveText('Written by the Owner.');
+  await expect(text(theirs)).toHaveText('Written by the Owner.');
 
   // The Owner sees the Editor in slot 2, and the Editor sees the Owner in slot 1: the solid, the ink on it, and the caret.
   const seenOfEditor = await drawnWith(page, 'Bea Editor');
+  expect(seenOfEditor.shown).toBe('"Bea Editor"');
   expect(seenOfEditor.ground).toBe(await token(page, '--collab-2', 'background-color'));
   expect(seenOfEditor.ink).toBe(await token(page, '--collab-2-ink', 'background-color'));
   expect(seenOfEditor.caret).toBe(await token(page, '--collab-2', 'border-inline-start-color'));
