@@ -1364,6 +1364,16 @@ export const TABLE_NO_ROOM = `The table has no room for this. A table and the ta
  * October 2026, the number following the constant.
  */
 export const TABLE_NO_MORE = `The document has no room for another table. A document holds ${TABLE_COUNT_MOST.toLocaleString('en-GB')} tables.`;
+/**
+ * The title of the statement for a change that the collaboration server
+ * refused because it takes a table past a bound (register D171, D172;
+ * src/lib/collab/shape.ts). This browser sends none of its own accord: it is
+ * seen where two writers together take a table past a bound, by an undo or by
+ * a row added at once, and by a tab of a release that held other bounds.
+ * Written under the Expression Guidelines for the owner's approval; the
+ * numbers are the bounds themselves.
+ */
+export const TABLE_PAST_BOUNDS = `A change in this tab would take a table past its bounds: ${TABLE_MOST} rows, ${TABLE_MOST} cells in a row, and ${TABLE_CELLS_MOST.toLocaleString('en-GB')} cells with the tables in its cells, ${COUNTS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep`;
 
 const Closed = Extension.create<{ noRoom: (words: string | null) => void }>({
   name: 'closed',

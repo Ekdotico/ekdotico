@@ -2,7 +2,8 @@
 // account made as a person makes one, and the checks every page owes.
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, type Page } from '@playwright/test';
 import { APP_ORIGIN, AUTH_SECRET } from './origin.ts';
@@ -100,7 +101,21 @@ export function ownDocument(email: string, title: string): string {
  * hold (tests/e2e/stored-state.ts).
  */
 export function storeNested(documentId: string, depth: number): void {
-  const ran = spawnSync('node', ['tests/e2e/stored-state.ts', documentId, String(depth)], {
+  storeWith(documentId, [String(depth)]);
+}
+
+/**
+ * Stores `state` as the state of a document: what a client could send before
+ * the collaboration server held the shape of a document (tests/e2e/stored-state.ts).
+ */
+export function storeState(documentId: string, state: Uint8Array): void {
+  const path = join(mkdtempSync(join(tmpdir(), 'ekdotico-e2e-state-')), 'state');
+  writeFileSync(path, state);
+  storeWith(documentId, ['--file', path]);
+}
+
+function storeWith(documentId: string, args: string[]): void {
+  const ran = spawnSync('node', ['tests/e2e/stored-state.ts', documentId, ...args], {
     env: {
       ...process.env,
       FOUNDING_TEAM_EMAILS: '',

@@ -1219,6 +1219,97 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
     },
   );
 
+  // The shape of a document (src/lib/collab/shape.ts; register D170, D171,
+  // D180): refused as a limit is, each with a reason of its own.
+  describe('the shape of a document', () => {
+    const element = (name: string, children: (Y.XmlElement | Y.XmlText)[] = []) => {
+      const made = new Y.XmlElement(name);
+      if (children.length) made.insert(0, children);
+      return made;
+    };
+    const cell = () => element('tableCell', [element('paragraph', [new Y.XmlText('cell')])]);
+    const tableOf = (rows: number, columns: number) =>
+      element('tableBlock', [
+        element(
+          'table',
+          Array.from({ length: rows }, () => element('tableRow', Array.from({ length: columns }, cell))),
+        ),
+        element('tableCaption'),
+      ]);
+
+    it('refuses an update that creates a table without a row', { timeout: 60_000 }, async () => {
+      await expectRefusedUpdate(
+        await opened(),
+        (document) =>
+          document
+            .getXmlFragment('default')
+            .push([element('tableBlock', [element('table'), element('tableCaption')])]),
+        REFUSAL.INCOMPLETE,
+      );
+    });
+
+    it('refuses an update that takes a table past 100 rows', { timeout: 60_000 }, async () => {
+      await expectRefusedUpdate(
+        await opened(),
+        (document) => document.getXmlFragment('default').push([tableOf(101, 1)]),
+        REFUSAL.TABLE_BOUNDS,
+      );
+    });
+
+    it('takes a table at its bounds and a change to it, and stores them', { timeout: 60_000 }, async () => {
+      const { owner, id } = await opened();
+      const writing = await sending(owner, id);
+      writing.provider.document.getXmlFragment('default').push([tableOf(100, 100)]);
+      await until(() => writing.acknowledged() > writing.before, 20_000);
+      const typed = writing.acknowledged();
+      const first = (writing.provider.document.getXmlFragment('default').get(0) as Y.XmlElement).get(
+        0,
+      ) as Y.XmlElement;
+      ((first.get(99) as Y.XmlElement).get(99) as Y.XmlElement).push([
+        element('paragraph', [new Y.XmlText('last')]),
+      ]);
+      await until(() => writing.acknowledged() > typed, 20_000);
+      expect(await logged()).toEqual([]);
+      const later = connect(server.port, await owner.signedIn()).open(id);
+      await later.synced;
+      expect(later.provider.document.getXmlFragment('default').toString()).toContain('last');
+      expect(writing.client.framesFor(id).some((each) => each.type === CLOSE)).toBe(false);
+    });
+
+    it(
+      'is told to the editor’s connection, which keeps the text and sends nothing more',
+      { timeout: 60_000 },
+      async () => {
+        const { DocumentConnection } = await import('../../src/lib/collab/client.ts');
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        const { cookie } = owner;
+        class Socket extends WebSocket {
+          constructor(url: string) {
+            super(url, { headers: { cookie, origin: ORIGIN } } as never);
+          }
+        }
+        const connection = new DocumentConnection({
+          url: `ws://127.0.0.1:${server.port}${COLLAB_PATH}`,
+          documentId: id,
+          errorAfterMs: 60_000,
+          probe: async () => 200,
+          WebSocketPolyfill: Socket,
+        });
+        connection.start();
+        try {
+          await until(() => connection.getState().phase === 'connected');
+          connection.document.getXmlFragment('default').push([tableOf(1, 101)]);
+          await until(() => connection.getState().phase === 'held');
+          expect(connection.getState()).toMatchObject({ phase: 'held', held: REFUSAL.TABLE_BOUNDS });
+          expect(connection.document.getXmlFragment('default').length).toBe(1);
+        } finally {
+          connection.stop();
+        }
+      },
+    );
+  });
+
   // NFR-SE-19: one entry for each period for a limit, and not one for each
   // refusal. A refusal closes the connection, but a client can open another
   // and send the same again, so without the bound the rows written to the

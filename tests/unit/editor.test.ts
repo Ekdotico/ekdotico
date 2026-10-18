@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { collabRewrites } from '../../next.config.ts';
 import { CAPACITY_RETRY_MS, retryDelay, syncStatus } from '../../src/lib/collab/client.ts';
 import { REFUSAL } from '../../src/lib/collab/protocol.ts';
+import { TABLE_PAST_BOUNDS } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import { MAX_ELEMENT_DEPTH, MAX_STATE_BYTES } from '../../src/lib/collab/state.ts';
 import { linkAddress } from '../../src/lib/editor/link.ts';
 
@@ -129,18 +130,34 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
   );
 
   // The owner's decision of 12 October 2026: the same change would be sent and refused again.
-  it.each([REFUSAL.TOO_LARGE, REFUSAL.TOO_DEEP, REFUSAL.TOO_DANGLING])(
-    'never tries again after %s',
-    (reason) => {
-      for (const attempt of [1, 2, 50]) expect(retryDelay(reason, attempt)).toBeNull();
-    },
-  );
+  // And register D170, D171, D180: a rule of the shape, refused as a limit is.
+  it.each([
+    REFUSAL.TOO_LARGE,
+    REFUSAL.TOO_DEEP,
+    REFUSAL.TOO_DANGLING,
+    REFUSAL.INCOMPLETE,
+    REFUSAL.TABLE_BOUNDS,
+  ])('never tries again after %s', (reason) => {
+    for (const attempt of [1, 2, 50]) expect(retryDelay(reason, attempt)).toBeNull();
+  });
 
   it('names, in what it says of such a refusal, the limits the server keeps', () => {
     // The page cannot import the server's module, so its words carry the numbers.
     const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
     expect(page).toContain(`would make the document larger than ${MAX_STATE_BYTES / 1024 / 1024} MB'`);
     expect(page).toContain(`would nest the content more than ${MAX_ELEMENT_DEPTH} levels deep'`);
+  });
+
+  it('says of a change refused for the shape of the document which rule, in words that name no internal term', () => {
+    const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
+    expect(page).toContain('[REFUSAL.TABLE_BOUNDS]: TABLE_PAST_BOUNDS');
+    expect(TABLE_PAST_BOUNDS).toBe(
+      'A change in this tab would take a table past its bounds: 100 rows, 100 cells in a row, and 10,000 cells with the tables in its cells, two levels deep',
+    );
+    const incomplete =
+      'A change in this tab adds a block without the content it must hold, so it cannot be applied';
+    expect(page).toContain(`[REFUSAL.INCOMPLETE]:\n    '${incomplete}'`);
+    expect(incomplete).not.toMatch(/\d|schema|element|node|Yjs/i);
   });
 
   it('says of a change that waits for content the document does not hold what is true of it, in words that name no number and no internal term', () => {
