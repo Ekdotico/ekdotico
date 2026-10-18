@@ -464,6 +464,8 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
       {/* FR-ED-18: read-only in the error state, "until the connection returns". */}
       {state.opened ? (
         <Text
+          // The extensions are made once for a browser that can edit, or for one that cannot.
+          key={canEdit ? 'w' : 'r'}
           document={connection.document}
           editable={canEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
           reads={!canEdit}

@@ -4121,11 +4121,16 @@ test('a Viewer is shown what the schema can show of a document with text standin
   await theirs.waitForTimeout(1500);
   // The frames were read: the browser did ask what the server holds.
   expect(sent.some((message) => message.type === 0 && message.step === 0)).toBe(true);
-  // The browser asked what the server holds, and answered with nothing of its own.
-  const empty = Buffer.from(Y.encodeStateAsUpdate(new Y.Doc()));
+  // It sent no update, and what it answered with adds nothing to what the server holds: applied to
+  // the server's state, which `watching` holds, it changes neither the clients nor the deletions.
+  const server = Buffer.from(Y.encodeStateAsUpdate(watching.provider.document));
   for (const message of sent) {
     expect(message.step).not.toBe(2);
-    if (message.step === 1) expect(message.update).toEqual(empty);
+    if (message.step !== 1) continue;
+    const applied = new Y.Doc();
+    Y.applyUpdate(applied, server);
+    Y.applyUpdate(applied, message.update!);
+    expect(Buffer.from(Y.encodeStateAsUpdate(applied))).toEqual(server);
   }
   // And the shared document still holds what the schema leaves out: no repair was written.
   expect(held()).toContain('stray-text');

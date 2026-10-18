@@ -1109,46 +1109,108 @@ export function holdBinding(
  * empty one. A fault of the making (quotes nested ten thousand deep) is thrown.
  */
 export function shownOf(shared: Y.Doc, schema: Schema): PMNode {
-  const copy = new Y.Doc();
+  const copy = shownCopy(shared, schema);
   try {
-    Y.applyUpdate(copy, Y.encodeStateAsUpdate(shared));
-    const fragment = copy.getXmlFragment(FRAGMENT_NAME);
-    for (const at of strays(fragment, schema).reverse()) fragment.delete(at, 1);
-    const made = yXmlFragmentToProseMirrorRootNode(fragment, schema);
-    const whole = made.type.createAndFill(null, made.content);
-    if (!whole) throw new Error('editor: the document cannot be made whole');
-    return whole;
+    return copy.show();
   } finally {
-    copy.destroy();
+    copy.stop();
   }
 }
 
+// The origin of what is applied to the copy from the shared document: anything else written to it is this browser's own.
+const FED = 'fed';
+
 /**
- * Shows `shownOf` the shared document in `view`, now and after each change of
- * the document, whoever made it: the way a reader's browser follows an editor,
- * and follows the repair when one is written. Nothing is written to the shared
- * document, which is only read. Changes of one moment are shown once. Returns
- * the function that stops it.
+ * The copy that `shownOf` makes the text of, kept between texts so that it is
+ * made once and then fed each update of the shared document (a copy of a 5 MB
+ * document costs a tenth of a second, which a writer who types makes many
+ * times a second). It is kept only while it is the shared document: where
+ * taking out what stands where it cannot, or the library's own making, wrote
+ * anything to it (a deletion that the shared document does not hold), it is
+ * put away, and the next text is made of a new copy, so that it never drifts.
+ * `held` is the copy, for the tests. `stop` puts it away.
+ */
+export function shownCopy(shared: Y.Doc, schema: Schema) {
+  let copy: Y.Doc | undefined;
+  const feed = (update: Uint8Array) => {
+    if (copy) Y.applyUpdate(copy, update, FED);
+  };
+  const drop = () => {
+    shared.off('update', feed);
+    copy?.destroy();
+    copy = undefined;
+  };
+  return {
+    held: () => copy,
+    stop: drop,
+    show(): PMNode {
+      if (!copy) {
+        copy = new Y.Doc();
+        Y.applyUpdate(copy, Y.encodeStateAsUpdate(shared), FED);
+        shared.on('update', feed);
+      }
+      const made = copy;
+      let written = false;
+      const note = (_update: Uint8Array, origin: unknown) => {
+        if (origin !== FED) written = true;
+      };
+      made.on('update', note);
+      try {
+        const fragment = made.getXmlFragment(FRAGMENT_NAME);
+        for (const at of strays(fragment, schema).reverse()) fragment.delete(at, 1);
+        const root = yXmlFragmentToProseMirrorRootNode(fragment, schema);
+        const whole = root.type.createAndFill(null, root.content);
+        if (!whole) throw new Error('editor: the document cannot be made whole');
+        return whole;
+      } catch (fault) {
+        written = true;
+        throw fault;
+      } finally {
+        made.off('update', note);
+        if (written) drop();
+      }
+    },
+  };
+}
+
+/**
+ * What a change of the text that the shared document made is marked with: the
+ * meta of the binding, which the filters of `Closed` read as what arrives and
+ * not as the writer's own change, and no history of undo.
+ */
+export const arrives = (tr: Transaction) =>
+  tr.setMeta('addToHistory', false).setMeta(ySyncPluginKey, { isChangeOrigin: true });
+
+/**
+ * Shows the text of the shared document in `view`, now and after each change
+ * of the document, whoever made it: the way a reader's browser follows an
+ * editor, and follows the repair when one is written. Nothing is written to
+ * the shared document, which is only read. Returns the function that stops it.
  *
  * The change to the view is the smallest that makes the text equal, so that a
  * selection in a part that did not change stays where it is. It carries the
- * meta of the binding, which the filters of `Closed` read as what arrives and
- * not as the writer's own change, and it is in no history. A text that cannot
- * be made is told to `unshown`, once, and nothing more is shown.
+ * meta of the binding (`arrives`). A text that cannot be made is told to
+ * `unshown`, once, and nothing more is shown.
+ *
+ * AT MOST ONE TEXT IN `max(100 ms, 4 times what the last cost)`, the first at
+ * once and the last after the rest (a reviewer measured a tenth of a second
+ * for a document of 5 MB, and separate messages of the socket are not one
+ * moment): a writer who types eight times a second does not take the page of a
+ * reader.
  */
 export function followShared(view: EditorView, document: Y.Doc, unshown: () => void): () => void {
   let over = false;
-  let queued = false;
-  const arrives = (tr: Transaction) =>
-    tr.setMeta('addToHistory', false).setMeta(ySyncPluginKey, { isChangeOrigin: true });
-  const show = () => {
-    queued = false;
-    if (over) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let last = Number.NEGATIVE_INFINITY;
+  let cost = 0;
+  const copy = shownCopy(document, view.state.schema);
+  const run = () => {
     let next: PMNode;
     try {
-      next = shownOf(document, view.state.schema);
+      next = copy.show();
     } catch {
       over = true;
+      copy.stop();
       unshown();
       return;
     }
@@ -1169,36 +1231,45 @@ export function followShared(view: EditorView, document: Y.Doc, unshown: () => v
       view.dispatch(arrives(view.state.tr.replaceWith(0, view.state.doc.content.size, next.content)));
     }
   };
+  const show = () => {
+    timer = undefined;
+    if (over) return;
+    last = Date.now();
+    const began = performance.now();
+    run();
+    cost = performance.now() - began;
+  };
   const changed = () => {
-    if (queued || over) return;
-    queued = true;
-    queueMicrotask(show);
+    if (timer !== undefined || over) return;
+    timer = setTimeout(show, Math.max(0, last + Math.max(100, 4 * cost) - Date.now()));
   };
   document.on('update', changed);
   show();
   return () => {
     over = true;
+    clearTimeout(timer);
     document.off('update', changed);
+    copy.stop();
   };
 }
 
 /** The editor of a reader: the text follows the shared document and is never written to it (`followShared`). */
-const ReaderView = Extension.create<
-  { document: Y.Doc; unshown: () => void },
-  { stop: (() => void) | undefined }
->({
+// What stops the following of each editor. Not the extension's storage, which an extension shares
+// between the editors made of it (a second editor made of the same extensions would take the first's).
+const FOLLOWING = new WeakMap<object, () => void>();
+const ReaderView = Extension.create<{ document: Y.Doc; unshown: () => void }>({
   name: 'readerView',
   addOptions() {
-    return { document: new Y.Doc(), unshown: () => {} };
-  },
-  addStorage() {
-    return { stop: undefined };
+    // Given by `extensions`.
+    return { document: undefined as unknown as Y.Doc, unshown: () => {} };
   },
   onCreate() {
-    this.storage.stop = followShared(this.editor.view, this.options.document, this.options.unshown);
+    FOLLOWING.get(this.editor)?.();
+    FOLLOWING.set(this.editor, followShared(this.editor.view, this.options.document, this.options.unshown));
   },
   onDestroy() {
-    this.storage.stop?.();
+    FOLLOWING.get(this.editor)?.();
+    FOLLOWING.delete(this.editor);
   },
 });
 
