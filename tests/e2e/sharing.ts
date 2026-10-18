@@ -41,6 +41,23 @@ export async function invite(page: Page, addresses: string[], role: 'Editor' | '
 export const pendingRow = (page: Page, address: string) =>
   page.getByRole('group', { name: 'Pending invitations' }).getByRole('row').filter({ hasText: address });
 
+/** Changes a collaborator's role in the database of the run (tests/e2e/set-role.ts); the server learns of it by its re-check. */
+export function setRole(documentId: string, address: string, role: 'editor' | 'reviewer' | 'viewer') {
+  const ran = spawnSync('node', ['tests/e2e/set-role.ts', documentId, address, role], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN,
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(ran.status, ran.stderr).toBe(0);
+}
+
 /** Moves the expiry of the pending invitations to an address into the past (tests/e2e/expire-invitation.ts). */
 export function expire(address: string) {
   const ran = spawnSync('node', ['tests/e2e/expire-invitation.ts', address], {

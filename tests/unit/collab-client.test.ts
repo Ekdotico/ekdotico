@@ -313,3 +313,148 @@ describe('a change that waits for its batch does not turn the indicator to synci
     connection.stop();
   });
 });
+
+// The types of the frames the server sends (@hocuspocus/server, types.ts).
+const AUTH = 2;
+const STATELESS = 5;
+/** A frame that says the server refused this document, and why. */
+const refusal = (reason: string) => toFrame(AUTH, 1, reason.length, ...new TextEncoder().encode(reason));
+/** A frame that carries a stateless message from the server. */
+const stateless = (payload: string) => {
+  const text = new TextEncoder().encode(payload);
+  return toFrame(STATELESS, ...varint(text.length), ...text);
+};
+/** The frames this socket sent that ask the server to open the document: authentication by a token. */
+const openings = (socket: Socket) => socket.sent.filter((frame) => frame[ID.length + 1] === AUTH);
+/** The frames that ask the server for what it holds: the first step of a synchronisation. */
+const asks = (socket: Socket) =>
+  socket.sent.filter((frame) => frame[ID.length + 1] === SYNC && frame[ID.length + 2] === 0);
+
+describe('a document at its limit of ten connections (FR-ED-18, NFR-PE-05)', () => {
+  /** A connection that the server has refused for the limit. */
+  async function refused() {
+    const connection = new DocumentConnection({
+      url: 'ws://example.invalid/collab',
+      documentId: ID,
+      errorAfterMs: 60_000,
+      probe: async () => 200,
+      WebSocketPolyfill: Socket,
+    });
+    connection.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const socket = Socket.all.at(-1)!;
+    socket.receive(new Uint8Array([9]).buffer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openings(socket)).toHaveLength(1);
+    socket.receive(refusal('capacity'));
+    await vi.advanceTimersByTimeAsync(0);
+    return { connection, socket };
+  }
+
+  it('shows the statement and neither the restoring state nor the error state, however long it lasts', async () => {
+    const { connection } = await refused();
+    expect(connection.getState()).toMatchObject({ phase: 'capacity', opened: false });
+    // The error state comes after `errorAfterMs` of a lost connection; this one is not lost.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(connection.getState().phase).toBe('capacity');
+    connection.stop();
+  });
+
+  it('asks again every 30 seconds, and not once before', async () => {
+    const { connection, socket } = await refused();
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(openings(socket)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(openings(socket)).toHaveLength(2);
+    // Refused again: the next try is 30 seconds after this one.
+    socket.receive(refusal('capacity'));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(openings(socket)).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(openings(socket)).toHaveLength(3);
+    expect(connection.getState().phase).toBe('capacity');
+    connection.stop();
+  });
+
+  it('opens the document when a place is free at the next try, and shows the state of a connection that is open', async () => {
+    const { connection, socket } = await refused();
+    await vi.advanceTimersByTimeAsync(30_000);
+    socket.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
+    socket.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState()).toMatchObject({ phase: 'connected', opened: true });
+    connection.stop();
+  });
+});
+
+describe('the role of an open connection changes (FR-ED-40 (b), FR-ED-41)', () => {
+  const notice = (role: string, canEdit: unknown) => JSON.stringify({ kind: 'role', role, canEdit });
+
+  it('is kept in the state, and read-only means no request for the server’s state', async () => {
+    const { connection, socket } = await opened();
+    expect(connection.getState().notice).toBeUndefined();
+    socket.receive(stateless(notice('viewer', false)));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().notice).toEqual({ role: 'viewer', canEdit: false });
+    expect(asks(socket)).toHaveLength(0);
+    connection.stop();
+  });
+
+  it('asks the server for its state where the connection may edit again, so that what a later change depends on is sent', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(notice('viewer', false)));
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(stateless(notice('editor', true)));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().notice).toEqual({ role: 'editor', canEdit: true });
+    expect(asks(socket)).toHaveLength(1);
+    connection.stop();
+  });
+
+  it.each([
+    ['text that is not JSON', 'not json'],
+    ['another kind', JSON.stringify({ kind: 'other', role: 'viewer', canEdit: false })],
+    ['a role that is not one', notice('king', true)],
+    ['a flag that is not one', notice('editor', 'yes')],
+    ['a field more', JSON.stringify({ kind: 'role', role: 'editor', canEdit: true, extra: 1 })],
+    ['a field fewer', JSON.stringify({ kind: 'role', role: 'editor' })],
+    ['an array', '[1]'],
+    ['null', 'null'],
+  ])('is ignored where it is %s', async (_, payload) => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(payload));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().notice).toBeUndefined();
+    expect(connection.getState().phase).toBe('connected');
+    expect(asks(socket)).toHaveLength(0);
+    connection.stop();
+  });
+
+  it('is gone with the connection: a new one is told its role afresh', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(notice('viewer', false)));
+    await vi.advanceTimersByTimeAsync(0);
+    connection.stop();
+    connection.start();
+    expect(connection.getState().notice).toBeUndefined();
+    connection.stop();
+  });
+});
+
+describe('awareness (FR-ED-17)', () => {
+  it('is the provider’s own once the connection is started, and says nothing of this client but its cursor', async () => {
+    const connection = new DocumentConnection({
+      url: 'ws://example.invalid/collab',
+      documentId: ID,
+      errorAfterMs: 60_000,
+      probe: async () => 200,
+      WebSocketPolyfill: Socket,
+    });
+    expect(connection.awareness).toBeNull();
+    connection.start();
+    expect(connection.awareness).not.toBeNull();
+    // The name and the colour are the server's: the client says neither.
+    expect(connection.awareness!.getLocalState()).toEqual({});
+    connection.stop();
+  });
+});

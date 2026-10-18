@@ -18,7 +18,7 @@ import {
   type Person,
 } from './account.ts';
 import { connectAs, startCollab, stopCollab } from './collab.ts';
-import { invite, INVITATION_LINK, shareNew } from './sharing.ts';
+import { invite, INVITATION_LINK, setRole, shareNew } from './sharing.ts';
 
 // One collaboration server for the file, and one test at a time: a test stops it.
 test.describe.configure({ mode: 'serial' });
@@ -3915,15 +3915,14 @@ test('a session that has ended is stated once, and the page does not connect aga
 }) => {
   await enter(page);
   await openNew(page);
+  // The connection is lost first, and the session ended after: the server's re-check (FR-ED-41,
+  // 3 seconds in these tests) cannot end it, so this is the other way a page learns that its
+  // session has ended. Every new handshake is refused, and the page must not go on asking.
+  await stopCollab();
   const other = await context.newPage();
   await other.goto('/');
   await other.getByRole('button', { name: 'Sign out' }).click();
   await expect(other).toHaveURL(/\/sign-in/);
-
-  // The server does not yet end a connection for the end of its session
-  // (NFR-SE-03 (b) is a later slice), so the connection is lost here: every
-  // new handshake is then refused, and the page must not go on asking.
-  await stopCollab();
   await startCollab();
   const statement = page.getByRole('status').filter({ hasText: 'The session has ended' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
@@ -4237,4 +4236,234 @@ test('a table block emptied by a client at 100 tables holds no honest tab: each 
   await expect(second.getByText(held)).toHaveCount(0);
   member.close();
   await second.close();
+});
+
+// FR-ED-17: the cursor of another person is named, and in the colour of the slot the server holds
+// for that connection. The names are the accounts' own, and the slots 1 and 2 follow the order of
+// connection. A colour is read as the browser resolves it, from the design package's own tokens.
+test('each of two people sees the other’s cursor under the other’s name, in the colour of the other’s slot, until the other goes', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  const owner = { ...newPerson(), name: 'Ada Owner' };
+  await enter(page, owner);
+  const id = await shareNew(page);
+  const editor = { ...newPerson(), name: 'Bea Editor' };
+  const other = await browser.newContext();
+  const theirs = await other.newPage();
+  await enter(theirs, editor);
+  await invite(page, [editor.email], 'Editor');
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  // The Owner connects first, so holds slot 1; the Editor, second, slot 2.
+  await page.goto(`/documents/${id}`);
+  await expect(status(page, 'In sync')).toBeVisible();
+  const { found: link } = await mailFor(editor.email, INVITATION_LINK);
+  await theirs.goto(new URL(link).pathname);
+  await theirs.getByRole('button', { name: 'Accept' }).click();
+  await theirs.waitForURL(`**/documents/${id}`);
+  await expect(status(theirs, 'In sync')).toBeVisible();
+
+  /** What the browser makes of a property set to a token of the design package. */
+  const token = (on: Page, name: string, property: 'background-color' | 'border-inline-start-color') =>
+    on.evaluate(
+      ([custom, css]) => {
+        const probe = document.createElement('span');
+        probe.style.setProperty(css!, `var(${custom})`);
+        document.body.append(probe);
+        const resolved = getComputedStyle(probe).getPropertyValue(css!);
+        probe.remove();
+        return resolved;
+      },
+      [name, property],
+    );
+  /** The label of a person's cursor in this page's text, and what the browser draws it with. */
+  const label = (on: Page, name: string) =>
+    text(on).locator('[aria-hidden="true"] > span').filter({ hasText: name });
+  const drawnWith = (on: Page, name: string) =>
+    label(on, name).evaluate((element) => ({
+      ground: getComputedStyle(element).backgroundColor,
+      ink: getComputedStyle(element).color,
+      caret: getComputedStyle(element.parentElement!).borderInlineStartColor,
+      caretWidth: getComputedStyle(element.parentElement!).borderInlineStartWidth,
+    }));
+
+  await text(page).click();
+  await page.keyboard.type('Written by the Owner.');
+  await text(theirs).click();
+  await expect(text(theirs)).toContainText('Written by the Owner.');
+
+  // Each sees the other, once, under the other's own name.
+  await expect(label(page, 'Bea Editor')).toHaveCount(1);
+  await expect(label(theirs, 'Ada Owner')).toHaveCount(1);
+  // And not itself.
+  await expect(label(page, 'Ada Owner')).toHaveCount(0);
+  await expect(label(theirs, 'Bea Editor')).toHaveCount(0);
+  // The name is text, as the label of the caret, and neither is read to a screen reader.
+  await expect(label(page, 'Bea Editor')).toHaveText('Bea Editor');
+
+  // The Owner sees the Editor in slot 2, and the Editor sees the Owner in slot 1: the solid, the ink on it, and the caret.
+  const seenOfEditor = await drawnWith(page, 'Bea Editor');
+  expect(seenOfEditor.ground).toBe(await token(page, '--collab-2', 'background-color'));
+  expect(seenOfEditor.ink).toBe(await token(page, '--collab-2-ink', 'background-color'));
+  expect(seenOfEditor.caret).toBe(await token(page, '--collab-2', 'border-inline-start-color'));
+  expect(seenOfEditor.caretWidth).toBe('1px');
+  const seenOfOwner = await drawnWith(theirs, 'Ada Owner');
+  expect(seenOfOwner.ground).toBe(await token(theirs, '--collab-1', 'background-color'));
+  expect(seenOfOwner.ink).toBe(await token(theirs, '--collab-1-ink', 'background-color'));
+  expect(seenOfOwner.ground).not.toBe(seenOfEditor.ground);
+
+  // What the Owner selects is washed in the Owner's slot, in the Editor's page.
+  await page.keyboard.press('ControlOrMeta+a');
+  const washed = await token(theirs, '--collab-1-soft', 'background-color');
+  await expect
+    .poll(() =>
+      theirs.evaluate(
+        (wash) =>
+          [...document.querySelectorAll('.ekd-editor span')].some(
+            (element) =>
+              getComputedStyle(element).backgroundColor === wash && element.textContent?.includes('Written'),
+          ),
+        washed,
+      ),
+    )
+    .toBe(true);
+
+  // The cursor goes when the person does.
+  await other.close();
+  await expect(label(page, 'Bea Editor')).toHaveCount(0);
+  await expect(text(page)).toContainText('Written by the Owner.');
+});
+
+// FR-ED-18, NFR-PE-05: the eleventh connection to a document is refused, and the page shows the fixed statement,
+// neither the reconnecting state nor the error state of FR-ED-23, and tries again at 30 seconds. The ten are
+// the first page and nine connections made straight to the server by the same account.
+test('the eleventh connection to a document is refused with the fixed statement, and is let in at the next try once a place is free', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  const id = await openNew(page);
+  const nine = [];
+  for (let n = 0; n < 9; n++) nine.push(await connectAs(page.context(), id));
+
+  const statement =
+    'This document has reached its limit of ten connections. Ekdotico tries again every 30 seconds.';
+  const second = await page.context().newPage();
+  await second.clock.install();
+  await second.goto(`/documents/${id}`);
+  await expect(second.getByText(statement)).toBeVisible();
+  // Neither the reconnecting state nor the error state: the indicator is not there at all, nor is the text.
+  const indicator = second.getByRole('button', {
+    name: /Restoring the connection|Not connected|Opening the document|In sync/,
+  });
+  await expect(indicator).toHaveCount(0);
+  await expect(second.getByRole('textbox', { name: 'Document text' })).toHaveCount(0);
+
+  // The error state would come after 6 seconds in these tests (COLLAB_ERROR_AFTER_MS); 20 seconds on, it has not.
+  await second.clock.fastForward(20_000);
+  await expect(second.getByText(statement)).toBeVisible();
+  await expect(indicator).toHaveCount(0);
+
+  // A place is free, and the next try, at 30 seconds from the refusal, is let in.
+  nine[0]!.close();
+  await second.clock.fastForward(10_000);
+  await expect(status(second, 'In sync')).toBeVisible();
+  await expect(second.getByText(statement)).toHaveCount(0);
+  await expect(text(second)).toBeVisible();
+  for (const each of nine.slice(1)) each.close();
+  await second.close();
+});
+
+// FR-ED-41: the re-check ends a connection whose session has ended, with no notice and no restart. The
+// collaboration server of these tests re-checks every 3 seconds (COLLAB_RECHECK_MS, tests/e2e/collab.ts).
+test('the re-check ends the connection of a session that was ended in another tab, and the page states it once and does not connect again', async ({
+  page,
+  context,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Open when the session ends.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  const sockets = countSockets(page);
+
+  const other = await context.newPage();
+  await other.goto('/');
+  await other.getByRole('button', { name: 'Sign out' }).click();
+  await expect(other).toHaveURL(/\/sign-in/);
+
+  // No handshake was refused and no socket lost: the server closed the connection, as session-ended.
+  const statement = page.getByRole('status').filter({ hasText: 'The session has ended' });
+  await expect(statement).toBeVisible({ timeout: 30_000 });
+  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in');
+  await expect(text(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
+  await page.waitForTimeout(8000);
+  expect(sockets.count).toBe(0);
+});
+
+// FR-ED-40 (b), FR-ED-41: a role that changes with no notice is applied to the open connection by the
+// re-check: read-only in place, with the words of docs/plan/slice-14.md (for the owner's approval), and
+// editable in place again. The connection is the same socket throughout.
+test('an Editor whose role becomes Viewer is made read-only in place and told, and is an Editor again, on the same connection', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  const owner = { ...newPerson(), name: 'Ada Owner' };
+  await enter(page, owner);
+  const id = await shareNew(page);
+  const editor = { ...newPerson(), name: 'Bea Editor' };
+  const other = await browser.newContext();
+  const theirs = await other.newPage();
+  await enter(theirs, editor);
+  await invite(page, [editor.email], 'Editor');
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  await page.goto(`/documents/${id}`);
+  await expect(status(page, 'In sync')).toBeVisible();
+  const { found: link } = await mailFor(editor.email, INVITATION_LINK);
+  await theirs.goto(new URL(link).pathname);
+  await theirs.getByRole('button', { name: 'Accept' }).click();
+  await theirs.waitForURL(`**/documents/${id}`);
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+  const sockets = countSockets(theirs);
+
+  await text(theirs).click();
+  await theirs.keyboard.type('Written as an Editor.');
+  await expect(text(page)).toContainText('Written as an Editor.');
+  const role = (now: string, rest: string) =>
+    theirs
+      .getByRole('status')
+      .filter({ hasText: `The role of this account on this document is now ${now}. ${rest}` });
+  await expect(theirs.getByRole('status').filter({ hasText: 'The role of this account' })).toHaveCount(0);
+
+  // A Viewer: the text stays, cannot be changed, and is still followed from the Owner's.
+  setRole(id, editor.email, 'viewer');
+  await expect(role('Viewer', 'The document is read-only in this tab.')).toBeVisible({ timeout: 30_000 });
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
+  await expect(text(theirs)).toContainText('Written as an Editor.');
+  await text(theirs).click();
+  await theirs.keyboard.type('Nothing of this.');
+  await expect(text(theirs)).not.toContainText('Nothing of this.');
+  await text(page).click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type(' Owner, meanwhile.');
+  await expect(text(theirs)).toContainText('Owner, meanwhile.');
+  await expect(text(page)).not.toContainText('Nothing of this.');
+  await expect(page.getByRole('status').filter({ hasText: 'The role of this account' })).toHaveCount(0);
+
+  // An Editor again: editable in place, and what is written is the Owner's to see.
+  setRole(id, editor.email, 'editor');
+  await expect(role('Editor', 'The document can be edited in this tab.')).toBeVisible({ timeout: 30_000 });
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+  await placeAtEnd(text(theirs).locator('p').first());
+  await theirs.keyboard.type(' And again.');
+  await expect(text(page)).toContainText('And again.');
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  // The same connection throughout: the page opened no socket.
+  expect(sockets.count).toBe(0);
+  await other.close();
 });

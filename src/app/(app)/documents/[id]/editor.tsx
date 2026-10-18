@@ -11,12 +11,14 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExtern
 import Link from 'next/link';
 import { EditorContent, useEditor, type Editor as TextEditor } from '@tiptap/react';
 import type { EditorView } from '@tiptap/pm/view';
+import type { Awareness } from 'y-protocols/awareness';
 import type * as Y from 'yjs';
 import { tabbableWithin } from '@ekdotico/domico/a11y';
 import { Button, Cluster, Dialog, FormFault, Stack, SyncStatus } from '@ekdotico/domico/components';
 import { DocumentConnection, syncStatus, type Ending, type Held } from '../../../../lib/collab/client.ts';
 import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import type { Limit } from '../../../../lib/collab/shape.ts';
+import { ROLE_NAME, type DocumentRole } from '../../../../lib/documents/permissions.ts';
 import pageStyles from '../../../pages.module.css';
 import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
 import styles from './editor.module.css';
@@ -84,6 +86,13 @@ const HELD: Record<Held, string> = {
     Object.entries(LIMIT_REFUSAL).map(([limit, reason]) => [reason, heldTitle(limit as Limit)]),
   ) as Record<(typeof LIMIT_REFUSAL)[Limit], string>),
 };
+// FR-ED-40 (b): the role of this connection changed and it stays open, and the
+// editor "states the new role". No words are given; for the owner's approval
+// (docs/plan/slice-14.md, section 6). The role's name is the one `ROLE_NAME` writes.
+const ROLE_NOW = (role: DocumentRole, canEdit: boolean) =>
+  `The role of this account on this document is now ${ROLE_NAME[role]}. ${
+    canEdit ? 'The document can be edited in this tab.' : 'The document is read-only in this tab.'
+  }`;
 // A repair of the document that this browser did not write (register D180,
 // the browser's half). Written for the owner's approval.
 const UNREPAIRED =
@@ -146,6 +155,7 @@ function blockControls(view: EditorView): HTMLElement | null {
 /** The text of the document: the editable region, and the toolbar on its selection. */
 function Text({
   document,
+  awareness,
   editable,
   reads,
   onEditor,
@@ -153,6 +163,8 @@ function Text({
   onUnrepairable,
 }: {
   document: Y.Doc;
+  /** Where the cursors of the others are read from (FR-ED-17); a browser that reads draws none. */
+  awareness: Awareness | null;
   editable: boolean;
   /** This browser cannot edit the document, whatever the connection: it shows what the schema can show and writes nothing. */
   reads: boolean;
@@ -181,8 +193,8 @@ function Text({
     [],
   );
   const all = useMemo(
-    () => extensions(document, onUnshown, refuse, onUnrepairable, reads),
-    [document, onUnshown, refuse, onUnrepairable, reads],
+    () => extensions(document, onUnshown, refuse, onUnrepairable, reads, awareness),
+    [document, onUnshown, refuse, onUnrepairable, reads, awareness],
   );
   // What a screen reader is given of a refusal: one region that is in the page
   // throughout, emptied and then written at each refusal, so that a second
@@ -438,6 +450,8 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
   }
 
   const status = syncStatus(state);
+  // FR-ED-40 (b): what the server says the role holds now, once it has said; until then, what the page was opened with.
+  const mayEdit = state.notice ? state.notice.canEdit : canEdit;
   return (
     <Stack gap={4}>
       {state.phase === 'held' && state.held ? (
@@ -465,14 +479,26 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
           <p>{UNREPAIRED}</p>
         </FormFault>
       ) : null}
+      {state.notice ? (
+        // Neither a fault nor the error state: said again for each change of role.
+        <FormFault
+          key={`${state.notice.role} ${state.notice.canEdit}`}
+          tone="neutral"
+          announce="polite"
+          autoFocus={false}
+        >
+          <p>{ROLE_NOW(state.notice.role, state.notice.canEdit)}</p>
+        </FormFault>
+      ) : null}
       {/* FR-ED-18: read-only in the error state, "until the connection returns". */}
       {state.opened ? (
         <Text
           // The extensions are made once for a browser that can edit, or for one that cannot.
-          key={canEdit ? 'w' : 'r'}
+          key={mayEdit ? 'w' : 'r'}
           document={connection.document}
-          editable={canEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
-          reads={!canEdit}
+          awareness={connection.awareness}
+          editable={mayEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
+          reads={!mayEdit}
           onEditor={keep}
           onUnshown={fail}
           onUnrepairable={unrepairable}
