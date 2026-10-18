@@ -584,6 +584,13 @@ describe('an update that takes the document past a limit, and further than it wa
     Y.applyUpdate(at150, deleted);
     undo.undo();
     expect(answer(at150, sentBy(writer, at150))).toBe('tables');
+    // A table taken away and one put in, in one change: no more than it had.
+    const swapped = sent(at150, (fragment) => {
+      fragment.delete(1, 1);
+      fragment.push([blockOf(1, 1)]);
+    });
+    expect(withoutTheCopy(at150, swapped)).toBe(true);
+    expect(answer(at150, swapped)).toBeNull();
     expect(
       answer(
         at150,
@@ -685,6 +692,16 @@ describe('an update that takes the document past a limit, and further than it wa
       answer(
         past,
         sent(past, (fragment) => textOf(fragment).delete(0, 5)),
+      ),
+    ).toBeNull();
+    // A character typed over another: no longer than it was.
+    expect(
+      answer(
+        past,
+        sent(past, (fragment) => {
+          textOf(fragment).delete(0, 1);
+          textOf(fragment).insert(0, 'k');
+        }),
       ),
     ).toBeNull();
     expect(
