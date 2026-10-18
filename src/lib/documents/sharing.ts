@@ -18,7 +18,7 @@ import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
 import { faultOf } from '../fault.ts';
-import { takeLimit } from '../rate-limit.ts';
+import { takeLimitReturnable } from '../rate-limit.ts';
 import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken } from '../token.ts';
@@ -83,85 +83,117 @@ export async function createInvitations(
   role: OfferedRole,
   now: Date = new Date(),
 ): Promise<CreateResult> {
-  return db().$transaction(async (tx): Promise<CreateResult> => {
-    // The one statement Prisma's interface cannot make. A raw query is not
-    // given the schema the client names (src/lib/db.ts), so it names its own,
-    // the application schema of contract IC-23. Parameterised (NFR-SE-06, A05).
-    const held = await tx.$queryRaw<{ id: string }[]>`
-      SELECT "id" FROM "ekdotico"."Document"
-      WHERE "id" = ${document.id}::uuid AND "deletedAt" IS NULL
-      FOR UPDATE`;
-    if (held.length === 0) return { outcome: 'not_found' };
+  // NFR-SE-07, S13-5: the invitations are counted inside the transaction,
+  // after every refusal, and given back where the transaction then fails, so
+  // that a request counts all its invitations only where it creates them.
+  let giveBack: (() => Promise<void>) | undefined;
+  try {
+    return await db().$transaction((tx) =>
+      creating(tx, document, inviterId, emails, role, now, (back) => (giveBack = back)),
+    );
+  } catch (error) {
+    await giveBack?.().catch((fault: unknown) =>
+      console.error(`invitations: count not given back (${faultOf(fault)})`),
+    );
+    throw error;
+  }
+}
 
-    // The two refusals of FR-ED-37 rest on what the Owner knows. A holder of
-    // the permission who is not the Owner may not know them, so only the
-    // holder's own address is refused (FR-ED-44 (a)).
-    const inviter = await tx.user.findUnique({ where: { id: inviterId }, select: { email: true } });
-    const own = emails.find((email) => email === inviter?.email);
-    if (own) return { outcome: 'own_address', email: own };
-    const collaborators = await tx.documentCollaborator.findMany({
-      where: { documentId: document.id },
-      select: { userId: true },
-    });
-    if (inviterId === document.ownerId) {
-      const accepted = await tx.documentInvitation.findFirst({
-        where: {
-          documentId: document.id,
-          state: 'ACCEPTED',
-          email: { in: [...emails] },
-          acceptedById: { in: collaborators.map(({ userId }) => userId) },
-        },
-        select: { email: true },
-      });
-      if (accepted?.email) return { outcome: 'collaborator_address', email: accepted.email };
-    }
+/**
+ * Holds the row of a document that is not deleted until the transaction ends;
+ * false where there is none. The one statement Prisma's interface cannot make.
+ * A raw query is not given the schema the client names (src/lib/db.ts), so it
+ * names its own, the application schema of contract IC-23. Parameterised
+ * (NFR-SE-06, A05).
+ */
+async function lockDocument(tx: Prisma.TransactionClient, documentId: string): Promise<boolean> {
+  const held = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "ekdotico"."Document"
+    WHERE "id" = ${documentId}::uuid AND "deletedAt" IS NULL
+    FOR UPDATE`;
+  return held.length > 0;
+}
 
-    // A row still stored pending past its expiry is written as expired, so
-    // that the index of one pending invitation for an address holds for open ones.
-    await tx.documentInvitation.updateMany({
-      where: { documentId: document.id, state: 'PENDING', expiresAt: { lte: now } },
-      data: { state: 'EXPIRED' },
-    });
-    const pending = await tx.documentInvitation.findMany({
-      where: { documentId: document.id, state: 'PENDING' },
-      select: { id: true, email: true },
-    });
-    const replaced = pending.filter(({ email }) => email !== null && emails.includes(email));
-    const people = 1 + collaborators.length + pending.length - replaced.length + emails.length;
-    if (people > PEOPLE_MOST) return { outcome: 'limit' };
+async function creating(
+  tx: Prisma.TransactionClient,
+  document: Pick<DocumentRow, 'id' | 'ownerId'>,
+  inviterId: string,
+  emails: readonly string[],
+  role: OfferedRole,
+  now: Date,
+  counted: (giveBack: () => Promise<void>) => void,
+): Promise<CreateResult> {
+  if (!(await lockDocument(tx, document.id))) return { outcome: 'not_found' };
 
-    // NFR-SE-07: each invitation created counts; all of them, or none (S13-5).
-    const limit = await takeLimit('INVITATIONS_PER_USER', inviterId, emails.length);
-    if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
-
-    if (replaced.length > 0) {
-      const ids = replaced.map(({ id }) => id);
-      await tx.documentInvitation.updateMany({
-        where: { id: { in: ids } },
-        data: { state: 'REVOKED', respondedAt: now },
-      });
-      await tx.notification.deleteMany({ where: notificationsOf(ids) });
-    }
-    const expiresAt = new Date(now.getTime() + settings().documentInvitationDays * DAY_MS);
-    const invitations: NewInvitation[] = [];
-    for (const email of emails) {
-      const token = newToken();
-      const { id } = await tx.documentInvitation.create({
-        data: {
-          documentId: document.id,
-          email,
-          role: OFFERED[role],
-          invitedById: inviterId,
-          tokenHash: hashToken(token),
-          createdAt: now,
-          expiresAt,
-        },
-        select: { id: true },
-      });
-      invitations.push({ id, email, token, role, expiresAt });
-    }
-    return { outcome: 'created', invitations };
+  // The two refusals of FR-ED-37 rest on what the Owner knows. A holder of
+  // the permission who is not the Owner may not know them, so only the
+  // holder's own address is refused (FR-ED-44 (a)).
+  const inviter = await tx.user.findUnique({ where: { id: inviterId }, select: { email: true } });
+  const own = emails.find((email) => email === inviter?.email);
+  if (own) return { outcome: 'own_address', email: own };
+  const collaborators = await tx.documentCollaborator.findMany({
+    where: { documentId: document.id },
+    select: { userId: true },
   });
+  if (inviterId === document.ownerId) {
+    const accepted = await tx.documentInvitation.findFirst({
+      where: {
+        documentId: document.id,
+        state: 'ACCEPTED',
+        email: { in: [...emails] },
+        acceptedById: { in: collaborators.map(({ userId }) => userId) },
+      },
+      select: { email: true },
+    });
+    if (accepted?.email) return { outcome: 'collaborator_address', email: accepted.email };
+  }
+
+  // A row still stored pending past its expiry is written as expired, so
+  // that the index of one pending invitation for an address holds for open ones.
+  await tx.documentInvitation.updateMany({
+    where: { documentId: document.id, state: 'PENDING', expiresAt: { lte: now } },
+    data: { state: 'EXPIRED' },
+  });
+  const pending = await tx.documentInvitation.findMany({
+    where: { documentId: document.id, state: 'PENDING' },
+    select: { id: true, email: true },
+  });
+  const replaced = pending.filter(({ email }) => email !== null && emails.includes(email));
+  const people = 1 + collaborators.length + pending.length - replaced.length + emails.length;
+  if (people > PEOPLE_MOST) return { outcome: 'limit' };
+
+  // NFR-SE-07: each invitation created counts; all of them, or none (S13-5).
+  const limit = await takeLimitReturnable('INVITATIONS_PER_USER', inviterId, emails.length);
+  if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
+  counted(limit.giveBack);
+
+  if (replaced.length > 0) {
+    const ids = replaced.map(({ id }) => id);
+    await tx.documentInvitation.updateMany({
+      where: { id: { in: ids } },
+      data: { state: 'REVOKED', respondedAt: now },
+    });
+    await tx.notification.deleteMany({ where: notificationsOf(ids) });
+  }
+  const expiresAt = new Date(now.getTime() + settings().documentInvitationDays * DAY_MS);
+  const invitations: NewInvitation[] = [];
+  for (const email of emails) {
+    const token = newToken();
+    const { id } = await tx.documentInvitation.create({
+      data: {
+        documentId: document.id,
+        email,
+        role: OFFERED[role],
+        invitedById: inviterId,
+        tokenHash: hashToken(token),
+        createdAt: now,
+        expiresAt,
+      },
+      select: { id: true },
+    });
+    invitations.push({ id, email, token, role, expiresAt });
+  }
+  return { outcome: 'created', invitations };
 }
 
 /**
@@ -354,6 +386,11 @@ async function judge(client: Client, userId: string, ref: InvitationRef, now: Da
   if (!invitation?.email || !user?.emailVerified || user.email !== invitation.email) {
     return { view: { outcome: 'not_open_to_account' } as InvitationView };
   }
+  // FR-ED-37: an invitation that was sent to no one "cannot be accepted,
+  // because its link reached nobody", nor declined, even where its address
+  // has come to belong to an account; and FR-ED-44 (a): one created for the
+  // Owner or a collaborator is sent nothing. Sent means claimed for its email.
+  if (!invitation.emailClaimedAt) return { view: { outcome: 'not_open_to_account' } as InvitationView };
   const holdsRole = invitation.document.ownerId === userId || invitation.document.collaborators.length > 0;
   if (invitation.state === 'ACCEPTED' && invitation.acceptedById === userId && holdsRole) {
     return { view: { outcome: 'accepted', documentId: invitation.documentId } as InvitationView };
@@ -410,8 +447,12 @@ export async function answerInvitation(
       return outcome === 'accepted' ? { outcome: 'no_longer_open' } : (judged.view as AnswerResult);
     }
     const { invitation } = judged;
+    // The document's row, as `createInvitations` holds it, so that an
+    // acceptance never falls between the two counts of a creation that would
+    // then see one person fewer (FR-ED-37: ten people).
+    if (!(await lockDocument(tx, invitation.documentId))) return { outcome: 'no_longer_open' };
     const { count } = await tx.documentInvitation.updateMany({
-      where: { id: invitation.id, ...open(now) },
+      where: { id: invitation.id, emailClaimedAt: { not: null }, ...open(now) },
       data:
         answer === 'accept'
           ? { state: 'ACCEPTED', respondedAt: now, acceptedById: userId }
@@ -442,7 +483,7 @@ export interface Sharing {
   people: number;
   limit: number;
   owner: { name: string };
-  collaborators: { userId: string; name: string; role: DocumentRole }[];
+  collaborators: { id: string; name: string; role: DocumentRole }[];
   /** For a caller who holds `document.collaborators.invite` alone (API design). */
   invitations?: { id: string; email: string; role: DocumentRole; expiresAt: Date }[];
 }
@@ -457,7 +498,7 @@ export async function sharingOf(
     db().user.findUnique({ where: { id: document.ownerId }, select: { name: true } }),
     db().documentCollaborator.findMany({
       where: { documentId: document.id },
-      select: { userId: true, role: true, user: { select: { name: true } } },
+      select: { id: true, role: true, user: { select: { name: true } } },
       orderBy: [{ addedAt: 'asc' }, { id: 'asc' }],
     }),
     db().documentInvitation.findMany({
@@ -471,7 +512,7 @@ export async function sharingOf(
     limit: PEOPLE_MOST,
     owner: { name: owner?.name ?? '' },
     collaborators: collaborators.map((row) => ({
-      userId: row.userId,
+      id: row.id,
       name: row.user.name ?? '',
       role: COLLABORATOR_ROLE[row.role],
     })),
@@ -551,11 +592,10 @@ export async function markNotificationRead(
   now: Date = new Date(),
 ): Promise<boolean> {
   if (typeof id !== 'string') return false;
-  const found = await db().notification.findFirst({
-    where: { id, recipientId: userId },
-    select: { id: true },
-  });
-  if (!found) return false;
+  // Only a notification the list shows: one whose subject is gone is not there (FR-ED-42).
+  // ponytail: reads the whole list, which holds a few invitations; a query of one if it grows.
+  const { notifications } = await listNotifications(userId, now);
+  if (!notifications.some((shown) => shown.id === id)) return false;
   await db().notification.updateMany({
     where: { id, recipientId: userId, readAt: null },
     data: { readAt: now },

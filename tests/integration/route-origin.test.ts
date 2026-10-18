@@ -115,6 +115,8 @@ async function invitation(from: string, to: string, token = TOKEN) {
       invitedById: from,
       tokenHash: hashToken(token),
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      // Sent: an invitation sent to no one cannot be answered (FR-ED-37).
+      emailClaimedAt: new Date(),
     },
   });
   return { documentId, id };
@@ -229,12 +231,14 @@ const CASES: Case[] = [
   },
   {
     handler: 'src/app/api/notifications/[id]/route.ts PATCH',
-    arrange: async (owner) =>
-      (
-        await db().notification.create({
-          data: { recipientId: owner.id, kind: 'document_invitation', payload: { invitationId: 'x' } },
-        })
-      ).id,
+    // A notification the list shows: of a pending invitation sent to the session's account.
+    arrange: async (owner) => {
+      const made = await invitation((await person()).id, owner.email, `${TOKEN.slice(1)}F`);
+      const notification = await db().notification.create({
+        data: { recipientId: owner.id, kind: 'document_invitation', payload: { invitationId: made.id } },
+      });
+      return notification.id;
+    },
     path: (id) => `/api/notifications/${id}`,
     state: async (_, id) => (await db().notification.findUniqueOrThrow({ where: { id } })).readAt,
     status: 204,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
 import { sendFor, type Fault } from '../../../components/send.ts';
 import { INVITATION_TITLE } from '../../../lib/documents/invitation-texts.ts';
@@ -40,6 +40,11 @@ export function OpenInvitation({
   const [sending, setSending] = useState(false);
   const [fault, setFault] = useState<Fault | null>(null);
   const [declined, setDeclined] = useState<string | null>(null);
+  const said = useRef<HTMLParagraphElement>(null);
+  // The buttons go with the answer: focus moves to what was said (WCAG 2.4.3).
+  useEffect(() => {
+    if (declined !== null) said.current?.focus();
+  }, [declined]);
 
   async function answer(chosen: 'accept' | 'decline') {
     setSending(true);
@@ -63,7 +68,7 @@ export function OpenInvitation({
         </InBrowser>
       </p>
       {declined !== null ? (
-        <p className={styles.text} role="status">
+        <p className={styles.text} role="status" ref={said} tabIndex={-1}>
           {declined}
         </p>
       ) : (

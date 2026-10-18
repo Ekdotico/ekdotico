@@ -62,6 +62,7 @@ export async function limitWith(
   key: string,
   count: boolean,
   amount = 1,
+  member: string = randomUUID(),
 ): Promise<LimitResult> {
   // ponytail: EVAL sends the script on each call; defineCommand (EVALSHA) if that ever shows in a profile.
   const reply = await client.eval(
@@ -70,7 +71,7 @@ export async function limitWith(
     storageKey(name, key),
     limit.max,
     limit.windowSeconds * 1000,
-    count ? randomUUID() : '',
+    count ? member : '',
     Math.max(1, Math.trunc(amount)),
   );
   // Nothing but the number 0 admits: an empty or absent reply is a refusal.
@@ -84,6 +85,28 @@ export async function limitWith(
  */
 export function takeLimit(name: LimitName, key: string, amount = 1): Promise<LimitResult> {
   return limitWith(valkey(), settings().limits[name], name, key, true, amount);
+}
+
+/**
+ * As `takeLimit`, for events counted before the work they stand for is done:
+ * where they are admitted, `giveBack` uncounts exactly them, for the caller to
+ * call where the work then fails (NFR-SE-07, "invitations created").
+ */
+export async function takeLimitReturnable(
+  name: LimitName,
+  key: string,
+  amount = 1,
+): Promise<{ ok: true; giveBack: () => Promise<void> } | { ok: false; retryAfterSeconds: number }> {
+  const member = randomUUID();
+  const result = await limitWith(valkey(), settings().limits[name], name, key, true, amount, member);
+  if (!result.ok) return result;
+  const members = Array.from({ length: Math.max(1, Math.trunc(amount)) }, (_, n) => `${member}:${n + 1}`);
+  return {
+    ok: true,
+    giveBack: async () => {
+      await valkey().zrem(storageKey(name, key), ...members);
+    },
+  };
 }
 
 /** Whether the limit is reached, without counting anything. */

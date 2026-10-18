@@ -50,6 +50,8 @@ test('an invitation by email and notification, accepted as Viewer', async ({ pag
   await expect(theirs.getByRole('heading', { level: 1, name: 'Notifications' })).toBeVisible();
   await expect(theirs.getByText(`${owner.name} invited you to a document as Viewer.`)).toBeVisible();
   await theirs.getByRole('button', { name: 'Mark as read' }).click();
+  // WCAG 2.4.3: the button goes; focus moves to the link of the same notification.
+  await expect(theirs.getByRole('link', { name: 'Open the invitation' })).toBeFocused();
   await expect(theirs.getByText('Unread', { exact: true })).toBeHidden();
   await expect(header).toHaveAccessibleName('Notifications');
 
@@ -91,6 +93,7 @@ test('declined, revoked, sent again, and expired invitations', async ({ page, br
   await theirs.getByRole('link', { name: 'Open the invitation' }).click();
   await theirs.getByRole('button', { name: 'Decline' }).click();
   await expect(theirs.getByText('Invitation declined.')).toBeVisible();
+  await expect(theirs.getByText('Invitation declined.')).toBeFocused();
   await theirs.goto('/notifications');
   await expect(theirs.getByText('There are no notifications.')).toBeVisible();
 
@@ -98,6 +101,8 @@ test('declined, revoked, sent again, and expired invitations', async ({ page, br
   const revokedLink = new URL((await mailFor(revoked.email, INVITATION_LINK)).found).pathname;
   await pendingRow(page, revoked.email).getByRole('button', { name: 'Revoke' }).click();
   await expect(page.getByRole('status')).toHaveText(`Invitation to ${revoked.email} revoked.`);
+  // WCAG 2.4.3: the row and its button are gone; focus is on what was said.
+  await expect(page.getByRole('status')).toBeFocused();
   await expect(pendingRow(page, revoked.email)).toHaveCount(0);
   await pages[1]!.goto(revokedLink);
   await expect(pages[1]!.getByText(NO_LONGER_OPEN)).toBeVisible();

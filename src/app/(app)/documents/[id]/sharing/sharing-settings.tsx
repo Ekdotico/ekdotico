@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import {
   Button,
   Cluster,
@@ -27,10 +27,13 @@ export interface SharingView {
   people: number;
   limit: number;
   owner: string;
-  collaborators: { userId: string; name: string; role: string }[];
+  collaborators: { id: string; name: string; role: string }[];
   /** Present for a caller who may invite (FR-ED-44). */
   invitations?: { id: string; email: string; role: string; expiresAt: string }[];
 }
+
+// The refusals that are about the addresses entered (src/lib/documents/invitation-answers.ts).
+const FIELD_FAULTS = ['invalid_request', 'invalid_address', 'own_address', 'collaborator_address'];
 
 const ROLES = [
   { value: 'editor', label: 'Editor' },
@@ -53,6 +56,8 @@ export function SharingSettings({ view }: { view: SharingView }) {
   const [fault, setFault] = useState<Fault | null>(null);
   // What the last action answered: the confirmations of FR-ED-21, or a statement.
   const [said, setSaid] = useState<string[]>([]);
+  const statusRef = useRef<HTMLDivElement>(null);
+  const emailsRef = useRef<HTMLTextAreaElement>(null);
 
   async function act(path: string, body?: unknown, method: 'POST' | 'DELETE' = 'POST') {
     setSending(true);
@@ -62,10 +67,16 @@ export function SharingSettings({ view }: { view: SharingView }) {
     setSending(false);
     if ('fault' in sent) {
       setFault(sent.fault);
+      // A refusal of the addresses is the field's own: focus goes to the field,
+      // which is described by it (WCAG 3.3.1).
+      if (FIELD_FAULTS.includes(sent.fault.code)) emailsRef.current?.focus();
       return false;
     }
     const answer = (sent.answer ?? {}) as { confirmations?: string[]; message?: string };
     setSaid(answer.confirmations ?? (answer.message ? [answer.message] : []));
+    // The control that was pressed may be gone with its row: focus goes to
+    // what was said, and not to the page (WCAG 2.4.3).
+    statusRef.current?.focus();
     router.refresh();
     return true;
   }
@@ -78,6 +89,8 @@ export function SharingSettings({ view }: { view: SharingView }) {
       .filter(Boolean);
     if (await act(`/api/documents/${view.documentId}/invitations`, { emails: entered, role })) setEmails('');
   }
+
+  const fieldFault = fault && FIELD_FAULTS.includes(fault.code) ? fault.message : undefined;
 
   const base = `/api/documents/${view.documentId}/invitations`;
   return (
@@ -94,22 +107,22 @@ export function SharingSettings({ view }: { view: SharingView }) {
             <bdi>{view.owner}</bdi>, Owner
           </li>
           {view.collaborators.map((collaborator) => (
-            <li key={collaborator.userId} className={styles.row}>
+            <li key={collaborator.id} className={styles.row}>
               <bdi>{collaborator.name}</bdi>, {collaborator.role}
             </li>
           ))}
         </ul>
       </Stack>
 
-      {/* Announced without moving focus: the confirmations, or the refusal. */}
-      <div role="status">
+      {/* The confirmations, or the statement of a revocation; focus comes here after an action. */}
+      <div role="status" ref={statusRef} tabIndex={-1}>
         {said.map((line) => (
           <p key={line} className={styles.text}>
             {line}
           </p>
         ))}
       </div>
-      {fault ? <FormFault title={fault.message} autoFocus={false} /> : null}
+      {fault && !fieldFault ? <FormFault title={fault.message} autoFocus={false} /> : null}
 
       {view.invitations ? (
         <>
@@ -124,6 +137,8 @@ export function SharingSettings({ view }: { view: SharingView }) {
                 rows={4}
                 value={emails}
                 onChange={(event) => setEmails(event.target.value)}
+                ref={emailsRef}
+                error={fieldFault}
               />
               <RadioGroup legend="Role" name="role" value={role} onChange={setRole} options={ROLES} />
               <Cluster>

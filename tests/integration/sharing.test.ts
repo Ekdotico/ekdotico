@@ -3,6 +3,7 @@
 // and of the notification list, called as Next.js calls them, against a
 // provisioned database, the real Valkey and the local email sink. Each test
 // of a security rule names the weakening that makes it fail.
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -512,6 +513,136 @@ describe('the notification list (FR-ED-42)', () => {
       headers: { origin: 'https://elsewhere.example', cookie: invitee.cookie },
     });
     expect((await byLink.POST(answering, at({ token: 'x', answer: 'accept' }))).status).toBe(403);
+  });
+});
+
+/**
+ * Makes the database refuse a write, as a fault of the database would, for
+ * the length of `run`: a trigger, written by the administrator, that raises
+ * on an insert into `table` where `condition` holds.
+ */
+async function refusing<T>(table: string, condition: string, run: () => Promise<T>): Promise<T> {
+  database.sql(
+    `CREATE FUNCTION refuse_for_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused for the test'; END $$;
+     CREATE TRIGGER refuse_for_test BEFORE INSERT ON "${table}" FOR EACH ROW WHEN (${condition}) EXECUTE FUNCTION refuse_for_test();`,
+  );
+  const lines = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    return await run();
+  } finally {
+    lines.mockRestore();
+    database.sql(`DROP TRIGGER refuse_for_test ON "${table}"; DROP FUNCTION refuse_for_test();`);
+  }
+}
+
+describe('what the review of pull request 43 asked', () => {
+  it('lets no one answer an invitation that was sent to no one, by its link or from the list (FR-ED-37)', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    // An address that belongs to no account when it is invited, and later to a verified one.
+    const later = `later-${randomUUID()}@example.com`;
+    expect((await invite(owner.cookie, id, [later])).status).toBe(201);
+    await runLater();
+    const [row] = await db().documentInvitation.findMany({ where: { documentId: id, email: later } });
+    expect(row!.emailClaimedAt).toBeNull();
+    const account = await createAccount(auth, later);
+    const cookie = cookiesOf(await signIn(auth, later));
+    // Its token never left the server; a known one is written for the test.
+    const token = 'U'.repeat(43);
+    await db().documentInvitation.update({ where: { id: row!.id }, data: { tokenHash: hashToken(token) } });
+    // Weakening: an open invitation that ignores whether it was sent.
+    for (const answer of ['accept', 'decline']) {
+      expect((await (await answerByLink(cookie, token, answer)).json()).error.code).toBe(
+        'not_open_to_account',
+      );
+      expect((await (await answerById(cookie, row!.id, answer)).json()).error.code).toBe(
+        'not_open_to_account',
+      );
+    }
+    expect(await db().documentCollaborator.count({ where: { userId: account } })).toBe(0);
+    expect((await db().documentInvitation.findUniqueOrThrow({ where: { id: row!.id } })).state).toBe(
+      'PENDING',
+    );
+  });
+
+  it('leaves no collaborator where the entry of the security log cannot be written (D163; plan test 14)', async () => {
+    const owner = await person();
+    const invitee = await person();
+    const id = await documentOf(owner.cookie);
+    const { token, row } = await sent(owner, id, invitee);
+    // Weakening: the entry written outside the transaction of the acceptance.
+    const response = await refusing('SecurityLogEntry', `NEW.kind = 'collaborators_changed'`, () =>
+      answerByLink(invitee.cookie, token, 'accept'),
+    );
+    expect(response.status).toBe(500);
+    expect(await db().documentCollaborator.count({ where: { documentId: id } })).toBe(0);
+    expect((await db().documentInvitation.findUniqueOrThrow({ where: { id: row.id } })).state).toBe(
+      'PENDING',
+    );
+    expect((await answerByLink(invitee.cookie, token, 'accept')).status).toBe(200);
+  });
+
+  it('revokes and sends again only the invitations of the document in the path', async () => {
+    const owner = await person();
+    const other = await person();
+    const [a, b] = [await documentOf(owner.cookie), await documentOf(other.cookie)];
+    expect((await invite(owner.cookie, a, ['cross@example.com'])).status).toBe(201);
+    const [row] = await invitationsOf(a);
+    // Weakening: an invitation found by its identifier alone.
+    expect((await revoke(other.cookie, b, row!.id)).status).toBe(404);
+    expect((await resend(other.cookie, b, row!.id)).status).toBe(404);
+    expect((await invitationsOf(a)).map(({ state }) => state)).toEqual(['PENDING']);
+    expect(await invitationsOf(b)).toEqual([]);
+  });
+
+  it('gives back the invitations of an hour that a failed transaction did not create (S13-5)', async () => {
+    const owner = await person();
+    const [a, b] = [await documentOf(owner.cookie), await documentOf(owner.cookie)];
+    expect(
+      (
+        await invite(
+          owner.cookie,
+          a,
+          Array.from({ length: 9 }, (_, n) => `back-a${n}@example.com`),
+        )
+      ).status,
+    ).toBe(201);
+    // Three that fail inside the transaction, after they were counted.
+    const failed = await refusing('DocumentInvitation', `NEW.email = 'back-boom@example.com'`, () =>
+      invite(owner.cookie, b, ['back-b0@example.com', 'back-boom@example.com', 'back-b1@example.com']),
+    );
+    expect(failed.status).toBe(500);
+    expect(await invitationsOf(b)).toEqual([]);
+    // Weakening: the count kept. Twelve in the hour remain possible: nine and these three.
+    expect(
+      (await invite(owner.cookie, b, ['back-b0@example.com', 'back-b1@example.com', 'back-b2@example.com']))
+        .status,
+    ).toBe(201);
+    expect((await invite(owner.cookie, b, ['back-b3@example.com'])).status).toBe(429);
+  });
+
+  it('marks read only a notification the list shows (FR-ED-42)', async () => {
+    const owner = await person();
+    const invitee = await person();
+    const id = await documentOf(owner.cookie);
+    const { row } = await sent(owner, id, invitee);
+    const [shown] = (await listOf(invitee.cookie)).notifications;
+    await db().documentInvitation.update({
+      where: { id: row.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    expect((await markRead(invitee.cookie, shown!.id)).status).toBe(404);
+  });
+
+  it('names no account’s identifier among the people of a document', async () => {
+    const owner = await person();
+    const invitee = await person();
+    const id = await documentOf(owner.cookie);
+    const { token } = await sent(owner, id, invitee);
+    await answerByLink(invitee.cookie, token, 'accept');
+    const text = await (await peopleOf(owner.cookie, id)).text();
+    expect(text).not.toContain(invitee.id);
+    expect(text).not.toContain(owner.id);
   });
 });
 

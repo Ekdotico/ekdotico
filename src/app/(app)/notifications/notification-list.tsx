@@ -36,6 +36,9 @@ export function NotificationList({ notifications }: { notifications: Notificatio
     setMarking(null);
     if (refused) return setFault(refused);
     window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED));
+    // The button goes with the unread state: focus moves to the link of the same
+    // notification, and not to the page (WCAG 2.4.3).
+    document.getElementById(`open-${id}`)?.focus();
     router.refresh();
   }
 
@@ -62,7 +65,10 @@ export function NotificationList({ notifications }: { notifications: Notificatio
                   </p>
                 </InBrowser>
                 <Cluster gap={3}>
-                  <Link href={`/invitations/received/${encodeURIComponent(notification.invitationId)}`}>
+                  <Link
+                    id={`open-${notification.id}`}
+                    href={`/invitations/received/${encodeURIComponent(notification.invitationId)}`}
+                  >
                     Open the invitation
                   </Link>
                   {notification.read ? null : (
