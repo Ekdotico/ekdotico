@@ -4037,6 +4037,43 @@ test('a Viewer reads what the Owner writes, in an editor that does not write', a
   await text(theirs).click();
   await theirs.keyboard.type('Written by the Viewer');
   await expect(text(theirs)).not.toContainText('Written by the Viewer');
+
+  // The owner's decision of 18 October 2026 (RV-3): the keys of a writer are not described to a
+  // Viewer, neither in the description of the text nor anywhere on the page. The Owner's are.
+  await expect(text(page)).toHaveAccessibleDescription(DESCRIPTION);
+  await expect(text(theirs)).not.toHaveAttribute('aria-describedby');
+  await expect(text(theirs)).toHaveAccessibleDescription('');
+  await expect(theirs.getByText(SLASH_HINT, { exact: false })).toHaveCount(0);
+  await expect(theirs.getByText('Alt+F10', { exact: false })).toHaveCount(0);
+
+  // The owner's decision of 18 October 2026 (RV-2): the statement of a limit past which a document
+  // stands is addressed to a writer. Both leave the document, and it is stored with 101 tables.
+  const statement =
+    'This document holds 101 tables, more than our current limit per document (100). It is read-only until it is back under the limit. You can still delete tables.';
+  await theirs.goto('/');
+  await storedWith(page, id, (fragment) => {
+    const tables = Array.from({ length: 101 }, () => {
+      const block = new Y.XmlElement('tableBlock');
+      const table = new Y.XmlElement('table');
+      const row = new Y.XmlElement('tableRow');
+      const cell = new Y.XmlElement('tableCell');
+      cell.insert(0, [new Y.XmlElement('paragraph')]);
+      row.insert(0, [cell]);
+      table.insert(0, [row]);
+      block.insert(0, [table, new Y.XmlElement('tableCaption')]);
+      return block;
+    });
+    fragment.push(tables);
+  });
+  await expect(page.getByText(statement)).toHaveCount(1);
+  await theirs.goto(`/documents/${id}`);
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  // Every table is shown to the Viewer (nothing is left out for a limit), and the statement is not.
+  await expect(text(theirs).locator('table')).toHaveCount(101);
+  await expect(theirs.getByText(statement)).toHaveCount(0);
+  await expect(theirs.getByText('read-only until it is back under the limit', { exact: false })).toHaveCount(
+    0,
+  );
   await other.close();
 });
 
