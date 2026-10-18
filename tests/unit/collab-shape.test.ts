@@ -829,3 +829,39 @@ describe('the fast path counts as Yjs applies (the review of pull request 41)', 
     },
   );
 });
+
+// The re-review of pull request 41: what is left of each item was found by
+// sorting every range of the delete set again for each item, 14 seconds for
+// one message of 20,000 items and 20,000 ranges.
+describe('the fast path is not quadratic in items and deleted ranges (the re-review of pull request 41)', () => {
+  it(
+    'a block of 20,000 items, each with one unit deleted in one update, is answered in well under a second',
+    { timeout: 60_000 },
+    () => {
+      const writers = new Y.Doc();
+      writers.getXmlFragment('default').push([element('codeBlock', [words('')])]);
+      const text = (writers.getXmlFragment('default').get(0) as Y.XmlElement).get(0) as Y.XmlText;
+      // Two clients by turns, so that Yjs cannot merge one's items: 20,000 items of two units.
+      for (let at = 0; at < 20_000; at += 1) {
+        writers.clientID = at % 2 === 0 ? 101 : 202;
+        text.insert(text.length, 'ab');
+      }
+      const server = peerOf(writers);
+      const update = sent(server, (fragment) => {
+        const code = (fragment.get(0) as Y.XmlElement).get(0) as Y.XmlText;
+        for (let at = 20_000 - 1; at >= 0; at -= 1) code.delete(at * 2, 1);
+        code.insert(0, 'k');
+      });
+      expect(
+        Y.decodeUpdate(update).ds.clients.get(101)!.length +
+          Y.decodeUpdate(update).ds.clients.get(202)!.length,
+      ).toBe(20_000);
+      expect(withoutTheCopy(server, update)).toBe(true);
+      const started = performance.now();
+      expect(shapeOf(server, update)).toBeNull();
+      // Measured after the fix: see the report of the commit; 14 seconds before it.
+      expect(performance.now() - started).toBeLessThan(500);
+      expect(withCopy(server, update)).toBeNull();
+    },
+  );
+});

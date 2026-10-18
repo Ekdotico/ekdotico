@@ -7,7 +7,7 @@ import type { Schema } from '@tiptap/pm/model';
 import { EditorState, type Plugin } from '@tiptap/pm/state';
 import HighlightJS from 'highlight.js/lib/core';
 import { common, createLowlight } from 'lowlight';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   CODE_COLOURS_FROM_POINT_MOST,
@@ -126,6 +126,12 @@ function watchColourings() {
   }) as never);
   return given;
 }
+// The clock that times a colouring (`CODE_COLOURS_LONGEST`) is held still: on a loaded
+// machine a real colouring of a window can take longer than 200 ms, and the block is then
+// shown without colours by design (D183), which tests of exactness would read as wrong
+// colours (the re-review of pull request 41: 3,728 characters). A test of the time limit
+// sets the clock itself; the tests of cost measure with `performance.now`.
+beforeEach(() => void vi.spyOn(clock, 'now').mockReturnValue(0));
 afterEach(() => vi.restoreAllMocks());
 
 // D193: "highlight.js is pinned, with a test on the internal detail that the design relies on."

@@ -329,6 +329,26 @@ type DeleteSet = ReturnType<typeof Y.decodeUpdate>['ds'];
 const rangesOf = (deleted: DeleteSet, client: number): { clock: number; len: number }[] =>
   (deleted as unknown as { clients: Map<number, { clock: number; len: number }[]> }).clients.get(client) ??
   [];
+type Ranges = { clock: number; end: number }[];
+// The ranges of each client of a delete set, sorted and merged once for the
+// set, and not once for each item they are asked of (the re-review of pull
+// request 41: items times ranges stalled the server for 14 seconds).
+const MERGED = new WeakMap<DeleteSet, Map<number, Ranges>>();
+function mergedOf(deleted: DeleteSet, client: number): Ranges {
+  let clients = MERGED.get(deleted);
+  if (!clients) MERGED.set(deleted, (clients = new Map()));
+  let merged = clients.get(client);
+  if (!merged) {
+    merged = [];
+    for (const { clock, len } of rangesOf(deleted, client).toSorted((a, b) => a.clock - b.clock)) {
+      const last = merged.at(-1);
+      if (last && clock <= last.end) last.end = Math.max(last.end, clock + len);
+      else merged.push({ clock, end: clock + len });
+    }
+    clients.set(client, merged);
+  }
+  return merged;
+}
 /**
  * What is left of the text of an item where `deleted` deletes part of it: a
  * delete set can delete any part of an item, and Yjs merges typing into long
@@ -338,10 +358,19 @@ function* survives(item: Y.Item, deleted?: DeleteSet): Iterable<string> {
   const { str } = item.content as Y.ContentString;
   if (!deleted) return yield str;
   const { client, clock } = item.id;
+  const ranges = mergedOf(deleted, client);
+  // The first range that ends after the item begins, and then only those that overlap it.
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (ranges[middle]!.end <= clock) low = middle + 1;
+    else high = middle;
+  }
   let from = 0;
-  for (const range of rangesOf(deleted, client).toSorted((a, b) => a.clock - b.clock)) {
-    const start = Math.max(range.clock - clock, from);
-    const end = Math.min(range.clock + range.len - clock, str.length);
+  for (let at = low; at < ranges.length && ranges[at]!.clock < clock + str.length; at += 1) {
+    const start = Math.max(ranges[at]!.clock - clock, from);
+    const end = Math.min(ranges[at]!.end - clock, str.length);
     if (end <= start) continue;
     if (start > from) yield str.slice(from, start);
     from = end;
