@@ -180,6 +180,10 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
     expect(heldTitle('codeBytes')).toBe(
       'We cannot apply this change. Our current limit per code block is 500 KB, and this change passes it.',
     );
+    // The owner's words of 18 October 2026 (D192).
+    expect(heldTitle('blocks')).toBe(
+      'We cannot apply this change. Our current limit per document is 5,000 blocks, and this change passes it.',
+    );
     const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
     expect(page).toContain('[reason, heldTitle(limit as Limit)]');
   });

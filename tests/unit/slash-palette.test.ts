@@ -1389,4 +1389,41 @@ describe('the limits of a document in the palette (D182, D192)', () => {
     expect(deepest(9)).toEqual(ALL);
     expect(deepest(10)).toEqual(ALL.filter((name) => name !== 'bullet' && name !== 'numbered'));
   });
+
+  // The owner's decision of 18 October 2026: the palette offers nothing once the document is at 5,000.
+  it('lists nothing in a document of 5,000 blocks, not even a block in place of the empty one, and everything at 4,999', () => {
+    const at = editorOf(paragraph(), ...many(4999, () => paragraph()));
+    type(at, '/');
+    expect(listed(at)).toEqual([]);
+    const under = editorOf(paragraph(), ...many(4998, () => paragraph()));
+    type(under, '/');
+    expect(listed(under)).toEqual(ALL);
+    // The paragraphs in the cells of a table are not blocks of the total.
+    const cell = { type: 'tableCell', content: [paragraph(), paragraph()] };
+    const table = {
+      type: 'tableBlock',
+      content: [
+        { type: 'table', content: many(50, () => ({ type: 'tableRow', content: many(20, () => cell) })) },
+        { type: 'tableCaption' },
+      ],
+    };
+    const withTable = editorOf(paragraph(), table, ...many(4997, () => paragraph()));
+    type(withTable, '/');
+    expect(listed(withTable)).toEqual(ALL);
+  });
+
+  // The review of pull request 42: the change as the palette would make it is asked, not the block alone.
+  it('lists at 4,999, after text at the end, no block the palette follows with a paragraph: that would make 5,001', () => {
+    const atEnd = editorOf(paragraph(), ...many(4998, () => paragraph()));
+    atEnd.commands.setTextSelection(atEnd.state.doc.content.size - 1);
+    type(atEnd, 'a /');
+    const followed = new Set(['horizontalRule', 'pageBreak', 'tableOfContents', 'tableBlock']);
+    expect(listed(atEnd)).toEqual(
+      SLASH_COMMANDS.filter(({ inserts }) => !followed.has(inserts.type)).map(({ name }) => name),
+    );
+    // Chosen in place of an empty paragraph, a divider brings no more, and is listed.
+    const alone = editorOf(paragraph(), ...many(4998, () => paragraph()));
+    type(alone, '/');
+    expect(listed(alone)).toEqual(ALL);
+  });
 });

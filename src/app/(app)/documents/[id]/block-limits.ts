@@ -8,24 +8,26 @@
 // (`limitRefusal`, asked by `Closed` of ./extensions.tsx). Nothing a document
 // holds is ever taken out for a limit.
 //
-// A DOCUMENT PAST A LIMIT ALREADY (D184), stored before the limit or by a tab
-// of an earlier release, opens read-only with a statement that names the count
-// and the limit (`overLimits`), and becomes editable once it is back under
-// every limit. While it is past one, the text stays editable for deletions
+// A DOCUMENT PAST A LIMIT ALREADY (D184), stored before the limit, by a tab
+// of an earlier release, or filled by this browser where a client emptied an
+// element (`mend` of ./extensions.tsx), opens to deletions alone, with a
+// statement that names the count and the limit (`overLimits`; its words, the
+// owner's, call that read-only), and is fully editable again once it is back
+// under every limit. While it is past one, the text stays editable for deletions
 // alone: a change of the writer's is applied only where every step of it
 // deletes and puts nothing in (`deletesOnly`), so that tables, blocks, items
 // and text can be taken out with the keyboard, by cutting, or by the menu of a
 // table, and nothing can be written, formatted or set. Anything else is
 // refused with the statement itself.
 //
-// The total of 5,000 blocks of D192 is not built: whether a paragraph in a
-// cell of a table is a block is open, and with it whether one table at its
-// bounds (10,000 cells) passes the total.
+// The total of 5,000 blocks of D192, as the owner settled it on 18 October
+// 2026, counts every block outside the cells of tables, a table counted as
+// one (`ONE_BLOCK` of src/lib/collab/shape.ts says what one block is).
 import type { Node as PMNode, ResolvedPos } from '@tiptap/pm/model';
 import type { Transaction } from '@tiptap/pm/state';
 import { ReplaceStep } from '@tiptap/pm/transform';
 import { ySyncPluginKey } from '@tiptap/y-tiptap';
-import { COUNTED, LIMITS, LISTS, textBytes, type Limit } from '../../../../lib/collab/shape.ts';
+import { COUNTED, LIMITS, LISTS, ONE_BLOCK, textBytes, type Limit } from '../../../../lib/collab/shape.ts';
 import { TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST, tablesIn } from './table-bounds.ts';
 
 type Counts = Record<Limit, number>;
@@ -33,6 +35,7 @@ const ALL = Object.keys(LIMITS) as Limit[];
 type CountedLimit = Exclude<Limit, 'listItems' | 'listDepth' | 'codeBytes'>;
 const COUNTED_LIMITS = [...new Set(COUNTED.values())] as CountedLimit[];
 const ZERO: Counts = Object.freeze(Object.fromEntries(ALL.map((limit) => [limit, 0]))) as Counts;
+const ONE: Counts = Object.freeze({ ...ZERO, blocks: 1 });
 // A node never changes, and a change keeps every node it does not touch: what
 // was counted once is not counted again at the next key.
 const COUNTS = new WeakMap<PMNode, Counts>();
@@ -40,19 +43,22 @@ const COUNTS = new WeakMap<PMNode, Counts>();
 /**
  * What the limits count in a node, itself among it: the blocks of each type,
  * wherever they stand; the most items of one list and how deep lists stand,
- * the outermost counted; and the bytes of the longest code block.
+ * the outermost counted; the bytes of the longest code block; and the blocks
+ * of the total, outside the cells of tables (`ONE_BLOCK`).
  */
 export function countsOf(node: PMNode): Counts {
-  if (node.isText || (node.isTextblock && node.type.name !== 'codeBlock')) return ZERO;
+  if (node.isText) return ZERO;
+  const { name } = node.type;
+  if (node.isTextblock && name !== 'codeBlock') return ONE_BLOCK.has(name) ? ONE : ZERO;
   let counts = COUNTS.get(node);
   if (counts) return counts;
   const made = { ...ZERO };
-  const { name } = node.type;
   if (name === 'codeBlock') made.codeBytes = textBytes([node.textContent]);
   else {
     node.forEach((child) => {
       const held = countsOf(child);
       for (const limit of COUNTED_LIMITS) made[limit] += held[limit];
+      made.blocks += held.blocks;
       made.listItems = Math.max(made.listItems, held.listItems);
       made.listDepth = Math.max(made.listDepth, held.listDepth);
       made.codeBytes = Math.max(made.codeBytes, held.codeBytes);
@@ -60,6 +66,8 @@ export function countsOf(node: PMNode): Counts {
   }
   const counted = COUNTED.get(name);
   if (counted) made[counted] += 1;
+  // One block, whatever it holds: a table's cells count nothing to the total.
+  if (ONE_BLOCK.has(name)) made.blocks = 1;
   if (LISTS.has(name)) {
     made.listItems = Math.max(made.listItems, node.childCount);
     made.listDepth += 1;
@@ -79,6 +87,7 @@ const BLOCKS: Record<CountedLimit, readonly [one: string, many: string]> = {
   pageBreaks: ['page break', 'page breaks'],
   dividers: ['divider', 'dividers'],
   quotes: ['quote', 'quotes'],
+  blocks: ['block', 'blocks'],
 };
 const KB = (bytes: number) => `${number(Math.ceil(bytes / 1024))} KB`;
 const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
@@ -88,11 +97,11 @@ const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'
  * it shares with the tables in its cells (FR-ED-09; ./table-bounds.ts).
  *
  * For a paste, the owner's text of 18 October 2026, word for word (D178).
- * For a command, such as a row added, the sentence that D178 approved before
- * it: the owner's text names a paste, and what a command is told is open.
+ * For a command, such as a row or a column added or a cell split, the
+ * owner's text of the same day.
  */
 export const TABLE_PASTE_NO_ROOM = `We cannot paste this table. A table and the tables in its cell hold ${number(TABLE_CELLS_MOST)} cells, ${COUNT_WORDS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep and this surpasses our current limits.`;
-export const TABLE_NO_ROOM = `The table has no room for this. A table and the tables in its cells hold ${number(TABLE_CELLS_MOST)} cells, ${COUNT_WORDS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep.`;
+export const TABLE_NO_ROOM = `We cannot add this. A table and the tables in its cells hold ${number(TABLE_CELLS_MOST)} cells, ${COUNT_WORDS[TABLE_DEPTH_MOST] ?? TABLE_DEPTH_MOST} levels deep, and this surpasses our current limits.`;
 
 /**
  * The title of the statement where the collaboration server refused a change
@@ -218,7 +227,13 @@ export function limitRefusal(transaction: Transaction, before: PMNode): string |
 export function passesLimits(doc: PMNode, block: PMNode, $at: ResolvedPos): boolean {
   const have = countsOf(doc);
   const brings = countsOf(block);
-  if (COUNTED_LIMITS.some((limit) => brings[limit] > 0 && have[limit] + brings[limit] > LIMITS[limit]))
+  // At the total, nothing is listed: not even a block in place of the one the
+  // command is alone in (the owner's decision of 18 October 2026).
+  if (
+    [...COUNTED_LIMITS, 'blocks' as const].some(
+      (limit) => brings[limit] > 0 && have[limit] + brings[limit] > LIMITS[limit],
+    )
+  )
     return true;
   let round = 0;
   for (let depth = 1; depth <= $at.depth; depth += 1) if (LISTS.has($at.node(depth).type.name)) round += 1;

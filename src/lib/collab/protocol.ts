@@ -115,6 +115,8 @@ export const REFUSAL = {
   LIST_TOO_LONG: 'list-too-long',
   LIST_TOO_DEEP: 'list-too-deep',
   CODE_BLOCK_TOO_LARGE: 'code-block-too-large',
+  /** The total of 5,000 blocks (D192; the owner's decision of 18 October 2026). */
+  TOO_MANY_BLOCKS: 'too-many-blocks',
 } as const;
 
 export type Refusal = (typeof REFUSAL)[keyof typeof REFUSAL];
@@ -131,4 +133,5 @@ export const LIMIT_REFUSAL = {
   listItems: REFUSAL.LIST_TOO_LONG,
   listDepth: REFUSAL.LIST_TOO_DEEP,
   codeBytes: REFUSAL.CODE_BLOCK_TOO_LARGE,
+  blocks: REFUSAL.TOO_MANY_BLOCKS,
 } as const satisfies Record<Limit, Refusal>;
