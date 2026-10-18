@@ -977,16 +977,34 @@ describe('after the review', () => {
     }
   });
 
-  it('checks the update of a read-only connection as it checks an Editor’s, since the flag can change before the library reads it', async () => {
+  // A read-only connection's updates are not checked (`beforeSync`), and the library reads the flag after
+  // that hook: so a connection is made editable only between its messages.
+  it('makes a read-only connection editable only when none of its messages is in flight', async () => {
     const local = await inProcess();
     try {
-      vi.spyOn(console, 'error').mockImplementation(() => {});
-      const { id, viewer, sockets } = await three(local);
-      expect(connectionOf(local, id, viewer.id)!.readOnly).toBe(true);
-      // Bytes that are no update: an Editor's connection is closed for them, and a Viewer's now is.
-      sockets.viewer.socket.webSocket!.send(sent(id, SYNC, 2, Uint8Array.from([1, 2, 3])));
-      await until(() => connectionOf(local, id, viewer.id) === undefined);
-      expect(local.placesOf(id)).toBe(2);
+      const { id, viewer, clients } = await three(local);
+      const connection = connectionOf(local, id, viewer.id)!;
+      expect(connection.readOnly).toBe(true);
+      // A message of this connection that is being handled, for as long as the test says.
+      let finish!: () => void;
+      const inFlight = new Promise<void>((resolve) => (finish = resolve));
+      vi.spyOn(connection, 'waitForPendingMessages').mockReturnValue(inFlight);
+
+      await db().documentCollaborator.update({
+        where: { documentId_userId: { documentId: id, userId: viewer.id } },
+        data: { role: 'EDITOR' },
+      });
+      const run = local.recheck();
+      await sleep(400);
+      // The role is an Editor's by the row, and the flag has not turned.
+      expect(connection.readOnly).toBe(true);
+      expect(clients.viewer.notices).toHaveLength(1);
+      finish();
+      await run;
+      expect(connection.readOnly).toBe(false);
+      expect(connection.context.role).toBe('editor');
+      await until(() => clients.viewer.notices.length === 2);
+      expect(readRoleNotice(clients.viewer.notices[1]!)).toEqual({ role: 'editor', canEdit: true });
     } finally {
       await local.stop();
     }

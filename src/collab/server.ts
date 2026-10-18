@@ -396,8 +396,15 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       } else if (decision.action === 'switch') {
         // FR-ED-40 (b): in place. The record is what the role holds now, and
         // the library reads the flag at each message it applies.
-        const { role: was } = connection.context;
         const readOnly = isReadOnly(decision.record);
+        if (!readOnly && connection.readOnly) {
+          // Made editable only between messages: the library reads the flag after the hook that
+          // checks an update, and a read-only connection's updates are not checked (`beforeSync`).
+          // Nothing is awaited from here to the flag.
+          await connection.waitForPendingMessages();
+          if (!entry.document.hasConnection(connection)) continue;
+        }
+        const { role: was } = connection.context;
         const changed = readOnly !== connection.readOnly;
         Object.assign(connection.context, {
           role: decision.record.role,
@@ -940,14 +947,16 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
      * A read-only connection is counted too: the hook runs before the library
      * looks at the flag.
      *
-     * A READ-ONLY CONNECTION'S UPDATE IS CHECKED TOO. The library tests the
-     * flag only after this hook has returned, and the re-check can make a
-     * connection editable in that gap (FR-ED-40 (b), FR-ED-41): an update
-     * that was let through unchecked because the flag was set when it was read
-     * would then be applied. The price is that a Viewer's forged update costs
-     * what an Editor's does, which the limit of messages bounds, and that the
-     * keeper's numbers stand higher than the document by what was never
-     * applied: a measure, and nothing else.
+     * AND NOTHING MORE IS DONE FOR A READ-ONLY CONNECTION. The library applies
+     * nothing it sends (MessageReceiver.ts tests the flag before each of the
+     * two), so there is nothing to check; and a check of what is never applied
+     * would let a Viewer cost the copy of a document at its limit, and leave
+     * the keeper's numbers higher than the document with every message. The
+     * library tests the flag only after this hook has returned, so the flag
+     * must not turn to editable while a message of the connection is in
+     * flight, or an update that was not checked would be applied: the re-check
+     * waits for the connection's messages before it makes it editable
+     * (`recheckOnce`).
      *
      * Counted for the user and not for the connection: a count on the
      * connection begins again with the next one, and a user may hold as many
@@ -956,12 +965,13 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
      * a limit; the client waits before it asks for the document again
      * (src/lib/collab/protocol.ts).
      */
-    async beforeSync({ type, payload, document, documentName, context }) {
+    async beforeSync({ type, payload, document, documentName, context, connection }) {
       if (type === messageYjsSyncStep1) return;
       if (!takeMessage(context.userId).ok) {
         void logMessageLimitReached(context.userId);
         throw refuse(REFUSAL.LIMITED);
       }
+      if (connection.readOnly) return;
       let past: Limit | Shape | null;
       try {
         assertUpdate(payload);
