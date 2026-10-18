@@ -7,6 +7,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { listen, until } from './channel.ts';
 import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, post, prepare, signIn, sunk } from './identity.ts';
 import { withCookies } from './second-factor.ts';
 
@@ -862,6 +863,34 @@ describe('the confirmation of a changed address (FR-AU-03; the owner’s answer 
     });
     expect(response?.user.email).toBe(next);
     expect(response?.session.id).toBe(sessionId);
+  });
+
+  // Weakening: the notice left out, or sent before the transaction committed.
+  it('tells the collaboration server that the other sessions ended, once they are gone, and not of a confirmation that changed nothing (FR-ED-40 (d))', async () => {
+    const channel = await listen();
+    try {
+      const { id, email, cookie } = await person();
+      const other = await session(email);
+      const next = unused();
+      const token = await linkFor(other, next);
+      const publish = valkey().publish.bind(valkey());
+      const seen: number[] = [];
+      vi.spyOn(valkey(), 'publish').mockImplementation((async (...given: Parameters<typeof publish>) => {
+        seen.push(await db().session.count({ where: { userId: id } }));
+        return publish(...given);
+      }) as never);
+
+      // A link that is no link changes nothing and tells no one.
+      expect((await confirm('no-such-token', { cookie })).response.status).toBe(409);
+      await channel.quiet();
+      expect(channel.about(id)).toEqual([]);
+
+      expect((await confirm(token, { cookie })).response.status).toBe(200);
+      await until(() => channel.sessionsEnded(id).length === 1);
+      expect(seen).toEqual([1]);
+    } finally {
+      channel.stop();
+    }
   });
 
   it('works once: a second confirmation is refused, and changes nothing more', async () => {

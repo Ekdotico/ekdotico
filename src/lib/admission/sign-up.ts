@@ -11,10 +11,10 @@
 import type { BetterAuthPlugin } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
-import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { acceptedName, NAME_REFUSAL } from '../field-text.ts';
 import { readBytes, sentAsJson } from '../http.ts';
+import { endHeldSession } from '../auth/session-end.ts';
 import { orEndSession } from '../auth/sign-in.ts';
 import { checkPassword } from '../password-rules.ts';
 import { acceptInvitation, findOpenInvitation } from './invitations.ts';
@@ -110,7 +110,7 @@ export const admissionSignUp = {
         const { authCookies, secret, internalAdapter } = ctx.context;
         const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
         try {
-          if (held) await db().session.deleteMany({ where: { token: held } });
+          if (held) await endHeldSession(held);
           const user = await internalAdapter.findUserById(account.userId);
           if (!user) throw new Error('The new account was not found.');
           const session = await internalAdapter.createSession(user.id);

@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { listen, until } from './channel.ts';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
 // One step of the transaction, made to fail on demand.
@@ -35,6 +36,8 @@ vi.mock('../../src/lib/workspace.ts', async (original) => {
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-sign-up-'));
 const database = prepare('sign_up', { EMAIL_SINK_DIRECTORY: sink, TRUSTED_PROXY_COUNT: '1' });
 const { auth, db, valkey, validateSessionRow } = await load();
+// What the collaboration server is told (FR-ED-40 (d)); register row S15-3.
+const channel = await listen();
 const { acceptInvitation, createInvitation, findOpenInvitation } =
   await import('../../src/lib/admission/invitations.ts');
 const { POST } = await import('../../src/app/api/sign-up/route.ts');
@@ -86,6 +89,7 @@ afterEach(async () => {
   await db().admissionInvitation.deleteMany();
 });
 afterAll(async () => {
+  channel.stop();
   await db().$disconnect();
   valkey().disconnect();
   database.drop();
@@ -422,6 +426,8 @@ describe('a browser that already holds a session', () => {
 
     expect(await db().session.count({ where: { id: held.sessionId } })).toBe(0);
     expect(await db().session.count({ where: { userId: held.userId } })).toBe(0);
+    // FR-ED-40 (d): the collaboration server is told that it ended, by the account that held it.
+    await until(() => channel.sessionsEnded(held.userId).length === 1);
     const user = await db().user.findUniqueOrThrow({ where: { email: 'person@example.com' } });
     const cookies = response.headers.getSetCookie();
     expect(cookies.map((cookie) => cookie.split('=')[0]).sort()).toEqual([
@@ -447,6 +453,9 @@ describe('a browser that already holds a session', () => {
     expect((await validateSessionRow(new Headers({ cookie: held.cookie }))).session?.userId).toBe(
       held.userId,
     );
+    // Nothing ended, so no one is told.
+    await channel.quiet();
+    expect(channel.about(held.userId)).toEqual([]);
   });
 
   it('is told of nothing in silence where that session cannot be ended: the fault is printed, and the cookies are cleared', async () => {

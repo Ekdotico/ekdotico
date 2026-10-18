@@ -12,6 +12,7 @@ import { errorResponse, textFields } from '../http.ts';
 import { settings } from '../settings.ts';
 import { describeUserAgent } from '../user-agent.ts';
 import { notAdmitted } from './route-answers.ts';
+import { sessionEnded } from './session-end.ts';
 import { validateSessionRow } from './session.ts';
 
 // Text for a person (the owner's answer to Q6 of the plan: approved with the pull request).
@@ -90,8 +91,8 @@ export const revokeSession = createAuthEndpoint(
       ? await db().session.deleteMany({ where: { id: entered.id, userId: session.userId } })
       : { count: 0 };
     if (count !== 1) return errorResponse(404, 'session_not_found', MESSAGES.notFound);
-    // FR-ED-40 (d): the slice that builds the collaboration server publishes
-    // the end of this session here.
+    // FR-ED-40 (d): the connections opened under this session close within 5 seconds.
+    await sessionEnded(session.userId);
 
     // FR-AU-84: the browser whose own session it was has its cookies cleared at once.
     if (entered.id === session.sessionId) deleteSessionCookie(ctx);
@@ -109,8 +110,8 @@ export const revokeOtherSessions = createAuthEndpoint(
     const { session } = validation;
     if (!session) return notAdmitted(validation);
     await db().session.deleteMany({ where: { userId: session.userId, id: { not: session.sessionId } } });
-    // FR-ED-40 (d): the slice that builds the collaboration server publishes
-    // the end of these sessions here.
+    // FR-ED-40 (d): the connections opened under these sessions close within 5 seconds.
+    await sessionEnded(session.userId);
     ctx.setHeader('Cache-Control', 'no-store');
     return ctx.json({});
   },

@@ -6,6 +6,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { listen, until } from './channel.ts';
 import { cookiesOf, createAccount, load, PASSWORD, post, prepare, signIn, sunk } from './identity.ts';
 
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-change-mail-'));
@@ -367,6 +368,66 @@ describe('the session of the request (NFR-SE-17 (c), FR-AU-07)', () => {
         ['forbidden', null],
       ]),
     );
+  });
+});
+
+describe('the collaboration server is told that sessions ended (FR-ED-40 (d), NFR-SE-03 (d))', () => {
+  // Weakening: the notice left out of the change, or sent before it committed.
+  it('is told once the other sessions are gone, after a change of the password, and not for one that was refused', async () => {
+    const channel = await listen();
+    try {
+      const { email, id, cookie } = await person();
+      cookiesOf(await signIn(auth, email, PASSWORD, from(2)));
+      const publish = valkey().publish.bind(valkey());
+      const seen: number[] = [];
+      vi.spyOn(valkey(), 'publish').mockImplementation((async (...given: Parameters<typeof publish>) => {
+        seen.push(await db().session.count({ where: { userId: id } }));
+        return publish(...given);
+      }) as never);
+
+      // Refused: the wrong current password, a new password that breaks the rules, no session.
+      expect((await change(cookie, WRONG, NEW)).response.status).toBe(403);
+      expect((await change(cookie, PASSWORD, 'short')).response.status).toBe(422);
+      expect((await change('', PASSWORD, NEW)).response.status).toBe(401);
+      await channel.quiet();
+      expect(channel.about(id)).toEqual([]);
+
+      expect((await change(cookie, PASSWORD, NEW)).response.status).toBe(200);
+      await until(() => channel.sessionsEnded(id).length === 1);
+      // At the moment it went out, only the session in use was left.
+      expect(seen).toEqual([1]);
+    } finally {
+      channel.stop();
+    }
+  });
+
+  it('is told once the sessions are gone, after the reset of a password, and not for a link that is no good', async () => {
+    const channel = await listen();
+    try {
+      const { email, id } = await person();
+      cookiesOf(await signIn(auth, email, PASSWORD, from(2)));
+      const token = await linkFor(email);
+      const publish = valkey().publish.bind(valkey());
+      const seen: number[] = [];
+      vi.spyOn(valkey(), 'publish').mockImplementation((async (...given: Parameters<typeof publish>) => {
+        seen.push(await db().session.count({ where: { userId: id } }));
+        return publish(...given);
+      }) as never);
+
+      expect(
+        (await post(auth, '/reset-password', { token: 'no-such-token', newPassword: NEW })).response.status,
+      ).toBe(409);
+      await channel.quiet();
+      expect(channel.about(id)).toEqual([]);
+
+      const done = await post(auth, '/reset-password', { token, newPassword: NEW });
+      expect(done.response.status).toBe(200);
+      await until(() => channel.sessionsEnded(id).length === 1);
+      expect(seen).toEqual([0]);
+      await done.after();
+    } finally {
+      channel.stop();
+    }
   });
 });
 

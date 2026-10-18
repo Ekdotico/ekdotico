@@ -3,6 +3,7 @@
 // database and Valkey. The limits that need a period to pass are in
 // sign-in-period.test.ts.
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { listen, until } from './channel.ts';
 import { cookiesOf, createAccount, DAY, handle, load, ORIGIN, PASSWORD, prepare } from './identity.ts';
 
 const database = prepare('signin', {
@@ -136,6 +137,32 @@ describe('a successful sign-in (FR-AU-81, FR-AU-84)', () => {
     expect((await db().session.findMany({ where: { userId: second.id } })).map((row) => row.id)).toEqual([
       onceId,
     ]);
+  });
+
+  // FR-ED-40 (d), register row S15-3: the session a new sign-in ends is told to the collaboration
+  // server as a sign-out is, for the account that held it. Weakening: the notice left out of any site.
+  it('tells the collaboration server that the session the browser held ended, by the account that held it, and tells it nothing where the sign-in fails', async () => {
+    const channel = await listen();
+    try {
+      const first = await person();
+      const second = await person();
+      const held = await signIn(first.email);
+      await expectSignedIn(held.clone(), first.id);
+
+      await expectRefused(await signIn(second.email, WRONG, { ...from(1), cookie: cookiesOf(held) }));
+      await channel.quiet();
+      expect(channel.about(first.id)).toEqual([]);
+
+      await expectSignedIn(
+        await signIn(second.email, PASSWORD, { ...from(1), cookie: cookiesOf(held) }),
+        second.id,
+      );
+      await until(() => channel.sessionsEnded(first.id).length === 1);
+      // Told of the account that held the session, and not of the one that signed in.
+      expect(channel.about(second.id)).toEqual([]);
+    } finally {
+      channel.stop();
+    }
   });
 
   it('leaves the session the browser held where the sign-in fails', async () => {

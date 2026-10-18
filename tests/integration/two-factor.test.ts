@@ -8,6 +8,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { listen, until } from './channel.ts';
 import {
   cookiesOf,
   createAccount,
@@ -34,6 +35,8 @@ import {
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-two-factor-mail-'));
 const database = prepare('twofactor', { TRUSTED_PROXY_COUNT: '1', EMAIL_SINK_DIRECTORY: sink });
 const { auth, db, valkey, settings, validateSession, validateSessionRow } = await load();
+// What the collaboration server is told (FR-ED-40 (d)); register row S15-3.
+const channel = await listen();
 
 // Written out here and not imported: every character is the requirement's.
 // FR-AU-81, at a prompt for the password (the owner's answer to Q10).
@@ -107,6 +110,7 @@ afterEach(async () => {
   await db().securityLogEntry.deleteMany();
 });
 afterAll(async () => {
+  channel.stop();
   await db().$disconnect();
   valkey().disconnect();
   database.drop();
@@ -782,6 +786,8 @@ describe('a second step that cannot be completed', () => {
     const password = await signIn(auth, email, PASSWORD, { ...fresh(), cookie: other.cookie });
     expect(await password.text()).toBe('{"twoFactorRedirect":true}');
     expect(await stands(other.cookie)).toBe(false);
+    // FR-ED-40 (d): the collaboration server is told that it ended, by the account that held it.
+    await until(() => channel.sessionsEnded(other.id).length === 1);
     // Its cookies are cleared, the signed copy among them, and none of a session is set.
     for (const cookie of password.headers
       .getSetCookie()

@@ -33,6 +33,7 @@ import { settings, type LimitName } from '../settings.ts';
 import { valkey } from '../valkey.ts';
 import { refusedOrigin } from './route-answers.ts';
 import { beginSecondStep, SECOND_STEP_COOKIE } from './second-step.ts';
+import { endHeldSession, sessionEnded, userOfSessionToken } from './session-end.ts';
 import {
   beginLock,
   claimSignInLink,
@@ -423,7 +424,7 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // sign-in from the first code of an enrolment (two-factor.ts).
     const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
     if (held) {
-      await db().session.deleteMany({ where: { token: held } });
+      await endHeldSession(held);
       deleteSessionCookie(ctx);
     }
     ctx.setHeader('Cache-Control', 'no-store');
@@ -455,7 +456,7 @@ export const signInEmail = createAuthEndpoint('/sign-in/email', { method: 'POST'
     // application's own client, which rejects on a fault and is quiet where the
     // row is absent; the library's deletion can skip the row without a word.
     const held = await ctx.getSignedCookie(authCookies.sessionToken.name, secret);
-    if (held) await db().session.deleteMany({ where: { token: held } });
+    if (held) await endHeldSession(held);
     // The cookie of a second step that this browser left open, for this account
     // before its second factor was turned off or for another, opens nothing
     // under the session that begins here.
@@ -515,7 +516,7 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
   const toSecondStep = async (until: Date) => {
     await beginSecondStep(ctx, link.userId, until);
     if (held) {
-      await db().session.deleteMany({ where: { token: held } });
+      await endHeldSession(held);
       deleteSessionCookie(ctx);
     }
     return ctx.json({ twoFactorRedirect: true });
@@ -546,6 +547,8 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
   // finds this session among those it ends.
   const session = await internalAdapter.createSession(user.id);
   if (!session) throw new NoSession('sign-in link: no session');
+  // Whose the held session is, read before the claim deletes it, to tell the collaboration server once it has.
+  const heldUser = held ? await userOfSessionToken(held) : null;
   return orEndSession(session.token, async () => {
     const claimed = await db()
       .$transaction(async (tx) => {
@@ -579,6 +582,8 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
       if (standing?.twoFactorEnabled) return toSecondStep(standing.until);
       return notValid();
     }
+    // FR-ED-40 (d): the session the browser held ended with the claim.
+    if (heldUser) await sessionEnded(heldUser);
     // "The counters of failed sign-ins for the address are cleared when that
     // sign-in completes." The sign-in stands whether or not this succeeds, as a
     // reset does (password.ts): uncleared, the counts refuse for the rest of
@@ -608,7 +613,10 @@ export const signOut = createAuthEndpoint(
   async (ctx) => {
     const token = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, ctx.context.secret);
     // The application's own client: it rejects on a fault and is quiet where the row is absent.
+    const user = token ? await userOfSessionToken(token) : null;
     if (token) await db().session.deleteMany({ where: { token } });
+    // FR-ED-40 (d): every connection opened under the session closes within 5 seconds.
+    if (user) await sessionEnded(user);
     deleteSessionCookie(ctx);
     ctx.setHeader('Cache-Control', 'no-store');
     return ctx.json({});

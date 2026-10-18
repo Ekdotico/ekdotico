@@ -2,6 +2,7 @@
 // NFR-SE-17 (c); NFR-RE-15), through the identity library's handler as the
 // route calls it, against a provisioned database and Valkey.
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { listen, until } from './channel.ts';
 import { cookiesOf, createAccount, DAY, load, ORIGIN, PASSWORD, post, prepare, signIn } from './identity.ts';
 
 const database = prepare('sessionlist', { TRUSTED_PROXY_COUNT: '1' });
@@ -305,6 +306,37 @@ describe('the session of the request (NFR-SE-17 (c), FR-AU-07)', () => {
       expect(get.status, path).toBe(404);
     }
     expect(await stands(other.cookie)).toBe(true);
+  });
+});
+
+describe('the collaboration server is told that sessions ended (FR-ED-40 (d), NFR-SE-03 (d))', () => {
+  // Weakening: the notice left out of either endpoint.
+  it('is told once for the end of one session and once for the end of the others, by the user alone', async () => {
+    const channel = await listen();
+    try {
+      const { id, email, cookie } = await person();
+      const other = await browser(email);
+      const stranger = await person();
+
+      expect((await revoke(cookie, other.sessionId)).response.status).toBe(200);
+      await until(() => channel.sessionsEnded(id).length === 1);
+      const more = await browser(email);
+      expect(more.sessionId).toBeTruthy();
+      expect((await revokeOthers(cookie)).response.status).toBe(200);
+      await until(() => channel.sessionsEnded(id).length === 2);
+      expect(channel.about(id)).toEqual([
+        `{"kind":"session-ended","userId":"${id}"}`,
+        `{"kind":"session-ended","userId":"${id}"}`,
+      ]);
+
+      // A session of another account is not found, ends nothing, and is told of to no one.
+      expect((await revoke(cookie, stranger.sessionId)).response.status).toBe(404);
+      await channel.quiet();
+      expect(channel.about(stranger.id)).toEqual([]);
+      expect(channel.about(id)).toHaveLength(2);
+    } finally {
+      channel.stop();
+    }
   });
 });
 

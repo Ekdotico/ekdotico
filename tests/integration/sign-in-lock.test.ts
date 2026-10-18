@@ -20,6 +20,7 @@ import {
   signIn,
   sunk,
 } from './identity.ts';
+import { listen, until } from './channel.ts';
 import { codeAt, enrol, midStep, nextCode, passwordStep, secondStep, withCookies } from './second-factor.ts';
 
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-lock-mail-'));
@@ -35,6 +36,8 @@ const database = prepare('lock', {
   RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS: '50/900',
 });
 const { auth, db, valkey, settings, validateSessionRow } = await load();
+// What the collaboration server is told (FR-ED-40 (d)); register row S15-3.
+const channel = await listen();
 const { beginLock, claimSignInLink, findOpenSignInLink } = await import('../../src/lib/auth/sign-in-lock.ts');
 const { clearFailedSignIns } = await import('../../src/lib/auth/sign-in.ts');
 const { deleteExpiredTokens } = await import('../../src/lib/auth/password.ts');
@@ -157,6 +160,7 @@ afterEach(async () => {
   await db().securityLogEntry.deleteMany();
 });
 afterAll(async () => {
+  channel.stop();
   await db().$disconnect();
   valkey().disconnect();
   database.drop();
@@ -722,10 +726,14 @@ describe('the confirmation of the link (FR-AU-81; A104)', () => {
     expect((await validateSessionRow(new Headers({ cookie: held }))).session).toBeNull();
     const cookie = withCookies(held, confirmed.response);
     expect((await validateSessionRow(new Headers({ cookie }))).session?.userId).toBe(id);
-    // A link that no longer works ends nothing.
+    // FR-ED-40 (d): the collaboration server is told, once the claim had committed, by the account that held it.
+    await until(() => channel.sessionsEnded(other.id).length === 1);
+    // A link that no longer works ends nothing, and tells no one.
     const again = cookiesOf(await signIn(auth, other.email, PASSWORD, fresh()));
     expect((await confirm(token, { cookie: again })).response.status).toBe(409);
     expect(await sessions(other.id)).toHaveLength(1);
+    await channel.quiet();
+    expect(channel.sessionsEnded(other.id)).toHaveLength(1);
   });
 
   it('lands an account of the founding team without a second factor on the enrolment, as any sign-in does', async () => {
@@ -967,6 +975,7 @@ describe('the link of an account with two-factor authentication on (FR-AU-81, FR
     const confirmed = await confirm(await lock(email), { cookie: held });
     expect(confirmed.response.status).toBe(200);
     expect(await sessions(other.id)).toEqual([]);
+    await until(() => channel.sessionsEnded(other.id).length === 1);
   });
 });
 

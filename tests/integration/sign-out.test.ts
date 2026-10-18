@@ -4,6 +4,7 @@
 // database and Valkey.
 import { NextRequest } from 'next/server';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { listen, until } from './channel.ts';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
 const database = prepare('signout', {
@@ -206,5 +207,51 @@ describe('signing out, at the request-interception layer (NFR-SE-17 (c), NFR-SE-
     for (let n = 0; n < 3; n++) {
       expect(passed(await throughProxy('GET', '/api/documents', { cookie: again }))).toBe(true);
     }
+  });
+});
+
+describe('the collaboration server is told that the session ended (FR-ED-40 (d), NFR-SE-03 (d))', () => {
+  // Weakening: the notice left out (the connections of the session then live for 60 seconds).
+  it('is told by the user alone, once the row is gone, and for a cookie that names no session it is told nothing', async () => {
+    const channel = await listen();
+    try {
+      const { cookie, id, sessionId } = await person();
+      // What the row said at the moment the notice went out: gone, never before the change.
+      const { valkey: client } = await load();
+      const publish = client().publish.bind(client());
+      const seen: number[] = [];
+      vi.spyOn(client(), 'publish').mockImplementation((async (...given: Parameters<typeof publish>) => {
+        seen.push(await rows(sessionId));
+        return publish(...given);
+      }) as never);
+
+      expect((await signOut({ cookie })).status).toBe(200);
+      await until(() => channel.sessionsEnded(id).length === 1);
+      expect(seen).toEqual([0]);
+      // The message holds the kind and the user's identifier, and nothing of the browser.
+      expect(channel.about(id)).toEqual([`{"kind":"session-ended","userId":"${id}"}`]);
+
+      // The same cookie again names no session: nothing ended, nothing told.
+      expect((await signOut({ cookie })).status).toBe(200);
+      expect((await signOut({})).status).toBe(200);
+      await channel.quiet();
+      expect(channel.about(id)).toHaveLength(1);
+    } finally {
+      channel.stop();
+    }
+  });
+
+  it('still signs out, and says one line that names no one, where the notice cannot be published', async () => {
+    const lines = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie, id, sessionId } = await person();
+    const { valkey: client } = await load();
+    vi.spyOn(client(), 'publish').mockRejectedValue(
+      Object.assign(new Error(`down ${id}`), { code: 'ECONNREFUSED' }),
+    );
+    expect((await signOut({ cookie })).status).toBe(200);
+    expect(await rows(sessionId)).toBe(0);
+    expect(lines.mock.calls).toEqual([
+      [`collab events: session-ended not published for user ${id} (Error ECONNREFUSED)`],
+    ]);
   });
 });

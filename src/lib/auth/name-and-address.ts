@@ -39,6 +39,7 @@ import { hashToken, newToken, RESET_LINK, TOKEN } from '../token.ts';
 import { ADDRESS_LINK, changeOf, pendingChange, voidAddressLinks } from './address-links.ts';
 import { notAdmitted, refusedOrigin, tooManyRequests, unauthenticated } from './route-answers.ts';
 import { SECOND_STEP } from './second-step.ts';
+import { sessionEnded } from './session-end.ts';
 import { holdSession, validateSessionRow } from './session.ts';
 import { voidSignInLinks } from './sign-in-lock.ts';
 import { checkCredentials, SIGN_IN_REFUSED, stillVerified } from './sign-in.ts';
@@ -409,8 +410,9 @@ export const verifyEmail = createAuthEndpoint(
     if (changed === 'ended') return unauthenticated();
     if (!changed) return notValid();
 
-    // FR-ED-40 (d): the slice that builds the collaboration server publishes the
-    // end of the account's other sessions here, once the transaction has committed.
+    // FR-ED-40 (d): the connections opened under the account's other sessions close
+    // within 5 seconds, once the transaction has committed.
+    await sessionEnded(userId);
 
     // FR-AU-87 (e): the notice to the old address, after the answer.
     afterResponse('address notice', () => handOver(addressChangedEmail(oldEmail)));
