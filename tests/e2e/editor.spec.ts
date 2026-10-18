@@ -2605,7 +2605,10 @@ test('a key typed in a table whose cells hold tables, ten thousand cells in all,
     false,
   ]);
   // Tab in the last cell would add a row: it adds none, and the page says so.
-  const noRoom = page.getByRole('status').filter({ hasText: 'The table has no room for this.' });
+  const noRoom = page.getByRole('status').filter({
+    hasText:
+      'We cannot add this. A table and the tables in its cells hold 10,000 cells, two levels deep, and this surpasses our current limits.',
+  });
   await expect(noRoom).toHaveCount(0);
   await page.keyboard.press('Tab');
   await expect(noRoom).toBeVisible();

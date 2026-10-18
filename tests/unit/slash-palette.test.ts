@@ -1389,4 +1389,26 @@ describe('the limits of a document in the palette (D182, D192)', () => {
     expect(deepest(9)).toEqual(ALL);
     expect(deepest(10)).toEqual(ALL.filter((name) => name !== 'bullet' && name !== 'numbered'));
   });
+
+  // The owner's decision of 18 October 2026: the palette offers nothing once the document is at 5,000.
+  it('lists nothing in a document of 5,000 blocks, not even a block in place of the empty one, and everything at 4,999', () => {
+    const at = editorOf(paragraph(), ...many(4999, () => paragraph()));
+    type(at, '/');
+    expect(listed(at)).toEqual([]);
+    const under = editorOf(paragraph(), ...many(4998, () => paragraph()));
+    type(under, '/');
+    expect(listed(under)).toEqual(ALL);
+    // The paragraphs in the cells of a table are not blocks of the total.
+    const cell = { type: 'tableCell', content: [paragraph(), paragraph()] };
+    const table = {
+      type: 'tableBlock',
+      content: [
+        { type: 'table', content: many(50, () => ({ type: 'tableRow', content: many(20, () => cell) })) },
+        { type: 'tableCaption' },
+      ],
+    };
+    const withTable = editorOf(paragraph(), table, ...many(4997, () => paragraph()));
+    type(withTable, '/');
+    expect(listed(withTable)).toEqual(ALL);
+  });
 });

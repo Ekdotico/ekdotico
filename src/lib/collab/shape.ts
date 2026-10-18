@@ -38,7 +38,9 @@
 //   browser counts them (src/app/(app)/documents/[id]/block-limits.ts), and,
 //   as for the bounds, what a document holds past a limit already is refused
 //   only what takes it further past, so that it can still be deleted from.
-//   The total of 5,000 blocks of D192 is not built: what it counts is open.
+//   And the total of D192, as the owner settled it on 18 October 2026: 5,000
+//   blocks, counted outside the cells of tables, a table counted as one
+//   (`ONE_BLOCK` says what one block is).
 //
 // The bounds and the limits are named here, where the browser can import them
 // too (src/app/(app)/documents/[id]/table-bounds.ts and block-limits.ts), so
@@ -103,6 +105,7 @@ export const LIMITS = {
   listItems: 1000,
   listDepth: 10,
   codeBytes: 500 * 1024,
+  blocks: 5000,
 } as const;
 export type Limit = keyof typeof LIMITS;
 /** The limits that count a block of a type wherever it stands, by the name of its node. */
@@ -116,6 +119,26 @@ export const COUNTED: ReadonlyMap<string, Limit> = new Map([
   ['blockquote', 'quotes'],
 ]);
 export const LISTS: ReadonlySet<string> = new Set(['bulletList', 'orderedList']);
+/**
+ * What the total of blocks counts as one block (D192; the owner's decision of
+ * 18 October 2026): each block the writer writes in or puts down, which is a
+ * paragraph, a heading, a code block, a divider, a page break, a table of
+ * contents, or a table with its caption. A list, an item of a list, a quote
+ * and a callout are counted by the blocks they hold: each holds one at least,
+ * so every one of them counts, and no line of text counts twice (an item and
+ * its paragraph are one line on the page). A table is one block, and nothing
+ * in its cells counts, tables in them included: the bounds of tables are
+ * their own (D171, D172). Nothing inside a block of this set is looked at.
+ */
+export const ONE_BLOCK: ReadonlySet<string> = new Set([
+  'paragraph',
+  'heading',
+  'codeBlock',
+  'horizontalRule',
+  'pageBreak',
+  'tableOfContents',
+  'tableBlock',
+]);
 const LIST_PARTS = new Set([...LISTS, 'listItem']);
 
 /**
@@ -170,6 +193,21 @@ function countsIn<Node>(tree: Tree<Node>, roots: Iterable<Node>): Map<Limit, num
   return found;
 }
 const COUNTED_LIMITS = [...new Set(COUNTED.values())];
+/**
+ * The blocks of the total in what is given (`ONE_BLOCK`): a table's cells are
+ * never walked, nor the text of a paragraph. A table outside its block, which
+ * the editor does not make, counts nothing and is not walked either.
+ */
+function blocksIn<Node>(tree: Tree<Node>, roots: Iterable<Node>): number {
+  let found = 0;
+  const left = [...roots];
+  for (let node = left.pop(); node !== undefined; node = left.pop()) {
+    const name = tree.name(node) ?? '';
+    if (ONE_BLOCK.has(name)) found += 1;
+    else if (name !== 'table' && name !== 'text') for (const child of tree.children(node)) left.push(child);
+  }
+  return found;
+}
 /** The first limit of `COUNTED` that a document passes, and further than before. */
 const pastCounts = (before: Map<Limit, number>, after: Map<Limit, number>) =>
   COUNTED_LIMITS.find((limit) => pastLimit(limit, before.get(limit) ?? 0, after.get(limit) ?? 0)) ?? null;
@@ -452,6 +490,7 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
     const lists = new Set<Shared>();
     const code = new Set<Shared>();
     let counted = false;
+    let made = false;
     for (const [client, structs] of after.store.clients) {
       const from = reached.get(client) ?? 0;
       if (from >= Y.getState(after.store, client)) continue;
@@ -473,6 +512,7 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
         const list = LIST_PARTS.has(name) && outermost(type, LISTS);
         if (list) lists.add(list);
         counted ||= COUNTED.has(name);
+        made = true;
       }
     }
     for (const table of tables) {
@@ -485,6 +525,9 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
     };
     const count = counted && pastCounts(countsIn(AS_IT_IS, root(document)), countsIn(AS_IT_IS, root(after)));
     if (count) return count;
+    // Only an element made adds a block to the total: Yjs moves nothing.
+    if (made && pastLimit('blocks', blocksIn(AS_IT_IS, root(document)), blocksIn(AS_IT_IS, root(after))))
+      return 'blocks';
     const list = pastLists(
       [...lists].map((each) => {
         const before = was(document, each);
@@ -684,8 +727,10 @@ export function withoutCopy(
   const lists = new Set<Node>();
   const code = new Set<Node>();
   let counted = false;
+  let making = false;
   for (const item of made) {
     if (!alive.get(item)) continue;
+    making = true;
     const children = inOrder(gained.get(item) ?? []);
     if (!children) return undefined;
     const itself: Tree<Node> = { name, children: () => children.filter((child) => alive.get(child)) };
@@ -714,14 +759,17 @@ export function withoutCopy(
     const before = table instanceof Y.Item ? NONE : measure(AS_IT_IS, table);
     if (pastBounds(before, measure(after, table))) return 'table';
   }
-  if (counted) {
-    // The whole document, before and after, where the update made a block that a limit counts.
+  if (making) {
+    // The whole document, before and after, where the update made an element:
+    // the types a limit counts, where it made one of them, and the total.
     const root = document.share.get(FRAGMENT_NAME) as Shared | undefined;
     const roots = root
       ? [...after.children(root)]
       : (gained.get(FRAGMENT_NAME) ?? []).filter((item) => alive.get(item) && nameOf(item) !== null);
-    const count = pastCounts(countsIn(AS_IT_IS, root ? AS_IT_IS.children(root) : []), countsIn(after, roots));
+    const had = () => (root ? AS_IT_IS.children(root) : []);
+    const count = counted && pastCounts(countsIn(AS_IT_IS, had()), countsIn(after, roots));
     if (count) return count;
+    if (pastLimit('blocks', blocksIn(AS_IT_IS, had()), blocksIn(after, roots))) return 'blocks';
   }
   const list = pastLists(
     [...lists].map((each) => ({
