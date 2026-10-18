@@ -15,17 +15,12 @@ import type * as Y from 'yjs';
 import { tabbableWithin } from '@ekdotico/domico/a11y';
 import { Button, Cluster, Dialog, FormFault, Stack, SyncStatus } from '@ekdotico/domico/components';
 import { DocumentConnection, syncStatus, type Ending, type Held } from '../../../../lib/collab/client.ts';
-import { COLLAB_PATH, REFUSAL } from '../../../../lib/collab/protocol.ts';
+import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL } from '../../../../lib/collab/protocol.ts';
+import type { Limit } from '../../../../lib/collab/shape.ts';
 import pageStyles from '../../../pages.module.css';
+import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
 import styles from './editor.module.css';
-import {
-  BLOCK_CONTROLS,
-  Editable,
-  SLASH_HINT,
-  TABLE_PAST_BOUNDS,
-  copyText,
-  extensions,
-} from './extensions.tsx';
+import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
@@ -84,7 +79,15 @@ const HELD: Record<Held, string> = {
   [REFUSAL.INCOMPLETE]:
     'A change in this tab adds a block without the content it must hold, so it cannot be applied',
   [REFUSAL.TABLE_BOUNDS]: TABLE_PAST_BOUNDS,
+  // The limits of a document (register D184, D192, D193), for the owner's approval.
+  ...(Object.fromEntries(
+    Object.entries(LIMIT_REFUSAL).map(([limit, reason]) => [reason, heldTitle(limit as Limit)]),
+  ) as Record<(typeof LIMIT_REFUSAL)[Limit], string>),
 };
+// A repair of the document that this browser did not write (register D180,
+// the browser's half). Written for the owner's approval.
+const UNREPAIRED =
+  'We cannot repair this document in this tab. The repair would make the document larger than our current limit of 5 MB, so the document is read-only here. Nothing in the document was changed.';
 const HELD_TEXT =
   'The server did not take the change, and the document is read-only in this tab. The changes that were not sent are shown here and nowhere else. Copy the text to keep it, then reload the document from the server. Reloading discards the changes that were not sent.';
 // `TEXT_NOT_COPIED`, where there is no dialog to close.
@@ -146,11 +149,14 @@ function Text({
   editable,
   onEditor,
   onUnshown,
+  onUnrepairable,
 }: {
   document: Y.Doc;
   editable: boolean;
   /** Told that the document cannot be built here: the text goes, and the page says so. */
   onUnshown: () => void;
+  /** Told that a repair was not written because it would pass 5 MB: the text is read-only (D180). */
+  onUnrepairable: () => void;
   /** Told of the editor, for the one who copies its text (FR-ED-24). */
   onEditor: (editor: TextEditor | null) => void;
 }) {
@@ -171,7 +177,10 @@ function Text({
       setRefusal((was) => (words === null ? null : { words, times: (was?.times ?? 0) + 1 })),
     [],
   );
-  const all = useMemo(() => extensions(document, onUnshown, refuse), [document, onUnshown, refuse]);
+  const all = useMemo(
+    () => extensions(document, onUnshown, refuse, onUnrepairable),
+    [document, onUnshown, refuse, onUnrepairable],
+  );
   // What a screen reader is given of a refusal: one region that is in the page
   // throughout, emptied and then written at each refusal, so that a second
   // refusal in the same words is heard as the first was. The design package
@@ -231,6 +240,19 @@ function Text({
     onEditor(editor);
   }, [onEditor, editor]);
 
+  // A document past a limit already (register D184; ./block-limits.ts): it
+  // can only be deleted from until it is back under, and is told so.
+  // Read when the editor is told of, and at each transaction after: what the
+  // binding built before then is read at once, and not missed.
+  const [over, setOver] = useState('');
+  useEffect(() => {
+    if (!editor) return;
+    const read = () => setOver(overLimits(editor.state.doc).join('\n'));
+    read();
+    editor.on('transaction', read);
+    return () => void editor.off('transaction', read);
+  }, [editor]);
+
   // FR-ED-18: read-only in the error state, and editable again when the
   // connection returns. The focus stays in the text: a region that stops being
   // editable would otherwise drop it, and so would the toolbar, the controls
@@ -254,6 +276,13 @@ function Text({
           are seen, here, and heard, from the region below, when the screen
           reader next falls silent. No fault of the writer's, and the focus
           stays in the text. */}
+      {over ? (
+        <FormFault tone="neutral" announce="polite">
+          {over.split('\n').map((sentence) => (
+            <p key={sentence}>{sentence}</p>
+          ))}
+        </FormFault>
+      ) : null}
       {refusal ? (
         <FormFault tone="neutral" announce="off">
           <p>{refusal.words}</p>
@@ -368,6 +397,8 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
   const editor = useRef<TextEditor | null>(null);
   const [unshown, setUnshown] = useState(false);
   const fail = useCallback(() => setUnshown(true), []);
+  const [unrepaired, setUnrepaired] = useState(false);
+  const unrepairable = useCallback(() => setUnrepaired(true), []);
   const keep = useCallback((made: TextEditor | null) => {
     editor.current = made;
   }, []);
@@ -422,13 +453,19 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
           }}
         />
       )}
+      {unrepaired ? (
+        <FormFault tone="neutral" announce="polite">
+          <p>{UNREPAIRED}</p>
+        </FormFault>
+      ) : null}
       {/* FR-ED-18: read-only in the error state, "until the connection returns". */}
       {state.opened ? (
         <Text
           document={connection.document}
-          editable={canEdit && state.phase !== 'lost' && state.phase !== 'held'}
+          editable={canEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
           onEditor={keep}
           onUnshown={fail}
+          onUnrepairable={unrepairable}
         />
       ) : null}
       <Dialog open={check !== null} onClose={close} title="Sync status">

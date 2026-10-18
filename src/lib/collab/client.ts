@@ -13,7 +13,7 @@ import {
   WebSocketStatus,
 } from '@hocuspocus/provider';
 import * as Y from 'yjs';
-import { documentName, REFUSAL } from './protocol.ts';
+import { documentName, LIMIT_REFUSAL, REFUSAL } from './protocol.ts';
 
 /** The refusals after which the client does not try again (FR-ED-41; src/lib/collab/protocol.ts). */
 export type Ending = typeof REFUSAL.NO_ACCESS | typeof REFUSAL.ACCESS_ENDED | typeof REFUSAL.SESSION_ENDED;
@@ -23,15 +23,17 @@ const ENDINGS: readonly string[] = [REFUSAL.NO_ACCESS, REFUSAL.ACCESS_ENDED, REF
 /**
  * The refusals of what this client sent, for a limit of the document (the
  * owner's decision of 12 October 2026; src/lib/collab/protocol.ts) or for a
- * rule of its shape (register D170, D171, D180). The client does not try
- * again either, since it would send the same; but the text stays.
+ * rule of its shape (register D170, D171, D180, D184, D192, D193). The
+ * client does not try again either, since it would send the same; but the
+ * text stays.
  */
 export type Held =
   | typeof REFUSAL.TOO_LARGE
   | typeof REFUSAL.TOO_DEEP
   | typeof REFUSAL.TOO_DANGLING
   | typeof REFUSAL.INCOMPLETE
-  | typeof REFUSAL.TABLE_BOUNDS;
+  | typeof REFUSAL.TABLE_BOUNDS
+  | (typeof LIMIT_REFUSAL)[keyof typeof LIMIT_REFUSAL];
 
 const HELD: readonly string[] = [
   REFUSAL.TOO_LARGE,
@@ -39,6 +41,7 @@ const HELD: readonly string[] = [
   REFUSAL.TOO_DANGLING,
   REFUSAL.INCOMPLETE,
   REFUSAL.TABLE_BOUNDS,
+  ...Object.values(LIMIT_REFUSAL),
 ];
 // The code a socket is closed with for a message longer than it takes (RFC
 // 6455, "Message Too Big"; `MAX_MESSAGE_BYTES` of src/lib/collab/state.ts):

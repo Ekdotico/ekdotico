@@ -39,7 +39,7 @@ import {
   type CollabEvent,
   type CollabEventSubscription,
 } from '../lib/collab/events.ts';
-import { COLLAB_PATH, REFUSAL, type Refusal } from '../lib/collab/protocol.ts';
+import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL, type Refusal } from '../lib/collab/protocol.ts';
 import { ISOLATION_HEADERS, STATIC_POLICY } from '../lib/csp.ts';
 import {
   applyState,
@@ -729,6 +729,7 @@ export function createCollabServer(store: ServerSettings) {
             waiting: REFUSAL.TOO_DANGLING,
             incomplete: REFUSAL.INCOMPLETE,
             table: REFUSAL.TABLE_BOUNDS,
+            ...LIMIT_REFUSAL,
           }[past],
         );
       }

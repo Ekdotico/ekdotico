@@ -966,11 +966,13 @@ describe('Tab, and a table in a table', () => {
     nested.commands.setTextSelection(nested.state.doc.content.size);
     type(nested, '/');
     expect(listed(nested)).toEqual(OTHERS);
-    // A document that holds more, as another client or storage made it, lists none either, and everything else.
+    // A document that holds more, as another client or storage made it, takes deletions alone
+    // until it is back under (D184): the slash is not typed, and the palette does not open.
     const more = holding(150);
     expect(rowsOf(more)).toHaveLength(150);
     type(more, '/');
-    expect(listed(more)).toEqual(OTHERS);
+    expect(text(more)).not.toContain('/');
+    expect(listed(more)).toEqual([]);
   });
 
   describe('the keys and the commands of a table in a cell', () => {
@@ -1348,5 +1350,43 @@ describe('what the closing of the list says (R44; NFR-IC-19)', () => {
     expect(closing(editor)).toBe('open');
     press(editor, 'Escape');
     expect(closing(editor)).toBeUndefined();
+  });
+});
+
+// Register D182, D192: the palette does not list a block at its limit.
+describe('the limits of a document in the palette (D182, D192)', () => {
+  const many = (count: number, make: () => Json) => Array.from({ length: count }, make);
+  it('lists no block whose type the document holds as many of as it may', () => {
+    const tocs = editorOf(paragraph(), ...many(5, () => ({ type: 'tableOfContents' })));
+    type(tocs, '/');
+    expect(listed(tocs)).toEqual(ALL.filter((name) => name !== 'toc'));
+    const four = editorOf(paragraph(), ...many(4, () => ({ type: 'tableOfContents' })));
+    type(four, '/');
+    expect(listed(four)).toEqual(ALL);
+    const dividers = editorOf(paragraph(), ...many(500, () => ({ type: 'horizontalRule' })));
+    type(dividers, '/');
+    expect(listed(dividers)).toEqual(ALL.filter((name) => name !== 'divider'));
+  });
+
+  it('lists no list in an item of a list nested as deep as lists may be', () => {
+    const item = (...content: Json[]): Json => ({ type: 'listItem', content: [paragraph(), ...content] });
+    const nest = (levels: number): Json => ({
+      type: 'bulletList',
+      content: [levels === 1 ? item() : item(nest(levels - 1))],
+    });
+    const deepest = (levels: number) => {
+      const made = editorOf(nest(levels));
+      // The deepest paragraph: the editor puts one after the list as well.
+      let [end, most] = [0, -1];
+      made.state.doc.descendants((node, pos) => {
+        const { depth } = made.state.doc.resolve(pos);
+        if (node.type.name === 'paragraph' && depth > most) [end, most] = [pos + 1, depth];
+      });
+      made.commands.setTextSelection(end);
+      type(made, ' /');
+      return listed(made);
+    };
+    expect(deepest(9)).toEqual(ALL);
+    expect(deepest(10)).toEqual(ALL.filter((name) => name !== 'bullet' && name !== 'numbered'));
   });
 });

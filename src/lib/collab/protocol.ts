@@ -5,6 +5,7 @@
 //
 // Nothing here reads a setting, the database, or anything of Next.js or of
 // Node.js: it loads in a browser as it is.
+import type { Limit } from './shape.ts';
 
 /**
  * Where the collaboration server is reached, on the application's own origin
@@ -97,6 +98,37 @@ export const REFUSAL = {
    */
   INCOMPLETE: 'incomplete',
   TABLE_BOUNDS: 'table-bounds',
+  /**
+   * A limit of the document (`LIMITS` of src/lib/collab/shape.ts; register
+   * D184, D192, D193), refused in the same way: the change would leave the
+   * document with more of a block than its limit and more than it had, a list
+   * with more items or nested deeper, or a code block longer. One reason for
+   * each limit; the names are provisional, for the owner's approval.
+   */
+  TOO_MANY_TABLES: 'too-many-tables',
+  TOO_MANY_CODE_BLOCKS: 'too-many-code-blocks',
+  TOO_MANY_CALLOUTS: 'too-many-callouts',
+  TOO_MANY_TABLES_OF_CONTENTS: 'too-many-tables-of-contents',
+  TOO_MANY_PAGE_BREAKS: 'too-many-page-breaks',
+  TOO_MANY_DIVIDERS: 'too-many-dividers',
+  TOO_MANY_QUOTES: 'too-many-quotes',
+  LIST_TOO_LONG: 'list-too-long',
+  LIST_TOO_DEEP: 'list-too-deep',
+  CODE_BLOCK_TOO_LARGE: 'code-block-too-large',
 } as const;
 
 export type Refusal = (typeof REFUSAL)[keyof typeof REFUSAL];
+
+/** The reason for each limit of a document. */
+export const LIMIT_REFUSAL = {
+  tables: REFUSAL.TOO_MANY_TABLES,
+  codeBlocks: REFUSAL.TOO_MANY_CODE_BLOCKS,
+  callouts: REFUSAL.TOO_MANY_CALLOUTS,
+  tablesOfContents: REFUSAL.TOO_MANY_TABLES_OF_CONTENTS,
+  pageBreaks: REFUSAL.TOO_MANY_PAGE_BREAKS,
+  dividers: REFUSAL.TOO_MANY_DIVIDERS,
+  quotes: REFUSAL.TOO_MANY_QUOTES,
+  listItems: REFUSAL.LIST_TOO_LONG,
+  listDepth: REFUSAL.LIST_TOO_DEEP,
+  codeBytes: REFUSAL.CODE_BLOCK_TOO_LARGE,
+} as const satisfies Record<Limit, Refusal>;
