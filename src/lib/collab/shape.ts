@@ -29,10 +29,23 @@
 // cost the limits already accept for it (register D132, D167), bounded by the
 // limit of messages.
 //
-// The bounds are named here, where the browser can import them too
-// (src/app/(app)/documents/[id]/table-bounds.ts), so that the two hold the same.
+// - D184 and D192: an update that leaves the document with more of a block
+//   than its limit, and with more than it had, is refused: 100 tables, 200
+//   code blocks, 200 callouts, 5 tables of contents, 500 page breaks, 500
+//   dividers, 500 quotes, counted wherever they stand, a table in a cell
+//   counted as one more; 1,000 items in one list, and lists nested 10 deep.
+//   And D193: a code block of more than 500 KB of text. Counted as the
+//   browser counts them (src/app/(app)/documents/[id]/block-limits.ts), and,
+//   as for the bounds, what a document holds past a limit already is refused
+//   only what takes it further past, so that it can still be deleted from.
+//   The total of 5,000 blocks of D192 is not built: what it counts is open.
+//
+// The bounds and the limits are named here, where the browser can import them
+// too (src/app/(app)/documents/[id]/table-bounds.ts and block-limits.ts), so
+// that the two hold the same.
 import { Schema, type NodeSpec } from '@tiptap/pm/model';
 import * as Y from 'yjs';
+import { FRAGMENT_NAME } from './protocol.ts';
 
 /** The most rows of a table, and the most cells of a row (FR-ED-09). */
 export const TABLE_MOST = 100;
@@ -71,13 +84,132 @@ export const NODES: Record<string, NodeSpec> = {
 };
 const SCHEMA = new Schema({ nodes: NODES, topNode: 'doc' });
 
-/** Which rule an update would break: `incomplete` (D170, D180) or `table` (D171, D172). */
-export type Shape = 'incomplete' | 'table';
+/**
+ * The limits of a document (register D184, D192, D193), by name: the most
+ * blocks of a type in a document, wherever they stand; `listItems`, the most
+ * items of one list; `listDepth`, the most levels of list, one in an item of
+ * another, the outermost counted; `codeBytes`, the most bytes of the text of
+ * one code block in UTF-8, 500 KB of 1,024 bytes, as the 5 MB of ./state.ts
+ * are counted.
+ */
+export const LIMITS = {
+  tables: 100,
+  codeBlocks: 200,
+  callouts: 200,
+  tablesOfContents: 5,
+  pageBreaks: 500,
+  dividers: 500,
+  quotes: 500,
+  listItems: 1000,
+  listDepth: 10,
+  codeBytes: 500 * 1024,
+} as const;
+export type Limit = keyof typeof LIMITS;
+/** The limits that count a block of a type wherever it stands, by the name of its node. */
+export const COUNTED: ReadonlyMap<string, Limit> = new Map([
+  ['table', 'tables'],
+  ['codeBlock', 'codeBlocks'],
+  ['callout', 'callouts'],
+  ['tableOfContents', 'tablesOfContents'],
+  ['pageBreak', 'pageBreaks'],
+  ['horizontalRule', 'dividers'],
+  ['blockquote', 'quotes'],
+]);
+export const LISTS: ReadonlySet<string> = new Set(['bulletList', 'orderedList']);
+const LIST_PARTS = new Set([...LISTS, 'listItem']);
+
+/**
+ * The bytes of a text in UTF-8; or its length in UTF-16, where three bytes
+ * for each unit would not pass `LIMITS.codeBytes`. A unit is one byte at
+ * least and three at most, and a pair of them four, so only a text between a
+ * third of the limit and the limit is counted byte by byte.
+ */
+export function textBytes(texts: readonly string[]): number {
+  let units = 0;
+  for (const text of texts) units += text.length;
+  if (units * 3 <= LIMITS.codeBytes) return units;
+  let bytes = 0;
+  for (const text of texts) {
+    for (let at = 0; at < text.length; at += 1) {
+      const unit = text.charCodeAt(at);
+      if (unit < 0x80) bytes += 1;
+      else if (unit < 0x800) bytes += 2;
+      else if (unit >= 0xd800 && unit < 0xdc00 && at + 1 < text.length) {
+        bytes += 4;
+        at += 1;
+      } else bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+/** Past a limit, and further past than before: what a document holds already is not closed to every change. */
+export const pastLimit = (limit: Limit, before: number, after: number) =>
+  after > LIMITS[limit] && after > before;
+
+/** Which rule an update would break: `incomplete` (D170, D180), `table` (D171, D172), or a limit (D184, D192, D193). */
+export type Shape = 'incomplete' | 'table' | Limit;
 
 /** A node of a document as a rule reads it: its name, and what it holds that is not deleted. */
 interface Tree<Node> {
   name(node: Node): string | null;
   children(node: Node): Iterable<Node>;
+  /** The text of a node that is text, in its pieces. */
+  strings?(text: Node): Iterable<string>;
+}
+
+/** How many blocks of each type of `COUNTED` stand in what is given, at any depth. */
+function countsIn<Node>(tree: Tree<Node>, roots: Iterable<Node>): Map<Limit, number> {
+  const found = new Map<Limit, number>();
+  const left = [...roots];
+  for (let node = left.pop(); node !== undefined; node = left.pop()) {
+    const limit = COUNTED.get(tree.name(node) ?? '');
+    if (limit) found.set(limit, (found.get(limit) ?? 0) + 1);
+    for (const child of tree.children(node)) left.push(child);
+  }
+  return found;
+}
+const COUNTED_LIMITS = [...new Set(COUNTED.values())];
+/** The first limit of `COUNTED` that a document passes, and further than before. */
+const pastCounts = (before: Map<Limit, number>, after: Map<Limit, number>) =>
+  COUNTED_LIMITS.find((limit) => pastLimit(limit, before.get(limit) ?? 0, after.get(limit) ?? 0)) ?? null;
+
+/** What the limits of lists count, of a list and the lists in its items: the most items of one, and how deep they stand. */
+interface Lists {
+  listItems: number;
+  listDepth: number;
+}
+const NO_LISTS: Lists = { listItems: 0, listDepth: 0 };
+function listsIn<Node>(tree: Tree<Node>, list: Node): Lists {
+  const found = { ...NO_LISTS };
+  const left: [Node, number][] = [[list, 0]];
+  for (let next = left.pop(); next; next = left.pop()) {
+    const [node, round] = next;
+    let above = round;
+    if (LISTS.has(tree.name(node) ?? '')) {
+      above += 1;
+      found.listDepth = Math.max(found.listDepth, above);
+      let items = 0;
+      for (const child of tree.children(node)) if (tree.name(child) === 'listItem') items += 1;
+      found.listItems = Math.max(found.listItems, items);
+    }
+    for (const child of tree.children(node)) left.push([child, above]);
+  }
+  return found;
+}
+/** The first limit of lists that one of the lists passes, each given before and after, and further than before. */
+const pastLists = (lists: [before: Lists, after: Lists][]) =>
+  (['listItems', 'listDepth'] as const).find((limit) =>
+    lists.some(([before, after]) => pastLimit(limit, before[limit], after[limit])),
+  ) ?? null;
+
+/** The bytes of the text of a code block (`textBytes`). */
+function codeBytesIn<Node>(tree: Tree<Node>, block: Node): number {
+  const strings: string[] = [];
+  for (const child of tree.children(block)) {
+    if (tree.name(child) === 'text') strings.push(...(tree.strings?.(child) ?? []));
+  }
+  return textBytes(strings);
 }
 
 /**
@@ -180,15 +312,31 @@ const AS_IT_IS: Tree<Shared> = {
   *children(type) {
     for (const item of live(type)) yield (item.content as Y.ContentType).type as Shared;
   },
+  strings: (text) => stringsOf(text),
 };
-/** The outermost table round a shared type, itself among them, or null. */
-function outermost(type: Shared): Shared | null {
+/** The pieces of a text that are not deleted, nor deleted by `deleted`. */
+function* stringsOf(text: Shared, deleted?: ReturnType<typeof Y.decodeUpdate>['ds']): Iterable<string> {
+  for (let item = text._start; item; item = item.right) {
+    if (item.deleted || !(item.content instanceof Y.ContentString)) continue;
+    if (!deleted || !Y.isDeleted(deleted, item.id)) yield item.content.str;
+  }
+}
+/** The outermost of the named round a shared type, itself among them, or null. */
+function outermost(type: Shared, names: ReadonlySet<string>): Shared | null {
   let found: Shared | null = null;
   for (let at: Shared | null = type; at; at = (at._item?.parent as Shared | undefined) ?? null) {
-    if (nameOfType(at) === 'table') found = at;
+    if (names.has(nameOfType(at) ?? '')) found = at;
   }
   return found;
 }
+/** The same shared type in the document before an update, where it was there. */
+function was(document: Y.Doc, type: Shared): Shared | null {
+  const { id } = type._item!;
+  return id.clock < Y.getState(document.store, id.client)
+    ? (((Y.getItem(document.store, id) as Y.Item).content as Y.ContentType).type as Shared)
+    : null;
+}
+const TABLES = new Set(['table']);
 
 /**
  * Which rule an update would break, asked before it is applied, or null where
@@ -196,8 +344,15 @@ function outermost(type: Shared): Shared | null {
  */
 export function shapeOf(document: Y.Doc, update: Uint8Array): Shape | null {
   const read = Y.decodeUpdate(update);
-  // No element in it: no element is made, and no table grows.
-  if (!read.structs.some((struct) => struct instanceof Y.Item && nameOf(struct) !== null)) return null;
+  // No element in it and no text: no element is made, no table and no count
+  // grows, and no code block is longer.
+  if (
+    !read.structs.some(
+      (struct) =>
+        struct instanceof Y.Item && (nameOf(struct) !== null || struct.content instanceof Y.ContentString),
+    )
+  )
+    return null;
   const quick = withoutCopy(document, read);
   return quick === undefined ? withCopy(document, update) : quick;
 }
@@ -220,26 +375,53 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
     Y.applyUpdate(after, Y.encodeStateAsUpdate(document));
     Y.applyUpdate(after, update);
     const tables = new Set<Shared>();
+    const lists = new Set<Shared>();
+    const code = new Set<Shared>();
+    let counted = false;
     for (const [client, structs] of after.store.clients) {
       const from = reached.get(client) ?? 0;
       if (from >= Y.getState(after.store, client)) continue;
       for (let at = Y.findIndexSS(structs, from); at < structs.length; at += 1) {
         const item = structs[at];
-        if (!(item instanceof Y.Item) || item.deleted || !(item.content instanceof Y.ContentType)) continue;
+        if (!(item instanceof Y.Item) || item.deleted) continue;
+        if (item.content instanceof Y.ContentString) {
+          // Text written into a code block.
+          const block = (item.parent as Shared)._item?.parent as Shared | undefined;
+          if (block && nameOfType(block) === 'codeBlock') code.add(block);
+          continue;
+        }
+        if (!(item.content instanceof Y.ContentType)) continue;
         const type = item.content.type as Shared;
         if (lacks(AS_IT_IS, type)) return 'incomplete';
-        const table = TABLE_PARTS.has(nameOfType(type) ?? '') && outermost(type);
+        const name = nameOfType(type) ?? '';
+        const table = TABLE_PARTS.has(name) && outermost(type, TABLES);
         if (table) tables.add(table);
+        const list = LIST_PARTS.has(name) && outermost(type, LISTS);
+        if (list) lists.add(list);
+        counted ||= COUNTED.has(name);
       }
     }
     for (const table of tables) {
-      // The same table before the update, where it was there.
-      const { id } = table._item!;
-      const was =
-        id.clock < Y.getState(document.store, id.client)
-          ? ((Y.getItem(document.store, id) as Y.Item).content as Y.ContentType).type
-          : null;
-      if (pastBounds(was ? measure(AS_IT_IS, was as Shared) : NONE, measure(AS_IT_IS, table))) return 'table';
+      const before = was(document, table);
+      if (pastBounds(before ? measure(AS_IT_IS, before) : NONE, measure(AS_IT_IS, table))) return 'table';
+    }
+    const root = (of: Y.Doc) => {
+      const type = of.share.get(FRAGMENT_NAME) as Shared | undefined;
+      return type ? AS_IT_IS.children(type) : [];
+    };
+    const count = counted && pastCounts(countsIn(AS_IT_IS, root(document)), countsIn(AS_IT_IS, root(after)));
+    if (count) return count;
+    const list = pastLists(
+      [...lists].map((each) => {
+        const before = was(document, each);
+        return [before ? listsIn(AS_IT_IS, before) : NO_LISTS, listsIn(AS_IT_IS, each)];
+      }),
+    );
+    if (list) return list;
+    for (const block of code) {
+      const before = was(document, block);
+      if (pastLimit('codeBytes', before ? codeBytesIn(AS_IT_IS, before) : 0, codeBytesIn(AS_IT_IS, block)))
+        return 'codeBytes';
     }
     return null;
   } finally {
@@ -247,10 +429,12 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
   }
 }
 
-// What stands directly in the document, as the parent of an item of an update.
-const ROOT = Symbol('root');
-/** Where an item of an update goes: a shared type of the document, an item of the update, the document itself, or nowhere (it is collected). */
-type Parent = Shared | Y.Item | typeof ROOT | null;
+/**
+ * Where an item of an update goes: a shared type of the document, an item of
+ * the update, a shared type of the document itself that the document does not
+ * hold yet, by its key, or nowhere (it is collected).
+ */
+type Parent = Shared | Y.Item | string | null;
 
 /**
  * `shapeOf` without the copy, or undefined where it cannot be said so. It
@@ -330,10 +514,10 @@ export function withoutCopy(
     return known;
   };
   const standsIn = (parent: Parent): boolean =>
-    parent === ROOT ||
+    typeof parent === 'string' ||
     (parent instanceof Y.Item ? alive.get(parent) === true : parent !== null && there(parent));
   /** The children each element of the update or of the document gains, in the order of the run. */
-  const gained = new Map<Y.Item | Shared, Y.Item[]>();
+  const gained = new Map<Y.Item | Shared | string, Y.Item[]>();
   const made: Y.Item[] = [];
   for (const item of structs) {
     if (!(item instanceof Y.Item)) continue;
@@ -351,9 +535,9 @@ export function withoutCopy(
       if (!beside) return undefined;
       parent = parents.has(beside) ? parents.get(beside)! : (beside.parent as Shared);
       key = parents.has(beside) ? keys.get(beside)! : beside.parentSub;
-    } else if (typeof item.parent === 'string' || item.parent instanceof Y.AbstractType) {
+    } else if (typeof item.parent === 'string') {
       // A shared type of the document itself, which a decoded update names by its key.
-      parent = ROOT;
+      parent = (document.share.get(item.parent) as Shared | undefined) ?? item.parent;
     } else if (above instanceof Y.Item && above.content instanceof Y.ContentType)
       parent = parents.has(above) ? above : (above.content.type as Shared);
     parents.set(item, parent);
@@ -367,7 +551,6 @@ export function withoutCopy(
     );
     if (parent === null || key !== null) continue;
     if (nameOf(item) !== null) made.push(item);
-    if (parent === ROOT) continue;
     const list = gained.get(parent) ?? [];
     list.push(item);
     gained.set(parent, list);
@@ -385,28 +568,76 @@ export function withoutCopy(
       }
       for (const item of gained.get(node) ?? []) if (alive.get(item) && nameOf(item) !== null) yield item;
     },
+    *strings(text) {
+      if (!(text instanceof Y.Item)) yield* stringsOf(text, ds);
+      for (const item of gained.get(text) ?? []) {
+        if (alive.get(item) && item.content instanceof Y.ContentString) yield item.content.str;
+      }
+    },
+  };
+  /** The outermost of the named round a node: up through the update, then through the document. */
+  const outermostOf = (node: Node, names: ReadonlySet<string>) => {
+    let found: Node | null = null;
+    for (let at: Node | null = node; at;) {
+      if (names.has(name(at) ?? '')) found = at;
+      const up: Parent =
+        at instanceof Y.Item ? parents.get(at)! : ((at._item?.parent as Shared | undefined) ?? null);
+      at = typeof up === 'string' ? null : up;
+    }
+    return found;
   };
   const tables = new Set<Node>();
+  const lists = new Set<Node>();
+  const code = new Set<Node>();
+  let counted = false;
   for (const item of made) {
     if (!alive.get(item)) continue;
     const children = inOrder(gained.get(item) ?? []);
     if (!children) return undefined;
     const itself: Tree<Node> = { name, children: () => children.filter((child) => alive.get(child)) };
     if (lacks(itself, item)) return 'incomplete';
-    if (!TABLE_PARTS.has(nameOf(item)!)) continue;
-    // The outermost table round it: up through the update, then through the document.
-    let table: Node | null = null;
-    for (let at: Node | null = item; at;) {
-      if (name(at) === 'table') table = at;
-      const up: Parent =
-        at instanceof Y.Item ? parents.get(at)! : ((at._item?.parent as Shared | undefined) ?? ROOT);
-      at = up === ROOT || up === null ? null : up;
-    }
+    const type = nameOf(item)!;
+    const table = TABLE_PARTS.has(type) && outermostOf(item, TABLES);
     if (table) tables.add(table);
+    const list = LIST_PARTS.has(type) && outermostOf(item, LISTS);
+    if (list) lists.add(list);
+    counted ||= COUNTED.has(type);
+  }
+  // Text written into a code block, in a text that is there or that the update made.
+  for (const item of structs) {
+    if (!(item instanceof Y.Item) || !alive.get(item) || !(item.content instanceof Y.ContentString)) continue;
+    const text = parents.get(item)!;
+    const block =
+      text instanceof Y.Item
+        ? parents.get(text)
+        : typeof text === 'string'
+          ? null
+          : (text?._item?.parent as Shared);
+    if (block && typeof block !== 'string' && name(block) === 'codeBlock') code.add(block);
   }
   for (const table of tables) {
     const before = table instanceof Y.Item ? NONE : measure(AS_IT_IS, table);
     if (pastBounds(before, measure(after, table))) return 'table';
+  }
+  if (counted) {
+    // The whole document, before and after, where the update made a block that a limit counts.
+    const root = document.share.get(FRAGMENT_NAME) as Shared | undefined;
+    const roots = root
+      ? [...after.children(root)]
+      : (gained.get(FRAGMENT_NAME) ?? []).filter((item) => alive.get(item) && nameOf(item) !== null);
+    const count = pastCounts(countsIn(AS_IT_IS, root ? AS_IT_IS.children(root) : []), countsIn(after, roots));
+    if (count) return count;
+  }
+  const list = pastLists(
+    [...lists].map((each) => [
+      each instanceof Y.Item ? NO_LISTS : listsIn(AS_IT_IS, each),
+      listsIn(after, each),
+    ]),
+  );
+  if (list) return list;
+  for (const block of code) {
+    const before = block instanceof Y.Item ? 0 : codeBytesIn(AS_IT_IS, block);
+    if (pastLimit('codeBytes', before, codeBytesIn(after, block))) return 'codeBytes';
   }
   return null;
 }

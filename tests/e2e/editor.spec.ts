@@ -4133,3 +4133,75 @@ test('a session that has ended is stated once, and the page does not connect aga
   await page.waitForTimeout(8000);
   expect(sockets.count).toBe(0);
 });
+
+// Register D182, D184, D192, D193 and Q45: the limits of a document refuse a
+// change at the moment it is made, and never honest editing.
+const REFUSED = /We cannot|We could not|This document holds|could not be shown/;
+
+test('honest editing is never refused: typing, a paste of ordinary content, and undo and redo', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await enter(page);
+  const id = await openNew(page);
+  const other = await connectAs(page.context(), id);
+  await text(page).click();
+  await page.keyboard.type('First line, typed.');
+  await page.keyboard.press('Enter');
+  await paste(page, EVERYTHING);
+  await paste(
+    page,
+    '<ul><li>one</li><li>two<ul><li>nested</li></ul></li></ul><blockquote><p>quoted</p></blockquote><pre><code>let x = 1;</code></pre><table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>',
+  );
+  await page.keyboard.type(' typed after.');
+  for (let times = 0; times < 3; times += 1) await page.keyboard.press('ControlOrMeta+z');
+  for (let times = 0; times < 3; times += 1) await page.keyboard.press('ControlOrMeta+Shift+Z');
+  await page.keyboard.type(' The end.');
+  await holds(other, 'The end.');
+  await expect(status(page, 'In sync')).toBeVisible();
+  await expect(text(page)).toHaveAttribute('aria-readonly', 'false');
+  await expect(text(page)).toContainText('nested');
+  await expect(page.getByText(REFUSED)).toHaveCount(0);
+  await expect(
+    page.getByRole('heading', { name: /We cannot apply this change|A change in this tab/ }),
+  ).toHaveCount(0);
+  other.close();
+});
+
+test('a document stored with more than 100 tables opens to deletions alone, says so, and is written in once it is back under', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await enter(page);
+  const id = await openNew(page);
+  await storedWith(page, id, (fragment) => {
+    const tables = Array.from({ length: 101 }, () => {
+      const block = new Y.XmlElement('tableBlock');
+      const table = new Y.XmlElement('table');
+      const row = new Y.XmlElement('tableRow');
+      const cell = new Y.XmlElement('tableCell');
+      cell.insert(0, [new Y.XmlElement('paragraph')]);
+      row.insert(0, [cell]);
+      table.insert(0, [row]);
+      block.insert(0, [table, new Y.XmlElement('tableCaption')]);
+      return block;
+    });
+    fragment.push(tables);
+  });
+  const statement =
+    'This document holds 101 tables, more than our current limit per document (100). It is read-only until it is back under the limit. You can still delete tables.';
+  await expect(page.getByText(statement)).toHaveCount(1);
+  await text(page).click();
+  await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.type('refused');
+  await expect(text(page)).not.toContainText('refused');
+  // Said again, where the refusal is said.
+  await expect(page.getByText(statement)).toHaveCount(2);
+  // Every table deleted: the document is back under, and written in.
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Backspace');
+  await expect(page.getByText(statement)).toHaveCount(0);
+  await page.keyboard.type('written again');
+  await expect(text(page)).toContainText('written again');
+  await expect(status(page, 'In sync')).toBeVisible();
+});

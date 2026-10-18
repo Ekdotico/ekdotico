@@ -40,8 +40,19 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
       // Register D170, D180 and D171: one for each rule of the shape of a document.
       INCOMPLETE: 'incomplete',
       TABLE_BOUNDS: 'table-bounds',
+      // Register D184, D192, D193: one for each limit of the blocks of a document.
+      TOO_MANY_TABLES: 'too-many-tables',
+      TOO_MANY_CODE_BLOCKS: 'too-many-code-blocks',
+      TOO_MANY_CALLOUTS: 'too-many-callouts',
+      TOO_MANY_TABLES_OF_CONTENTS: 'too-many-tables-of-contents',
+      TOO_MANY_PAGE_BREAKS: 'too-many-page-breaks',
+      TOO_MANY_DIVIDERS: 'too-many-dividers',
+      TOO_MANY_QUOTES: 'too-many-quotes',
+      LIST_TOO_LONG: 'list-too-long',
+      LIST_TOO_DEEP: 'list-too-deep',
+      CODE_BLOCK_TOO_LARGE: 'code-block-too-large',
     });
-    expect(new Set(Object.values(REFUSAL)).size).toBe(11);
+    expect(new Set(Object.values(REFUSAL)).size).toBe(21);
   });
 });
 

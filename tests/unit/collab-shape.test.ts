@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { extensions } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import {
+  LIMITS,
   NODES,
   TABLE_CELLS_MOST,
   TABLE_DEPTH_MOST,
@@ -501,5 +502,196 @@ describe('an update that Yjs does not take in whole is answered on a copy', () =
     expect(server.store.pendingStructs).not.toBeNull();
     // `first` wakes it, and it is whole: taken.
     expect(answer(server, first)).toBeNull();
+  });
+});
+
+// Register D184, D192, D193: the limits of a document, held by the server as
+// the browser holds them (src/app/(app)/documents/[id]/block-limits.ts).
+describe('an update that takes the document past a limit, and further than it was, is refused (D184, D192, D193)', () => {
+  const many = (count: number, make: () => Json) => Array.from({ length: count }, make);
+  const one = (): Json => table([tr([td()])]);
+  const KB500 = 500 * 1024;
+  const code = (text: string): Json => ({
+    type: 'codeBlock',
+    attrs: { language: 'plaintext' },
+    ...(text ? { content: [{ type: 'text', text }] } : {}),
+  });
+  const item = (...content: Json[]): Json => ({
+    type: 'listItem',
+    content: content.length ? content : [p()],
+  });
+  const list = (...items: Json[]): Json => ({ type: 'bulletList', content: items });
+
+  it('holds the owner’s numbers', () => {
+    expect(LIMITS).toEqual({
+      tables: 100,
+      codeBlocks: 200,
+      callouts: 200,
+      tablesOfContents: 5,
+      pageBreaks: 500,
+      dividers: 500,
+      quotes: 500,
+      listItems: 1000,
+      listDepth: 10,
+      codeBytes: 500 * 1024,
+    });
+  });
+
+  it('a 101st table is refused, from the editor and from a client that is no editor, and a 100th is taken, without the copy', () => {
+    const at99 = opened(doc(p('first'), ...many(99, one)));
+    const hundredth = edited(at99, doc(p('first'), ...many(100, one)));
+    expect(withoutTheCopy(at99, hundredth)).toBe(true);
+    expect(answer(at99, hundredth)).toBeNull();
+    const at100 = opened(doc(p('first'), ...many(100, one)));
+    const more = edited(at100, doc(p('first'), ...many(101, one)));
+    expect(withoutTheCopy(at100, more)).toBe(true);
+    expect(answer(at100, more)).toBe('tables');
+    // In a cell of a table it is one more all the same.
+    const nested = opened(doc(p('first'), ...many(99, one)));
+    expect(
+      answer(
+        nested,
+        sent(nested, (fragment) => fragment.push([blockOf(1, 1, () => cell(blockOf(1, 1)))])),
+      ),
+    ).toBe('tables');
+  });
+
+  it('a table put into a cell of a table that is there, in a document of 100, is refused', () => {
+    const at100 = opened(doc(p('first'), ...many(100, one)));
+    const update = sent(at100, (fragment) => {
+      const first = ((fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).get(0) as Y.XmlElement;
+      (first.get(0) as Y.XmlElement).push([blockOf(1, 1)]);
+    });
+    expect(withoutTheCopy(at100, update)).toBe(true);
+    expect(answer(at100, update)).toBe('tables');
+  });
+
+  // Known, and reported for the owner: the undo of a table deleted from a
+  // document past the limit takes it past again, and is refused like any
+  // table more; the writer's tab is then held read-only with the text kept.
+  it('a document of more than 100 tables takes typing and deleting a table, and no table more, not even the undo of that deletion', () => {
+    const at150 = opened(doc(p('first'), ...many(150, one)));
+    const typed = sent(at150, (fragment) =>
+      ((fragment.get(0) as Y.XmlElement).get(0) as Y.XmlText).insert(0, 'k'),
+    );
+    expect(withoutTheCopy(at150, typed)).toBe(true);
+    expect(answer(at150, typed)).toBeNull();
+    const writer = peerOf(at150);
+    const undo = new Y.UndoManager(writer.getXmlFragment('default'), { captureTimeout: 0 });
+    writer.getXmlFragment('default').delete(1, 1);
+    const deleted = sentBy(writer, at150);
+    expect(answer(at150, deleted)).toBeNull();
+    Y.applyUpdate(at150, deleted);
+    undo.undo();
+    expect(answer(at150, sentBy(writer, at150))).toBe('tables');
+    expect(
+      answer(
+        at150,
+        sent(at150, (fragment) => fragment.push([blockOf(1, 1)])),
+      ),
+    ).toBe('tables');
+  });
+
+  it('a new document, whose content the server does not hold yet, is counted too', () => {
+    const empty = new Y.Doc();
+    const update = sent(empty, (fragment) => fragment.push(Array.from({ length: 101 }, () => blockOf(1, 1))));
+    expect(withoutTheCopy(empty, update)).toBe(true);
+    expect(answer(empty, update)).toBe('tables');
+    expect(
+      answer(
+        empty,
+        sent(empty, (fragment) => fragment.push([blockOf(1, 1)])),
+      ),
+    ).toBeNull();
+  });
+
+  it.each([
+    ['codeBlocks', 200, () => code('x')],
+    ['callouts', 200, (): Json => ({ type: 'callout', attrs: { type: 'note' }, content: [p()] })],
+    ['tablesOfContents', 5, (): Json => ({ type: 'tableOfContents' })],
+    ['pageBreaks', 500, (): Json => ({ type: 'pageBreak' })],
+    ['dividers', 500, (): Json => ({ type: 'horizontalRule' })],
+    ['quotes', 500, (): Json => ({ type: 'blockquote', content: [p()] })],
+  ] as const)('%s: %i are taken, and one more is refused', (limit, most, make) => {
+    const under = opened(doc(p('first'), ...many(most - 1, make)));
+    const last = edited(under, doc(p('first'), ...many(most, make)));
+    expect(withoutTheCopy(under, last)).toBe(true);
+    expect(answer(under, last)).toBeNull();
+    const full = opened(doc(p('first'), ...many(most, make)));
+    const more = edited(full, doc(p('first'), ...many(most + 1, make)));
+    expect(withoutTheCopy(full, more)).toBe(true);
+    expect(answer(full, more)).toBe(limit);
+  });
+
+  it('a list of 1,000 items takes no 1,001st, and another list is not that list', () => {
+    const full = opened(doc(list(...many(1000, () => item()))));
+    const more = edited(full, doc(list(...many(1001, () => item()))));
+    expect(withoutTheCopy(full, more)).toBe(true);
+    expect(answer(full, more)).toBe('listItems');
+    expect(answer(full, edited(full, doc(list(...many(1000, () => item())), list(item()))))).toBeNull();
+    // Typing in it is taken.
+    expect(
+      answer(
+        full,
+        sent(full, (fragment) =>
+          (
+            (((fragment.get(0) as Y.XmlElement).get(999) as Y.XmlElement).get(0) as Y.XmlElement).get(
+              0,
+            ) as Y.XmlText
+          )?.insert(0, 'k'),
+        ),
+      ),
+    ).toBeNull();
+  });
+
+  it('lists nest 10 deep, and an eleventh level is refused', () => {
+    const nest = (levels: number): Json =>
+      levels === 1 ? list(item(p('deepest'))) : list(item(p(), nest(levels - 1)));
+    const ten = opened(doc(nest(10)));
+    const eleven = edited(ten, doc(nest(11)));
+    expect(answer(ten, eleven)).toBe('listDepth');
+    const nine = opened(doc(nest(9)));
+    expect(answer(nine, edited(nine, doc(nest(10))))).toBeNull();
+  });
+
+  it('a code block holds 500 KB: a key past it is refused from the update alone, and so is a block past it', () => {
+    const full = opened(doc(code(`€€${'a'.repeat(KB500 - 6)}`)));
+    const textOf = (fragment: Y.XmlFragment) => (fragment.get(0) as Y.XmlElement).get(0) as Y.XmlText;
+    const key = sent(full, (fragment) => textOf(fragment).insert(5, 'k'));
+    expect(withoutTheCopy(full, key)).toBe(true);
+    expect(answer(full, key)).toBe('codeBytes');
+    // A key that deletes and one that replaces a character of three bytes with one of one are taken.
+    expect(
+      answer(
+        full,
+        sent(full, (fragment) => textOf(fragment).delete(0, 1)),
+      ),
+    ).toBeNull();
+    expect(
+      answer(
+        full,
+        sent(full, (fragment) => {
+          textOf(fragment).delete(0, 1);
+          textOf(fragment).insert(0, 'k');
+        }),
+      ),
+    ).toBeNull();
+    const room = opened(doc(p('first')));
+    expect(answer(room, edited(room, doc(p('first'), code('a'.repeat(KB500)))))).toBeNull();
+    expect(answer(room, edited(room, doc(p('first'), code('a'.repeat(KB500 + 1)))))).toBe('codeBytes');
+    // A code block stored past it takes deleting, and no key more.
+    const past = opened(doc(code('a'.repeat(KB500 + 10))));
+    expect(
+      answer(
+        past,
+        sent(past, (fragment) => textOf(fragment).delete(0, 5)),
+      ),
+    ).toBeNull();
+    expect(
+      answer(
+        past,
+        sent(past, (fragment) => textOf(fragment).insert(0, 'k')),
+      ),
+    ).toBe('codeBytes');
   });
 });

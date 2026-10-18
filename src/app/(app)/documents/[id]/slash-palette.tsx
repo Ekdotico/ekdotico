@@ -43,7 +43,8 @@ import {
   type Block,
   type SlashCommand,
 } from '../../../../lib/editor/slash-commands.ts';
-import { TABLE_COUNT_MOST, tableCount, tableRoom, tablesIn } from './table-bounds.ts';
+import { passesLimits } from './block-limits.ts';
+import { tableRoom, tablesIn } from './table-bounds.ts';
 
 /** The id of the list, which the text names while the list shows a row. */
 export const SLASH_LIST_ID = 'slash-commands';
@@ -177,7 +178,8 @@ const alone = ($from: ResolvedPos, range: Range) => range.from === $from.start()
  * 2026), for as long as the tables are inside the bounds they share: the row
  * is not listed in a cell of the deepest table there may be, nor where the
  * outermost table has no room for the cells of a new one (./table-bounds.ts).
- * Nor anywhere in a document that holds as many tables as it may (R58).
+ * Nor a block that would pass a limit of the document: a type at its limit,
+ * or a list that would stand too deep (D182, D192; ./block-limits.ts).
  */
 function stands(state: EditorState, range: Range, block: Block): boolean {
   const $from = state.doc.resolve(range.from);
@@ -187,8 +189,8 @@ function stands(state: EditorState, range: Range, block: Block): boolean {
     const made = state.schema.nodeFromJSON(block);
     const brings = tablesIn(made);
     if (brings.levels > room.levels || brings.cells > room.cells) return false;
-    if (tableCount(state.doc) + tableCount(made) > TABLE_COUNT_MOST) return false;
   }
+  if (passesLimits(state.doc, state.schema.nodeFromJSON(block), $from)) return false;
   const index = $from.index(-1);
   return alone($from, range)
     ? $from.node(-1).canReplaceWith(index, index + 1, type)

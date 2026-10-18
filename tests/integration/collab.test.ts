@@ -1256,6 +1256,41 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       );
     });
 
+    // Register D184, D192, D193: the limits of a document, each with a reason of its own.
+    const listOf = (items: number, inner: () => Y.XmlElement[] = () => []) =>
+      element(
+        'bulletList',
+        Array.from({ length: items }, () => element('listItem', [element('paragraph'), ...inner()])),
+      );
+    const nest = (levels: number): Y.XmlElement =>
+      listOf(1, levels > 1 ? () => [nest(levels - 1)] : undefined);
+    it.each([
+      ['101 tables', () => Array.from({ length: 101 }, () => tableOf(1, 1)), REFUSAL.TOO_MANY_TABLES],
+      [
+        '201 code blocks',
+        () => Array.from({ length: 201 }, () => element('codeBlock', [new Y.XmlText('x')])),
+        REFUSAL.TOO_MANY_CODE_BLOCKS,
+      ],
+      [
+        '6 tables of contents',
+        () => Array.from({ length: 6 }, () => element('tableOfContents')),
+        REFUSAL.TOO_MANY_TABLES_OF_CONTENTS,
+      ],
+      ['a list of 1,001 items', () => [listOf(1001)], REFUSAL.LIST_TOO_LONG],
+      ['lists 11 levels deep', () => [nest(11)], REFUSAL.LIST_TOO_DEEP],
+      [
+        'a code block of 500 KB and one byte',
+        () => [element('codeBlock', [new Y.XmlText('a'.repeat(500 * 1024 + 1))])],
+        REFUSAL.CODE_BLOCK_TOO_LARGE,
+      ],
+    ] as const)('refuses an update that adds %s', { timeout: 60_000 }, async (_name, blocks, reason) => {
+      await expectRefusedUpdate(
+        await opened(),
+        (document) => document.getXmlFragment('default').push(blocks()),
+        reason,
+      );
+    });
+
     it('takes a table at its bounds and a change to it, and stores them', { timeout: 60_000 }, async () => {
       const { owner, id } = await opened();
       const writing = await sending(owner, id);

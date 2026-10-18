@@ -81,3 +81,23 @@ Add an entry whenever the owner decides something provisionally. When a point ha
 - Writers who lose a table by cutting it and then being refused the paste, and whether they find undo.
 
 **What would change the decision.** If a writer loses a table this way, or 100 is met in ordinary work, the paste that restores a table is let through, or the number is raised.
+
+## Two writers who add the 100th row of a table at once (D171)
+
+**Where the behaviour lives:** the collaboration server's rule on the bounds of a table, `src/lib/collab/shape.ts`; the held state of the editor, `src/app/(app)/documents/[id]/editor.tsx`.
+
+**What happens.** A table holds 100 rows. Where two writers each add the 100th row to a table of 99 at the same moment, each browser lets its own row through, since each saw 99. The server takes the first and refuses the second, which would bring the table to 101. The second writer's tab goes read-only with the statement "We cannot apply this change. A table holds 100 rows, 100 cells in a row and 10,000 cells, two levels deep, and this change passes our current limits.", the text kept so that it can be copied before the document is reloaded. The same holds for every other limit of a document that two writers reach at once: the 100th table, the 200th code block, and so on.
+
+**Decided as built** on 18 October 2026: accepted for the α line, to be observed in user testing (D171).
+
+**Alternatives considered:**
+
+- The server takes the row and the browsers mend the table, taking out the last row. This is what was built before the server held the bounds, and it removed another writer's work without a word.
+
+**Watch for:**
+
+- Whether a writer ever meets this in ordinary writing, which needs a table at 99 rows and two writers at its end.
+- Whether the writer understands the statement, copies the text, and reloads.
+- Whether any text is lost.
+
+**What would change the decision.** If writers meet it in ordinary work, or lose text when they do, the server could take the change and the browser of its writer refuse only what passes, or the tab could reload by itself and keep the text.

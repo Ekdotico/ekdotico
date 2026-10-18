@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { collabRewrites } from '../../next.config.ts';
 import { CAPACITY_RETRY_MS, retryDelay, syncStatus } from '../../src/lib/collab/client.ts';
-import { REFUSAL } from '../../src/lib/collab/protocol.ts';
-import { TABLE_PAST_BOUNDS } from '../../src/app/(app)/documents/[id]/extensions.tsx';
+import { LIMIT_REFUSAL, REFUSAL } from '../../src/lib/collab/protocol.ts';
+import { TABLE_PAST_BOUNDS, heldTitle } from '../../src/app/(app)/documents/[id]/block-limits.ts';
 import { MAX_ELEMENT_DEPTH, MAX_STATE_BYTES } from '../../src/lib/collab/state.ts';
 import { linkAddress } from '../../src/lib/editor/link.ts';
 
@@ -137,6 +137,8 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
     REFUSAL.TOO_DANGLING,
     REFUSAL.INCOMPLETE,
     REFUSAL.TABLE_BOUNDS,
+    // Register D184, D192, D193: a limit of the document.
+    ...Object.values(LIMIT_REFUSAL),
   ])('never tries again after %s', (reason) => {
     for (const attempt of [1, 2, 50]) expect(retryDelay(reason, attempt)).toBeNull();
   });
@@ -151,13 +153,35 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
   it('says of a change refused for the shape of the document which rule, in words that name no internal term', () => {
     const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
     expect(page).toContain('[REFUSAL.TABLE_BOUNDS]: TABLE_PAST_BOUNDS');
+    // The owner's words of 18 October 2026 (D171).
     expect(TABLE_PAST_BOUNDS).toBe(
-      'A change in this tab would take a table past its bounds: 100 rows, 100 cells in a row, and 10,000 cells with the tables in its cells, two levels deep',
+      'We cannot apply this change. A table holds 100 rows, 100 cells in a row and 10,000 cells, two levels deep, and this change passes our current limits.',
     );
     const incomplete =
       'A change in this tab adds a block without the content it must hold, so it cannot be applied';
     expect(page).toContain(`[REFUSAL.INCOMPLETE]:\n    '${incomplete}'`);
     expect(incomplete).not.toMatch(/\d|schema|element|node|Yjs/i);
+  });
+
+  it('says of a change refused for a limit of the document which limit, in the voice of the owner’s words', () => {
+    // Written out here, and not taken from the code under test. For the owner's approval.
+    expect(heldTitle('tables')).toBe(
+      'We cannot apply this change. Our current limit per document is 100 tables, and this change passes it.',
+    );
+    expect(heldTitle('tablesOfContents')).toBe(
+      'We cannot apply this change. Our current limit per document is 5 tables of contents, and this change passes it.',
+    );
+    expect(heldTitle('listItems')).toBe(
+      'We cannot apply this change. Our current limit per list is 1,000 items, and this change passes it.',
+    );
+    expect(heldTitle('listDepth')).toBe(
+      'We cannot apply this change. Our current limit is 10 levels of nesting, and this change passes it.',
+    );
+    expect(heldTitle('codeBytes')).toBe(
+      'We cannot apply this change. Our current limit per code block is 500 KB, and this change passes it.',
+    );
+    const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
+    expect(page).toContain('[reason, heldTitle(limit as Limit)]');
   });
 
   it('says of a change that waits for content the document does not hold what is true of it, in words that name no number and no internal term', () => {

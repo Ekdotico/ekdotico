@@ -37,11 +37,12 @@
 //   (`holdsTables`), at this key and at every later one, and the table stays as
 //   it is until a cell is deleted somewhere in the outermost table.
 // - The collaboration server holds the bounds of a table (register D171, D172;
-//   src/lib/collab/shape.ts), and not the number of tables of a document.
-//   What is left out here is what a document stored before it held them, or
-//   sent by a client of an earlier release, can still bring.
+//   src/lib/collab/shape.ts), and the number of tables of a document as well
+//   (./block-limits.ts). What is left out here is what a document stored
+//   before it held them, or sent by a client of an earlier release, can still
+//   bring.
 import { Fragment, type Node as PMNode, type ResolvedPos } from '@tiptap/pm/model';
-import { TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST } from '../../../../lib/collab/shape.ts';
+import { LIMITS, TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST } from '../../../../lib/collab/shape.ts';
 
 // Named with the server's rules, which the browser and the server hold alike
 // (FR-ED-09; register D134, D171, D172):
@@ -69,65 +70,29 @@ export { TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST };
  * so a higher one is also refused by a server that runs the lower.
  */
 /**
- * The most tables a writer may bring a document to, a table in a cell counted
- * as one more (the owner's decision R58 of 13 October 2026: "refuse only,
- * never delete, at 100"; specification rows D182 and D184, pending).
- *
- * REFUSE ONLY. A change of the writer's own that would leave the document
- * with more tables than this, and more than it had, is not applied
- * (`tableRefusal` of ./extensions.tsx), and the palette lists no Table at the
- * number. Nothing that a document holds is ever taken out for it: a document
- * with more, from another client, from storage, from another release, or
- * from two writers who each added the hundredth at once, is shown whole and
- * written in, and takes no table more. So the number can be changed without
- * loss, which the bounds that leave out cannot.
+ * The most tables a document holds, a table in a cell counted as one more
+ * (register D182, D184): `LIMITS.tables` of the collaboration server, which
+ * holds it too. The one number, on every path: a change that would leave the
+ * document with more tables than this, and more than it had, is refused, by
+ * this browser (./block-limits.ts) and by the server. Nothing that a document
+ * holds is ever taken out for it: a document with more, stored before the
+ * limit, opens read-only with a statement, and tables can be deleted from it.
  *
  * Counted in the text the editor holds, after the schema has made it, so that
  * nothing the schema leaves out is counted.
  *
- * KNOWN, AND ACCEPTED UNTIL THE OWNER SAYS OTHERWISE (the review of pull
- * request 35): in a document at or past the number, a table that is cut
- * cannot be pasted back. The cut is applied, and the paste would leave the
- * document with more tables than it then had, so it is refused, in the words
- * of the refusal. Undoing the cut restores the table.
+ * KNOWN, AND ACCEPTED UNTIL THE OWNER SAYS OTHERWISE (A106; the review of pull
+ * request 35): in a document at the number, a table that is cut cannot be
+ * pasted back. The cut is applied, and the paste would leave the document with
+ * more tables than it then had, so it is refused, in the words of the refusal.
+ * Undoing the cut restores the table.
  *
- * The unit is the table, though the cost it stands for is not a table's
- * alone. Measured on 12 October 2026 (Chromium, Apple M2 Pro; the row "Editor
+ * Measured on 12 October 2026 (Chromium, Apple M2 Pro; the row "Editor
  * keystroke to character render" of §2.4, under 16 ms at P50 in the reference
  * document of 5,000 words): a key is 8 ms with no table, 14 with 50 tables of
- * five rows by four, 23 with 100; a table of one cell costs a third of that,
- * a callout as much as a table of one cell, and a code block more. The owner
- * left a wider count, of every block with controls, for β.
- *
- * The collaboration server holds neither this number nor the next.
+ * five rows by four, 23 with 100.
  */
-export const TABLE_COUNT_MOST = 100;
-/**
- * The most tables a document is opened with: past it, the tables that are
- * last in the order of the document are left out and taken out of the shared
- * document, as the rows and the cells past their bounds are (`floodOfTables`
- * of ./extensions.tsx). Against a flood and nothing
- * else: a client that is no editor can send sixty thousand tables in under 5
- * MB, and a page that is asked to draw them does not answer.
- *
- * The number was approved by the owner on 13 October 2026 (R58: "a much
- * higher threshold, in the thousands, against a flood"). IT MUST NOT BE
- * LOWERED ONCE SHARING IS RELEASED: a browser that holds a lower number takes
- * the tables past it out of the shared document, for everyone. It was
- * proposed from the same measurement, in the
- * reference document: with 1,000 tables of one cell a key takes 57 ms and the
- * document opens in 1 second; with 2,000, 105 ms and 2.2 seconds, and with
- * 2,000 of five rows by four, 187 ms and 4.1 seconds; with 5,000 of one cell,
- * 228 ms and 12 seconds. So 2,000 is where a document still opens in seconds
- * and answers a key within a fifth of a second, and is twenty times what a
- * writer can make.
- *
- * It deletes, so it is not free to change either way: see `TABLE_DEPTH_MOST`.
- * A browser that cannot edit the document writes nothing, and where it is
- * handed a document past this number it says that the document cannot be
- * shown (`holdBinding` of ./extensions.tsx says what that costs a reader).
- */
-export const TABLE_FLOOD_MOST = 2000;
+export const TABLE_COUNT_MOST = LIMITS.tables;
 
 /** The tables in a node: their cells, how deep they stand, and whether one of them is past a bound. */
 interface Held {
