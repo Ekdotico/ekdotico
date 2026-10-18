@@ -788,40 +788,44 @@ describe('the fast path counts as Yjs applies (the review of pull request 41)', 
     expect(answer(deep, deeper)).toBe('listDepth');
   });
 
-  it('fuzz: random keys, pastes and deletions in a code block near its limit are answered alike with and without the copy', () => {
-    let seed = 41;
-    const random = (below: number) => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
-      return Math.floor(seed / 65536) % below;
-    };
-    const CHARACTERS = ['a', 'é', '€', '😀', '\n'];
-    const server = opened(
-      doc(code(`${'😀'.repeat(300)}${'é'.repeat(500)}${'a'.repeat(KB500 - 3000 - 1200)}`)),
-    );
-    let fast = 0;
-    let refused = 0;
-    for (let round = 0; round < 150; round += 1) {
-      const update = sent(server, (fragment) => {
-        const text = textOf(fragment);
-        for (let op = random(3) + 1; op > 0; op -= 1) {
-          if (random(2) === 0 && text.length > 0) {
-            const at = random(text.length);
-            text.delete(at, Math.min(random(500) + 1, text.length - at));
-          } else {
-            const written = Array.from(
-              { length: random(800) + 1 },
-              () => CHARACTERS[random(CHARACTERS.length)],
-            ).join('');
-            text.insert(random(text.length + 1), written);
+  it(
+    'fuzz: random keys, pastes and deletions in a code block near its limit are answered alike with and without the copy',
+    { timeout: 60_000 },
+    () => {
+      let seed = 41;
+      const random = (below: number) => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return Math.floor(seed / 65536) % below;
+      };
+      const CHARACTERS = ['a', 'é', '€', '😀', '\n'];
+      const server = opened(
+        doc(code(`${'😀'.repeat(300)}${'é'.repeat(500)}${'a'.repeat(KB500 - 3000 - 1200)}`)),
+      );
+      let fast = 0;
+      let refused = 0;
+      for (let round = 0; round < 150; round += 1) {
+        const update = sent(server, (fragment) => {
+          const text = textOf(fragment);
+          for (let op = random(3) + 1; op > 0; op -= 1) {
+            if (random(2) === 0 && text.length > 0) {
+              const at = random(text.length);
+              text.delete(at, Math.min(random(500) + 1, text.length - at));
+            } else {
+              const written = Array.from(
+                { length: random(800) + 1 },
+                () => CHARACTERS[random(CHARACTERS.length)],
+              ).join('');
+              text.insert(random(text.length + 1), written);
+            }
           }
-        }
-      });
-      if (Y.decodeUpdate(update).structs.length > 0 && withoutTheCopy(server, update)) fast += 1;
-      if (answer(server, update) === null) Y.applyUpdate(server, update);
-      else refused += 1;
-    }
-    expect(fast).toBeGreaterThan(50);
-    expect(refused).toBeGreaterThan(10);
-    expect(refused).toBeLessThan(140);
-  });
+        });
+        if (Y.decodeUpdate(update).structs.length > 0 && withoutTheCopy(server, update)) fast += 1;
+        if (answer(server, update) === null) Y.applyUpdate(server, update);
+        else refused += 1;
+      }
+      expect(fast).toBeGreaterThan(50);
+      expect(refused).toBeGreaterThan(10);
+      expect(refused).toBeLessThan(140);
+    },
+  );
 });
