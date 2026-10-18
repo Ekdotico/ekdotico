@@ -4,33 +4,34 @@
 //
 // What a client must know of it is in src/lib/collab/protocol.ts.
 //
+// HERE of FR-ED-41 (the re-check, `recheck`) and of NFR-PE-05 (the limit of
+// connections, `onConnect`; the count is kept in this one instance, register
+// D174): every 60 seconds each open connection's session row and access are
+// read again, and a connection whose session no longer stands, whose role is
+// gone, or whose document is deleted is closed; one whose role changed is
+// switched in place. Presence (FR-ED-17) is `beforeHandleAwareness`: what a
+// connection may say of itself is its cursor, under the name and the slot that
+// this server holds for it (src/lib/collab/presence.ts).
+//
 // NOT HERE YET, and so true of this process until the slice that ends and
-// switches connections is built (NFR-SE-03 (b) to (e), FR-ED-40, FR-ED-41): a
-// connection that was accepted outlives a sign-out, a revoked or expired
-// session, the loss of the role, and a change of the role. Each is refused at
-// the next handshake, and none ends a connection that is open. Nor is there a
-// limit of connections for a document (NFR-PE-05), presence (FR-ED-17), or a
-// second instance (NFR-SC-04).
+// switches connections is built (NFR-SE-03 (b) to (d), FR-ED-40 (a), (b), (d)):
+// a sign-out, a revocation, the removal of a collaborator, and a change of
+// role are acted on by the re-check, so within 60 seconds and not the 5 that
+// FR-ED-40 gives them; nothing publishes them on the channel yet. Nor is there
+// a second instance (NFR-SC-04, withdrawn from α by D168).
 //
 // HERE of FR-ED-40: event (c), the deletion of a document. Every instance is
 // told of it on the channel of src/lib/collab/events.ts, reads the document's
 // row, and where the row says so stores what it had received and closes its
 // connections to the document (`endDocument`). The channel can lose a
-// notice, and the re-check that would then close the connection (FR-ED-41) is
-// not built yet: until it is, a connection whose notice was lost stays open,
-// and what it changes is received and never stored.
-//
-// CARRIED FORWARD from the review of this slice, for the slices named:
-// - Presence (slice 14). The library takes awareness from a read-only
-//   connection and sends it to every other connection of the document: a
-//   Viewer can show the others any name and any cursor. Nothing reads
-//   awareness yet; the slice that does decides what a connection may say of
-//   itself, in `beforeHandleAwareness`.
+// notice, and the re-check then closes the connection (FR-ED-41): a
+// connection whose notice was lost is closed within 60 seconds, and what it
+// changed meanwhile is received and never stored.
 import { randomUUID } from 'node:crypto';
 import { STATUS_CODES, type IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { setTimeout as wait } from 'node:timers/promises';
-import { Server, type Document } from '@hocuspocus/server';
+import { Server, type Connection, type Document } from '@hocuspocus/server';
 import { messageYjsSyncStep1 } from 'y-protocols/sync';
 import { validateSessionRow, type ValidSession } from '../lib/auth/session.ts';
 import { isReadOnly, recordConnection, type CollabConnection } from '../lib/collab/connection.ts';
@@ -39,7 +40,17 @@ import {
   type CollabEvent,
   type CollabEventSubscription,
 } from '../lib/collab/events.ts';
-import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL, type Refusal } from '../lib/collab/protocol.ts';
+import { Places, type Place } from '../lib/collab/places.ts';
+import {
+  awarenessClients,
+  awarenessTooLong,
+  isAwareness,
+  CONNECTIONS_PER_DOCUMENT,
+  displayNameOf,
+  pinAwareness,
+} from '../lib/collab/presence.ts';
+import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL, roleNotice, type Refusal } from '../lib/collab/protocol.ts';
+import { decide, RECHECK_MS, sessionStands, type SessionRow } from '../lib/collab/recheck.ts';
 import { ISOLATION_HEADERS, STATIC_POLICY } from '../lib/csp.ts';
 import {
   applyState,
@@ -53,7 +64,7 @@ import {
 } from '../lib/collab/state.ts';
 import { shapeOf, type Shape } from '../lib/collab/shape.ts';
 import { db } from '../lib/db.ts';
-import { authorise } from '../lib/documents/access.ts';
+import { authorise, type Access } from '../lib/documents/access.ts';
 import { faultOf } from '../lib/fault.ts';
 import { assertContractVersion } from '../lib/istorico/index.ts';
 import { isOwnOrigin } from '../lib/origin.ts';
@@ -74,7 +85,32 @@ const ANSWER_HEADERS = {
 };
 
 type StoreSettings = Pick<Settings, 'collabStoreDelayMs' | 'collabStoreMaxMs'>;
-type ServerSettings = StoreSettings & { limits: Pick<Settings['limits'], 'COLLAB_MESSAGES_PER_USER'> };
+type ServerSettings = StoreSettings & {
+  limits: Pick<Settings['limits'], 'COLLAB_MESSAGES_PER_USER'>;
+  /** FR-AU-84: read at the first re-check where it is not given (a test of the health check gives none). */
+  sessionMaxSeconds?: number;
+  /** FR-ED-41: `COLLAB_RECHECK_MS`, 60 seconds where it is not given. */
+  collabRecheckMs?: number;
+};
+
+/**
+ * What a test may set. The limit of connections is `CONNECTIONS_PER_DOCUMENT`,
+ * and a process takes it from nowhere else: it is coupled to the colour set and
+ * to the fixed statement of FR-ED-18, which says the number. The period of the
+ * re-check is a setting (`COLLAB_RECHECK_MS`, at most the 60 seconds of
+ * FR-ED-41), and the option wins over it.
+ */
+export interface CollabOptions {
+  connectionsPerDocument?: number;
+  recheckMs?: number;
+}
+
+/**
+ * The context of a connection: the record of NFR-SE-03 (a), and the place it
+ * holds on its document (NFR-PE-05), which carries its slot and the name of
+ * its cursor (FR-ED-17).
+ */
+export type CollabContext = CollabConnection & { place: Place };
 
 // What the write itself may take and still be inside the period.
 const STORE_WRITE_MARGIN_MS = 500;
@@ -107,6 +143,9 @@ export const ENDED_MEMORY_MAX = 1000;
 // change being committed" (FR-ED-40) where the database is slow to answer.
 const NOTICE_READ_MS = 2000;
 const FINAL_STORE_MS = 2500;
+// What each read of the re-check may take: the database client bounds a query
+// at 5 seconds (src/lib/db.ts), and this is the same bound for the whole read.
+const RECHECK_READ_MS = 5000;
 // The mark of that period for a refused origin, kept as every such mark is (src/lib/rate-limit.ts).
 const ORIGIN_REFUSED = 'collab:origin-refused';
 // And for an update refused for a limit of its document, one for each document and user.
@@ -196,8 +235,12 @@ type Refused = { status: number; headers?: Record<string, string> };
 // which overwrites whatever a client sent under the name and names no one.
 const HANDLE_HEADER = 'x-ekdotico-handshake';
 
-export function createCollabServer(store: ServerSettings) {
+export function createCollabServer(store: ServerSettings, options: CollabOptions = {}) {
   const messages = store.limits.COLLAB_MESSAGES_PER_USER;
+  // NFR-PE-05: the places of every document's connections, in this instance (register D174).
+  const places = new Places(options.connectionsPerDocument ?? CONNECTIONS_PER_DOCUMENT);
+  // The client identifiers of the awareness message each connection is being handled for (see `beforeHandleMessage`).
+  const speaking = new WeakMap<Connection<CollabContext>, ReadonlySet<number>>();
   // The messages each user has sent this instance (see `beforeSync`).
   const takeMessage = limitHere(messages);
   const messageLogDueHere = oncePerHere(messages.windowSeconds);
@@ -255,6 +298,141 @@ export function createCollabServer(store: ServerSettings) {
     const document = server.hocuspocus.documents.get(documentId);
     for (const connection of document?.getConnections() ?? []) {
       connection.close({ code: 1000, reason });
+    }
+  }
+
+  /**
+   * FR-ED-41: the re-check, once. Every open connection's session row and
+   * access are read again, and the connection is kept, closed, or switched as
+   * `decide` (src/lib/collab/recheck.ts) says.
+   *
+   * THE SESSION IS READ FROM ITS ROW, by one query for all the sessions the
+   * connections were opened under, and never through the identity library:
+   * its `getSession` answers from the signed copy in the cookie, for up to a
+   * minute after the session ended (NFR-SE-17 (c)). The access is `authorise`,
+   * the one function every request asks (NFR-SE-04), once for each user and
+   * document.
+   *
+   * WHERE A READING FAILS the connections it was for are closed `unavailable`
+   * (register row S14-3), as the notice of a deletion does where it cannot
+   * read the row (`endDocument`): each client keeps its changes, asks again,
+   * and its handshake reads the row. Nothing is kept open on what could not
+   * be read.
+   */
+  async function recheckOnce(): Promise<void> {
+    const open: { document: Document; connection: Connection<CollabContext> }[] = [];
+    for (const document of server.hocuspocus.documents.values()) {
+      for (const connection of document.getConnections()) open.push({ document, connection });
+    }
+    if (open.length === 0) return;
+    const unreadable = (entries: typeof open) => {
+      for (const { connection } of entries) connection.close({ code: 1000, reason: REFUSAL.UNAVAILABLE });
+    };
+
+    const sessions = new Map<string, SessionRow>();
+    const ids = [...new Set(open.map(({ connection }) => connection.context.sessionId))];
+    // Read twice at most before every connection of the run is given up: one query that fails is
+    // no reason to drop them all, and an outage fails the second as it failed the first.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const rows = await within(
+          RECHECK_READ_MS,
+          db().session.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              userId: true,
+              createdAt: true,
+              expiresAt: true,
+              user: { select: { email: true } },
+            },
+          }),
+        );
+        for (const { id, userId, createdAt, expiresAt, user } of rows) {
+          sessions.set(id, { userId, createdAt, expiresAt, accountStands: user.email !== null });
+        }
+        break;
+      } catch (error) {
+        console.error(`collab: re-check not read for sessions (${faultOf(error)})`);
+        if (attempt === 2 || stopping) return unreadable(open);
+      }
+    }
+
+    // The same user in several tabs of one document is one reading.
+    const access = new Map<string, Access | null>();
+    const now = Date.now();
+    const maxMs = (store.sessionMaxSeconds ?? settings().sessionMaxSeconds) * 1000;
+    // What `decide` is given where the session ended, which it answers before it looks at this.
+    const NOT_READ: Access = { outcome: 'not_found' };
+    for (const entry of open) {
+      if (stopping) return;
+      const { connection } = entry;
+      const { userId, documentId, sessionId } = connection.context;
+      const row = sessions.get(sessionId);
+      let seen: Access | null = NOT_READ;
+      // A session that ended closes its connections whatever the access: it is not read.
+      if (sessionStands(row, userId, now, maxMs)) {
+        const key = `${userId} ${documentId}`;
+        if (!access.has(key)) {
+          let read: Access | null = null;
+          try {
+            read = await within(RECHECK_READ_MS, authorise(userId, documentId, 'document.view'));
+          } catch (error) {
+            console.error(`collab: re-check not read for access (${faultOf(error)})`);
+          }
+          access.set(key, read);
+        }
+        seen = access.get(key) ?? null;
+      }
+      // Closed while the readings were made: nothing is done to a connection that is gone.
+      if (!entry.document.hasConnection(connection)) continue;
+      if (!seen) {
+        unreadable([entry]);
+        continue;
+      }
+      const decision = decide(connection.context, row, seen, now, maxMs);
+      if (decision.action === 'close') {
+        connection.close({ code: 1000, reason: decision.reason });
+      } else if (decision.action === 'switch') {
+        // FR-ED-40 (b): in place. The record is what the role holds now, and
+        // the library reads the flag at each message it applies.
+        const readOnly = isReadOnly(decision.record);
+        if (!readOnly && connection.readOnly) {
+          // Made editable only between messages: the library reads the flag after the hook that
+          // checks an update, and a read-only connection's updates are not checked (`beforeSync`).
+          // Nothing is awaited from here to the flag.
+          await connection.waitForPendingMessages();
+          if (!entry.document.hasConnection(connection)) continue;
+        }
+        const { role: was } = connection.context;
+        const changed = readOnly !== connection.readOnly;
+        Object.assign(connection.context, {
+          role: decision.record.role,
+          permissions: decision.record.permissions,
+        });
+        connection.readOnly = readOnly;
+        if (changed || decision.record.role !== was) {
+          connection.sendStateless(roleNotice({ role: decision.record.role, canEdit: !readOnly }));
+        }
+      }
+    }
+  }
+
+  let rechecking = false;
+  /**
+   * One run at a time: where a run outlasts its period (a slow database), the
+   * next period's does not start, and none piles up behind it. It never
+   * rejects.
+   */
+  async function recheck(): Promise<void> {
+    if (stopping || rechecking) return;
+    rechecking = true;
+    try {
+      await recheckOnce();
+    } catch (error) {
+      console.error(`collab: re-check failed (${faultOf(error)})`);
+    } finally {
+      rechecking = false;
     }
   }
 
@@ -452,7 +630,7 @@ export function createCollabServer(store: ServerSettings) {
     return session;
   }
 
-  const server = new Server<CollabConnection>({
+  const server = new Server<CollabContext>({
     ...storeTimers(store),
     quiet: true,
     // Stopping is this file's own: see `stop`.
@@ -578,11 +756,34 @@ export function createCollabServer(store: ServerSettings) {
         }
         throw refuse(REFUSAL.NO_ACCESS);
       }
+      // (h) NFR-PE-05, FR-ED-18: the place on the document, after the
+      // authorisation, so that an account with no role is told nothing of how
+      // full a document is (it was refused above, as for a document that does
+      // not exist), and before the load, so that nothing of the document is
+      // sent to a connection that is refused. `reserve` counts and takes in one
+      // step with nothing awaited between: handshakes that run side by side
+      // cannot pass the limit between them. `access.document.id` is the name,
+      // which `authorise` admits only where it is a document's own identifier.
+      const place = places.reserve(access.document.id);
+      if (!place) throw refuse(REFUSAL.CAPACITY);
+      try {
+        // FR-ED-17: the name of the cursor is the account's, read here and
+        // never taken from the client.
+        const account = await db().user.findUnique({
+          where: { id: session.userId },
+          select: { name: true, email: true },
+        });
+        place.name = displayNameOf({ name: account?.name ?? null, email: account?.email ?? null });
+      } catch (error) {
+        places.release(place);
+        fault('account', error);
+        throw refuse(REFUSAL.UNAVAILABLE);
+      }
       // (i) NFR-SE-03 (a): what is recorded for the connection.
       const connection = recordConnection(session, access.document, access.role);
-      // (h) The library discards every update it receives on a read-only connection.
+      // (j) The library discards every update it receives on a read-only connection.
       connectionConfig.readOnly = isReadOnly(connection);
-      return connection;
+      return { ...connection, place };
     },
 
     /**
@@ -606,6 +807,27 @@ export function createCollabServer(store: ServerSettings) {
      * by nothing (`storeState`).
      */
     async connected({ documentName, context, connection }) {
+      // NFR-PE-05: the place becomes the connection's, and is given back the
+      // moment the connection closes, by whatever closes it: a callback on the
+      // connection itself, which runs inside `close()`, and not the library's
+      // `onDisconnect`, which runs only after the messages being processed.
+      // (`onDisconnect` gives it back too, for a connection that was closed
+      // before this hook ran.)
+      // Closed before this hook ran (the socket went while the document loaded): `onDisconnect`
+      // gives its place back, and there is no connection to hold it for.
+      if (!connection.document.hasConnection(connection)) return;
+      if (!places.hold(context.place)) {
+        // Its place expired while it was made, and was taken by another: it
+        // has none, and the client asks again.
+        connection.close({ code: 1000, reason: REFUSAL.UNAVAILABLE });
+        return;
+      }
+      connection.onClose(() => places.release(context.place));
+      // FR-ED-40 (b), FR-ED-41: the role of this connection, told at every
+      // connection and not only at a change. A client that was away while its
+      // role changed learns it here (its scope says whether it may edit, and
+      // this says in which role); one that was not takes it for what it knows.
+      connection.sendStateless(roleNotice({ role: context.role, canEdit: !isReadOnly(context) }));
       const at = ended.get(documentName);
       if (at === undefined || Date.now() - at > ENDED_MEMORY_MS) return;
       let reason: Refusal | undefined;
@@ -630,7 +852,7 @@ export function createCollabServer(store: ServerSettings) {
      * built for that. `storeState` and `assertUpdate` are what keeps such a
      * state from being written (src/lib/collab/state.ts).
      */
-    async onLoadDocument({ documentName, document }) {
+    async onLoadDocument({ documentName, document, context }) {
       let step = 'load';
       try {
         const state = await loadState(documentName);
@@ -651,7 +873,60 @@ export function createCollabServer(store: ServerSettings) {
       // and a document that is not destroyed keeps its timer, and so itself,
       // for as long as the process runs.
       document.destroy();
+      // NFR-PE-05: no connection will be made, so nothing else gives the place back. The
+      // handshakes that were waiting for the same load fail with it, and the library calls this
+      // hook for one of them: the places of the others would count until they expire.
+      places.dropPending(documentName);
+      places.release(context.place);
       throw refuse(REFUSAL.UNAVAILABLE);
+    },
+
+    /**
+     * NFR-PE-05: the second way a place is given back (see `connected`): for a
+     * connection that closed before that hook ran, and where the first did not.
+     */
+    async onDisconnect({ context }) {
+      places.release(context.place);
+    },
+
+    /**
+     * FR-ED-17: what a connection may say of itself, which is its cursor, and
+     * nothing else (src/lib/collab/presence.ts, `pinAwareness`). The library
+     * takes awareness from a connection of any role, a read-only one too, and
+     * sends it as it is to every other: without this a Viewer could show the
+     * others any name, any colour, and a state for any client. A change made
+     * by the server itself has no connection and is left as it is.
+     */
+    async beforeHandleAwareness({ states, document, connection, context }) {
+      if (!connection || !context) return;
+      // What the message speaks for, as `beforeHandleMessage` read it from the
+      // message itself. The map holds one more state: the library's scratch
+      // `Awareness` has one of its own, for an identifier that is no one's.
+      const spoken = speaking.get(connection) ?? new Set<number>();
+      for (const id of [...states.keys()]) if (!spoken.has(id)) states.delete(id);
+      const others = new Set<number>();
+      for (const each of document.getConnections()) {
+        if (each !== connection) for (const id of document.getClients(each)) others.add(id);
+      }
+      pinAwareness(states, {
+        own: document.getClients(connection),
+        others,
+        who: { name: context.place.name, slot: context.place.slot },
+      });
+    },
+
+    /**
+     * Awareness longer than a state can be closes the connection, before the
+     * library decodes it (`AWARENESS_MAX_BYTES`). An object with no message,
+     * as in `beforeSync`: what is closed with it is not the client's to read.
+     */
+    async beforeHandleMessage({ update, connection }) {
+      if (awarenessTooLong(update)) throw {};
+      // The identifiers of an awareness message are noted for `beforeHandleAwareness`, which
+      // runs for this same message: the connection's messages are handled one at a time.
+      // An awareness message that does not read to its end speaks for no one (the library may
+      // still decode it): the set of the message before is never the set of this one.
+      if (isAwareness(update)) speaking.set(connection, new Set(awarenessClients(update) ?? []));
     },
 
     /**
@@ -676,7 +951,12 @@ export function createCollabServer(store: ServerSettings) {
      * nothing it sends (MessageReceiver.ts tests the flag before each of the
      * two), so there is nothing to check; and a check of what is never applied
      * would let a Viewer cost the copy of a document at its limit, and leave
-     * the keeper's numbers higher than the document with every message.
+     * the keeper's numbers higher than the document with every message. The
+     * library tests the flag only after this hook has returned, so the flag
+     * must not turn to editable while a message of the connection is in
+     * flight, or an update that was not checked would be applied: the re-check
+     * waits for the connection's messages before it makes it editable
+     * (`recheckOnce`).
      *
      * Counted for the user and not for the connection: a count on the
      * connection begins again with the next one, and a user may hold as many
@@ -801,6 +1081,13 @@ export function createCollabServer(store: ServerSettings) {
     void server.hocuspocus.unloadDocument(document);
   }
 
+  // FR-ED-41: "at least once every 60 seconds". The timer keeps no process alive.
+  const recheckTimer = setInterval(
+    () => void recheck(),
+    options.recheckMs ?? store.collabRecheckMs ?? RECHECK_MS,
+  );
+  recheckTimer.unref();
+
   /**
    * The orderly stop of NFR-RE-07: no new handshake and no new document; every
    * open document stored; then the sockets closed. True where every store
@@ -808,6 +1095,7 @@ export function createCollabServer(store: ServerSettings) {
    */
   function stop(deadlineMs = STOP_DEADLINE_MS): Promise<boolean> {
     stopping = true;
+    clearInterval(recheckTimer);
     halt.abort();
     // No further event is acted on: the stop closes every connection itself.
     events?.client.disconnect();
@@ -847,6 +1135,10 @@ export function createCollabServer(store: ServerSettings) {
     held: () => ({ handshakes: admitted.size, sockets: sockets.size }),
     /** How many deletions are remembered, for the tests. */
     remembered: () => ended.size,
+    /** How many places a document holds, for the tests. */
+    placesOf: (documentId: string) => places.count(documentId),
+    /** One re-check, now, for the tests; it is the one the timer runs, and never overlaps itself. */
+    recheck,
   };
 }
 

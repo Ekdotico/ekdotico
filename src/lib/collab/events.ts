@@ -13,8 +13,8 @@
 // connected, and a publish can fail after its change was committed. The
 // channel is the fast path and never the guarantee; the guarantee is the
 // re-check of every open connection at least once in 60 seconds (FR-ED-41,
-// NFR-SE-03 (e)), which the slice that ends and switches connections builds.
-// UNTIL THEN a lost notice leaves a connection open.
+// NFR-SE-03 (e)), which `recheck` of src/collab/server.ts runs: a lost notice
+// leaves a connection open for no longer than that.
 //
 // NFR-SE-19: a message holds the kind and identifiers of the application, and
 // nothing else: no title, no content, no address. A message is read as data

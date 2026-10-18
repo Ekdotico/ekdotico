@@ -25,6 +25,8 @@ export async function startCollab(): Promise<void> {
       VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
       AUTH_SECRET,
       COLLAB_PORT,
+      // FR-ED-41: the re-check, 60 seconds where unset; a test of a role that changes would wait that long.
+      COLLAB_RECHECK_MS: '3000',
     },
     stdio: ['ignore', 'pipe', 'inherit'],
   });

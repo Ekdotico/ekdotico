@@ -61,6 +61,7 @@ import { common, createLowlight } from 'lowlight';
 import * as Y from 'yjs';
 import { Button, MenuButton, RadioGroup, Select } from '@ekdotico/domico/components';
 import { LightbulbIcon, StickyNoteIcon, TriangleAlertIcon } from '@ekdotico/domico/icons';
+import type { Awareness } from 'y-protocols/awareness';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
 import { shapeOf } from '../../../../lib/collab/shape.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
@@ -70,6 +71,7 @@ import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
 import { limitRefusal, overLimits } from './block-limits.ts';
 import { CODE_NOT_COLOURED, codeColours } from './code-colours.ts';
+import { Cursors } from './cursors.ts';
 import {
   TABLE_MOST,
   closeNested,
@@ -1514,6 +1516,8 @@ const lowlight = createLowlight(common);
  * `unrepairable` is told, once, that a mending was not written because it would pass 5 MB.
  * `reads` is true for a browser that cannot edit the document: it has no binding to the shared
  * document, and shows what the schema can show of it, writing nothing (`followShared`).
+ * `awareness` is where the cursors of the others are read from (FR-ED-17; ./cursors.ts); with
+ * none, or for a browser that reads, none is drawn.
  */
 export function extensions(
   document: Y.Doc,
@@ -1521,6 +1525,7 @@ export function extensions(
   noRoom: (words: string | null) => void = () => {},
   unrepairable: () => void = () => {},
   reads = false,
+  awareness: Awareness | null = null,
 ) {
   return [
     StarterKit.configure({
@@ -1639,6 +1644,8 @@ export function extensions(
             return plugins;
           },
         }).configure({ document, field: FRAGMENT_NAME }),
+    // FR-ED-17: the cursors of the others need the binding above, so a browser that cannot edit has none (S14-1).
+    ...(reads || !awareness ? [] : [Cursors.configure({ awareness })]),
     Closed.configure({ noRoom }),
     Shortcuts,
     MarkdownInput,

@@ -27,3 +27,138 @@
 .table {
   margin: var(--sp-0);
 }
+
+/* The cursor of another person (FR-ED-17), drawn by the application from the
+   design package's collaborator slots ("Collaborator" in the token catalogue):
+   a caret, and the name above it (the caret's ::after, from its data-name, so that the name is not part of the text of the editor), so that the colour is never the only
+   sign. The caret is a hairline in the slot's solid; the label is the slot's
+   ink on the slot's solid, which the package measures at 4.5:1 in every
+   palette; the selection is the slot's own wash, which it measures over the five
+   grounds and over nothing else. The slot is a class, and each rule names its
+   tokens whole: no custom property is declared here, and no value is built from
+   a slot with an alpha. The caret and the label are not read to a screen reader
+   (they carry aria-hidden), and take no pointer. */
+.caret {
+  position: relative;
+  border-inline-start: 1px solid;
+  pointer-events: none;
+  word-break: normal;
+}
+
+.caret::after {
+  content: attr(data-name);
+  position: absolute;
+  inset-block-end: 100%;
+  inset-inline-start: 0;
+  z-index: 1;
+  padding-inline: var(--sp-1);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-sans);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-snug);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.slot1 {
+  border-inline-start-color: var(--collab-1);
+}
+.slot1::after {
+  background-color: var(--collab-1);
+  color: var(--collab-1-ink);
+}
+.selection1 {
+  background-color: var(--collab-1-soft);
+}
+.slot2 {
+  border-inline-start-color: var(--collab-2);
+}
+.slot2::after {
+  background-color: var(--collab-2);
+  color: var(--collab-2-ink);
+}
+.selection2 {
+  background-color: var(--collab-2-soft);
+}
+.slot3 {
+  border-inline-start-color: var(--collab-3);
+}
+.slot3::after {
+  background-color: var(--collab-3);
+  color: var(--collab-3-ink);
+}
+.selection3 {
+  background-color: var(--collab-3-soft);
+}
+.slot4 {
+  border-inline-start-color: var(--collab-4);
+}
+.slot4::after {
+  background-color: var(--collab-4);
+  color: var(--collab-4-ink);
+}
+.selection4 {
+  background-color: var(--collab-4-soft);
+}
+.slot5 {
+  border-inline-start-color: var(--collab-5);
+}
+.slot5::after {
+  background-color: var(--collab-5);
+  color: var(--collab-5-ink);
+}
+.selection5 {
+  background-color: var(--collab-5-soft);
+}
+.slot6 {
+  border-inline-start-color: var(--collab-6);
+}
+.slot6::after {
+  background-color: var(--collab-6);
+  color: var(--collab-6-ink);
+}
+.selection6 {
+  background-color: var(--collab-6-soft);
+}
+.slot7 {
+  border-inline-start-color: var(--collab-7);
+}
+.slot7::after {
+  background-color: var(--collab-7);
+  color: var(--collab-7-ink);
+}
+.selection7 {
+  background-color: var(--collab-7-soft);
+}
+.slot8 {
+  border-inline-start-color: var(--collab-8);
+}
+.slot8::after {
+  background-color: var(--collab-8);
+  color: var(--collab-8-ink);
+}
+.selection8 {
+  background-color: var(--collab-8-soft);
+}
+.slot9 {
+  border-inline-start-color: var(--collab-9);
+}
+.slot9::after {
+  background-color: var(--collab-9);
+  color: var(--collab-9-ink);
+}
+.selection9 {
+  background-color: var(--collab-9-soft);
+}
+.slot10 {
+  border-inline-start-color: var(--collab-10);
+}
+.slot10::after {
+  background-color: var(--collab-10);
+  color: var(--collab-10-ink);
+}
+.selection10 {
+  background-color: var(--collab-10-soft);
+}

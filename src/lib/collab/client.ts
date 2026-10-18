@@ -12,8 +12,9 @@ import {
   MessageType,
   WebSocketStatus,
 } from '@hocuspocus/provider';
+import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import { documentName, LIMIT_REFUSAL, REFUSAL } from './protocol.ts';
+import { documentName, LIMIT_REFUSAL, readRoleNotice, REFUSAL, type RoleNotice } from './protocol.ts';
 
 /** The refusals after which the client does not try again (FR-ED-41; src/lib/collab/protocol.ts). */
 export type Ending = typeof REFUSAL.NO_ACCESS | typeof REFUSAL.ACCESS_ENDED | typeof REFUSAL.SESSION_ENDED;
@@ -66,6 +67,20 @@ export interface ConnectionState {
   held?: Held;
   /** The document's state has arrived at least once: there is something to edit. */
   opened: boolean;
+  /**
+   * FR-ED-40 (b): the last change of role the server told this client of, with
+   * whether the connection may now edit. Absent until one arrives: then the
+   * role is the one the page was opened with.
+   */
+  notice?: RoleNotice;
+  /**
+   * Whether this connection may edit, as the server last said: its scope at
+   * every handshake, and the role it tells of after. It is read at each
+   * (re)connection, so a role that changed while the socket was lost is the
+   * connection's from the moment it is back. Absent until the first handshake:
+   * then it is what the page was opened with.
+   */
+  canEdit?: boolean;
   /** Changes the server has not acknowledged, which are lost if the tab is closed (FR-ED-18). */
   unsent: boolean;
 }
@@ -147,6 +162,10 @@ export class DocumentConnection {
   private socket!: HocuspocusProviderWebsocket;
   private provider!: HocuspocusProvider;
   private started = false;
+  // What the tab last showed of the role: the editability of the first handshake, and what each
+  // statement of a change said (the role is known once the server has told it). A handshake or a
+  // notice that differs from it is a change of role the writer is told of (FR-ED-40 (b)).
+  private shown: { canEdit: boolean; role?: RoleNotice['role'] } | undefined;
   private readonly options: ConnectionOptions;
   private lostTimer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -168,6 +187,7 @@ export class DocumentConnection {
     this.started = true;
     const { options } = this;
     this.state = { phase: 'opening', opened: this.state.opened, unsent: false };
+    this.shown = undefined;
     this.waiting = false;
     this.socket = new HocuspocusProviderWebsocket({
       url: options.url,
@@ -188,11 +208,16 @@ export class DocumentConnection {
       websocketProvider: this.socket,
       name: documentName(options.documentId),
       document: this.document,
-      // Presence is another slice's (FR-ED-17): nothing is said of this client.
-      awareness: null,
+      // FR-ED-17: the library's own awareness, which carries this client's
+      // cursor. What peers are told of this client is not what it says: the
+      // server holds the name and the slot (src/lib/collab/presence.ts).
       // Switches the library's batching on. `changed` sends a change at once while the bucket allows it.
       flushDelay: BATCH_MS,
       onOutgoingMessage: ({ message }) => this.sending(message.type),
+      // FR-ED-40 (b): the server says that the role of this connection changed.
+      onStateless: ({ payload }) => this.told(payload),
+      // The scope of each handshake, the one after a lost socket included (FR-ED-40 (b), FR-ED-41).
+      onAuthenticated: ({ scope }) => this.authenticated(scope),
       onSynced: () => this.connected(),
       onAuthenticationFailed: ({ reason }) => this.refused(reason),
       // The close of this document's connection on a socket that stays open.
@@ -256,6 +281,48 @@ export class DocumentConnection {
     const waits = this.waiting && this.state.phase === 'connected' ? 1 : 0;
     const unsent = this.provider.unsyncedChanges - waits > 0;
     if (unsent !== this.state.unsent) this.set({ unsent });
+  }
+
+  /** What the server said, as a stateless message: the one kind there is, a change of role. Anything else is ignored. */
+  private told(payload: string): void {
+    const notice = readRoleNotice(payload);
+    if (!notice) return;
+    const { shown } = this;
+    const differs =
+      shown !== undefined &&
+      (shown.canEdit !== notice.canEdit || (shown.role !== undefined && shown.role !== notice.role));
+    const wasEditable = this.state.canEdit;
+    this.shown = { canEdit: notice.canEdit, role: notice.role };
+    this.set(differs ? { notice, canEdit: notice.canEdit } : { canEdit: notice.canEdit });
+    // Where the connection may edit again, what it holds that the server dropped
+    // while it could not (a change not yet acknowledged when the role was taken)
+    // is sent now: the server applies a later change only once the earlier ones
+    // it depends on have arrived, so without this nothing written after the
+    // change of role would ever be applied. After a reconnection the library
+    // synchronises by itself.
+    if (notice.canEdit && wasEditable === false && this.started) this.provider.forceSync();
+  }
+
+  /**
+   * The server accepted the connection, at the first handshake and at each
+   * the library makes after a lost socket: its scope says whether it may edit
+   * now (FR-ED-40 (b), FR-ED-41). The tab follows that and not the role it
+   * was opened with, which a change made while the socket was lost has
+   * outdated, in either direction. A statement that was made before the
+   * connection was lost and no longer holds is taken away; the server then
+   * tells the role (`connected` of src/collab/server.ts), and the statement is
+   * made where it differs from what the tab showed.
+   */
+  private authenticated(scope: string): void {
+    const canEdit = scope === 'read-write';
+    const stale = this.shown !== undefined && this.shown.canEdit !== canEdit;
+    this.shown ??= { canEdit };
+    this.set(stale ? { canEdit, notice: undefined } : { canEdit });
+  }
+
+  /** FR-ED-17: where the cursors of the others are read from, and this client's own is set. Null before `start`. */
+  get awareness(): Awareness | null {
+    return this.provider?.awareness ?? null;
   }
 
   subscribe = (listener: () => void): (() => void) => {

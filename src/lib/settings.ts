@@ -125,6 +125,12 @@ export interface Settings {
    * value is 30 seconds. The page hands it to the editor.
    */
   collabErrorAfterMs: number;
+  /**
+   * FR-ED-41: how often the collaboration server reads again the session and
+   * the access of every open connection, "at least once every 60 seconds".
+   * Milliseconds, from 1000 to 60000, and 60 seconds where unset: a longer period would not be what the requirement asks, and a shorter one makes the re-check a load of its own.
+   */
+  collabRecheckMs: number;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -259,6 +265,11 @@ export function loadSettings(env: Env = process.env): Settings {
   if (collabStoreMaxMs < 2 * collabStoreDelayMs + 1000) {
     throw new Error('COLLAB_STORE_MAX_MS must be at least twice COLLAB_STORE_DELAY_MS and 1000 more.');
   }
+  // FR-ED-41: "at least once every 60 seconds", so never less often; and not so often that the re-check is a load of its own (a query for the sessions and one for each user and document, each run).
+  const collabRecheckMs = wholeNumber(env, 'COLLAB_RECHECK_MS', 60_000, 1);
+  if (collabRecheckMs > 60_000 || collabRecheckMs < 1000) {
+    throw new Error('COLLAB_RECHECK_MS must be from 1000 to 60000 (FR-ED-41).');
+  }
   // NFR-SE-17 (e): the secrets differ from one another, so that one that
   // leaks opens one door. The message holds neither.
   const admission = admissionSecret(env);
@@ -355,6 +366,7 @@ export function loadSettings(env: Env = process.env): Settings {
     collabStoreDelayMs,
     collabStoreMaxMs,
     collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),
+    collabRecheckMs,
     limits,
   };
 }
