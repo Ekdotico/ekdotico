@@ -3154,6 +3154,106 @@ test('the header of a code block says that the block is shown without colours wh
   }
 });
 
+// Register row D183: "A colouring of a code block that fails, or that takes
+// too long, shows the block without syntax colours." The review of pull
+// request 34 found content whose colouring threw, so that the document could
+// not be shown, and content whose colouring took seconds at each key. Here the
+// faults are put into the page instead: the regular expressions of the
+// colouring (global and multiline) throw on code that holds COLOURING-THROWS,
+// and take 400 ms on each new code that holds COLOURING-SLOW.
+test('a code block whose colouring throws or takes too long is shown without colours, its header says so, and the document stays open and editable; an honest block keeps its colours', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  // Written out here, and not taken from the code under test. The words are the owner's to approve.
+  const WORDS =
+    'Syntax colours are not shown in this code block. Colouring its code took too long or could not complete.';
+  await page.addInitScript(() => {
+    const exec = RegExp.prototype.exec;
+    const fault = { slow: 0, last: '' };
+    (window as unknown as { __colouring: typeof fault }).__colouring = fault;
+    RegExp.prototype.exec = function (this: RegExp, given: string) {
+      if (this.global && this.multiline && typeof given === 'string') {
+        if (given.includes('COLOURING-THROWS')) throw new Error('A fault put in by the test.');
+        if (given.includes('COLOURING-SLOW') && given !== fault.last) {
+          fault.last = given;
+          fault.slow += 1;
+          const until = performance.now() + 400;
+          while (performance.now() < until);
+        }
+      }
+      return exec.call(this, given);
+    };
+  });
+  const slowCount = () =>
+    page.evaluate(() => (window as unknown as { __colouring: { slow: number } }).__colouring.slow);
+  await enter(page);
+  const id = await openNew(page);
+  const peer = await connectAs(page.context(), id);
+  const fragment = peer.provider.document.getXmlFragment('default');
+  // The honest block first: a pass that has spent its budget, as the slow
+  // block spends it, tries no block after it (CODE_COLOURS_PASS_LONGEST).
+  fragment.push([
+    element('codeBlock', { language: 'javascript' }, [words('const honest = "kept";')]),
+    element('codeBlock', { language: 'javascript' }, [
+      words('function f(g) {\n  return "COLOURING-THROWS";\n}'),
+    ]),
+    element('codeBlock', { language: 'javascript' }, [words('const slow = "COLOURING-SLOW";')]),
+    paragraph('END-OF-DOCUMENT'),
+  ]);
+  const doc = text(page);
+  await expect(doc).toContainText('END-OF-DOCUMENT', { timeout: 30_000 });
+  const blocks = doc.locator('.ekd-code');
+  await expect(blocks).toHaveCount(3);
+  const [kept, thrown, slow] = [blocks.nth(0), blocks.nth(1), blocks.nth(2)];
+  const said = (within: Locator) => within.locator('.ekd-code-header').getByText(WORDS, { exact: true });
+  const colours = (within: Locator) => within.locator('code [class*="hljs-"]');
+  await expect(doc).toContainText('COLOURING-THROWS');
+  await expect(said(thrown)).toBeVisible();
+  await expect(colours(thrown)).toHaveCount(0);
+  await expect(said(slow)).toBeVisible();
+  await expect(colours(slow)).toHaveCount(0);
+  await expect(said(kept)).toHaveCount(0);
+  await expect(colours(kept).first()).toBeVisible();
+  expect(await colours(kept).count()).toBeGreaterThan(1);
+  // A statement that stands, with the controls of the header, in no live region.
+  await expect(thrown).toMatchAriaSnapshot(`
+    - combobox "Code language"
+    - button "Copy"
+    - status
+    - text: ${WORDS}
+  `);
+  expect(
+    await said(thrown).evaluate((element) => element.closest('[role="status"], [aria-live]')),
+  ).toBeNull();
+  expect(await slowCount()).toBe(1);
+
+  // Editable: keys typed in the slow block are not coloured again, so none of
+  // them waits for the 400 ms; and they reach the other client.
+  await placeAtEnd(slow.locator('code'));
+  const times = await keyTimes(page, 'abc');
+  console.log(`a key in a block whose colouring took too long: ${times.join(', ')} ms`);
+  expect(Math.max(...times)).toBeLessThan(400);
+  expect(await slowCount()).toBe(1);
+  await expect(slow).toContainText('"COLOURING-SLOW";abc');
+  await expect(said(slow)).toBeVisible();
+  await expect(colours(slow)).toHaveCount(0);
+  await expect.poll(() => fragment.toString()).toContain('COLOURING-SLOW";abc');
+  // And in the honest block, which keeps its colours, and the others still have none.
+  await placeAtEnd(kept.locator('code'));
+  await page.keyboard.type(' // more');
+  await expect(kept).toContainText('"kept"; // more');
+  await expect(kept.locator('code .hljs-comment')).toHaveText('// more');
+  await expect(said(kept)).toHaveCount(0);
+  await expect(colours(thrown)).toHaveCount(0);
+  await expect(colours(slow)).toHaveCount(0);
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => fragment.toString()).toContain('// more');
+  await expectNoSidewaysScroll(page);
+  await screens(page, 'editor-code-not-coloured');
+  peer.close();
+});
+
 // The owner's decision of 12 October 2026. Before it the member was told
 // nothing: the connection closed, the page asked again and was refused again,
 // and the change was lost at the next load.

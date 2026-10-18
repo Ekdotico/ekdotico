@@ -183,7 +183,7 @@ const LANGUAGES: Record<string, string> = {
 export const codeLanguage = (given: unknown): string =>
   typeof given === 'string' && Object.hasOwn(LANGUAGES, given) ? given : 'plaintext';
 
-function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
+function CodeBlockView({ node, updateAttributes, editor, extension }: NodeViewProps) {
   const editable = useContext(Editable);
   const id = useId();
   const [copied, setCopied] = useState<'no' | 'yes' | 'refused'>('no');
@@ -228,7 +228,12 @@ function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
             block is come to, and says nothing while the code is typed. The
             length is the one the colourer is given, the characters of the
             block, which is its size. */}
-        {node.content.size > CODE_COLOURS_MOST ? <span>{CODE_UNCOLOURED}</span> : null}
+        {node.content.size > CODE_COLOURS_MOST ? (
+          <span>{CODE_UNCOLOURED}</span>
+        ) : // D183: the same, where the colouring threw or took too long.
+        (extension.options.lowlight as CodeColours).failed(node.textContent) ? (
+          <span>{CODE_NOT_COLOURED}</span>
+        ) : null}
       </BlockControls>
       {/* FR-ED-03: "Code blocks shall not be subject to spell-checking". */}
       <pre spellCheck={false}>
@@ -1514,16 +1519,127 @@ export const CODE_COLOURS_MOST = 50_000;
  * above. Approved by the owner on 13 October 2026.
  */
 export const CODE_UNCOLOURED = `Syntax colours are not shown in a code block longer than ${CODE_COLOURS_MOST.toLocaleString('en-GB')} characters.`;
+/**
+ * The longest that one colouring of one code block may take, in milliseconds
+ * (register row D183). A colouring that takes longer is not used, and the
+ * block is shown without colours, as is one whose colouring throws.
+ *
+ * Chosen on 16 October 2026 from a measurement, the row giving no number. One
+ * key at the end of a block of ordinary code, in Chromium, from the key down
+ * to the second frame after it, mean of ten: 47, 56 and 92 ms for JavaScript
+ * at 10, 25 and 49 KB (worst 117); 32, 48 and 52 ms for TypeScript; 32 ms at
+ * each length for plain text, which is not coloured. One colouring alone, in
+ * Node, median of 15: 6, 15 and 29 ms for that JavaScript at 10, 25 and 50 KB.
+ * So 200 ms is about seven times the dearest colouring the length lets
+ * through and twice its whole keystroke, room for a slower machine, and what a
+ * block may add to a keystroke is bounded at a fifth of a second.
+ */
+export const CODE_COLOURS_LONGEST = 200;
+/**
+ * The longest that the colourings of one pass over the document may take
+ * together, in milliseconds (D183, and the review of pull request 38). The
+ * library colours every block again at each key in any of them, so blocks
+ * each within the time above would add up; and on opening, each block that
+ * fails costs its whole first colouring. Once a pass has spent this, the
+ * blocks after it in the pass are not tried, and are shown without colours as
+ * if they had taken too long.
+ *
+ * 200 ms, as for one block, from the same measurement: it holds six blocks of
+ * 50 KB of the dearest ordinary code, or some thirty of 10 KB, and bounds the
+ * colouring of one key at this plus the one block that crosses it.
+ */
+export const CODE_COLOURS_PASS_LONGEST = 200;
+/**
+ * What the header of a code block says while its colouring is not shown for
+ * D183. No requirement gives the words: written under the Expression
+ * Guidelines, and the owner's to approve.
+ */
+export const CODE_NOT_COLOURED =
+  'Syntax colours are not shown in this code block. Colouring its code took too long or could not complete.';
 // What the library reads from an answer: the nodes to colour. None.
-const UNCOLOURED = { type: 'root', children: [] };
-/** `lowlight`, which answers with no colours for code past the bound. */
-export const codeColours = {
-  ...lowlight,
-  highlight: (language: string, code: string) =>
-    code.length > CODE_COLOURS_MOST ? UNCOLOURED : lowlight.highlight(language, code),
-  highlightAuto: (code: string) =>
-    code.length > CODE_COLOURS_MOST ? UNCOLOURED : lowlight.highlightAuto(code),
-};
+const UNCOLOURED = { type: 'root' as const, children: [] };
+
+/**
+ * Whether `now` is `was` as edited since: the text the two share at their two
+ * ends is at least half of the longer.
+ */
+function edited(was: string, now: string) {
+  const most = Math.min(was.length, now.length);
+  let start = 0;
+  while (start < most && was[start] === now[start]) start += 1;
+  let end = 0;
+  while (end < most - start && was[was.length - 1 - end] === now[now.length - 1 - end]) end += 1;
+  return 2 * (start + end) >= Math.max(was.length, now.length);
+}
+
+/**
+ * `lowlight`, bounded, for the code blocks of one editor. Code past the length
+ * is not coloured (D133), and nor is code whose colouring throws or takes
+ * longer than `CODE_COLOURS_LONGEST` (D183): the block is shown as it is, and
+ * the document stays open and editable. The library colours every block again
+ * at each keystroke, so such code is remembered, and so is each edit of it
+ * (`edited`), and it is not coloured again: one slow colouring for the block,
+ * and not one a key. Nor is a block that a pass comes to after it has spent
+ * `CODE_COLOURS_PASS_LONGEST`. Code rewritten past half of it is tried
+ * afresh, and the document opened again tries every block afresh.
+ *
+ * ponytail: a colouring runs to its end before it is measured, so the block
+ * that crosses the budget still costs its whole colouring, and one that never
+ * ends holds the page.
+ * Colouring in a worker abandons one as it runs, if such content is met.
+ */
+export function codeColours(colourer = lowlight, now = () => performance.now()) {
+  let uncoloured: string[] = [];
+  const held = (code: string) => uncoloured.findIndex((was) => edited(was, code));
+  // One pass of the library over the blocks of the document, in one
+  // transaction (`pass`, from the plugin before the library's): whether it
+  // coloured, what its colourings took together, and the remembered code
+  // that a block of it held. Not one task: a task can hold several
+  // transactions, the sync of a change and then its repair.
+  let current = { asked: false, spent: 0, held: new Set<number>() };
+  /** Ends a pass, and begins the next: called before the library may colour the blocks again. */
+  function pass() {
+    // A pass that coloured asked of every block of the document. Code that no
+    // block held is forgotten: its block was deleted, or rewritten past half.
+    // So the list is never longer than the failing blocks.
+    if (current.asked) uncoloured = uncoloured.filter((_, index) => current.held.has(index));
+    current = { asked: false, spent: 0, held: new Set<number>() };
+  }
+  function colour(code: string, colouring: () => ReturnType<typeof lowlight.highlight>) {
+    if (code.length > CODE_COLOURS_MOST) return UNCOLOURED;
+    current.asked = true;
+    const at = held(code);
+    if (at !== -1) {
+      uncoloured[at] = code;
+      current.held.add(at);
+      return UNCOLOURED;
+    }
+    // Past the budget of the pass the block is not tried: shown without
+    // colours, and remembered as one that took too long.
+    if (current.spent < CODE_COLOURS_PASS_LONGEST) {
+      const start = now();
+      try {
+        const colours = colouring();
+        if (now() - start <= CODE_COLOURS_LONGEST) return colours;
+      } catch {
+        // The block is shown without colours, and its header says so.
+      } finally {
+        current.spent += now() - start;
+      }
+    }
+    current.held.add(uncoloured.push(code) - 1);
+    return UNCOLOURED;
+  }
+  return {
+    ...colourer,
+    highlight: (language: string, code: string) => colour(code, () => colourer.highlight(language, code)),
+    highlightAuto: (code: string) => colour(code, () => colourer.highlightAuto(code)),
+    /** Whether this code is shown without colours because its colouring threw or took too long. */
+    failed: (code: string) => held(code) !== -1,
+    pass,
+  };
+}
+export type CodeColours = ReturnType<typeof codeColours>;
 
 /**
  * The extensions of the editor, bound to the document of one connection.
@@ -1574,7 +1690,14 @@ export function extensions(
       addNodeView() {
         return ReactNodeViewRenderer(CodeBlockView);
       },
-    }).configure({ lowlight: codeColours, defaultLanguage: 'plaintext' }),
+      // Before the library's own plugin, whose state is worked out after this
+      // one's in every transaction: each begins a pass of the colourer.
+      addProseMirrorPlugins() {
+        const colours = this.options.lowlight as CodeColours;
+        const begin = () => colours.pass();
+        return [new Plugin({ state: { init: begin, apply: begin } }), ...(this.parent?.() ?? [])];
+      },
+    }).configure({ lowlight: codeColours(), defaultLanguage: 'plaintext' }),
     Callout,
     TableOfContents,
     PageBreak,
