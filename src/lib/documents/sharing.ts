@@ -104,9 +104,11 @@ export async function createInvitations(
  * false where there is none. The one statement Prisma's interface cannot make.
  * A raw query is not given the schema the client names (src/lib/db.ts), so it
  * names its own, the application schema of contract IC-23. Parameterised
- * (NFR-SE-06, A05).
+ * (NFR-SE-06, A05). Every change to who holds a role on a document holds it
+ * (an invitation, an acceptance, and src/lib/documents/collaborators.ts), so
+ * that they are one after another.
  */
-async function lockDocument(tx: Prisma.TransactionClient, documentId: string): Promise<boolean> {
+export async function lockDocument(tx: Prisma.TransactionClient, documentId: string): Promise<boolean> {
   const held = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "ekdotico"."Document"
     WHERE "id" = ${documentId}::uuid AND "deletedAt" IS NULL
@@ -483,7 +485,8 @@ export interface Sharing {
   people: number;
   limit: number;
   owner: { name: string };
-  collaborators: { id: string; name: string; role: DocumentRole }[];
+  /** `self` is true for the caller's own entry alone: a page withdraws the controls on it and offers to leave (FR-ED-38). */
+  collaborators: { id: string; name: string; role: DocumentRole; self: boolean }[];
   /** For a caller who holds `document.collaborators.invite` alone (API design). */
   invitations?: { id: string; email: string; role: DocumentRole; expiresAt: Date }[];
 }
@@ -492,13 +495,14 @@ export interface Sharing {
 export async function sharingOf(
   document: Pick<DocumentRow, 'id' | 'ownerId' | 'permissionSet'>,
   role: DocumentRole,
+  callerId: string,
   now: Date = new Date(),
 ): Promise<Sharing> {
   const [owner, collaborators, pending] = await Promise.all([
     db().user.findUnique({ where: { id: document.ownerId }, select: { name: true } }),
     db().documentCollaborator.findMany({
       where: { documentId: document.id },
-      select: { id: true, role: true, user: { select: { name: true } } },
+      select: { id: true, role: true, userId: true, user: { select: { name: true } } },
       orderBy: [{ addedAt: 'asc' }, { id: 'asc' }],
     }),
     db().documentInvitation.findMany({
@@ -515,6 +519,8 @@ export async function sharingOf(
       id: row.id,
       name: row.user.name ?? '',
       role: COLLABORATOR_ROLE[row.role],
+      // The account's identifier is read to say this, and goes no further.
+      self: row.userId === callerId,
     })),
   };
   if (holds(document.permissionSet, role, 'document.collaborators.invite')) {
