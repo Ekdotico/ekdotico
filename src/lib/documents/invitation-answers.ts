@@ -23,7 +23,8 @@ export const INVITATION_MESSAGES = {
   own: (address: string) => `No invitation was created: ${address} is an address of this account.`,
   collaborator: (address: string) =>
     `No invitation was created: the person at ${address} already has a role on this document.`,
-  reviewer: 'The Reviewer role is not offered in this release. Choose Editor or Viewer.',
+  reviewer:
+    'No invitation was created. The Reviewer role is not offered in this release. Choose Editor or Viewer.',
   invalid: 'Enter 1 to 10 email addresses, one on each line, and choose a role. No invitation was created.',
   notAnAddress: (entry: string) => `No invitation was created: ${entry} is not an email address.`,
   notFound: 'This invitation is no longer pending. Reload the page to see the pending invitations.',
