@@ -673,6 +673,77 @@ describe('the words of changes the server did not take (F14-2)', () => {
     connection.stop();
   });
 
+  // The provider counts a batch, and a status of 0 does not lower the count: a count that is not zero
+  // cannot say which of several messages the server took.
+  it('offers only what the server refused where it applied one change and refused the next, which the count cannot tell', async () => {
+    const { connection, socket, text } = await acknowledged();
+    text.insert(6, 'Taken. ');
+    await vi.advanceTimersByTimeAsync(0);
+    text.insert(13, 'Refused.');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.updates).toHaveLength(3);
+    // The first was applied, the role was taken, and the second reached the server after that.
+    acknowledge(socket);
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved).toEqual({ text: 'Refused.' });
+    socket.receive(toFrame(8, 0));
+    await vi.advanceTimersByTimeAsync(0);
+    // The refusal changes nothing: it is what the tab already offers.
+    expect(connection.getState().unsaved).toEqual({ text: 'Refused.' });
+    connection.stop();
+  });
+
+  it('offers only the second where the server refused it before it told the role', async () => {
+    const { connection, socket, text } = await acknowledged();
+    text.insert(6, 'Taken. ');
+    text.insert(13, 'Refused.');
+    await vi.advanceTimersByTimeAsync(0);
+    acknowledge(socket);
+    socket.receive(toFrame(8, 0));
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved).toEqual({ text: 'Refused.' });
+    connection.stop();
+  });
+
+  // The role notice is sent before the answer to the client's second step on a new socket.
+  describe('after a reconnection, where the answer to an earlier message was lost with the socket', () => {
+    /** A change that the server applied, the socket lost before its status, and the new socket's steps. */
+    async function reconnected() {
+      const { connection, socket, text } = await acknowledged();
+      text.insert(6, 'Applied, status lost.');
+      await vi.advanceTimersByTimeAsync(0);
+      (connection as unknown as { provider: { forceSync(): void } }).provider.forceSync();
+      // The server asks for what the tab holds (an empty state vector: it holds nothing the tab lacks).
+      socket.receive(toFrame(SYNC, 0, ...varint(1), 0));
+      await vi.advanceTimersByTimeAsync(0);
+      socket.receive(authenticated('readonly'));
+      socket.receive(stateless(viewer));
+      await vi.advanceTimersByTimeAsync(0);
+      return { connection, socket };
+    }
+
+    it('offers the words until the second step is answered as applied, and then takes the offer back', async () => {
+      const { connection, socket } = await reconnected();
+      expect(connection.getState().unsaved).toEqual({ text: 'Applied, status lost.' });
+      // Nothing new for a read-only server: it applied nothing and says so as applied.
+      socket.receive(toFrame(8, 1));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.getState().unsaved).toBeUndefined();
+      expect(connection.getState().notice).toEqual({ role: 'viewer', canEdit: false });
+      connection.stop();
+    });
+
+    it('keeps the offer where the second step is refused', async () => {
+      const { connection, socket } = await reconnected();
+      socket.receive(toFrame(8, 0));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connection.getState().unsaved).toEqual({ text: 'Applied, status lost.' });
+      connection.stop();
+    });
+  });
+
   it('takes the statement away when the connection may edit again, which sends what the tab holds', async () => {
     const { connection, socket, text } = await acknowledged();
     text.insert(6, 'Typed as an Editor.');
@@ -730,6 +801,23 @@ describe('who has the document open (FR-ED-17)', () => {
     socket.receive(stateless(payload));
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.getState().people).toEqual([{ slot: 2, name: 'Ben Editor' }]);
+    connection.stop();
+  });
+
+  it('is taken away when the connection is lost for good, and told afresh when it returns', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(list([{ slot: 1, name: 'Ada Owner' }])));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().people).toHaveLength(1);
+    // The socket is lost, and not restored within the period of the error state (FR-ED-23).
+    socket.readyState = 3;
+    socket.dispatchEvent(Object.assign(new Event('close'), { code: 1006, reason: '' }));
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(connection.getState().phase).toBe('restoring');
+    expect(connection.getState().people).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(connection.getState().phase).toBe('lost');
+    expect(connection.getState().people).toBeUndefined();
     connection.stop();
   });
 

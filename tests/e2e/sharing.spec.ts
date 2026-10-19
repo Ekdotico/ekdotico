@@ -306,7 +306,7 @@ test('a change of role and a removal are notified to the person affected, and ne
   await cy$.getByRole('button', { name: 'Change role' }).click();
   await expect(page.getByRole('status')).toHaveText('Role of Cy Viewer changed to Editor.');
   await notifications(his);
-  const changed = his.getByText('Your role on Untitled document is now Editor.');
+  const changed = his.getByText('Your role on Untitled document was changed to Editor.');
   await expect(changed).toBeVisible();
   const item = his.getByRole('listitem').filter({ has: changed });
   await expect(item.getByRole('link', { name: 'Open the document' })).toHaveAttribute(
@@ -324,7 +324,7 @@ test('a change of role and a removal are notified to the person affected, and ne
   await notifications(page);
   await expect(page.getByText('There are no notifications.')).toBeVisible();
   await notifications(theirs);
-  await expect(theirs.getByText(/Your role on|You were removed/)).toHaveCount(0);
+  await expect(theirs.getByText(/Your role on|You no longer have access/)).toHaveCount(0);
 
   // A removal: Cy is told, in words that name no document and with no link; the change of role goes with the role.
   await page.goto(`/documents/${id}/sharing`);
@@ -335,7 +335,7 @@ test('a change of role and a removal are notified to the person affected, and ne
     .click();
   await expect(page.getByRole('status')).toHaveText('Cy Viewer removed from this document.');
   await notifications(his);
-  const removed = his.getByText('You were removed from a document.');
+  const removed = his.getByText('You no longer have access to a document.');
   await expect(removed).toBeVisible();
   await expect(his.getByText(/Your role on/)).toHaveCount(0);
   const gone = his.getByRole('listitem').filter({ has: removed });
@@ -356,7 +356,7 @@ test('a change of role and a removal are notified to the person affected, and ne
     .click();
   await theirs.waitForURL('**/');
   await notifications(theirs);
-  await expect(theirs.getByText(/You were removed|Your role on/)).toHaveCount(0);
+  await expect(theirs.getByText(/You no longer have access|Your role on/)).toHaveCount(0);
   await notifications(page);
   await expect(page.getByText('There are no notifications.')).toBeVisible();
   await cyContext.close();

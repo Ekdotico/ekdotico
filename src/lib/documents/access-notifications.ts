@@ -42,9 +42,49 @@ export async function notifyRoleChanged(
   }: { recipientId: string; actorId: string; documentId: string; role: GivenRole },
 ): Promise<void> {
   if (recipientId === actorId) return;
+  // A new role takes the place of the one before it: the earlier notification is no longer true.
+  await endRoleChanges(tx, recipientId, documentId);
   await tx.notification.create({
     data: { recipientId, kind: ROLE_CHANGED_NOTIFICATION, payload: { documentId, role } },
   });
+}
+
+/**
+ * Takes away the notifications of changes of this person's role on this
+ * document (register row PR-10): their subject, the role, ends when the role is
+ * changed again, and when the person is removed or leaves; and a person who is
+ * invited again holds a new role, not the one an old notification names. Called
+ * in the transaction of each of those, so that no change stands beside a
+ * notification that has stopped being true.
+ */
+export async function endRoleChanges(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  documentId: string,
+): Promise<void> {
+  await tx.notification.deleteMany({
+    where: {
+      recipientId: userId,
+      kind: ROLE_CHANGED_NOTIFICATION,
+      payload: { path: ['documentId'], equals: documentId },
+    },
+  });
+}
+
+/**
+ * The notifications of removals that are older than they stay (register row
+ * PR-8), by the timer of src/lib/timers.ts (NFR-RE-15). The list does not show
+ * them from that moment either, so the timer only keeps the table from
+ * growing. Idempotent; answers with the number of rows it deleted.
+ */
+export async function deleteExpiredRemovedNotifications(now: Date = new Date()): Promise<number> {
+  const { count } = await db().notification.deleteMany({
+    where: {
+      kind: REMOVED_NOTIFICATION,
+      createdAt: { lte: new Date(now.getTime() - REMOVED_STAYS_DAYS * DAY_MS) },
+    },
+  });
+  return count;
 }
 
 /** A removal: the person removed is told. Nothing for the actor, and none for a leave (which is the person's own act). */
@@ -53,6 +93,8 @@ export async function notifyRemoved(
   { recipientId, actorId, documentId }: { recipientId: string; actorId: string; documentId: string },
 ): Promise<void> {
   if (recipientId === actorId) return;
+  // The role is gone, and with it the notifications of its changes.
+  await endRoleChanges(tx, recipientId, documentId);
   await tx.notification.create({
     data: { recipientId, kind: REMOVED_NOTIFICATION, payload: { documentId } },
   });

@@ -1245,6 +1245,47 @@ describe('the limit of 60 presence messages a second for each connection (S14-5)
     }
   });
 
+  // The library builds the awareness of every client for each request and can no more drop one than
+  // refuse a message: a connection past the limit with these is closed.
+  it('counts a request for everyone’s awareness under the same limit: 60 are let through, and the 61st closes the connection', async () => {
+    const local = await inProcess();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { id, owner, editor, sockets } = await three(local);
+      await sleep(1100);
+      // The type of the message (3) and nothing after it.
+      for (let n = 1; n <= 60; n += 1) sockets.owner.socket.webSocket!.send(sent(id, 3));
+      await sleep(300);
+      expect(connectionOf(local, id, owner.id)).toBeDefined();
+      sockets.owner.socket.webSocket!.send(sent(id, 3));
+      await until(() => connectionOf(local, id, owner.id) === undefined);
+      // Not the others'.
+      expect(connectionOf(local, id, editor.id)).toBeDefined();
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('counts the two kinds together: 30 requests and 30 cursors pass, and one more request closes the connection', async () => {
+    const local = await inProcess();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { id, owner, sockets, clients } = await three(local);
+      await sleep(1100);
+      for (let n = 1; n <= 30; n += 1) {
+        sockets.owner.socket.webSocket!.send(sent(id, 3));
+        say(clients.owner, n);
+      }
+      await sleep(300);
+      expect(connectionOf(local, id, owner.id)).toBeDefined();
+      // 31 requests alone would have passed: it is the 61st message of the second.
+      sockets.owner.socket.webSocket!.send(sent(id, 3));
+      await until(() => connectionOf(local, id, owner.id) === undefined);
+    } finally {
+      await local.stop();
+    }
+  });
+
   it('counts for each connection: a second tab of the same account has its own 60', async () => {
     const local = await inProcess();
     try {
@@ -1391,7 +1432,10 @@ describe('a connection made read-only first handles the messages it has received
       expect(connection.readOnly).toBe(false);
       expect(connection.context.role).toBe('editor');
       await until(() => clients.viewer.notices.length === 2);
-      expect(logged).toBeDefined();
+      // One line said that it waited, and it names no one.
+      expect(logged.mock.calls).toEqual([
+        ['collab: an upgrade waits for the next look: the connection still holds messages'],
+      ]);
     } finally {
       await local.stop();
     }

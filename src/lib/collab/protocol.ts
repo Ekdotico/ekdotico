@@ -6,7 +6,7 @@
 // Nothing here reads a setting, the database, or anything of Next.js or of
 // Node.js: it loads in a browser as it is.
 import { ROLES, type DocumentRole } from '../documents/permissions.ts';
-import { COLLABORATOR_COLOURS, isSlot } from './presence.ts';
+import { COLLABORATOR_COLOURS, isSlot, varUint } from './presence.ts';
 import type { Limit } from './shape.ts';
 
 /**
@@ -213,6 +213,37 @@ export function readRoleNotice(payload: string): RoleNotice | null {
   const { kind, role, canEdit, ...rest } = read as Record<string, unknown>;
   if (kind !== 'role' || Object.keys(rest).length > 0 || typeof canEdit !== 'boolean') return null;
   return (ROLES as readonly unknown[]).includes(role) ? { role: role as DocumentRole, canEdit } : null;
+}
+
+/** The step of a synchronisation a message carries (y-protocols `sync`): 0, 1 and 2. */
+export type SyncKind = 'step1' | 'step2' | 'update';
+
+/**
+ * What a frame the client sends is, where it is a synchronisation message: the
+ * name of the document, the type of the message (0, a synchronisation), and its
+ * step. Only the first bytes are read. `null` for anything else. The server
+ * answers each `step2` and each `update` with one status (`syncStatusOf`).
+ */
+export function syncKindOf(frame: Uint8Array): SyncKind | null {
+  const name = varUint(frame, 0);
+  const type = name && varUint(frame, name[1] + name[0]);
+  if (!type || type[0] !== 0) return null;
+  const step = varUint(frame, type[1]);
+  return step ? ((['step1', 'step2', 'update'] as const)[step[0]] ?? null) : null;
+}
+
+/**
+ * The status the server answers a `step2` or an `update` with (@hocuspocus/server,
+ * `writeSyncStatus`): message type 8, then 1 where it applied the message and 0
+ * where it did not (a read-only connection applies nothing). `null` for any
+ * other frame.
+ */
+export function syncStatusOf(frame: Uint8Array): boolean | null {
+  const name = varUint(frame, 0);
+  const type = name && varUint(frame, name[1] + name[0]);
+  if (!type || type[0] !== 8) return null;
+  const applied = frame[type[1]];
+  return applied === 1 ? true : applied === 0 ? false : null;
 }
 
 /**

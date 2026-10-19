@@ -2,12 +2,7 @@
 // (FR-ED-17; register rows S14-1, S14-5, S14-6, F14-1; docs/plan/presence-row.md):
 // the limiter, the letters of a picture, and the message that tells who is present.
 import { describe, expect, it } from 'vitest';
-import {
-  AWARENESS_PER_SECOND,
-  AwarenessRate,
-  COLLABORATOR_COLOURS,
-  initialsOf,
-} from '../../src/lib/collab/presence.ts';
+import { AWARENESS_PER_SECOND, AwarenessRate, COLLABORATOR_COLOURS } from '../../src/lib/collab/presence.ts';
 import { peopleNotice, readPeopleNotice, type Person } from '../../src/lib/collab/protocol.ts';
 
 describe('the limit on presence messages (S14-5)', () => {
@@ -62,31 +57,6 @@ describe('the limit on presence messages (S14-5)', () => {
   it('lets the pace of a person through: a message every 20 ms for ten seconds is all let through', () => {
     const rate = new AwarenessRate();
     for (let at = 0; at < 500; at += 1) expect(rate.take(at * 20)).toBe(true);
-  });
-});
-
-describe('the letters of a picture (F14-1)', () => {
-  it.each([
-    ['Ada Owner', 'AO'],
-    ['Ada', 'A'],
-    ['ada byron lovelace', 'AL'],
-    ['  Ben   Editor  ', 'BE'],
-    ['Ελένη Παπαδοπούλου', 'ΕΠ'],
-    ['ελένη', 'Ε'],
-    ['Émile Zola', 'ÉZ'],
-    ['Maria-José Silva', 'MS'],
-    ['(Admin) Bob', 'AB'],
-    ['3D Studio', '3S'],
-    ['😀 Smith', 'S'],
-    ['😀', ''],
-    ['', ''],
-    ['   ', ''],
-  ])('%j is %j', (name, letters) => {
-    expect(initialsOf(name)).toBe(letters);
-  });
-
-  it('takes a letter with its accent when the accent is a character of its own', () => {
-    expect(initialsOf('émile zola')).toBe('ÉZ');
   });
 });
 

@@ -25,6 +25,7 @@ import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
 import styles from './editor.module.css';
 import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
+import { PeopleRow } from './people-row.tsx';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
 
@@ -98,7 +99,7 @@ const ROLE_NOW = (role: DocumentRole, canEdit: boolean) =>
 // the server had not received. They are not taken, and the person is told (docs/plan/presence-row.md,
 // section 5; for the owner's approval). It follows `ROLE_NOW`, which says the new role.
 const UNSAVED =
-  'Your last changes in this tab were not saved. Ekdotico had not received them when the role of this account changed.';
+  'Your last changes in this tab were not saved. Ekdotico did not keep them, because the role of this account changed first.';
 const COPY_UNSAVED = 'Copy unsaved text';
 // A repair of the document that this browser did not write (register D180,
 // the browser's half). Written for the owner's approval.
@@ -484,6 +485,8 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
   const mayEdit = state.canEdit ?? canEdit;
   return (
     <Stack gap={4}>
+      {/* FR-ED-17: drawn in the header of the page, beside "Sharing" (./people-row.tsx). */}
+      <PeopleRow people={state.people} />
       {state.phase === 'held' && state.held ? (
         <HeldChange held={state.held} text={() => editor.current?.getText() ?? ''} />
       ) : state.phase === 'capacity' ? (

@@ -27,7 +27,7 @@ import { publishCollabEvent } from '../collab/events.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { db } from '../db.ts';
 import { securityLogIn } from '../security-log.ts';
-import { notifyRemoved, notifyRoleChanged } from './access-notifications.ts';
+import { endRoleChanges, notifyRemoved, notifyRoleChanged } from './access-notifications.ts';
 import { mayAct, refusalOn, type CollaboratorAction } from './collaborator-rules.ts';
 import { COLLABORATOR_ROLE, type DocumentRole } from './permissions.ts';
 import { lockDocument, OFFERED, type OfferedRole } from './sharing.ts';
@@ -197,6 +197,8 @@ export async function leaveDocument(documentId: string, callerId: string): Promi
     if (count !== 1) return { outcome: 'not_found' };
     // The one who acts is the one who goes.
     await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
+    // No notification of a leave (the person's own act), and none of the changes of the role that ended.
+    await endRoleChanges(tx, callerId, documentId);
     return { outcome: 'left' };
   });
   if (done.outcome === 'left') await announce(documentId, callerId);

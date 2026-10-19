@@ -54,6 +54,7 @@ import {
   awarenessTooLong,
   AwarenessRate,
   isAwareness,
+  isQueryAwareness,
   CONNECTIONS_PER_DOCUMENT,
   displayNameOf,
   pinAwareness,
@@ -278,6 +279,8 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
   const speaking = new WeakMap<Connection<CollabContext>, ReadonlySet<number>>();
   // S14-5: the awareness messages each connection has sent in the last second (see `beforeHandleMessage`).
   const awarenessRates = new WeakMap<Connection<CollabContext>, AwarenessRate>();
+  // The connections whose place is held: those `tellPeople` counts (see `connected`).
+  const confirmed = new WeakSet<Connection<CollabContext>>();
   const pendingWaitMs = options.pendingWaitMs ?? PENDING_WAIT_MS;
   // The messages each user has sent this instance (see `beforeSync`).
   const takeMessage = limitHere(messages);
@@ -524,13 +527,22 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
    *
    * - Made editable: after the messages it has received, so that none that
    *   was not checked is applied. Where they have not been handled within
-   *   `pendingWaitMs` it is not made editable (the next look makes it).
+   *   `pendingWaitMs` it is not made editable: it waits for the next look,
+   *   which is the next event that names the connection or, at the latest, the
+   *   next re-check (up to 60 seconds, FR-ED-41).
    * - Made read-only (F14-2): after the messages it has received too, so that
    *   what the server had received while the person was an Editor is kept, as
-   *   a document that merged it before the change. Where they have not been
-   *   handled within `pendingWaitMs` it is made read-only all the same: the
+   *   a document that merged it before the change. The wait is for the
+   *   connection's queue to empty, so a message that arrives during it is
+   *   handled too, as the old role, up to the bound. Where the queue has not
+   *   emptied within `pendingWaitMs` it is made read-only all the same: the
    *   downgrade takes effect, and what still waits is discarded. After the
    *   flag turns the library applies nothing the connection sends.
+   *
+   * THE BUDGET of FR-ED-40's 5 seconds, for a change that an event announces:
+   * the sessions are read for at most 2 seconds, the access for at most 2, and
+   * this wait for at most 1 (`pendingWaitMs`). They add to 5, so a slow database
+   * and a connection that never stops sending together use all of it.
    */
   async function applySwitch(
     document: Document,
@@ -545,7 +557,10 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       if (!document.hasConnection(connection)) return;
       // A fresher decision was applied while this one waited for the messages in flight.
       if (decided.get(connection) !== reading) return;
-      if (!handled && !readOnly) return;
+      if (!handled && !readOnly) {
+        console.error('collab: an upgrade waits for the next look: the connection still holds messages');
+        return;
+      }
       if (!handled) console.error('collab: a downgrade did not wait for all the messages it had received');
     }
     const { role: was, permissions: held } = connection.context;
@@ -573,9 +588,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
   function tellPeople(document: Document): void {
     if (stopping) return;
     try {
-      const present = (document.getConnections() as Connection<CollabContext>[]).sort(
-        (a, b) => a.context.place.slot - b.context.place.slot,
-      );
+      // Only a connection whose place is held (the `connected` hook has run): one that is still being
+      // made has no place of its own yet, and may be closed at once if its place expired meanwhile.
+      const present = (document.getConnections() as Connection<CollabContext>[])
+        .filter((each) => confirmed.has(each))
+        .sort((a, b) => a.context.place.slot - b.context.place.slot);
       for (const to of present) {
         const mayKnow = to.context.permissions.includes('document.collaborators.view');
         const people: Person[] = present.map(({ context }) => ({
@@ -1037,6 +1054,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         connection.close({ code: 1000, reason: REFUSAL.UNAVAILABLE });
         return;
       }
+      confirmed.add(connection);
       connection.onClose((document) => {
         places.release(context.place);
         // The others are told that this connection is gone (FR-ED-17).
@@ -1147,14 +1165,23 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // runs for this same message: the connection's messages are handled one at a time.
       // An awareness message that does not read to its end speaks for no one (the library may
       // still decode it): the set of the message before is never the set of this one.
-      if (!isAwareness(update)) return;
+      const asks = isQueryAwareness(update);
+      if (!asks && !isAwareness(update)) return;
       // S14-5: a message past the limit of the connection speaks for no one either, so that
       // `beforeHandleAwareness` takes every state out of it and nothing goes on to any peer. It is
       // dropped and the connection is kept: the library offers no way to refuse one message but
       // by closing the connection, and a client that moves its cursor fast has done no wrong.
       let rate = awarenessRates.get(connection);
       if (!rate) awarenessRates.set(connection, (rate = new AwarenessRate()));
-      speaking.set(connection, rate.take() ? new Set(awarenessClients(update) ?? []) : new Set());
+      const within = rate.take();
+      // A request for everyone's awareness counts under the same limit, and the library can no more
+      // drop one: it builds the answer of every state for each. The client of this application
+      // sends none, so a connection past the limit with these is closed, and not one that moves its cursor.
+      if (asks) {
+        if (!within) throw {};
+        return;
+      }
+      speaking.set(connection, within ? new Set(awarenessClients(update) ?? []) : new Set());
     },
 
     /**

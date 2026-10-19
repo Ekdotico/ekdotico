@@ -647,6 +647,7 @@ describe('the notification of a change of role and of a removal (FR-ED-42, S15-2
         payload: { path: ['documentId'], equals: documentId },
       },
       select: { recipientId: true, kind: true, payload: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
   // Weakening: the notification not written, or written to the actor, or written outside the transaction.
@@ -675,10 +676,51 @@ describe('the notification of a change of role and of a removal (FR-ED-42, S15-2
     expect(await listFor(owner)).toEqual({ unread: 0, notifications: [] });
     expect(await listFor(viewer)).toEqual({ unread: 0, notifications: [] });
 
-    // And back: a second notification, newest first, each in the role it gave.
+    // And back: the new role takes the place of the old, which is no longer true (PR-10): one
+    // notification, in the role it gave, and no row of the first.
     expect((await change(owner.cookie, id, rows.editor, { role: 'editor' })).status).toBe(200);
     const again = await listFor(editor);
-    expect(again.notifications.map(({ role }) => role)).toEqual(['editor', 'viewer']);
+    expect(again.notifications.map(({ role }) => role)).toEqual(['editor']);
+    expect(await rowsFor(id)).toEqual([
+      { recipientId: editor.id, kind: 'role_changed', payload: { documentId: id, role: 'editor' } },
+    ]);
+  });
+
+  // Weakening: the earlier notifications of the role not taken away in the transaction of each change.
+  it('ends the notifications of a role when it is removed, when its holder leaves, and when it is given again, so that none comes back with a new invitation (PR-10)', async () => {
+    const { owner, editor, viewer, id, rows } = await three();
+    expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(200);
+    expect((await change(owner.cookie, id, rows.viewer, { role: 'editor' })).status).toBe(200);
+    expect(await rowsFor(id)).toHaveLength(2);
+
+    // Removed: the row of the change goes with the role; only the removal is left, and it is not undone by an invitation.
+    expect((await remove(owner.cookie, id, rows.editor)).status).toBe(200);
+    expect(await rowsFor(id)).toEqual([
+      { recipientId: viewer.id, kind: 'role_changed', payload: { documentId: id, role: 'editor' } },
+      { recipientId: editor.id, kind: 'removed', payload: { documentId: id } },
+    ]);
+    const again = await grant(id, editor, 'VIEWER');
+    expect((await listFor(editor)).notifications.map(({ kind }) => kind)).toEqual(['removed']);
+
+    // Leaving: the leaver's rows of the document go, and none is written for the leave.
+    expect((await leave(viewer.cookie, id)).status).toBe(204);
+    expect(await rowsFor(id)).toEqual([
+      { recipientId: editor.id, kind: 'removed', payload: { documentId: id } },
+    ]);
+    expect(await roleOf(again)).toBe('VIEWER');
+  });
+
+  it('does not touch another document’s notifications, or another person’s, when it ends one', async () => {
+    const { owner, editor, viewer, id, rows } = await three();
+    const other = await documentOf(owner);
+    const otherRow = await grant(other, editor, 'EDITOR');
+    expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(200);
+    expect((await change(owner.cookie, id, rows.viewer, { role: 'editor' })).status).toBe(200);
+    expect((await change(owner.cookie, other, otherRow, { role: 'viewer' })).status).toBe(200);
+    expect((await remove(owner.cookie, id, rows.editor)).status).toBe(200);
+    // The other document's change and the other person's are kept.
+    expect(await rowsFor(other)).toHaveLength(1);
+    expect((await rowsFor(id)).filter(({ recipientId }) => recipientId === viewer.id)).toHaveLength(1);
   });
 
   it('writes nothing where the role is the one held, and nothing for a leave', async () => {
@@ -777,6 +819,26 @@ describe('the notification of a change of role and of a removal (FR-ED-42, S15-2
     const DAY = 24 * 60 * 60 * 1000;
     expect(await listAccessNotifications(viewer.id, new Date(Date.now() + 29 * DAY))).toHaveLength(1);
     expect(await listAccessNotifications(viewer.id, new Date(Date.now() + 31 * DAY))).toEqual([]);
+  });
+
+  // Weakening: the timer's deletion left out, or taking the rows of a removal that is not yet 30 days old.
+  it('is deleted by the timer once it is 30 days old, and not before, and by no other timer run twice', async () => {
+    const { owner, viewer, id, rows } = await three();
+    expect((await remove(owner.cookie, id, rows.viewer)).status).toBe(200);
+    const { deleteExpiredRemovedNotifications } =
+      await import('../../src/lib/documents/access-notifications.ts');
+    const DAY = 24 * 60 * 60 * 1000;
+    expect(await deleteExpiredRemovedNotifications(new Date(Date.now() + 29 * DAY))).toBe(0);
+    expect(await rowsFor(id)).toHaveLength(1);
+    // Two instances at once: one deletes the row and the other finds none, and neither fails.
+    const run = new Date(Date.now() + 31 * DAY);
+    const counts = await Promise.all([
+      deleteExpiredRemovedNotifications(run),
+      deleteExpiredRemovedNotifications(run),
+    ]);
+    expect(counts.reduce((sum, count) => sum + count, 0)).toBeGreaterThanOrEqual(1);
+    expect(await rowsFor(id)).toEqual([]);
+    expect((await listFor(viewer)).notifications).toEqual([]);
   });
 
   it('is marked read by its recipient alone, and stays in the list as read', async () => {

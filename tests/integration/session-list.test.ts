@@ -371,6 +371,7 @@ describe('the removal of ended sessions (NFR-RE-15, FR-AU-84)', () => {
       'security-log-deletion',
       'ended-session-removal',
       'expired-token-removal',
+      'removed-notification-removal',
     ]);
     const { email, sessionId } = await person();
     const idle = await browser(email);

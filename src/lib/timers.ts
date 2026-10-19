@@ -1,5 +1,6 @@
 // The timers of the application (NFR-RE-15): scheduled work that is not a queue
 // job. Started once when a process starts.
+import { deleteExpiredRemovedNotifications } from './documents/access-notifications.ts';
 import { deleteExpiredDocuments } from './documents/deletion.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
@@ -24,6 +25,8 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // admission invitation 30 days on, is not built yet.
   'ended-session-removal': () => deleteEndedSessions(),
   'expired-token-removal': () => deleteExpiredTokens(),
+  // FR-ED-42 (register row PR-8): the notification of a removal stays 30 days.
+  'removed-notification-removal': () => deleteExpiredRemovedNotifications(),
 };
 
 function runTimers(): void {

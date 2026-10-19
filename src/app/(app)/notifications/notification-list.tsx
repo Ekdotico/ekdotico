@@ -36,11 +36,11 @@ function Statement({ notification }: { notification: NotificationItem }) {
     case 'role_changed':
       return (
         <>
-          Your role on <bdi>{notification.title}</bdi> is now {notification.role}.
+          Your role on <bdi>{notification.title}</bdi> was changed to {notification.role}.
         </>
       );
     case 'removed':
-      return <>You were removed from a document.</>;
+      return <>You no longer have access to a document.</>;
   }
 }
 

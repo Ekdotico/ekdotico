@@ -95,7 +95,7 @@ export class AwarenessRate {
 const AWARENESS_MESSAGE = 1;
 
 /** One number of the protocol (lib0's variable-length integer): its value and the offset after it, or null where the bytes end. */
-function varUint(bytes: Uint8Array, at: number): [value: number, next: number] | null {
+export function varUint(bytes: Uint8Array, at: number): [value: number, next: number] | null {
   let value = 0;
   for (let shift = 0; shift < 35; shift += 7) {
     const byte = bytes[at++];
@@ -117,6 +117,16 @@ export function awarenessTooLong(message: Uint8Array): boolean {
   if (!name) return false;
   const type = varUint(message, name[1] + name[0]);
   return type !== null && type[0] === AWARENESS_MESSAGE && message.length - type[1] > AWARENESS_MAX_BYTES;
+}
+
+// The type of a message that asks for the awareness of every client (`MessageType.QueryAwareness`).
+const QUERY_AWARENESS_MESSAGE = 3;
+
+/** Whether this message, as a client sent it, asks for the awareness of every client. */
+export function isQueryAwareness(message: Uint8Array): boolean {
+  const name = varUint(message, 0);
+  const type = name && varUint(message, name[1] + name[0]);
+  return !!type && type[0] === QUERY_AWARENESS_MESSAGE;
 }
 
 /** Whether this message, as a client sent it, is of the awareness type (and not whether it reads to its end). */
@@ -173,22 +183,6 @@ export function displayNameOf({ name, email }: { name: string | null; email: str
   if (!email) return '';
   const at = email.lastIndexOf('@');
   return at < 0 ? email : email.slice(0, at);
-}
-
-// A letter with the marks that follow it (an accent written as its own character), or a digit.
-const INITIAL = /\p{L}\p{M}*|\p{N}/u;
-
-/**
- * The letters of a person's picture in the row of the people present (the
- * owner's decision of 18 October 2026): the first letter of the first and of
- * the last word of the name, in capitals, or the first letter alone for a name
- * of one word. A whole character each, and not a byte or a half of a pair, as
- * the names are often Greek. A word with no letter or digit in it (a bracket,
- * an emoji) is passed over; a name with none gives ''.
- */
-export function initialsOf(name: string): string {
-  const letters = name.split(/\s+/u).flatMap((word) => INITIAL.exec(word)?.[0] ?? []);
-  return (letters.length > 1 ? [letters[0]!, letters.at(-1)!] : letters).join('').toLocaleUpperCase();
 }
 
 /** What every peer is told of a connection: who, and in which colour. Both are the server's. */
