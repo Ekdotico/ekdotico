@@ -572,6 +572,48 @@ describe('a reading never undoes a fresher one (FR-ED-40 (b), FR-ED-41)', () => 
   });
 });
 
+describe('two runs that decide the same change at once (FR-ED-40 (b), FR-ED-41)', () => {
+  // Weakening: the notice sent by each run that applies the switch, and not by the one that changes the connection.
+  it('tell the connection once, whichever applies the change', async () => {
+    const local = await inProcess();
+    try {
+      const { id, editor, rows, clients } = await three(local);
+      const connection = connectionOf(local, id, editor.id)!;
+      // The row says Viewer, and no one has told the server.
+      await db().documentCollaborator.update({ where: { id: rows.editor }, data: { role: 'VIEWER' } });
+
+      // Both runs, the re-check and the look an event asks for, read the Editor's access, and are held
+      // until both have read it: each then decides to switch the same connection.
+      const original = db().document.findUnique.bind(db().document) as (query: unknown) => Promise<unknown>;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let arrived = 0;
+      type Query = { where?: { id?: string }; include?: { collaborators?: { where?: { userId?: string } } } };
+      vi.spyOn(db().document, 'findUnique').mockImplementation((async (query: Query) => {
+        const result = await original(query);
+        if (query.where?.id === id && query.include?.collaborators?.where?.userId === editor.id) {
+          if (++arrived === 2) release();
+          await gate;
+        }
+        return result;
+      }) as never);
+      const run = local.recheck();
+      await forger.publish(
+        COLLAB_EVENTS_CHANNEL,
+        JSON.stringify({ kind: 'collaborator-changed', documentId: id, userId: editor.id }),
+      );
+      await until(() => arrived === 2);
+      await run;
+      await until(() => connection.readOnly);
+      await sleep(400);
+      expect(clients.editor.notices).toHaveLength(2);
+      expect(readRoleNotice(clients.editor.notices[1]!)).toEqual({ role: 'viewer', canEdit: false });
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
 describe('where the notice is lost (FR-ED-41: the re-check is the backstop)', () => {
   it('leaves the connection open until the re-check runs, which then closes it, and the removal stood meanwhile', async () => {
     const local = await inProcess();

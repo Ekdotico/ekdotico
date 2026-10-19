@@ -201,6 +201,25 @@ describe('changing a role (FR-ED-38)', () => {
     await until(() => heardFor(id).length === 2);
   });
 
+  // Weakening: the notice published inside the transaction, before the commit.
+  it('publishes only once the change is committed: what another connection reads of the row at that moment', async () => {
+    const { owner, editor, id, rows } = await three();
+    const publish = valkey().publish.bind(valkey());
+    const seen: (string | null)[] = [];
+    vi.spyOn(valkey(), 'publish').mockImplementation((async (...given: Parameters<typeof publish>) => {
+      seen.push(await roleOf(rows.editor));
+      seen.push(await roleOf(rows.viewer));
+      return publish(...given);
+    }) as never);
+    expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(200);
+    // The role is the new one; the row of the other collaborator is as it was.
+    expect(seen).toEqual(['VIEWER', 'VIEWER']);
+    expect((await remove(owner.cookie, id, rows.viewer)).status).toBe(200);
+    expect(seen.slice(2)).toEqual(['VIEWER', null]);
+    expect((await leave(editor.cookie, id)).status).toBe(204);
+    expect(seen.slice(4)).toEqual([null, null]);
+  });
+
   it('answers the role already held with a statement, and writes, logs and publishes nothing (S15-4)', async () => {
     const { owner, id, rows } = await three();
     const before = await db().documentCollaborator.findUniqueOrThrow({ where: { id: rows.viewer } });
