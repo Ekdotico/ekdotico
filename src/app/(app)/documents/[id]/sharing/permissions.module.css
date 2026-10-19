@@ -1,0 +1,44 @@
+/* The permission settings of a document (FR-ED-46): placement only. Every
+   control is the package's, and every value is one of its tokens, with no
+   fallback and no token declared (@ekdotico/domico AGENTS.md, rules 1 to 3).
+   The properties are logical ones (NFR-I18-07). The header of a row, its
+   hover, the scope and the hidden label of a checkbox are the package's, since
+   0.30.0 (register row S16-8). */
+
+/* The words of a cell that is not a checkbox: a kind, "Always" or "Never". They stay on a line, so that a column is as wide as its words. */
+.kind,
+.fixed {
+  white-space: nowrap;
+}
+
+.fixed {
+  font-weight: var(--fw-semi);
+  color: var(--fg-1);
+}
+
+/* A cell that holds a checkbox and the words said beside it. */
+.cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* What was said of the change: "Saved.", or why it was not. Text, so that no
+   state is shown by colour alone. It is a live region, so it is in the page
+   when it is empty, and takes no room until it holds words. */
+.note {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+
+.note:not(:empty) {
+  margin-inline-start: var(--sp-2);
+}
+
+/* The sentence that a row adds under its name. */
+.limit {
+  margin: var(--sp-1) var(--sp-0) var(--sp-0);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  color: var(--fg-3);
+}

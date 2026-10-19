@@ -12,7 +12,10 @@ import { sharingOf } from '../../../../../lib/documents/sharing.ts';
 import { reading } from '../../../../page-fault.ts';
 import styles from '../../../../pages.module.css';
 import { currentAccount, titled } from '../../../account.ts';
+import { Stack } from '@ekdotico/domico/components';
 import { LeaveDocument } from './collaborator-actions.tsx';
+import { PermissionSettings } from './permission-settings.tsx';
+import { permissionRows, RoleSummary } from './permission-rows.tsx';
 import { SharingSettings } from './sharing-settings.tsx';
 
 export const generateMetadata = () => titled('Sharing');
@@ -31,12 +34,21 @@ export default async function Sharing({ params }: { params: Promise<{ id: string
   const { document, role } = access;
   // FR-ED-38: the Owner cannot leave; every other role may, whatever the permission set shows of the people.
   const mayLeave = holds(document.permissionSet, role, 'document.leave');
+  // FR-ED-46: the Owner sees the table of the set; any other role is told in words what it holds and
+  // may do, with no control over the set. Whatever the set shows of the people.
+  const permissions =
+    role === 'owner' ? (
+      <PermissionSettings documentId={document.id} rows={permissionRows(document.permissionSet)} />
+    ) : (
+      <RoleSummary stored={document.permissionSet} role={role} />
+    );
   if (!holds(document.permissionSet, role, 'document.collaborators.view')) {
     return (
-      <>
+      <Stack gap={6}>
         <p className={styles.text}>{NOT_SHOWN}</p>
+        {permissions}
         {mayLeave ? <LeaveDocument documentId={document.id} /> : null}
-      </>
+      </Stack>
     );
   }
   const sharing = await reading(() => sharingOf(document, role, userId));
@@ -44,6 +56,8 @@ export default async function Sharing({ params }: { params: Promise<{ id: string
   const remove = mayAct(document.permissionSet, role, 'remove');
   return (
     <SharingSettings
+      // FR-ED-46: the screen of the permission set is part of the sharing settings.
+      section={permissions}
       view={{
         documentId: document.id,
         people: sharing.people,

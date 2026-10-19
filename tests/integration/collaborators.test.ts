@@ -494,6 +494,9 @@ describe('leaving a document (FR-ED-38)', () => {
     // Weakening: the permission of the Owner read as held.
     const owned = await leave(owner.cookie, id);
     expect(owned.status).toBe(403);
+    expect((await owned.clone().json()).error.message).toBe(
+      'You are the Owner. You must transfer ownership before leaving.',
+    );
     expect(await code(owned)).toBe('forbidden');
     expect((await db().document.findUniqueOrThrow({ where: { id } })).ownerId).toBe(owner.id);
     expect(await logged(id)).toHaveLength(3);

@@ -24,7 +24,7 @@ const REMOVE_CANCEL_ID = 'remove-cancel';
 const LEAVE_CANCEL_ID = 'leave-cancel';
 
 /** The package's `Button` takes no ref (reported), so a dialog opens on Cancel by finding it by its id. */
-function useCancel(id: string) {
+export function useCancel(id: string) {
   return useMemo(
     () => ({
       get current() {

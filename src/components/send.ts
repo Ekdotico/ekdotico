@@ -29,7 +29,7 @@ const NOT_READ =
 export async function send(
   path: string,
   body?: unknown,
-  method: 'POST' | 'PATCH' | 'DELETE' = 'POST',
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'POST',
 ): Promise<Fault | null> {
   const sent = await sendFor(path, body, method);
   return 'fault' in sent ? sent.fault : null;
@@ -39,7 +39,7 @@ export async function send(
 export async function sendFor(
   path: string,
   body?: unknown,
-  method: 'POST' | 'PATCH' | 'DELETE' = 'POST',
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'POST',
 ): Promise<{ fault: Fault } | { answer: unknown }> {
   let response: Response;
   try {

@@ -5,7 +5,6 @@
 //
 // Nothing here reads the database or is of Next.js.
 import { holds, PERMISSIONS, type DocumentRole, type Permission } from '../documents/permissions.ts';
-
 /**
  * NFR-SE-03 (a): "the user, the document, the user's document-level role and
  * the permissions that role holds on the document, and the identifier of the
@@ -36,6 +35,11 @@ export function recordConnection(
     ),
     sessionId: session.sessionId,
   };
+}
+
+/** Whether two lists of permissions are the same, in order: `recordConnection` writes them in the order of the table. */
+export function sameList(a: readonly Permission[], b: readonly Permission[]): boolean {
+  return a.length === b.length && a.every((permission, at) => permission === b[at]);
 }
 
 /**

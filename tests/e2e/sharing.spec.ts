@@ -296,7 +296,8 @@ test('an Editor who is given the permissions acts on a Viewer, and is offered no
   await accept(dans!, dan.email, id);
   await accept(cys!, cy.email, id);
 
-  // The Owner gives Editors the permission, in the database of the run: the screen that gives it is slice 16.
+  // The Owner gives Editors the permission, in the database of the run. The screen that gives it is
+  // tested in tests/e2e/permissions.spec.ts; here it would be one more page to drive and wait for.
   setPermissions(id, ['document.collaborators.roles', 'document.collaborators.remove']);
   await beas!.goto(`/documents/${id}/sharing`);
   await expect(beas!.getByText('4 of 10 people')).toBeVisible();

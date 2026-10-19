@@ -25,6 +25,19 @@ describe('the events a message holds', () => {
       kind: 'session-ended',
       userId: USER,
     });
+    // FR-ED-40 (g): a change of a document's permission set names the document and no one.
+    expect(readEvent(`{"kind":"permission-set-changed","documentId":"${DOCUMENT}"}`)).toEqual({
+      kind: 'permission-set-changed',
+      documentId: DOCUMENT,
+    });
+  });
+
+  it('carries no user, and nothing of the set, in a change of the permission set', () => {
+    const read = readEvent(
+      `{"kind":"permission-set-changed","documentId":"${DOCUMENT}","userId":"${USER}","set":{"document.rename":{"editor":true}}}`,
+    );
+    expect(read).toEqual({ kind: 'permission-set-changed', documentId: DOCUMENT });
+    expect(Object.keys(read!)).toEqual(['kind', 'documentId']);
   });
 
   it('carries nothing a message holds beyond the fields of its kind', () => {
@@ -50,6 +63,15 @@ describe('the events a message holds', () => {
     ],
     ['a change of a collaborator without its document', `{"kind":"collaborator-changed","userId":"${USER}"}`],
     ['a session that ended without its user', '{"kind":"session-ended"}'],
+    ['a change of the permission set without its document', '{"kind":"permission-set-changed"}'],
+    [
+      'a change of the permission set for a document that is not an identifier',
+      '{"kind":"permission-set-changed","documentId":"x"}',
+    ],
+    [
+      'a change of the permission set for a document written in capitals',
+      `{"kind":"permission-set-changed","documentId":"${DOCUMENT.toUpperCase()}"}`,
+    ],
     [
       'a document that is not an identifier',
       `{"kind":"collaborator-changed","documentId":"x","userId":"${USER}"}`,

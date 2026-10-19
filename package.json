@@ -27,7 +27,7 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@ekdotico/domico": "0.29.0",
+    "@ekdotico/domico": "0.30.0",
     "@hocuspocus/provider": "4.7.0",
     "@hocuspocus/server": "4.7.0",
     "@prisma/adapter-pg": "7.10.0",

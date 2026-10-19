@@ -392,6 +392,59 @@ describe('a document at its limit of ten connections (FR-ED-18, NFR-PE-05)', () 
   });
 });
 
+describe('the permissions of the role of an open connection change (FR-ED-40 (g))', () => {
+  const permissions = (role: unknown) => JSON.stringify({ kind: 'permissions', role });
+
+  it('is kept in the state, counted so that each is stated, and changes nothing else of the connection', async () => {
+    const { connection, socket } = await opened();
+    expect(connection.getState().permissions).toBeUndefined();
+    const before = connection.getState();
+    socket.receive(stateless(permissions('editor')));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().permissions).toEqual({ role: 'editor', changes: 1 });
+    socket.receive(stateless(permissions('editor')));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().permissions).toEqual({ role: 'editor', changes: 2 });
+    // Nothing is closed, switched, or said of the role, and no request for the server's state is made.
+    expect(connection.getState()).toMatchObject({
+      phase: before.phase,
+      canEdit: before.canEdit,
+      opened: true,
+    });
+    expect(connection.getState().notice).toBeUndefined();
+    expect(asks(socket)).toHaveLength(0);
+    connection.stop();
+  });
+
+  it('is taken away when the role changes: the statement of the new role says what it may do', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(permissions('editor')));
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(stateless(JSON.stringify({ kind: 'role', role: 'viewer', canEdit: false })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().permissions).toBeUndefined();
+    expect(connection.getState().notice).toEqual({ role: 'viewer', canEdit: false });
+    connection.stop();
+  });
+
+  it.each([
+    ['text that is not JSON', 'not json'],
+    ['another kind', JSON.stringify({ kind: 'other', role: 'editor' })],
+    ['a role that is not one', permissions('king')],
+    ['no role', JSON.stringify({ kind: 'permissions' })],
+    ['a field more', JSON.stringify({ kind: 'permissions', role: 'editor', permissions: [] })],
+    ['an array', '[1]'],
+    ['null', 'null'],
+  ])('is ignored where it is %s', async (_, payload) => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(payload));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().permissions).toBeUndefined();
+    expect(connection.getState().phase).toBe('connected');
+    connection.stop();
+  });
+});
+
 describe('the role of an open connection changes (FR-ED-40 (b), FR-ED-41)', () => {
   const notice = (role: string, canEdit: unknown) => JSON.stringify({ kind: 'role', role, canEdit });
 

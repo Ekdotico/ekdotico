@@ -167,6 +167,35 @@ export function roleNotice({ role, canEdit }: RoleNotice): string {
 }
 
 /**
+ * FR-ED-40 (g): the permissions of the role of an open connection changed, and
+ * the connection stays as it is. The server sends it where the role did not
+ * change and the permissions it holds on this document did: a change of role
+ * is told by the notice above. The client states that the permissions of the
+ * role have changed. It carries the role and nothing of the set.
+ */
+export interface PermissionsNotice {
+  role: DocumentRole;
+}
+
+export function permissionsNotice({ role }: PermissionsNotice): string {
+  return JSON.stringify({ kind: 'permissions', role });
+}
+
+/** The notice of `permissionsNotice`, or null for anything else, read field by field as the role notice is. */
+export function readPermissionsNotice(payload: string): PermissionsNotice | null {
+  let read: unknown;
+  try {
+    read = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (typeof read !== 'object' || read === null || Array.isArray(read)) return null;
+  const { kind, role, ...rest } = read as Record<string, unknown>;
+  if (kind !== 'permissions' || Object.keys(rest).length > 0) return null;
+  return (ROLES as readonly unknown[]).includes(role) ? { role: role as DocumentRole } : null;
+}
+
+/**
  * The notice a stateless message holds, or null for anything else: text that
  * is not JSON, another kind, a role that is not one, a field more or fewer.
  * Read field by field. A client sends this server nothing of the kind and no

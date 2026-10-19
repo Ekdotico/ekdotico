@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   Button,
   Cluster,
@@ -60,7 +60,7 @@ const ROLES = [
  * the server's, shown as it is given; the list is read again after each.
  * Text for a person (plan Q6; docs/plan/slice-13.md, §5).
  */
-export function SharingSettings({ view }: { view: SharingView }) {
+export function SharingSettings({ view, section }: { view: SharingView; section?: ReactNode }) {
   const router = useRouter();
   const ready = useReady();
   const [emails, setEmails] = useState('');
@@ -274,6 +274,8 @@ export function SharingSettings({ view }: { view: SharingView }) {
           </Stack>
         </>
       ) : null}
+
+      {section}
 
       {view.mayLeave ? <LeaveDocument documentId={view.documentId} /> : null}
     </Stack>
