@@ -31,7 +31,8 @@ const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { defaultPermissionSet } = await import('../../src/lib/documents/permissions.ts');
 const { deleteDocument } = await import('../../src/lib/documents/deletion.ts');
 const { lockDocument } = await import('../../src/lib/documents/sharing.ts');
-const { answerOffer, deliverOffer, expireOffers } = await import('../../src/lib/documents/ownership.ts');
+const { answerOffer, deliverOffer, deliverUnsentOffers, expireOffers } =
+  await import('../../src/lib/documents/ownership.ts');
 const { COLLAB_EVENTS_CHANNEL } = await import('../../src/lib/collab/events.ts');
 const offering = await import('../../src/app/api/documents/[id]/ownership-offer/route.ts');
 const answering = await import('../../src/app/api/ownership-offers/[offerId]/[answer]/route.ts');
@@ -446,7 +447,7 @@ describe('offering ownership (FR-ED-47)', () => {
     expect(recorded.status).toBe(409);
     expect(await code(recorded)).toBe('not_transferable');
     expect(await message(recorded)).toBe(
-      'No offer was made. This document cannot be transferred in this release.',
+      'No offer was made. This document cannot be transferred in this release. You stay its Owner.',
     );
     await db().document.update({ where: { id }, data: { recording: 'UNRECORDED' } });
 
@@ -1115,6 +1116,26 @@ describe('what authorises an answer is read again under the lock of the document
     expect((await standing(id)).ownerId).toBe(owner.id);
   });
 
+  // Weakening: the time read before the wait for the row.
+  it('an acceptance that waited for the row past the offer’s time is refused', async () => {
+    const { owner, editor, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    const made = await offerOf(id);
+    await db().ownershipOffer.update({
+      where: { id: made.id },
+      data: { expiresAt: new Date(Date.now() + 1500) },
+    });
+    const response = await holding(
+      id,
+      () => accept(editor.cookie, made.id),
+      // Still holding the row, past the time of the offer.
+      async () => void (await sleep(2200)),
+    );
+    expect(response.status).toBe(404);
+    expect(await code(response)).toBe('no_longer_open');
+    expect((await standing(id)).ownerId).toBe(owner.id);
+  });
+
   it('an acceptance meets a document that was deleted while it waited', async () => {
     const { owner, editor, id, row } = await pair();
     expect((await offer(owner.cookie, id, row)).status).toBe(201);
@@ -1151,6 +1172,132 @@ describe('what authorises an answer is read again under the lock of the document
     );
     expect(response.status).toBe(403);
     expect((await offerOf(id)).state).toBe('ACCEPTED');
+  });
+});
+
+// ── The email, with the timer as its backstop ───────────────────────────────
+
+describe('the email of an offer: after the response, and by the timer where that did not happen (NFR-RE-15; S17-6)', () => {
+  const sunkFor = async (address: string) => (await mail()).filter(({ to }) => to === address);
+
+  // Weakening: no timer, or a timer that sends without the claim.
+  it('sends an open offer that nothing sent, once, and sends it no more', async () => {
+    const { owner, editor, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    // The process stopped between the commit and the hand-over: what the response left is lost.
+    later.length = 0;
+    expect((await offerOf(id)).emailClaimedAt).toBeNull();
+    expect(await sunkFor(editor.email)).toHaveLength(0);
+    expect(await deliverUnsentOffers()).toBe(0);
+    expect(await sunkFor(editor.email)).toHaveLength(1);
+    expect((await offerOf(id)).emailClaimedAt).not.toBeNull();
+    expect(await deliverUnsentOffers()).toBe(0);
+    expect(await sunkFor(editor.email)).toHaveLength(1);
+  });
+
+  it('sends one where the hand-over after the response and the timer race, and two timers at once', async () => {
+    for (let round = 0; round < 4; round++) {
+      const { owner, editor, id, row } = await pair();
+      expect((await offer(owner.cookie, id, row)).status).toBe(201);
+      await Promise.all([afterResponses(), deliverUnsentOffers(), deliverUnsentOffers()]);
+      expect(await sunkFor(editor.email), String(round)).toHaveLength(1);
+    }
+  });
+
+  it('sends nothing for an offer that was sent, expired or withdrawn', async () => {
+    const sent = await pair();
+    expect((await offer(sent.owner.cookie, sent.id, sent.row)).status).toBe(201);
+    await afterResponses();
+    const expired = await pair();
+    expect((await offer(expired.owner.cookie, expired.id, expired.row)).status).toBe(201);
+    await db().ownershipOffer.updateMany({
+      where: { documentId: expired.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    const withdrawn = await pair();
+    expect((await offer(withdrawn.owner.cookie, withdrawn.id, withdrawn.row)).status).toBe(201);
+    expect((await withdraw(withdrawn.owner.cookie, withdrawn.id)).status).toBe(200);
+    later.length = 0;
+    await deliverUnsentOffers();
+    for (const each of [sent, expired, withdrawn]) {
+      expect(await sunkFor(each.editor.email)).toHaveLength(each === sent ? 1 : 0);
+    }
+  });
+});
+
+// ── The former Owner's address (S17-12) ─────────────────────────────────────
+
+describe('inviting the address of a former Owner (FR-ED-37; S17-12)', () => {
+  it('is refused to the Owner as an address of a person who already holds a role, and nothing is created', async () => {
+    const { owner, editor, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    expect((await accept(editor.cookie, (await offerOf(id)).id)).status).toBe(200);
+    const { POST } = await import('../../src/app/api/documents/[id]/invitations/route.ts');
+    const asked = (cookie: string, email: string) =>
+      POST(
+        request('POST', `/api/documents/${id}/invitations`, cookie, { emails: [email], role: 'viewer' }),
+        at({ id }),
+      );
+    // Weakening: the refusal keyed on an accepted invitation alone.
+    const refused = await asked(editor.cookie, owner.email);
+    expect(refused.status).toBe(409);
+    expect(await code(refused)).toBe('collaborator_address');
+    expect(await db().documentInvitation.count({ where: { documentId: id } })).toBe(0);
+    // An address that holds no role is invited as before.
+    expect((await asked(editor.cookie, 'someone@example.com')).status).toBe(201);
+  });
+});
+
+// ── The conflict on the index of one pending offer ──────────────────────────
+
+describe('the index of one pending offer, met by an offer that the check did not see', () => {
+  // Weakening: the catch of the conflict left out, which answers a 500.
+  it('answers 409 offer_pending and leaves no offer', async () => {
+    const { owner, id, row } = await pair();
+    // A pending offer that appears as the offer is written, which the check before it could not have seen.
+    database.sql(
+      `CREATE FUNCTION shadow_for_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+         INSERT INTO "ekdotico"."OwnershipOffer" ("id", "documentId", "fromUserId", "toUserId", "expiresAt")
+         VALUES ('shadow-' || NEW."id", NEW."documentId", NEW."toUserId", NEW."fromUserId", NEW."expiresAt");
+         RETURN NEW; END $$;
+       CREATE TRIGGER shadow_for_test BEFORE INSERT ON "OwnershipOffer" FOR EACH ROW WHEN (NEW."id" NOT LIKE 'shadow-%') EXECUTE FUNCTION shadow_for_test();`,
+    );
+    try {
+      const response = await offer(owner.cookie, id, row);
+      expect(response.status).toBe(409);
+      expect(await code(response)).toBe('offer_pending');
+    } finally {
+      database.sql(`DROP TRIGGER shadow_for_test ON "OwnershipOffer"; DROP FUNCTION shadow_for_test();`);
+    }
+    expect(await offersOf(id)).toEqual([]);
+    expect(
+      await notificationsFor(
+        (await db().documentCollaborator.findUniqueOrThrow({ where: { id: row } })).userId,
+      ),
+    ).toEqual([]);
+  });
+});
+
+// ── The delete that a transfer overtook ─────────────────────────────────────
+
+describe('a deletion authorised before a transfer', () => {
+  it('is answered by a logged 403 to the former Owner, and the document is not deleted', async () => {
+    const { owner, editor, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    const document = await import('../../src/app/api/documents/[id]/route.ts');
+    const response = await holding(
+      id,
+      () => document.DELETE(request('DELETE', `/api/documents/${id}`, owner.cookie), at({ id })),
+      async (tx) => {
+        await tx.documentCollaborator.delete({ where: { id: row } });
+        await tx.document.update({ where: { id }, data: { ownerId: editor.id } });
+        await tx.documentCollaborator.create({ data: { documentId: id, userId: owner.id, role: 'EDITOR' } });
+      },
+    );
+    expect(response.status).toBe(403);
+    expect(await message(response)).toBe('Only the Owner of the document can do this.');
+    expect((await db().document.findUniqueOrThrow({ where: { id } })).deletedAt).toBeNull();
+    expect((await logged(id)).at(-1)).toEqual({ kind: 'forbidden', userId: owner.id });
   });
 });
 

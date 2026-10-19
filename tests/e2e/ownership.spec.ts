@@ -10,9 +10,9 @@ import { expectNoSidewaysScroll, mailFor, newPerson, screens, signUp, type Perso
 import { accept, CONFIRMATION, invite, personRow, shareNew } from './sharing.ts';
 
 const NO_LONGER_OPEN =
-  'This offer is no longer open. It was accepted, declined, or withdrawn, or it expired.';
+  'This offer is no longer open. The Editor accepted or declined it, the Owner withdrew it, or it expired. Open your notifications to see the offers that are open.';
 const NOT_OPEN_TO_ACCOUNT =
-  'This offer is not open to this account. An offer of ownership can be accepted only by the Editor it was made to.';
+  'This offer is not open to this account. Only the Editor it was made to can accept it. Open your notifications to see the offers made to you.';
 const OFFERED = 'Ada Owner offered you ownership of Untitled document.';
 const SENTENCE =
   'Offer ownership of this document to one of its Editors. Ownership changes only when they accept. If they accept, they become the Owner, you become an Editor, and the document moves to their personal workspace.';
@@ -82,7 +82,7 @@ test('the Owner offers ownership from the sharing settings, the Editor declines,
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
   await expect(dialog).toContainText('Bea Editor');
   await expect(dialog).toContainText(
-    'This Editor will be asked to accept ownership of this document. You stay the Owner until they accept. If they accept, they become the Owner, you become an Editor, and the document moves to their personal workspace. Everything else stays as it is. The offer is open for 14 days.',
+    'You are asking this Editor to accept ownership of this document. You stay the Owner until they accept. If they accept, they become the Owner, you become an Editor, and the document moves to their personal workspace. Everything else stays as it is. The offer is open for 14 days.',
   );
   await screens(page, 'transfer-confirmation');
   await dialog.getByRole('button', { name: 'Cancel' }).click();

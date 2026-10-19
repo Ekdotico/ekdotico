@@ -140,8 +140,7 @@ async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
  * NFR-RE-15: the expiry of offers, on a timer of the application. Writes every
  * pending offer past its time expired and deletes its notification (FR-ED-42:
  * the notification stays "until the offer is no longer pending"). Idempotent;
- * a second instance finds nothing. Answers how many notifications it deleted,
- * which is what the timer says it deleted.
+ * a second instance finds nothing. Answers how many offers it expired.
  */
 export async function expireOffers(now: Date = new Date()): Promise<number> {
   return db().$transaction(async (tx) => {
@@ -151,8 +150,8 @@ export async function expireOffers(now: Date = new Date()): Promise<number> {
       select: { id: true },
     });
     if (ended.length === 0) return 0;
-    const { count } = await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
-    return count;
+    await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
+    return ended.length;
   });
 }
 
@@ -346,6 +345,25 @@ export async function deliverOffer(
   }
 }
 
+/**
+ * NFR-RE-15: "the email of an offer of ownership", on a timer of the application, as the backstop of
+ * the hand-over after the response (register row S17-6): a process that stopped between the commit and
+ * `after` left its offer with no claim, and the timer hands it over. The claim of `deliverOffer` keeps
+ * it to one email whichever of the two comes first, and on two instances. Answers 0, since a timer
+ * says what it deleted and this deletes nothing; a failure is the line of `deliverOffer`.
+ */
+export async function deliverUnsentOffers(
+  send: (message: EmailMessage) => Promise<void> = sendEmail,
+  now: Date = new Date(),
+): Promise<number> {
+  const unsent = await db().ownershipOffer.findMany({
+    where: { emailClaimedAt: null, ...open(now) },
+    select: { id: true },
+  });
+  for (const { id } of unsent) await deliverOffer(id, send);
+  return 0;
+}
+
 // ── Answering ───────────────────────────────────────────────────────────────
 
 export type OfferView =
@@ -442,17 +460,19 @@ export async function answerOffer(
   userId: string,
   offerId: string,
   answer: 'accept' | 'decline',
-  now: Date = new Date(),
+  given?: Date,
 ): Promise<AnswerResult> {
   const done = await db().$transaction(async (tx): Promise<AnswerResult & { from?: string }> => {
-    const first = await judge(tx, userId, offerId, now);
+    const first = await judge(tx, userId, offerId, given ?? new Date());
     const documentId = first.offer?.documentId ?? first.stale;
     if (!documentId) {
       const { outcome } = first.view;
       return outcome === 'accepted' ? { outcome: 'no_longer_open' } : (first.view as AnswerResult);
     }
     if (!(await lockDocument(tx, documentId))) return { outcome: 'no_longer_open' };
-    // Again, under the row: what was read a moment ago may have been decided since.
+    // Again, under the row: what was read a moment ago may have been decided since. The time is read
+    // here, after the wait for the row, so that an acceptance that waited cannot pass the offer's time.
+    const now = given ?? new Date();
     const judged = await judge(tx, userId, offerId, now);
     if (!judged.offer) {
       if (judged.stale) await settle(tx, documentId, now);
@@ -534,15 +554,24 @@ export async function listOfferNotifications(
           id: { in: ids },
           toUserId: userId,
           ...open(now),
-          document: { deletedAt: null, collaborators: { some: { userId, role: 'EDITOR' } } },
+          document: {
+            deletedAt: null,
+            recording: 'UNRECORDED',
+            workspace: { type: 'PERSONAL' },
+            collaborators: { some: { userId, role: 'EDITOR' } },
+          },
         },
         select: {
           id: true,
+          fromUserId: true,
           from: { select: { name: true, email: true } },
-          document: { select: { title: true } },
+          document: { select: { title: true, ownerId: true } },
         },
       })
-    ).map((offer) => [offer.id, offer]),
+    )
+      // As the page of the offer judges it: the maker is still the Owner (the one thing a where cannot say).
+      .filter((offer) => offer.document.ownerId === offer.fromUserId)
+      .map((offer) => [offer.id, offer]),
   );
   const notifications = rows.flatMap((row) => {
     const offerId = (row.payload as { offerId?: string }).offerId ?? '';

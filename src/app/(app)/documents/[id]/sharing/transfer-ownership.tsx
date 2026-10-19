@@ -57,6 +57,12 @@ export function TransferOwnership({
   // The person chosen, as the list now holds them: an Editor removed meanwhile is no longer chosen.
   const person = editors.find(({ id }) => id === chosen) ?? editors[0];
 
+  // A refusal shown in the dialog stays in the dialog: closing it clears it, so that it is not stated again outside.
+  function close() {
+    setOpen(false);
+    setFault(null);
+  }
+
   async function offerOwnership() {
     if (!person) return;
     setPending(true);
@@ -154,7 +160,7 @@ export function TransferOwnership({
 
       <Dialog
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={close}
         title="Offer ownership"
         aria-describedby="offer-name offer-statement"
         initialFocusRef={cancel}
@@ -170,7 +176,7 @@ export function TransferOwnership({
             </p>
           </Stack>
           <p id="offer-statement" className={styles.text}>
-            This Editor will be asked to accept ownership of this document. You stay the Owner until they
+            You are asking this Editor to accept ownership of this document. You stay the Owner until they
             accept. If they accept, they become the Owner, you become an Editor, and the document moves to
             their personal workspace. Everything else stays as it is. The offer is open for {days}{' '}
             {days === 1 ? 'day' : 'days'}.
@@ -183,7 +189,7 @@ export function TransferOwnership({
             >
               Offer ownership
             </Button>
-            <Button id={CANCEL_ID} onClick={() => setOpen(false)}>
+            <Button id={CANCEL_ID} onClick={close}>
               Cancel
             </Button>
           </Cluster>

@@ -14,6 +14,7 @@
 // NFR-SE-19: nothing here logs an address, a name, or a token. The token
 // leaves this module once, inside the email.
 import { Prisma, type DocumentRole as StoredRole } from '../../generated/prisma/client.ts';
+import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
@@ -176,6 +177,18 @@ async function creating(
       select: { email: true },
     });
     if (accepted?.email) return { outcome: 'collaborator_address', email: accepted.email };
+    // FR-ED-47, register row S17-12: a former Owner holds a role through an accepted transfer, not through an
+    // invitation, and is as well known to the Owner as the people above.
+    const transferred = await tx.ownershipOffer.findMany({
+      where: {
+        documentId: document.id,
+        state: 'ACCEPTED',
+        fromUserId: { in: collaborators.map(({ userId }) => userId) },
+      },
+      select: { from: { select: { email: true } } },
+    });
+    const former = transferred.map(({ from }) => from.email).find((email) => email && emails.includes(email));
+    if (former) return { outcome: 'collaborator_address', email: former };
   }
 
   // A row still stored pending past its expiry is written as expired, so
@@ -535,10 +548,10 @@ export async function sharingOf(
   now: Date = new Date(),
 ): Promise<Sharing> {
   const [owner, collaborators, pending] = await Promise.all([
-    db().user.findUnique({ where: { id: document.ownerId }, select: { name: true } }),
+    db().user.findUnique({ where: { id: document.ownerId }, select: { name: true, email: true } }),
     db().documentCollaborator.findMany({
       where: { documentId: document.id },
-      select: { id: true, role: true, userId: true, user: { select: { name: true } } },
+      select: { id: true, role: true, userId: true, user: { select: { name: true, email: true } } },
       orderBy: [{ addedAt: 'asc' }, { id: 'asc' }],
     }),
     db().documentInvitation.findMany({
@@ -550,10 +563,10 @@ export async function sharingOf(
   const sharing: Sharing = {
     people: 1 + collaborators.length + pending.length,
     limit: PEOPLE_MOST,
-    owner: { name: owner?.name ?? '' },
+    owner: { name: owner ? displayNameOf(owner) : '' },
     collaborators: collaborators.map((row) => ({
       id: row.id,
-      name: row.user.name ?? '',
+      name: displayNameOf(row.user),
       role: COLLABORATOR_ROLE[row.role],
       // The account's identifier is read to say this, and goes no further.
       self: row.userId === callerId,

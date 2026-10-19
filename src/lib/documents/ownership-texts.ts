@@ -10,8 +10,9 @@ export const OFFER_TITLE = 'Offer of ownership';
 export const OFFER_STATEMENTS = {
   // The neutral statement of an offer that is not this account's, or does not exist (docs/plan/slice-17.md, S13-3's rule).
   notOpenToAccount:
-    'This offer is not open to this account. An offer of ownership can be accepted only by the Editor it was made to.',
-  noLongerOpen: 'This offer is no longer open. It was accepted, declined, or withdrawn, or it expired.',
+    'This offer is not open to this account. Only the Editor it was made to can accept it. Open your notifications to see the offers made to you.',
+  noLongerOpen:
+    'This offer is no longer open. The Editor accepted or declined it, the Owner withdrew it, or it expired. Open your notifications to see the offers that are open.',
   declined: 'Offer declined.',
   noSuchAction: 'There is no such action.',
 };
@@ -25,7 +26,8 @@ export const OFFER_MESSAGES = {
     'No offer was made. Ownership can be offered only to a collaborator who holds the Editor role.',
   pending:
     'No offer was made. An offer of ownership is already open for this document. Withdraw it to offer ownership to someone else.',
-  notTransferable: 'No offer was made. This document cannot be transferred in this release.',
+  notTransferable:
+    'No offer was made. This document cannot be transferred in this release. You stay its Owner.',
   noSuchCollaborator:
     'This person is not a collaborator on this document. Reload the page to see the people.',
   noOpenOffer:

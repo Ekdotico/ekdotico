@@ -133,6 +133,8 @@ const FORBIDDEN_FOR: Partial<Record<Permission, string>> = {
   'document.permissions.edit': ONLY_OWNER,
   // The owner's decision of 19 October 2026 (S16-7) names two; this slice adds the third permission that no one can give (S17-11).
   'document.ownership.transfer': ONLY_OWNER,
+  // The same, for the deletion that a transfer overtook (register row S17-11).
+  'document.delete': ONLY_OWNER,
   'document.leave': OWNER_LEAVE,
 };
 
