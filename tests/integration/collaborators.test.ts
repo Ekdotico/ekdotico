@@ -21,6 +21,8 @@ const collection = await import('../../src/app/api/documents/route.ts');
 const people = await import('../../src/app/api/documents/[id]/collaborators/route.ts');
 const one = await import('../../src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts');
 const leaving = await import('../../src/app/api/documents/[id]/leave/route.ts');
+const notifications = await import('../../src/app/api/notifications/route.ts');
+const notification = await import('../../src/app/api/notifications/[id]/route.ts');
 const byId = await import('../../src/app/api/invitations/received/[invitationId]/[answer]/route.ts');
 
 // ── Valkey: what is published ───────────────────────────────────────────────
@@ -619,6 +621,195 @@ describe('the request (NFR-SE-17 (c), NFR-SE-02, NFR-SE-19)', () => {
     expect(((await seen(owner)) as { self: boolean }[]).every(({ self }) => !self)).toBe(true);
     const text = JSON.stringify(await (await peopleOf(owner.cookie, id)).json());
     for (const who of [owner, editor, viewer]) expect(text).not.toContain(who.id);
+  });
+});
+
+// ── The notification of the person affected (FR-ED-42; S15-2) ───────────────
+
+describe('the notification of a change of role and of a removal (FR-ED-42, S15-2)', () => {
+  type Listed = {
+    kind: string;
+    id: string;
+    read: boolean;
+    title?: string;
+    role?: string;
+    documentId?: string;
+  };
+  const listFor = async (who: Person) =>
+    (await (await notifications.GET(request('GET', '/api/notifications', who.cookie))).json()) as {
+      unread: number;
+      notifications: Listed[];
+    };
+  const rowsFor = (documentId: string) =>
+    db().notification.findMany({
+      where: {
+        kind: { in: ['role_changed', 'removed'] },
+        payload: { path: ['documentId'], equals: documentId },
+      },
+      select: { recipientId: true, kind: true, payload: true },
+    });
+
+  // Weakening: the notification not written, or written to the actor, or written outside the transaction.
+  it('tells the person whose role it is, in the transaction of the change, and no one else, the Owner who acted least', async () => {
+    const { owner, editor, viewer, id, rows } = await three();
+    await db().document.update({ where: { id }, data: { title: 'Thesis, chapter two' } });
+
+    expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(200);
+    // The payload holds identifiers and the role, never the title or a name (FR-ED-42).
+    expect(await rowsFor(id)).toEqual([
+      { recipientId: editor.id, kind: 'role_changed', payload: { documentId: id, role: 'viewer' } },
+    ]);
+    const told = await listFor(editor);
+    expect(told.unread).toBe(1);
+    expect(told.notifications).toEqual([
+      expect.objectContaining({
+        kind: 'role_changed',
+        read: false,
+        // The title is read when the list is, and the person holds a role on the document.
+        title: 'Thesis, chapter two',
+        role: 'viewer',
+        documentId: id,
+      }),
+    ]);
+    // The Owner who acted, and the other collaborator, are told nothing.
+    expect(await listFor(owner)).toEqual({ unread: 0, notifications: [] });
+    expect(await listFor(viewer)).toEqual({ unread: 0, notifications: [] });
+
+    // And back: a second notification, newest first, each in the role it gave.
+    expect((await change(owner.cookie, id, rows.editor, { role: 'editor' })).status).toBe(200);
+    const again = await listFor(editor);
+    expect(again.notifications.map(({ role }) => role)).toEqual(['editor', 'viewer']);
+  });
+
+  it('writes nothing where the role is the one held, and nothing for a leave', async () => {
+    const { owner, editor, id, rows } = await three();
+    expect((await change(owner.cookie, id, rows.viewer, { role: 'viewer' })).status).toBe(200);
+    expect(await rowsFor(id)).toEqual([]);
+    // A leave is the person's own act: no one is told, the leaver least.
+    expect((await leave(editor.cookie, id)).status).toBe(204);
+    expect(await rowsFor(id)).toEqual([]);
+  });
+
+  it('tells the person removed that they were removed, naming no document, and no one else', async () => {
+    const { owner, editor, viewer, id, rows } = await three();
+    expect((await remove(owner.cookie, id, rows.viewer)).status).toBe(200);
+    expect(await rowsFor(id)).toEqual([
+      { recipientId: viewer.id, kind: 'removed', payload: { documentId: id } },
+    ]);
+    const told = await listFor(viewer);
+    expect(told.unread).toBe(1);
+    // It names no title and links to nothing (register row PR-5): no document is in it.
+    expect(told.notifications).toEqual([expect.objectContaining({ kind: 'removed', read: false })]);
+    expect(JSON.stringify(told)).not.toContain(id);
+    expect(await listFor(owner)).toEqual({ unread: 0, notifications: [] });
+    expect(await listFor(editor)).toEqual({ unread: 0, notifications: [] });
+  });
+
+  // Weakening: the guard that refuses the actor as the recipient taken out.
+  it('never writes one for the person who acted, whoever calls the writers', async () => {
+    const { owner, id } = await three();
+    const { notifyRemoved, notifyRoleChanged } =
+      await import('../../src/lib/documents/access-notifications.ts');
+    await db().$transaction(async (tx) => {
+      await notifyRoleChanged(tx, {
+        recipientId: owner.id,
+        actorId: owner.id,
+        documentId: id,
+        role: 'viewer',
+      });
+      await notifyRemoved(tx, { recipientId: owner.id, actorId: owner.id, documentId: id });
+    });
+    expect(await rowsFor(id)).toEqual([]);
+  });
+
+  // Weakening: the notification written after the commit, or outside the transaction.
+  it('leaves the change unmade where the notification cannot be written, and tells no one', async () => {
+    const { owner, editor, id, rows } = await three();
+    database.sql(
+      `CREATE FUNCTION refuse_notification_for_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused for the test'; END $$;
+       CREATE TRIGGER refuse_notification_for_test BEFORE INSERT ON "Notification" FOR EACH ROW WHEN (NEW.kind IN ('role_changed', 'removed')) EXECUTE FUNCTION refuse_notification_for_test();`,
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(500);
+      expect((await remove(owner.cookie, id, rows.viewer)).status).toBe(500);
+    } finally {
+      database.sql(
+        `DROP TRIGGER refuse_notification_for_test ON "Notification"; DROP FUNCTION refuse_notification_for_test();`,
+      );
+    }
+    expect(await roleOf(rows.editor)).toBe('EDITOR');
+    expect(await roleOf(rows.viewer)).toBe('VIEWER');
+    // Neither the entry of the log nor the notice to the collaboration server came out of a change that was not made.
+    expect(await logged(id)).toEqual([]);
+    await sleep(200);
+    expect(heardFor(id)).toEqual([]);
+    expect(await listFor(editor)).toEqual({ unread: 0, notifications: [] });
+  });
+
+  it('shows a change of role while the person holds a role on the document, with its title as it stands, and not after', async () => {
+    const { owner, editor, id, rows } = await three();
+    expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(200);
+    await db().document.update({ where: { id }, data: { title: 'Renamed since' } });
+    expect((await listFor(editor)).notifications[0]).toMatchObject({ title: 'Renamed since' });
+    // Removed: the subject (the role) is gone, and the change of role with it; the removal is there instead.
+    expect((await remove(owner.cookie, id, rows.editor)).status).toBe(200);
+    expect((await listFor(editor)).notifications.map(({ kind }) => kind)).toEqual(['removed']);
+    // And a document that is deleted is shown in no notification.
+    const second = await documentOf(owner);
+    const row = await grant(second, editor, 'EDITOR');
+    expect((await change(owner.cookie, second, row, { role: 'viewer' })).status).toBe(200);
+    expect((await listFor(editor)).notifications.map(({ kind }) => kind)).toEqual([
+      'role_changed',
+      'removed',
+    ]);
+    await db().document.update({
+      where: { id: second },
+      data: { deletedAt: new Date(), deletedById: owner.id },
+    });
+    expect((await listFor(editor)).notifications.map(({ kind }) => kind)).toEqual(['removed']);
+  });
+
+  it('keeps the notification of a removal for 30 days', async () => {
+    const { owner, viewer, id, rows } = await three();
+    expect((await remove(owner.cookie, id, rows.viewer)).status).toBe(200);
+    const { listAccessNotifications } = await import('../../src/lib/documents/access-notifications.ts');
+    const DAY = 24 * 60 * 60 * 1000;
+    expect(await listAccessNotifications(viewer.id, new Date(Date.now() + 29 * DAY))).toHaveLength(1);
+    expect(await listAccessNotifications(viewer.id, new Date(Date.now() + 31 * DAY))).toEqual([]);
+  });
+
+  it('is marked read by its recipient alone, and stays in the list as read', async () => {
+    const { owner, editor, viewer, id, rows } = await three();
+    expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(200);
+    expect((await remove(owner.cookie, id, rows.viewer)).status).toBe(200);
+    const mark = (who: Person, notificationId: string) =>
+      notification.PATCH(
+        request('PATCH', `/api/notifications/${notificationId}`, who.cookie),
+        at({ id: notificationId }),
+      );
+    const [theirs] = (await listFor(editor)).notifications;
+    // Another account's notification is no notification: a 404, and still unread.
+    expect((await mark(viewer, theirs!.id)).status).toBe(404);
+    expect((await listFor(editor)).unread).toBe(1);
+    expect((await mark(editor, theirs!.id)).status).toBe(204);
+    expect(await listFor(editor)).toMatchObject({
+      unread: 0,
+      notifications: [{ kind: 'role_changed', read: true }],
+    });
+    const [removed] = (await listFor(viewer)).notifications;
+    expect((await mark(viewer, removed!.id)).status).toBe(204);
+    expect((await listFor(viewer)).unread).toBe(0);
+  });
+
+  it('is taken with the document when its retention ends and it is deleted for good', async () => {
+    const { owner, id, rows } = await three();
+    expect((await change(owner.cookie, id, rows.editor, { role: 'viewer' })).status).toBe(200);
+    expect((await remove(owner.cookie, id, rows.viewer)).status).toBe(200);
+    expect(await rowsFor(id)).toHaveLength(2);
+    const { deleteAccessNotificationsOf } = await import('../../src/lib/documents/access-notifications.ts');
+    await db().$transaction((tx) => deleteAccessNotificationsOf(tx, id));
+    expect(await rowsFor(id)).toEqual([]);
   });
 });
 
