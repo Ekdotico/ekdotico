@@ -11,6 +11,9 @@ import {
   sameSet,
   SCREEN_PERMISSIONS,
   SCREEN_ROLES,
+  TABLE_PERMISSIONS,
+  TABLE_ROLES,
+  tableCell,
   wholeSet,
   type CellState,
 } from '../../src/lib/documents/permission-rules.ts';
@@ -49,6 +52,47 @@ describe('the part of the set that α 0.1.0 shows (build-phases; FR-ED-44)', () 
 
   it('is the columns of the Owner, the Editor and the Viewer, and not the Reviewer', () => {
     expect([...SCREEN_ROLES]).toEqual(['owner', 'editor', 'viewer']);
+  });
+});
+
+// The owner's decision of 19 October 2026 (register row S16-1): the table shows every permission of
+// FR-ED-44 and every role, and marks the cells that α 0.1.0 does not offer, which the server still refuses.
+describe('what the table shows (S16-1)', () => {
+  it('is every permission of FR-ED-44 in its order, and the four roles, the Reviewer among them', () => {
+    expect([...TABLE_PERMISSIONS]).toEqual(ALL);
+    expect(TABLE_PERMISSIONS).toHaveLength(15);
+    expect([...TABLE_ROLES]).toEqual(['owner', 'editor', 'reviewer', 'viewer']);
+  });
+
+  it.each(cells)(
+    'says of %s for the %s what the printed table says, and whether α offers it',
+    (permission, role) => {
+      const { state, offered } = tableCell(permission, role);
+      const printed = symbolOf(permission, role);
+      expect(state).toBe(
+        printed === 'on' || printed === 'off' ? 'adjustable' : printed === '✓' ? 'always' : 'never',
+      );
+      expect(offered).toBe(!(HIDDEN_ROWS.includes(permission) || role === 'reviewer'));
+    },
+  );
+
+  it('shows the four adjustable cells that α does not offer, disabled, and still refuses a change to each', () => {
+    const disabled = cells.filter(([permission, role]) => {
+      const cell = tableCell(permission, role);
+      return cell.state === 'adjustable' && !cell.offered;
+    });
+    expect(disabled.map((cell) => cell.join(' '))).toEqual([
+      'document.comments.resolve editor',
+      'document.comments.resolve reviewer',
+      'document.collaborators.view reviewer',
+      'document.export.draft reviewer',
+    ]);
+    for (const [permission, role] of disabled) {
+      expect(readRequest({ changes: { [permission]: { [role]: true } } })).toEqual({
+        ok: false,
+        why: 'not_offered',
+      });
+    }
   });
 });
 

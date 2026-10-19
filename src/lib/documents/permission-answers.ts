@@ -31,7 +31,9 @@ export function refusedRequest(why: RequestRefusal): Response {
  */
 export async function setAnswer(result: SetResult, userId: string, documentId: string): Promise<Response> {
   if (result.outcome === 'not_found') return refusal({ outcome: 'not_found' }, userId, documentId);
-  if (result.outcome === 'no_permission') return refusal({ outcome: 'forbidden' }, userId, documentId);
+  if (result.outcome === 'no_permission') {
+    return refusal({ outcome: 'forbidden' }, userId, documentId, 'document.permissions.edit');
+  }
   const message =
     result.outcome === 'changed'
       ? result.defaults

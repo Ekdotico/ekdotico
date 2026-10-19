@@ -20,37 +20,57 @@ async function enter(page: Page, person: Person = newPerson()) {
 }
 
 // The first column of FR-ED-44, as the screen words it (register row S16-2), in the order of the table.
+// The owner's decision of 19 October 2026 (S16-1): every row of the table is shown, and the Reviewer column. The
+// words of each cell are those of the columns Owner, Editor, Reviewer, Viewer; null is a checkbox.
 const ROWS = [
-  ["View the document's content", 'Fixed by role', ['Always', 'Always', 'Always']],
+  ["View the document's content", 'Fixed by role', ['Always', 'Always', 'Always', 'Always']],
   [
     "Edit the document's content, which includes adding and changing images and footnotes",
     'Fixed by role',
-    ['Always', 'Always', 'Never'],
+    ['Always', 'Always', 'Never', 'Never'],
   ],
-  ['See the list of collaborators and their roles', 'Adjustable', ['Always', null, null]],
-  ['Rename the document', 'Adjustable', ['Always', null, 'Never']],
-  ['Draft export', 'Adjustable', ['Always', null, null]],
+  [
+    "Create comment threads, reply to them, and resolve one's own thread",
+    'Fixed by role',
+    ['Always', 'Always', 'Always', 'Never'],
+  ],
+  ['Resolve and reopen any comment thread', 'Adjustable', ['Always', null, null, 'Never']],
+  ['See the list of collaborators and their roles', 'Adjustable', ['Always', null, null, null]],
+  ['Rename the document', 'Adjustable', ['Always', null, 'Never', 'Never']],
+  ['Draft export', 'Adjustable', ['Always', null, null, null]],
   [
     'Invite collaborators, send an invitation again, revoke a pending invitation, and see the pending invitations',
     'Adjustable',
-    ['Always', null, 'Never'],
+    ['Always', null, 'Never', 'Never'],
   ],
-  ["Change a collaborator's role", 'Adjustable', ['Always', null, 'Never']],
-  ['Remove a collaborator', 'Adjustable', ['Always', null, 'Never']],
-  ['Leave the document', 'Fixed by role', ['Never', 'Always', 'Always']],
-  ["Change the document's permission set", 'Fixed to the Owner', ['Always', 'Never', 'Never']],
-  ['Transfer ownership of the document', 'Fixed to the Owner', ['Always', 'Never', 'Never']],
+  ["Change a collaborator's role", 'Adjustable', ['Always', null, 'Never', 'Never']],
+  ['Remove a collaborator', 'Adjustable', ['Always', null, 'Never', 'Never']],
+  ['Leave the document', 'Fixed by role', ['Never', 'Always', 'Always', 'Always']],
+  ["Change the document's permission set", 'Fixed to the Owner', ['Always', 'Never', 'Never', 'Never']],
+  ['Transfer ownership of the document', 'Fixed to the Owner', ['Always', 'Never', 'Never', 'Never']],
   [
     'Delete the document, and restore it within its retention',
     'Fixed to the Owner',
-    ['Always', 'Never', 'Never'],
+    ['Always', 'Never', 'Never', 'Never'],
+  ],
+  [
+    'Initiate a provenance-sealed export, and the Revise and Branch actions that follow one',
+    'Fixed to the Owner',
+    ['Always', 'Never', 'Never', 'Never'],
   ],
 ] as const;
+
+// What the table says of what α 0.1.0 does not offer (S16-1) and of the Owner's "Leave" cell (S16-3).
+const NOT_OFFERED_ROW = 'Not offered in this release.';
+const NOT_OFFERED_CELL = 'This permission is not offered in this release.';
+const NOT_OFFERED_REVIEWER = 'The Reviewer role is not offered in this release.';
+const REVIEWER_HEADER = 'Reviewer (not offered in this release)';
+const OWNER_LEAVE = 'You are the Owner. You must transfer ownership before leaving.';
 
 const LIMIT = 'An Editor who is given this permission can act on Viewers and never on another Editor.';
 
 /** The checkbox of a cell, by the name that states its permission and its role (FR-ED-46). */
-const box = (page: Page, role: 'Editor' | 'Viewer', permission: string) =>
+const box = (page: Page, role: 'Editor' | 'Reviewer' | 'Viewer', permission: string) =>
   page.getByRole('checkbox', { name: `${role}: ${permission}`, exact: true });
 
 /** The cell that holds a checkbox, to read what is said beside it. */
@@ -73,11 +93,12 @@ test('the Owner sees the table of the set, in words and checkboxes, and every co
     'Kind',
     'Owner',
     'Editor',
+    REVIEWER_HEADER,
     'Viewer',
   ]);
   await expect(grid.getByRole('row')).toHaveCount(ROWS.length + 1);
   // `scope` on every header, for WebKit with VoiceOver (register row S16-8 (b)).
-  await expect(grid.locator('thead th')).toHaveCount(5);
+  await expect(grid.locator('thead th')).toHaveCount(6);
   for (const header of await grid.locator('thead th').all())
     await expect(header).toHaveAttribute('scope', 'col');
   await expect(grid.locator('tbody th')).toHaveCount(ROWS.length);
@@ -93,13 +114,35 @@ test('the Owner sees the table of the set, in words and checkboxes, and every co
     // A cell the Owner cannot change shows "Always" or "Never", as text and not as a disabled control.
     const cells = row.getByRole('cell');
     for (const [n, word] of words.entries()) {
-      if (word) await expect(cells.nth(n + 1)).toHaveText(word);
+      if (word) await expect(cells.nth(n + 1)).toContainText(word);
       else await expect(cells.nth(n + 1).getByRole('checkbox')).toBeVisible();
     }
   }
-  // No disabled control stands for a fixed cell: the checkboxes are those of the 8 cells that can change.
-  await expect(grid.getByRole('checkbox')).toHaveCount(8);
-  await expect(grid.locator('input:disabled')).toHaveCount(0);
+  // No disabled control stands for a fixed cell: the checkboxes are the 12 cells that can be changed, and the
+  // 4 of them that α 0.1.0 does not offer are disabled and say so (S16-1).
+  await expect(grid.getByRole('checkbox')).toHaveCount(12);
+  await expect(grid.locator('input:disabled')).toHaveCount(4);
+  const disabled: [Parameters<typeof box>[1], string, string, boolean][] = [
+    ['Editor', 'Resolve and reopen any comment thread', NOT_OFFERED_CELL, true],
+    ['Reviewer', 'Resolve and reopen any comment thread', NOT_OFFERED_REVIEWER, false],
+    ['Reviewer', 'See the list of collaborators', NOT_OFFERED_REVIEWER, true],
+    ['Reviewer', 'Draft export', NOT_OFFERED_REVIEWER, false],
+  ];
+  for (const [role, name, why, on] of disabled) {
+    const off = box(page, role, name);
+    await expect(off).toBeDisabled();
+    await expect(off).toHaveAccessibleDescription(why);
+    if (on) await expect(off).toBeChecked();
+    else await expect(off).not.toBeChecked();
+  }
+  // The three rows that are not offered say so under their names, once each.
+  await expect(grid.getByText(NOT_OFFERED_ROW, { exact: true })).toHaveCount(3);
+  // S16-3: the Owner's "Leave" cell says why it is "Never": under the row's name, and for a screen reader in the cell.
+  const leave = grid
+    .getByRole('row')
+    .filter({ has: page.getByRole('rowheader', { name: 'Leave the document' }) });
+  await expect(leave.getByRole('rowheader')).toContainText(OWNER_LEAVE);
+  await expect(leave.getByRole('cell').nth(1)).toContainText(`Never. ${OWNER_LEAVE}`);
 
   // The defaults of FR-ED-44, which are the stored set of a new document.
   await expect(box(page, 'Editor', 'See the list of collaborators')).toBeChecked();
@@ -207,7 +250,7 @@ test('the set is returned to its defaults after a confirmation that opens on Can
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
   await expect(dialog).toContainText(
-    'Resetting returns every permission of every role on this document to its default. Any change you made to the permissions is lost.',
+    'Resetting returns every permission of every role on this document to its default. Any change made to them is lost.',
   );
   await screens(page, 'permissions-reset-confirmation');
   await dialog.getByRole('button', { name: 'Cancel' }).click();

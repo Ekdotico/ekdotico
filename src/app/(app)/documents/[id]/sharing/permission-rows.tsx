@@ -4,13 +4,17 @@
 // request asks. Nothing here decides anything: the routes do, again.
 import { Stack } from '@ekdotico/domico/components';
 import {
-  cellState,
+  tableCell,
   heldBy,
   SCREEN_PERMISSIONS,
-  SCREEN_ROLES,
+  TABLE_PERMISSIONS,
+  TABLE_ROLES,
 } from '../../../../../lib/documents/permission-rules.ts';
 import {
   KIND_TEXT,
+  NOT_OFFERED_CELL,
+  NOT_OFFERED_REVIEWER,
+  OWNER_LEAVE,
   PERMISSION_TEXT,
   ROWS_WITH_LIMIT,
   SETTINGS_TEXT,
@@ -25,17 +29,30 @@ import {
 import styles from '../../../../pages.module.css';
 import type { CellView, PermissionRowView } from './permission-settings.tsx';
 
-/** The rows of the table, in the order of FR-ED-44, for a document with this stored set. */
+/**
+ * The rows of the table, every permission of FR-ED-44 in its order and every role, for a document with
+ * this stored set. The owner's decisions of 19 October 2026 (register rows S16-1, S16-3): a cell that
+ * α 0.1.0 does not offer is shown, a checkbox disabled and described where it can be changed, and the
+ * Owner's "Leave" cell says why it is "Never".
+ */
 export function permissionRows(stored: unknown): PermissionRowView[] {
-  return SCREEN_PERMISSIONS.map((permission) => {
+  return TABLE_PERMISSIONS.map((permission) => {
     const cells = {} as PermissionRowView['cells'];
-    for (const role of SCREEN_ROLES) {
-      const state = cellState(permission, role);
-      // The screen offers only the cells of the table that its rows and columns name.
+    for (const role of TABLE_ROLES) {
+      const { state, offered } = tableCell(permission, role);
       cells[role] =
         state === 'adjustable'
-          ? ({ state, checked: holds(stored, role, permission) } satisfies CellView)
-          : { state: state === 'always' ? 'always' : 'never' };
+          ? ({
+              state,
+              checked: holds(stored, role, permission),
+              ...(offered
+                ? {}
+                : { notOffered: role === 'reviewer' ? NOT_OFFERED_REVIEWER : NOT_OFFERED_CELL }),
+            } satisfies CellView)
+          : {
+              state,
+              ...(permission === 'document.leave' && role === 'owner' ? { note: OWNER_LEAVE } : {}),
+            };
     }
     return {
       permission,
@@ -43,6 +60,9 @@ export function permissionRows(stored: unknown): PermissionRowView[] {
       short: SHORT_TEXT[permission] ?? PERMISSION_TEXT[permission],
       kind: KIND_TEXT[PERMISSIONS[permission].kind],
       limit: ROWS_WITH_LIMIT.includes(permission),
+      // A row α does not have: the two comment rows and the sealed export.
+      notOffered: !(SCREEN_PERMISSIONS as readonly string[]).includes(permission),
+      ...(permission === 'document.leave' ? { ownerNote: OWNER_LEAVE } : {}),
       cells,
     };
   });

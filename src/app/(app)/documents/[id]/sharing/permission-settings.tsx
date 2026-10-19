@@ -17,8 +17,15 @@ import {
 } from '@ekdotico/domico/components';
 import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
-import { SCREEN_ROLES } from '../../../../../lib/documents/permission-rules.ts';
-import { ALWAYS, EDITOR_LIMIT, NEVER, SETTINGS_TEXT } from '../../../../../lib/documents/permission-texts.ts';
+import { TABLE_ROLES } from '../../../../../lib/documents/permission-rules.ts';
+import {
+  ALWAYS,
+  EDITOR_LIMIT,
+  NEVER,
+  NOT_OFFERED_ROW,
+  REVIEWER_HEADER,
+  SETTINGS_TEXT,
+} from '../../../../../lib/documents/permission-texts.ts';
 import { ROLE_NAME, type DocumentRole, type Permission } from '../../../../../lib/documents/permissions.ts';
 import styles from '../../../../pages.module.css';
 import { useCancel } from './collaborator-actions.tsx';
@@ -40,7 +47,11 @@ const COLUMN = { scope: 'col' } as unknown as HTMLAttributes<HTMLTableCellElemen
 const ROW = { scope: 'row' } as unknown as HTMLAttributes<HTMLTableCellElement>;
 
 /** One cell: its words where it cannot be changed, its state where it can. */
-export type CellView = { state: 'always' | 'never' } | { state: 'adjustable'; checked: boolean };
+export type CellView =
+  /** `note`: what the cell says beyond its word, for the screen reader (the Owner's "Leave", S16-3). */
+  | { state: 'always' | 'never'; note?: string }
+  /** `notOffered`: the cell is shown disabled, and this is why (S16-1). */
+  | { state: 'adjustable'; checked: boolean; notOffered?: string };
 
 export interface PermissionRowView {
   permission: Permission;
@@ -52,10 +63,14 @@ export interface PermissionRowView {
   kind: string;
   /** FR-ED-46: the row states that an Editor never acts on another Editor. */
   limit: boolean;
-  cells: Record<(typeof SCREEN_ROLES)[number], CellView>;
+  /** S16-1: the row is one α 0.1.0 does not offer, and says so under its name. */
+  notOffered: boolean;
+  /** S16-3: a sentence shown under the row's name that the Owner's cell also carries. */
+  ownerNote?: string;
+  cells: Record<DocumentRole, CellView>;
 }
 
-type Roles = (typeof SCREEN_ROLES)[number];
+type Roles = DocumentRole;
 const keyOf = (permission: Permission, role: Roles) => `${permission} ${role}`;
 const RESET_CANCEL_ID = 'reset-cancel';
 
@@ -75,7 +90,7 @@ export function PermissionSettings({
   const [checked, setChecked] = useState<Record<string, boolean>>(() => {
     const first: Record<string, boolean> = {};
     for (const row of rows) {
-      for (const role of SCREEN_ROLES) {
+      for (const role of TABLE_ROLES) {
         const cell = row.cells[role];
         if (cell.state === 'adjustable') first[keyOf(row.permission, role)] = cell.checked;
       }
@@ -156,9 +171,10 @@ export function PermissionSettings({
           <TableRow>
             <TableHeaderCell {...COLUMN}>Permission</TableHeaderCell>
             <TableHeaderCell {...COLUMN}>Kind</TableHeaderCell>
-            {SCREEN_ROLES.map((role) => (
+            {TABLE_ROLES.map((role) => (
               <TableHeaderCell key={role} {...COLUMN}>
-                {ROLE_NAME[role]}
+                {/* S16-1: the column of a role that α 0.1.0 does not offer says so in its header. */}
+                {role === 'reviewer' ? REVIEWER_HEADER : ROLE_NAME[role]}
               </TableHeaderCell>
             ))}
           </TableRow>
@@ -169,15 +185,48 @@ export function PermissionSettings({
               <TableHeaderCell className={cells.rowHeader} {...ROW}>
                 {row.text}
                 {row.limit ? <p className={cells.limit}>{EDITOR_LIMIT}</p> : null}
+                {row.notOffered ? <p className={cells.limit}>{NOT_OFFERED_ROW}</p> : null}
+                {/* S16-3: shown to everyone; the Owner's cell carries the same sentence for a screen
+                    reader, so this copy is hidden from one and is not read twice. */}
+                {row.ownerNote ? (
+                  <p className={cells.limit} aria-hidden="true">
+                    {row.ownerNote}
+                  </p>
+                ) : null}
               </TableHeaderCell>
               <TableCell className={cells.kind}>{row.kind}</TableCell>
-              {SCREEN_ROLES.map((role) => {
+              {TABLE_ROLES.map((role) => {
                 const cell = row.cells[role];
                 const key = keyOf(row.permission, role);
                 if (cell.state !== 'adjustable') {
                   return (
                     <TableCell key={role}>
-                      <span className={cells.fixed}>{cell.state === 'always' ? ALWAYS : NEVER}</span>
+                      <div className={cells.cell}>
+                        <span className={cells.fixed}>{cell.state === 'always' ? ALWAYS : NEVER}</span>
+                        {/* Read after the word, and not shown: the sentence is under the row's name. */}
+                        {cell.note ? <span className="sr-only">{`. ${cell.note}`}</span> : null}
+                      </div>
+                    </TableCell>
+                  );
+                }
+                if (cell.notOffered) {
+                  // S16-1: shown, disabled, and described; no request is made from it, and the server
+                  // refuses one (422 not_offered).
+                  const whyId = `why-${row.permission.replaceAll('.', '-')}-${role}`;
+                  return (
+                    <TableCell key={role}>
+                      <div className={cells.cell}>
+                        <Checkbox
+                          label={<span className="sr-only">{`${ROLE_NAME[role]}: ${row.short}`}</span>}
+                          checked={cell.checked}
+                          disabled
+                          aria-describedby={whyId}
+                          onChange={() => {}}
+                        />
+                        <span id={whyId} className="sr-only">
+                          {cell.notOffered}
+                        </span>
+                      </div>
                     </TableCell>
                   );
                 }

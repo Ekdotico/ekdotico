@@ -37,8 +37,33 @@ export const SCREEN_PERMISSIONS = [
   'document.delete',
 ] as const satisfies readonly Permission[];
 
-/** The roles the release offers: "one column for each role the release offers" (FR-ED-46). The Reviewer is stored and not offered (D56). */
+/** The roles the release offers (FR-ED-46). The Reviewer is stored and not offered (D56). */
 export const SCREEN_ROLES = ['owner', 'editor', 'viewer'] as const satisfies readonly DocumentRole[];
+
+/**
+ * What the table shows: every permission and every role, in the order of FR-ED-44.
+ * The owner's decision of 19 October 2026 (register row S16-1): the cells of a
+ * feature that α 0.1.0 does not have, the Reviewer column and the two comment
+ * rows and the sealed export row, are SHOWN, disabled, and say that they are
+ * not offered in this release; the server still refuses a change to one.
+ */
+export const TABLE_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
+export const TABLE_ROLES: readonly DocumentRole[] = ROLES;
+
+/** What the table says of one cell, and whether the release offers it: `offered` is false for a cell of the Reviewer column or of a row that α does not have. */
+export function tableCell(
+  permission: Permission,
+  role: DocumentRole,
+): { state: 'always' | 'never' | 'adjustable'; offered: boolean } {
+  const cell = PERMISSIONS[permission][role];
+  const offered =
+    (SCREEN_PERMISSIONS as readonly string[]).includes(permission) &&
+    (SCREEN_ROLES as readonly string[]).includes(role);
+  return {
+    state: cell === 'on' || cell === 'off' ? 'adjustable' : cell === 'yes' ? 'always' : 'never',
+    offered,
+  };
+}
 
 /**
  * What one cell of the table is, for a permission and a role.
@@ -47,18 +72,14 @@ export const SCREEN_ROLES = ['owner', 'editor', 'viewer'] as const satisfies rea
  *   or to the Owner, and every cell that reads "never" (FR-ED-44).
  * - `adjustable`: "on" or "off", and the Owner may change it (FR-ED-45).
  * - `not_offered`: the Reviewer column, the two comment rows, and the sealed
- *   export row, which α 0.1.0 does not show (register row S16-1).
+ *   export row, which α 0.1.0 shows disabled and refuses to change (register
+ *   row S16-1, as the owner decided it on 19 October 2026).
  */
 export type CellState = 'always' | 'never' | 'adjustable' | 'not_offered';
 
 export function cellState(permission: Permission, role: DocumentRole): CellState {
-  const offered =
-    (SCREEN_PERMISSIONS as readonly string[]).includes(permission) &&
-    (SCREEN_ROLES as readonly string[]).includes(role);
-  if (!offered) return 'not_offered';
-  const cell = PERMISSIONS[permission][role];
-  if (cell === 'on' || cell === 'off') return 'adjustable';
-  return cell === 'yes' ? 'always' : 'never';
+  const { state, offered } = tableCell(permission, role);
+  return offered ? state : 'not_offered';
 }
 
 /**

@@ -12,6 +12,7 @@ import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { isRetained } from './deletion.ts';
+import { ONLY_OWNER, OWNER_LEAVE } from './permission-texts.ts';
 import { COLLABORATOR_ROLE, holds, type DocumentRole, type Permission } from './permissions.ts';
 
 /** A document's row as every query but one reads it: without its content (src/lib/db.ts). */
@@ -125,17 +126,28 @@ const MESSAGES = {
     'The role of this account on the document does not hold the permission for this action. The Owner of the document can give it.',
 };
 
+// The owner's decision of 19 October 2026 (register row S16-7): for the two permissions that no one
+// can give to the role refused, the statement of a 403 does not say that the Owner can. Changing the
+// permission set is the Owner's alone; the one role refused leaving is the Owner.
+const FORBIDDEN_FOR: Partial<Record<Permission, string>> = {
+  'document.permissions.edit': ONLY_OWNER,
+  'document.leave': OWNER_LEAVE,
+};
+
 /**
  * The answer to a request that `authorise` did not allow. One body for every
  * `not_found`, whatever lay behind it. NFR-SE-19: a 403 is written to the
- * security log, with the user and the document and nothing else.
+ * security log, with the user and the document and nothing else. `permission`
+ * is the one the request asked for, where its statement is its own.
  */
 export async function refusal(
   access: Exclude<Access, { outcome: 'allowed' }>,
   userId: string,
   documentId: string,
+  permission?: Permission,
 ): Promise<Response> {
   if (access.outcome === 'not_found') return errorResponse(404, 'not_found', MESSAGES.notFound);
   await securityLog({ kind: 'forbidden', userId, documentId });
-  return errorResponse(403, 'forbidden', MESSAGES.forbidden);
+  const own = permission === undefined ? undefined : FORBIDDEN_FOR[permission];
+  return errorResponse(403, 'forbidden', own ?? MESSAGES.forbidden);
 }

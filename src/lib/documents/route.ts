@@ -83,7 +83,7 @@ function make(state: DocumentState, permission: Permission, handler: Handler): D
         state === 'live'
           ? await authorise(session.userId, id, permission)
           : await authoriseDeleted(session.userId, id);
-      if (access.outcome !== 'allowed') return await refusal(access, session.userId, id);
+      if (access.outcome !== 'allowed') return await refusal(access, session.userId, id, permission);
 
       return await handler({
         request,

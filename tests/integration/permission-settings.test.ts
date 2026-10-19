@@ -446,7 +446,9 @@ describe('who may change the set (FR-ED-45)', () => {
           const response = await put(who.cookie, id, body);
           // A fixed cell asked by a non-Owner is a 403, and not a 422: authorisation first (Q8).
           expect(response.status, `${permission} ${role}`).toBe(403);
-          expect(await code(response)).toBe('forbidden');
+          expect(await code(response.clone())).toBe('forbidden');
+          // S16-7 (the owner's decision of 19 October 2026): it does not say that the Owner can give it.
+          expect((await response.json()).error.message).toBe('Only the Owner of the document can do this.');
           refused++;
         }
       }
@@ -604,6 +606,8 @@ describe('what authorises a request is read again under the lock of the document
       },
     );
     expect(response.status).toBe(403);
+    // The refusal made under the lock says it too (S16-7).
+    expect((await response.json()).error.message).toBe('Only the Owner of the document can do this.');
     expect(await stored(id)).toEqual(defaultPermissionSet());
     expect((await logged(id)).map(({ kind }) => kind)).toEqual(['forbidden']);
     expect(heardFor(id)).toEqual([]);

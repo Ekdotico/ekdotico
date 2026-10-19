@@ -6,17 +6,20 @@
 //
 // Nothing here is of Next.js; it loads in a browser.
 import type { Permission, PermissionKind } from './permissions.ts';
-import type { SCREEN_PERMISSIONS } from './permission-rules.ts';
-
-type OfScreen = (typeof SCREEN_PERMISSIONS)[number];
 
 /**
  * The first column of FR-ED-44, row for row. Without the citations the column
  * carries, and without the clause on comment threads, which α has none of
  * (register row S16-2).
  */
-export const PERMISSION_TEXT: Record<OfScreen, string> = {
+export const PERMISSION_TEXT: Record<Permission, string> = {
   'document.view': "View the document's content",
+  // The three rows that α 0.1.0 shows disabled (register row S16-1, 19 October 2026): the first
+  // column of FR-ED-44 without its citations.
+  'document.comments.write': "Create comment threads, reply to them, and resolve one's own thread",
+  'document.comments.resolve': 'Resolve and reopen any comment thread',
+  'document.export.sealed':
+    'Initiate a provenance-sealed export, and the Revise and Branch actions that follow one',
   'document.content.edit':
     "Edit the document's content, which includes adding and changing images and footnotes",
   'document.collaborators.view': 'See the list of collaborators and their roles',
@@ -34,6 +37,7 @@ export const PERMISSION_TEXT: Record<OfScreen, string> = {
 
 /** The name a checkbox is given for its permission: short, so that "[Role]: [name]" reads at once. */
 export const SHORT_TEXT: Partial<Record<Permission, string>> = {
+  'document.comments.resolve': 'Resolve and reopen any comment thread',
   'document.collaborators.view': 'See the list of collaborators',
   'document.rename': 'Rename the document',
   'document.export.draft': 'Draft export',
@@ -48,6 +52,22 @@ export const KIND_TEXT: Record<PermissionKind, string> = {
   adjustable: 'Adjustable',
   fixed_to_owner: 'Fixed to the Owner',
 };
+
+/**
+ * The owner's decisions of 19 October 2026 (register rows S16-1, S16-3, S16-7).
+ * What the table says of a cell or a column that α 0.1.0 does not offer, as the
+ * accessible description of a disabled checkbox and the note under a row; the
+ * Reviewer column's header; and the one sentence that the Owner's "Leave" cell
+ * and the refusal of an Owner who tries to leave both say. "Owner" is the
+ * product's role name, capitalised.
+ */
+export const NOT_OFFERED_REVIEWER = 'The Reviewer role is not offered in this release.';
+export const NOT_OFFERED_CELL = 'This permission is not offered in this release.';
+export const NOT_OFFERED_ROW = 'Not offered in this release.';
+export const REVIEWER_HEADER = 'Reviewer (not offered in this release)';
+export const OWNER_LEAVE = 'You are the Owner. You must transfer ownership before leaving.';
+/** The refusal of a role that asks to change the permission set, which only the Owner can do. */
+export const ONLY_OWNER = 'Only the Owner of the document can do this.';
 
 /** FR-ED-46: the words of a cell the Owner cannot change. */
 export const ALWAYS = 'Always';
@@ -69,7 +89,7 @@ export const SETTINGS_TEXT = {
   reset: 'Reset to defaults',
   resetTitle: 'Reset permissions',
   resetStatement:
-    'Resetting returns every permission of every role on this document to its default. Any change you made to the permissions is lost.',
+    'Resetting returns every permission of every role on this document to its default. Any change made to them is lost.',
   resetConfirm: 'Reset permissions',
   resetPending: 'Resetting permissions…',
   yourRole: 'Your role',
