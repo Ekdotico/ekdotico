@@ -50,7 +50,7 @@ After the commit, and never before: `collaborator-changed` for the former Owner 
 
 **The hourly timer** (`expireOffers`): in one transaction writes every pending offer past its time `EXPIRED` and deletes its notifications. Idempotent; with two instances the second finds nothing.
 
-**The notification list** (additive): `listOfferNotifications` and `markOfferNotificationRead` are in `ownership.ts`. The route `GET /api/notifications` adds the offers to the one list and to the one unread count; `PATCH /api/notifications/[id]` marks an offer's notification where it is not an invitation's; the page and `NotificationList` show both kinds, newest first. Nothing of the invitation functions changes.
+**The notification list** (one list, as PR 49 built it): the offer is a kind, `ownership_offer`, of `ListedNotification`; `listOfferNotifications` is in `src/lib/documents/ownership-notifications.ts` (beside `access-notifications.ts`, and without a cycle), joined in `listNotifications` of `sharing.ts` with the one unread count and the one order, so that the routes read and mark offers as they do the others; `NotificationList` has a case for the kind ("[name] offered you ownership of [title].", link "Open the offer").
 
 ## 4. Routes, each with its authorisation
 

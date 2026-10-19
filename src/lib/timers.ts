@@ -1,5 +1,6 @@
 // The timers of the application (NFR-RE-15): scheduled work that is not a queue
 // job. Started once when a process starts.
+import { deleteExpiredRemovedNotifications } from './documents/access-notifications.ts';
 import { deleteExpiredDocuments } from './documents/deletion.ts';
 import { deliverUnsentOffers, expireOffers } from './documents/ownership.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
@@ -30,6 +31,8 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   'ownership-offer-expiry': () => expireOffers(),
   // NFR-RE-15, "the email of an offer of ownership": the backstop of the hand-over after the response (S17-6).
   'ownership-offer-email': () => deliverUnsentOffers(),
+  // FR-ED-42 (register row PR-8): the notification of a removal stays 30 days.
+  'removed-notification-removal': () => deleteExpiredRemovedNotifications(),
 };
 
 function runTimers(): void {

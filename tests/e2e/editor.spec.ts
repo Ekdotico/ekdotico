@@ -4480,6 +4480,156 @@ test('an Editor whose role becomes Viewer is made read-only in place and told, a
   await other.close();
 });
 
+// FR-ED-17, S14-1, S14-6, F14-1 (docs/plan/presence-row.md, §2.1, §5): the people who have the document
+// open, a Viewer among them, are one row of pictures in the header beside "Sharing": the initials on the
+// colour of each person's connection, and to a screen reader a list of names and roles. Past four, the rest
+// are counted. The words are those of §5 (for the owner's approval), written out here.
+test('the people who have the document open are a row in the header that a screen reader reads as a list, with the rest counted, and it fits 320 pixels', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  const owner = { ...newPerson(), name: 'Ada Owner' };
+  await enter(page, owner);
+  const id = await shareNew(page);
+  const bea = { ...newPerson(), name: 'Bea Editor' };
+  const cy = { ...newPerson(), name: 'Μαρία Παπαδοπούλου' };
+  const [beaContext, cyContext] = [await browser.newContext(), await browser.newContext()];
+  const [beaPage, cyPage] = [await beaContext.newPage(), await cyContext.newPage()];
+  await enter(beaPage, bea);
+  await enter(cyPage, cy);
+  await invite(page, [bea.email], 'Editor');
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  await invite(page, [cy.email], 'Viewer');
+  await expect(page.getByText('3 of 10 people')).toBeVisible();
+  await page.goto(`/documents/${id}`);
+  await expect(status(page, 'In sync')).toBeVisible();
+  await accept(beaPage, bea.email, id);
+  await expect(status(beaPage, 'In sync')).toBeVisible();
+  await accept(cyPage, cy.email, id);
+  // A Viewer's page reads and writes nothing, and has the row all the same.
+  await expect(text(cyPage)).toHaveAttribute('aria-readonly', 'true');
+
+  const row = (who: Page) => who.getByRole('list', { name: 'People in this document' });
+  // In the header, in the one place with "Sharing"; the names and roles are what a screen reader reads, in order.
+  await expect(
+    page.getByRole('link', { name: 'Sharing' }).locator('xpath=..').locator(row(page)),
+  ).toBeVisible();
+  await expect(row(page)).toMatchAriaSnapshot(`
+    - list "People in this document":
+      - listitem: Ada Owner (you), Owner
+      - listitem: Bea Editor, Editor
+      - listitem: Μαρία Παπαδοπούλου, Viewer
+  `);
+  // The Viewer is shown the same people, and itself as "you".
+  await expect(row(cyPage)).toMatchAriaSnapshot(`
+    - list "People in this document":
+      - listitem: Ada Owner, Owner
+      - listitem: Bea Editor, Editor
+      - listitem: Μαρία Παπαδοπούλου (you), Viewer
+  `);
+  // The pictures are initials, by whole letter (Greek among them), and not a tab stop.
+  await expect(row(page).locator('.ekd-avatar-letters')).toHaveText(['AO', 'BE', 'ΜΠ']);
+  await expect(row(page).locator('a, button, [tabindex]')).toHaveCount(0);
+  await screens(page, 'editor-people-row');
+
+  // Past four the rest are counted, in words, as one item. Three more places of the Owner's.
+  const more = [];
+  for (let n = 0; n < 3; n++) more.push(await connectAs(page.context(), id));
+  await expect(row(page).getByRole('listitem')).toHaveCount(5);
+  await expect(row(page).getByRole('listitem').last()).toContainText('and 2 more people');
+  await expect(row(page).locator('.ekd-avatar-letters').last()).toHaveText('+2');
+  // And one more person for the fifth.
+  more[2]!.close();
+  await expect(row(page).getByRole('listitem').last()).toContainText('and 1 more person');
+  // No sideways scroll at 320 CSS pixels, with the row and the header's other words.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await expectNoSidewaysScroll(page);
+  await expect(row(page)).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  // A person who goes is taken out of the row for the others.
+  await cyContext.close();
+  await expect(row(page).getByRole('listitem').filter({ hasText: 'Μαρία Παπαδοπούλου' })).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  for (const each of more.slice(0, 2)) each.close();
+  await beaContext.close();
+});
+
+// F14-2 (docs/plan/presence-row.md, §2.4, §5): words typed while the connection was lost, under a role
+// that was taken meanwhile, are not taken by the server; the tab says so, in words for the owner's
+// approval, and offers to copy them. What the server had acknowledged before is not offered, and what
+// is not offered is not changed.
+test('an Editor whose role is taken while the connection is lost is told that the last changes were not saved, and copies the words that were not', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  const owner = { ...newPerson(), name: 'Ada Owner' };
+  await enter(page, owner);
+  const id = await shareNew(page);
+  const editor = { ...newPerson(), name: 'Bea Editor' };
+  const other = await browser.newContext();
+  await other.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const theirs = await other.newPage();
+  await enter(theirs, editor);
+  await invite(page, [editor.email], 'Editor');
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  await page.goto(`/documents/${id}`);
+  await expect(status(page, 'In sync')).toBeVisible();
+  const { found: link } = await mailFor(editor.email, INVITATION_LINK);
+  await theirs.goto(new URL(link).pathname);
+  await theirs.getByRole('button', { name: 'Accept' }).click();
+  await theirs.waitForURL(`**/documents/${id}`);
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  await text(theirs).click();
+  await theirs.keyboard.type('Written as an Editor.');
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  await expect(text(page)).toContainText('Written as an Editor.');
+
+  // The server goes, and the Editor writes on; the role is taken while it is away.
+  await stopCollab();
+  try {
+    await expect(status(theirs, /^Restoring the connection\./)).toBeVisible();
+    await theirs.keyboard.type(' Typed offline.');
+    await expect(text(theirs)).toContainText('Written as an Editor. Typed offline.');
+    setRole(id, editor.email, 'viewer');
+  } finally {
+    await startCollab();
+  }
+
+  const now = theirs
+    .getByRole('status')
+    .filter({ hasText: 'The role of this account on this document is now Viewer.' });
+  await expect(now).toBeVisible({ timeout: 60_000 });
+  await expect(now).toContainText('The document is read-only in this tab.');
+  await expect(now).toContainText(
+    'Your last changes in this tab were not saved. Ekdotico did not keep them, because the role of this account changed first.',
+  );
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
+  await screens(theirs, 'editor-role-taken-unsaved');
+  // The words are copied, and only the words the server did not take.
+  await now.getByRole('button', { name: 'Copy unsaved text' }).click();
+  await expect(now.getByRole('status')).toHaveText('Text copied.');
+  expect(await clipboardText(theirs)).toBe(' Typed offline.');
+  // The server took none of them: the Owner's page has what was acknowledged and nothing more.
+  await page.waitForTimeout(4000);
+  await expect(text(page)).toContainText('Written as an Editor.');
+  await expect(text(page)).not.toContainText('Typed offline.');
+
+  // The role is given back: the statement goes, and the tab sends what it holds.
+  setRole(id, editor.email, 'editor');
+  await expect(
+    theirs
+      .getByRole('status')
+      .filter({ hasText: 'The role of this account on this document is now Editor.' }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(theirs.getByText('Your last changes in this tab were not saved.')).toHaveCount(0);
+  await expect(text(page)).toContainText('Typed offline.', { timeout: 15_000 });
+  await other.close();
+});
+
 // FR-ED-40 (a), (b), (d), NFR-SE-03 (b), (c), FR-AU-27, FR-AU-84: a removal, a leave, a change of role,
 // and the end of a session act on an open page WITHIN 5 SECONDS of the change, made from the screens.
 // The collaboration server of these tests re-checks every 60 seconds here, so that nothing but the

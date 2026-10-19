@@ -20,6 +20,9 @@ import { APP_ORIGIN, APP_PORT, AUTH_SECRET, COLLAB_PORT } from './tests/e2e/orig
 process.env.E2E_EMAIL_SINK ??= mkdtempSync(join(tmpdir(), 'ekdotico-e2e-mail-'));
 // The key of the signed admission requests, for this run and nothing else.
 process.env.E2E_ADMISSION_SECRET ??= 'a-test-value-for-the-end-to-end-tests-and-nothing-else';
+// The channel on which the web application tells the collaboration server of a change
+// (src/lib/collab/events.ts): Valkey is shared by every run on the machine, so a run has one of its own.
+process.env.E2E_EVENTS_CHANNEL ??= `ekdotico:collab-events:e2e-${randomBytes(6).toString('hex')}`;
 // The one address on the list of the founding team (FR-AU-83): an address no
 // earlier run used, since the database of a development machine keeps its
 // accounts. Written with a capital: the list is compared without regard to case.
@@ -63,6 +66,7 @@ export default defineConfig({
       // FR-ED-23: 30 seconds where unset; a test waits for the error state.
       COLLAB_ERROR_AFTER_MS: '6000',
       ADMISSION_SECRET: process.env.E2E_ADMISSION_SECRET,
+      COLLAB_EVENTS_CHANNEL: process.env.E2E_EVENTS_CHANNEL,
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
       // With no trusted proxy every request without a session shares one count
       // of 20 a minute (docs/operations/deployment.md), which one run of the

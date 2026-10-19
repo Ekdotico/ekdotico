@@ -12,10 +12,14 @@ vi.mock('../../src/lib/documents/deletion.ts', () => ({ deleteExpiredDocuments }
 // (tests/integration/session-list.test.ts runs them against a database).
 vi.mock('../../src/lib/auth/password.ts', () => ({ deleteExpiredTokens: async () => 0 }));
 vi.mock('../../src/lib/auth/session-list.ts', () => ({ deleteEndedSessions: async () => 0 }));
-// The expiry of offers of ownership, which runs beside them (tests/integration/ownership.test.ts runs it against a database).
+// The expiry of offers of ownership and the backstop of their email, which run beside them
+// (tests/integration/ownership.test.ts runs them against a database).
 vi.mock('../../src/lib/documents/ownership.ts', () => ({
   expireOffers: async () => 0,
   deliverUnsentOffers: async () => 0,
+}));
+vi.mock('../../src/lib/documents/access-notifications.ts', () => ({
+  deleteExpiredRemovedNotifications: async () => 0,
 }));
 
 const HOUR_MS = 60 * 60 * 1000;

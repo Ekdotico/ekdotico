@@ -374,6 +374,7 @@ describe('the removal of ended sessions (NFR-RE-15, FR-AU-84)', () => {
       // FR-ED-47: run twice at once here with the others, and found nothing to do.
       'ownership-offer-expiry',
       'ownership-offer-email',
+      'removed-notification-removal',
     ]);
     const { email, sessionId } = await person();
     const idle = await browser(email);

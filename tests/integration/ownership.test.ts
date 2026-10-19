@@ -959,9 +959,9 @@ describe('expiry (FR-ED-47: 14 days after it was created)', () => {
       await notifications.GET(request('GET', '/api/notifications', editor.cookie))
     ).json()) as {
       unread: number;
-      offers: unknown[];
+      notifications: { kind: string }[];
     };
-    expect(list.offers).toEqual([]);
+    expect(list.notifications.filter(({ kind }) => kind === 'ownership_offer')).toEqual([]);
     expect(list.unread).toBe(0);
     // A new offer settles the old one and stands.
     expect((await offer(owner.cookie, id, row)).status).toBe(201);
@@ -1558,12 +1558,26 @@ describe('an acceptance and a change at once are one after the other, and there 
 // ── The notification list ───────────────────────────────────────────────────
 
 describe('the notification list (FR-ED-42)', () => {
-  const list = async (who: Person) =>
-    (await (await notifications.GET(request('GET', '/api/notifications', who.cookie))).json()) as {
+  // One list: the offers' notifications are of the kind `ownership_offer`, beside the others (src/lib/documents/sharing.ts).
+  const list = async (who: Person) => {
+    const body = (await (
+      await notifications.GET(request('GET', '/api/notifications', who.cookie))
+    ).json()) as {
       unread: number;
-      notifications: unknown[];
-      offers: { id: string; offerId: string; ownerName: string; title: string; read: boolean }[];
+      notifications: { kind: string }[];
     };
+    return {
+      unread: body.unread,
+      notifications: body.notifications.filter(({ kind }) => kind !== 'ownership_offer'),
+      offers: body.notifications.filter(({ kind }) => kind === 'ownership_offer') as unknown as {
+        id: string;
+        offerId: string;
+        ownerName: string;
+        title: string;
+        read: boolean;
+      }[],
+    };
+  };
   const mark = (who: Person, id: string) =>
     notification.PATCH(request('PATCH', `/api/notifications/${id}`, who.cookie), at({ id }));
 
@@ -1581,6 +1595,7 @@ describe('the notification list (FR-ED-42)', () => {
     expect(Object.keys(seen.offers[0]!).sort()).toEqual([
       'createdAt',
       'id',
+      'kind',
       'offerId',
       'ownerName',
       'read',

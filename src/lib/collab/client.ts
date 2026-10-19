@@ -16,12 +16,19 @@ import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import {
   documentName,
+  FRAGMENT_NAME,
   LIMIT_REFUSAL,
+  readPeopleNotice,
   readPermissionsNotice,
   readRoleNotice,
   REFUSAL,
+  syncKindOf,
+  syncStatusOf,
+  type Person,
   type RoleNotice,
+  type SyncKind,
 } from './protocol.ts';
+import { unsentText } from './unsent.ts';
 
 /** The refusals after which the client does not try again (FR-ED-41; src/lib/collab/protocol.ts). */
 export type Ending = typeof REFUSAL.NO_ACCESS | typeof REFUSAL.ACCESS_ENDED | typeof REFUSAL.SESSION_ENDED;
@@ -97,6 +104,21 @@ export interface ConnectionState {
   canEdit?: boolean;
   /** Changes the server has not acknowledged, which are lost if the tab is closed (FR-ED-18). */
   unsent: boolean;
+  /**
+   * F14-2: the role of this connection became one that cannot edit while the tab
+   * held changes the server had not acknowledged. The server does not take them
+   * (it applies nothing a read-only connection sends); `text` is the words in
+   * them, for the person to copy, and is '' where they were not words (a mark, a
+   * deletion). Set with the notice that says the new role, and taken away when
+   * the connection may edit again, which sends them.
+   */
+  unsaved?: { text: string };
+  /**
+   * FR-ED-17: who has the document open, as the server last said (the people
+   * present, Viewers included), in the order of their colours. Absent until the
+   * first list arrives.
+   */
+  people?: readonly Person[];
 }
 
 /** FR-ED-18: "tries again no more often than once in 30 seconds". */
@@ -184,6 +206,20 @@ export class DocumentConnection {
   private lostTimer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private refusals = 0;
+  // WHAT THE SERVER TOOK, for the words of `unsaved` (see `unsavedWords`). The server answers each
+  // update and each second step with one status, in order: 1 where it applied the message, 0 where it
+  // did not (a read-only connection applies nothing). So the messages that wait for their status are
+  // kept in the order they left, each with the next clock of this client's own changes when it
+  // left, and `acknowledged` is the clock of the last one the server applied. The provider's own
+  // count cannot say it: it counts a batch, it is set to 1 at every (re)connection whether or not a
+  // change waits, and a status of 0 does not lower it.
+  private acknowledged = 0;
+  private pending: { clock: number; changes: boolean; step2: boolean }[] = [];
+  // A change of this tab that no message has carried yet.
+  private fresh = false;
+  // A message that held changes was refused, or was lost with its socket: they are the tab's until a
+  // second step is applied, which carries the whole document.
+  private carried = false;
   // The bucket of tokens (above), refilled when it is looked at.
   private tokens = BURST_MESSAGES;
   private tokensAt = Date.now();
@@ -227,7 +263,21 @@ export class DocumentConnection {
       // server holds the name and the slot (src/lib/collab/presence.ts).
       // Switches the library's batching on. `changed` sends a change at once while the bucket allows it.
       flushDelay: BATCH_MS,
-      onOutgoingMessage: ({ message }) => this.sending(message.type),
+      onOutgoingMessage: ({ message }) => {
+        this.sending(message.type);
+        // Its first step, and each update: read from the bytes. The library's answer to the server's
+        // first step is a message of no type, whose own encoder is empty: see `onMessage`.
+        this.left(syncKindOf(message.toUint8Array()));
+      },
+      // Before the library applies what arrived.
+      onMessage: ({ event }) => {
+        const frame = new Uint8Array(event.data as ArrayBuffer);
+        // The status the server answered a message with.
+        const applied = syncStatusOf(frame);
+        if (applied !== null) this.answered(applied);
+        // The server's first step: the library answers it, at once, with a second step.
+        else if (syncKindOf(frame) === 'step1') this.left('step2');
+      },
       // FR-ED-40 (b): the server says that the role of this connection changed.
       onStateless: ({ payload }) => this.told(payload),
       // The scope of each handshake, the one after a lost socket included (FR-ED-40 (b), FR-ED-41).
@@ -265,6 +315,7 @@ export class DocumentConnection {
   /** A change of this tab's document: sent at once while the bucket holds a token, else left to the batch. */
   private changed = (_update: Uint8Array, origin: unknown): void => {
     if (origin === this.provider) return;
+    this.fresh = true;
     this.refill();
     if (this.tokens >= 1) this.flush();
     else this.waiting = true;
@@ -283,6 +334,49 @@ export class DocumentConnection {
     this.tokens = Math.max(0, this.tokens - 1);
     this.waiting = false;
     this.refreshUnsent();
+  }
+
+  /** Whether this tab holds a change the server has not applied (F14-2). */
+  private get unacknowledged(): boolean {
+    return this.fresh || this.carried || this.pending.some(({ changes }) => changes);
+  }
+
+  /**
+   * A synchronisation message left, as the library sends it. A first step asks for
+   * the server's state and is answered with no status; what waited before it will
+   * never be answered on this socket, and the second step that follows carries the
+   * whole document, so what held changes is `carried` until that is applied.
+   */
+  private left(kind: SyncKind | null): void {
+    if (kind === 'step1') {
+      this.carried ||= this.pending.some(({ changes }) => changes);
+      this.pending = [];
+    } else if (kind === 'step2' || kind === 'update') {
+      const changes = kind === 'update' ? this.fresh : this.unacknowledged;
+      this.pending.push({
+        clock: Y.getState(this.document.store, this.document.clientID),
+        changes,
+        step2: kind === 'step2',
+      });
+      this.fresh = false;
+    }
+  }
+
+  /**
+   * The server's status for the oldest message that waits: applied, or not. The words
+   * offered as unsaved are worked out again, so that an acknowledgement that came
+   * after the notice of the role takes back what it had offered.
+   */
+  private answered(applied: boolean): void {
+    const entry = this.pending.shift();
+    if (!entry) return;
+    if (applied) {
+      this.acknowledged = Math.max(this.acknowledged, entry.clock);
+      if (entry.step2) this.carried = false;
+    } else if (entry.changes) this.carried = true;
+    if (this.state.unsaved) {
+      this.set({ unsaved: this.unacknowledged ? { text: this.unsavedWords() } : undefined });
+    }
   }
 
   /**
@@ -307,6 +401,12 @@ export class DocumentConnection {
       });
       return;
     }
+    const people = readPeopleNotice(payload);
+    if (people) {
+      // FR-ED-17: who has the document open. The server's list replaces the last.
+      this.set({ people });
+      return;
+    }
     const notice = readRoleNotice(payload);
     if (!notice) return;
     const { shown } = this;
@@ -315,8 +415,15 @@ export class DocumentConnection {
       (shown.canEdit !== notice.canEdit || (shown.role !== undefined && shown.role !== notice.role));
     const wasEditable = this.state.canEdit;
     this.shown = { canEdit: notice.canEdit, role: notice.role };
+    // F14-2: a role that cannot edit, told while this tab holds changes the server did not
+    // acknowledge. The server acknowledges every update it took before it tells the new role, so
+    // what is unacknowledged now is what it did not take: the words in it are kept to be copied.
+    const unsaved =
+      differs && !notice.canEdit && this.unacknowledged ? { text: this.unsavedWords() } : undefined;
     this.set(
-      differs ? { notice, canEdit: notice.canEdit, permissions: undefined } : { canEdit: notice.canEdit },
+      differs
+        ? { notice, canEdit: notice.canEdit, permissions: undefined, unsaved }
+        : { canEdit: notice.canEdit },
     );
     // Where the connection may edit again, what it holds that the server dropped
     // while it could not (a change not yet acknowledged when the role was taken)
@@ -341,7 +448,14 @@ export class DocumentConnection {
     const canEdit = scope === 'read-write';
     const stale = this.shown !== undefined && this.shown.canEdit !== canEdit;
     this.shown ??= { canEdit };
-    this.set(stale ? { canEdit, notice: undefined, permissions: undefined } : { canEdit });
+    this.set(
+      stale ? { canEdit, notice: undefined, permissions: undefined, unsaved: undefined } : { canEdit },
+    );
+  }
+
+  /** The words this tab wrote that the server has not acknowledged (`unsentText`). */
+  private unsavedWords(): string {
+    return unsentText(this.document.getXmlFragment(FRAGMENT_NAME), this.document.clientID, this.acknowledged);
   }
 
   /** FR-ED-17: where the cursors of the others are read from, and this client's own is set. Null before `start`. */
@@ -372,7 +486,8 @@ export class DocumentConnection {
     if (this.lostTimer || this.state.phase === 'lost') return;
     this.lostTimer = setTimeout(() => {
       this.lostTimer = undefined;
-      this.set({ phase: 'lost' });
+      // A list of who is present that the server can no longer keep true is taken away.
+      this.set({ phase: 'lost', people: undefined });
     }, this.options.errorAfterMs);
   }
 

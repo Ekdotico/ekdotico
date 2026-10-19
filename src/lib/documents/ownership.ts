@@ -28,12 +28,13 @@ import { sendEmail, type EmailMessage } from '../email/index.ts';
 import { faultOf } from '../fault.ts';
 import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
+import { OFFER_NOTIFICATION } from './ownership-notifications.ts';
 import { lockDocument } from './sharing.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The kind of the notification of an offer of ownership (FR-ED-42). Its payload is `{ "offerId": … }` and nothing else. */
-export const OFFER_NOTIFICATION = 'ownership_offer';
+// The kind of the notification of an offer of ownership (FR-ED-42) and the list that reads it are in
+// ./ownership-notifications.ts. Its payload is `{ "offerId": … }` and nothing else.
 
 // What the identifier of a collaborator's row, and of an offer, look like (a cuid); anything else names nothing and is not looked up.
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,64}$/;
@@ -515,96 +516,4 @@ export async function answerOffer(
     await Promise.all([announce(done.documentId, done.from!), announce(done.documentId, userId)]);
   }
   return done.outcome === 'accepted' ? { outcome: 'accepted', documentId: done.documentId } : done;
-}
-
-// ── The notification list (FR-ED-42) ───────────────────────────────────────
-
-export interface OfferNotificationView {
-  id: string;
-  createdAt: Date;
-  read: boolean;
-  ownerName: string;
-  title: string;
-  offerId: string;
-}
-
-/**
- * The account's notifications of offers whose offer is still open, newest
- * first, with how many are unread. The list is additive to the invitations'
- * (./sharing.ts, `listNotifications`), which the route and the page join to it.
- * One whose offer is past its time is left out from that moment (the timer
- * deletes its row); so is one whose recipient no longer holds the Editor role.
- */
-export async function listOfferNotifications(
-  userId: string,
-  now: Date = new Date(),
-): Promise<{ unread: number; notifications: OfferNotificationView[] }> {
-  const rows = await db().notification.findMany({
-    where: { recipientId: userId, kind: OFFER_NOTIFICATION },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-  });
-  const ids = rows.flatMap(({ payload }) => {
-    const id = (payload as { offerId?: unknown } | null)?.offerId;
-    return typeof id === 'string' ? [id] : [];
-  });
-  const offers = new Map(
-    (
-      await db().ownershipOffer.findMany({
-        where: {
-          id: { in: ids },
-          toUserId: userId,
-          ...open(now),
-          document: {
-            deletedAt: null,
-            recording: 'UNRECORDED',
-            workspace: { type: 'PERSONAL' },
-            collaborators: { some: { userId, role: 'EDITOR' } },
-          },
-        },
-        select: {
-          id: true,
-          fromUserId: true,
-          from: { select: { name: true, email: true } },
-          document: { select: { title: true, ownerId: true } },
-        },
-      })
-    )
-      // As the page of the offer judges it: the maker is still the Owner (the one thing a where cannot say).
-      .filter((offer) => offer.document.ownerId === offer.fromUserId)
-      .map((offer) => [offer.id, offer]),
-  );
-  const notifications = rows.flatMap((row) => {
-    const offerId = (row.payload as { offerId?: string }).offerId ?? '';
-    const offer = offers.get(offerId);
-    if (!offer) return [];
-    return [
-      {
-        id: row.id,
-        createdAt: row.createdAt,
-        read: row.readAt !== null,
-        ownerName: displayNameOf(offer.from),
-        title: offer.document.title,
-        offerId,
-      },
-    ];
-  });
-  return { unread: notifications.filter(({ read }) => !read).length, notifications };
-}
-
-/** Marks a notification of an offer of this account read. False where the account has no such notification in its list. */
-export async function markOfferNotificationRead(
-  userId: string,
-  id: unknown,
-  now: Date = new Date(),
-): Promise<boolean> {
-  if (typeof id !== 'string') return false;
-  // Only a notification the list shows: one whose offer is over is not there (FR-ED-42).
-  // ponytail: reads the whole list, which holds a few offers; a query of one if it grows.
-  const { notifications } = await listOfferNotifications(userId, now);
-  if (!notifications.some((shown) => shown.id === id)) return false;
-  await db().notification.updateMany({
-    where: { id, recipientId: userId, readAt: null },
-    data: { readAt: now },
-  });
-  return true;
 }

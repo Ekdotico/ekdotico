@@ -56,8 +56,14 @@ export type CollabEvent =
    */
   | { kind: 'permission-set-changed'; documentId: string };
 
-/** The one channel. Every instance of the collaboration server subscribes to it. */
-export const COLLAB_EVENTS_CHANNEL = 'ekdotico:collab-events';
+/**
+ * The one channel. Every instance of the collaboration server subscribes to it.
+ * The name is `COLLAB_EVENTS_CHANNEL` where that is set, and is not set in
+ * production: the tests give each run a name of its own, since Valkey is shared
+ * by every run on a machine and a run that reads the channel would hear the
+ * events of another. Read once, as `COLLAB_PORT` is.
+ */
+export const COLLAB_EVENTS_CHANNEL = process.env.COLLAB_EVENTS_CHANNEL || 'ekdotico:collab-events';
 
 // `Document.id` as the application writes it (FR-ED-35).
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

@@ -19,7 +19,8 @@ import { cookiesOf, createAccount, DAY, load, ORIGIN, prepare, signIn } from './
 const database = prepare('presence');
 const { auth, db, valkey, settings } = await load();
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
-const { COLLAB_PATH, REFUSAL, readRoleNotice } = await import('../../src/lib/collab/protocol.ts');
+const { COLLAB_PATH, peopleNotice, readPeopleNotice, REFUSAL, readRoleNotice } =
+  await import('../../src/lib/collab/protocol.ts');
 const { CONNECTIONS_PER_DOCUMENT } = await import('../../src/lib/collab/presence.ts');
 const { createCollabServer } = await import('../../src/collab/server.ts');
 
@@ -92,10 +93,21 @@ function connect(port: number, cookie: string) {
     });
     const synced = new Promise<void>((resolve) => provider.on('synced', () => resolve()));
     // What the server says as a stateless message (FR-ED-40 (b)).
+    // The list of the people present is its own message (FR-ED-17), kept apart.
     const notices: string[] = [];
-    provider.on('stateless', ({ payload }: { payload: string }) => notices.push(payload));
+    const lists: string[] = [];
+    provider.on('stateless', ({ payload }: { payload: string }) =>
+      (payload.startsWith('{"kind":"people"') ? lists : notices).push(payload),
+    );
     provider.attach();
-    return { provider, outcome, synced, notices, changes: provider.document.getArray<string>('changes') };
+    return {
+      provider,
+      outcome,
+      synced,
+      notices,
+      lists,
+      changes: provider.document.getArray<string>('changes'),
+    };
   };
   const framesFor = (name: string) => frames.filter((each) => each.name === name);
   /** Whether the server closed this document's connection for this reason. */
@@ -132,7 +144,9 @@ const grant = (documentId: string, userId: string, role: 'EDITOR' | 'VIEWER' | '
   db().documentCollaborator.create({ data: { documentId, userId, role } });
 
 /** The server in this process. The period of the re-check is long: a test calls `recheck` itself. */
-async function inProcess(options: { connectionsPerDocument?: number; recheckMs?: number } = {}) {
+async function inProcess(
+  options: { connectionsPerDocument?: number; recheckMs?: number; pendingWaitMs?: number } = {},
+) {
   const collab = createCollabServer(
     { ...settings(), limits: settings().limits },
     { recheckMs: 3_600_000, ...options },
@@ -1073,5 +1087,378 @@ describe('after the review', () => {
         }
       },
     );
+  });
+});
+
+// ── FR-ED-17: who has the document open ────────────────────────────────────
+
+describe('who has the document open (FR-ED-17; the row of the people present)', () => {
+  const listOf = (client: Opened) => readPeopleNotice(client.lists.at(-1) ?? '');
+
+  it('tells every connection, a Viewer’s included, who is present: name, colour, role, and which is its own', async () => {
+    const local = await inProcess();
+    try {
+      const { clients } = await three(local);
+      await until(() => Object.values(clients).every((each) => listOf(each)?.length === 3));
+      const everyone = [
+        { slot: 1, name: 'Ada Owner', role: 'owner' },
+        { slot: 2, name: 'Ben Editor', role: 'editor' },
+        { slot: 3, name: 'Cy Viewer', role: 'viewer' },
+      ];
+      // The same three for each, in the order of the colours, with the recipient's own entry marked.
+      expect(listOf(clients.owner)).toEqual([{ ...everyone[0]!, you: true }, everyone[1], everyone[2]]);
+      expect(listOf(clients.editor)).toEqual([everyone[0], { ...everyone[1]!, you: true }, everyone[2]]);
+      expect(listOf(clients.viewer)).toEqual([everyone[0], everyone[1], { ...everyone[2]!, you: true }]);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('shows the same account twice when it has the document open in two tabs, each in the colour of its place (register row PR-3)', async () => {
+    const local = await inProcess();
+    try {
+      const { id, editor, clients } = await three(local);
+      const second = connect(local.port, editor.cookie).open(id);
+      await second.synced;
+      await until(() => listOf(clients.owner)?.length === 4);
+      expect(listOf(clients.owner)!.map(({ slot, name }) => [slot, name])).toEqual([
+        [1, 'Ada Owner'],
+        [2, 'Ben Editor'],
+        [3, 'Cy Viewer'],
+        [4, 'Ben Editor'],
+      ]);
+      // And the second tab is told it is the fourth, and not the second.
+      await until(() => listOf(second)?.length === 4);
+      expect(
+        listOf(second)!
+          .filter(({ you }) => you)
+          .map(({ slot }) => slot),
+      ).toEqual([4]);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('tells the others when a connection goes, and when a role changes, and not the one that went', async () => {
+    const local = await inProcess();
+    try {
+      const { id, editor, viewer, clients } = await three(local);
+      await until(() => Object.values(clients).every((each) => listOf(each)?.length === 3));
+      const gone = clients.viewer.lists.length;
+      connectionOf(local, id, viewer.id)!.close({ code: 1000, reason: 'test' });
+      await until(() => listOf(clients.owner)?.length === 2);
+      expect(listOf(clients.editor)!.map(({ name }) => name)).toEqual(['Ada Owner', 'Ben Editor']);
+      // The connection that closed is sent nothing more.
+      await sleep(200);
+      expect(clients.viewer.lists).toHaveLength(gone);
+
+      // A role that changes is sent again to everyone, in the new role.
+      await db().documentCollaborator.update({
+        where: { documentId_userId: { documentId: id, userId: editor.id } },
+        data: { role: 'VIEWER' },
+      });
+      await local.recheck();
+      await until(() => listOf(clients.owner)?.[1]?.role === 'viewer');
+      expect(listOf(clients.editor)![1]).toEqual({ slot: 2, name: 'Ben Editor', role: 'viewer', you: true });
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('holds the name and the slot the server holds, whatever a client says in awareness', async () => {
+    const local = await inProcess();
+    try {
+      const { clients } = await three(local);
+      clients.viewer.provider.awareness!.setLocalState({ user: { name: 'Ada Owner', slot: 1 } });
+      await sleep(300);
+      await local.recheck();
+      expect(listOf(clients.owner)!.map(({ name, slot }) => [slot, name])).toEqual([
+        [1, 'Ada Owner'],
+        [2, 'Ben Editor'],
+        [3, 'Cy Viewer'],
+      ]);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('relays no list a client sends: a message of the kind from a peer reaches no one', async () => {
+    const local = await inProcess();
+    try {
+      const { clients } = await three(local);
+      await until(() => Object.values(clients).every((each) => listOf(each)?.length === 3));
+      const before = Object.values(clients).map((each) => each.lists.length);
+      clients.viewer.provider.sendStateless(peopleNotice([{ slot: 1, name: 'Someone else', role: 'owner' }]));
+      clients.viewer.provider.sendStateless(JSON.stringify({ kind: 'role', role: 'owner', canEdit: true }));
+      await sleep(400);
+      expect(Object.values(clients).map((each) => each.lists.length)).toEqual(before);
+      expect(clients.owner.notices).toHaveLength(1);
+      expect(clients.editor.notices).toHaveLength(1);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+// ── S14-5: the limit on presence messages ──────────────────────────────────
+
+describe('the limit of 60 presence messages a second for each connection (S14-5)', () => {
+  /** A cursor that names the message it came in: the peers read the number back. */
+  const cursor = (n: number) => ({
+    anchor: { item: { client: 7, clock: n } },
+    head: { item: { client: 7, clock: n } },
+  });
+  const numberSeenBy = (peer: Opened, clientId: number) => {
+    const state = stateOf(peer, clientId) as { cursor?: { anchor: { item: { clock: number } } } } | undefined;
+    return state?.cursor?.anchor.item.clock;
+  };
+  const say = (client: Opened, n: number) => client.provider.awareness!.setLocalState({ cursor: cursor(n) });
+
+  it('passes the first 60 messages of a second to the peers, drops the 61st, keeps the connection, and passes the next second’s', async () => {
+    const local = await inProcess();
+    try {
+      const { id, editor, clients } = await three(local);
+      // The messages of the opening leave the window.
+      await sleep(1100);
+      const sender = clientIdOf(clients.editor);
+      for (let n = 1; n <= 61; n += 1) say(clients.editor, n);
+      await until(() => numberSeenBy(clients.owner, sender) === 60);
+      // The 61st never reaches anyone: not the Owner, not the Viewer.
+      await sleep(400);
+      expect(numberSeenBy(clients.owner, sender)).toBe(60);
+      expect(numberSeenBy(clients.viewer, sender)).toBe(60);
+      expect(local.hocuspocus.documents.get(id)!.awareness.getStates().get(sender)).toMatchObject({
+        cursor: cursor(60),
+      });
+      // The connection is kept: still open, the same one, and it still writes.
+      expect(connectionOf(local, id, editor.id)).toBeDefined();
+      expect(connectionOf(local, id, editor.id)!.readOnly).toBe(false);
+      clients.editor.changes.push(['written after the limit']);
+      await until(() => local.hocuspocus.documents.get(id)!.getArray('changes').length === 1);
+
+      // A second later the next message passes.
+      await sleep(1000);
+      say(clients.editor, 100);
+      await until(() => numberSeenBy(clients.owner, sender) === 100);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  // The library builds the awareness of every client for each request and can no more drop one than
+  // refuse a message: a connection past the limit with these is closed.
+  it('counts a request for everyone’s awareness under the same limit: 60 are let through, and the 61st closes the connection', async () => {
+    const local = await inProcess();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { id, owner, editor, sockets } = await three(local);
+      await sleep(1100);
+      // The type of the message (3) and nothing after it.
+      for (let n = 1; n <= 60; n += 1) sockets.owner.socket.webSocket!.send(sent(id, 3));
+      await sleep(300);
+      expect(connectionOf(local, id, owner.id)).toBeDefined();
+      sockets.owner.socket.webSocket!.send(sent(id, 3));
+      await until(() => connectionOf(local, id, owner.id) === undefined);
+      // Not the others'.
+      expect(connectionOf(local, id, editor.id)).toBeDefined();
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('counts the two kinds together: 30 requests and 30 cursors pass, and one more request closes the connection', async () => {
+    const local = await inProcess();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { id, owner, sockets, clients } = await three(local);
+      await sleep(1100);
+      for (let n = 1; n <= 30; n += 1) {
+        sockets.owner.socket.webSocket!.send(sent(id, 3));
+        say(clients.owner, n);
+      }
+      await sleep(300);
+      expect(connectionOf(local, id, owner.id)).toBeDefined();
+      // 31 requests alone would have passed: it is the 61st message of the second.
+      sockets.owner.socket.webSocket!.send(sent(id, 3));
+      await until(() => connectionOf(local, id, owner.id) === undefined);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('counts for each connection: a second tab of the same account has its own 60', async () => {
+    const local = await inProcess();
+    try {
+      const { id, editor, clients } = await three(local);
+      const second = connect(local.port, editor.cookie).open(id);
+      await second.synced;
+      await sleep(1100);
+      for (let n = 1; n <= 61; n += 1) {
+        say(clients.editor, n);
+        say(second, n);
+      }
+      await until(
+        () =>
+          numberSeenBy(clients.owner, clientIdOf(clients.editor)) === 60 &&
+          numberSeenBy(clients.owner, clientIdOf(second)) === 60,
+      );
+      await sleep(300);
+      expect(numberSeenBy(clients.owner, clientIdOf(clients.editor))).toBe(60);
+      expect(numberSeenBy(clients.owner, clientIdOf(second))).toBe(60);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('leaves the pace of a person alone: a cursor that moves every 25 ms for two seconds reaches the peers every time', async () => {
+    const local = await inProcess();
+    try {
+      const { clients } = await three(local);
+      await sleep(1100);
+      const sender = clientIdOf(clients.editor);
+      const seen: number[] = [];
+      clients.owner.provider.awareness!.on('update', () => {
+        const at = numberSeenBy(clients.owner, sender);
+        if (at !== undefined && seen.at(-1) !== at) seen.push(at);
+      });
+      for (let n = 1; n <= 80; n += 1) {
+        say(clients.editor, n);
+        await sleep(25);
+      }
+      await until(() => numberSeenBy(clients.owner, sender) === 80);
+      // Every one of the 80 arrived, in order: none was dropped.
+      expect(seen).toEqual(Array.from({ length: 80 }, (_, at) => at + 1));
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+// ── F14-2: a downgrade handles what was received first ────────────────────
+
+describe('a connection made read-only first handles the messages it has received (F14-2)', () => {
+  const where = (id: string, userId: string) => ({ documentId_userId: { documentId: id, userId } });
+  /** Makes the next messages of a connection wait in `beforeSync`, as a slow check does, until `release`. */
+  function gated(connection: ReturnType<typeof connectionOf> & object) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const original = connection.callbacks.beforeSync;
+    connection.callbacks.beforeSync = async (c, payload) => {
+      await gate;
+      return original(c, payload);
+    };
+    return release;
+  }
+
+  it('keeps an update that was already received when the Editor became a Viewer, and discards the one that comes after', async () => {
+    const local = await inProcess();
+    try {
+      const { id, editor, sockets } = await three(local);
+      const held = local.hocuspocus.documents.get(id)!;
+      const connection = connectionOf(local, id, editor.id)!;
+      const release = gated(connection);
+      // Received, and being handled.
+      sockets.editor.socket.webSocket!.send(sent(id, SYNC, 2, forgedUpdate('received as an Editor')));
+      await sleep(150);
+
+      await db().documentCollaborator.update({ where: where(id, editor.id), data: { role: 'VIEWER' } });
+      const run = local.recheck();
+      await sleep(400);
+      // The role is a Viewer's by the row, and the connection has not turned: it is still handling.
+      expect(connection.readOnly).toBe(false);
+      expect(held.getArray('changes').length).toBe(0);
+      release();
+      await run;
+      expect(held.getArray('changes').toArray()).toEqual(['received as an Editor']);
+      expect(connection.readOnly).toBe(true);
+
+      // After the switch nothing is taken.
+      sockets.editor.socket.webSocket!.send(sent(id, SYNC, 2, forgedUpdate('sent after the switch')));
+      await sleep(300);
+      expect(held.getArray('changes').toArray()).toEqual(['received as an Editor']);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('switches all the same when its messages do not finish within the bound, and discards what still waits', async () => {
+    const local = await inProcess({ pendingWaitMs: 200 });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { id, editor, sockets, clients } = await three(local);
+      const held = local.hocuspocus.documents.get(id)!;
+      const connection = connectionOf(local, id, editor.id)!;
+      const release = gated(connection);
+      sockets.editor.socket.webSocket!.send(sent(id, SYNC, 2, forgedUpdate('never finished')));
+      await sleep(150);
+
+      await db().documentCollaborator.update({ where: where(id, editor.id), data: { role: 'VIEWER' } });
+      const started = Date.now();
+      await local.recheck();
+      // Made read-only at the bound, and not held back for as long as the client keeps the connection busy.
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(connection.readOnly).toBe(true);
+      expect(connection.context.role).toBe('viewer');
+      await until(() => clients.editor.notices.length === 2);
+      expect(readRoleNotice(clients.editor.notices[1]!)).toEqual({ role: 'viewer', canEdit: false });
+      expect(logged.mock.calls.some(([line]) => String(line).includes('a downgrade did not wait'))).toBe(
+        true,
+      );
+      // What was still waiting finds the flag turned: it is discarded.
+      release();
+      await sleep(300);
+      expect(held.getArray('changes').length).toBe(0);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('does not make a read-only connection editable at the bound, and makes it so at the next look', async () => {
+    const local = await inProcess({ pendingWaitMs: 200 });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { id, viewer, clients } = await three(local);
+      const connection = connectionOf(local, id, viewer.id)!;
+      const waiting = vi.spyOn(connection, 'waitForPendingMessages').mockReturnValue(new Promise(() => {}));
+      await db().documentCollaborator.update({ where: where(id, viewer.id), data: { role: 'EDITOR' } });
+      await local.recheck();
+      // Still read-only, as a Viewer, and told nothing.
+      expect(connection.readOnly).toBe(true);
+      expect(connection.context.role).toBe('viewer');
+      expect(clients.viewer.notices).toHaveLength(1);
+      // Its messages are handled at the next look: now it is made editable.
+      waiting.mockRestore();
+      await local.recheck();
+      expect(connection.readOnly).toBe(false);
+      expect(connection.context.role).toBe('editor');
+      await until(() => clients.viewer.notices.length === 2);
+      // One line said that it waited, and it names no one.
+      expect(logged.mock.calls).toEqual([
+        ['collab: an upgrade waits for the next look: the connection still holds messages'],
+      ]);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('does not let a connection that waits hold back the close of another connection in the same run', async () => {
+    const local = await inProcess();
+    try {
+      const { id, editor, viewer, sockets } = await three(local);
+      const connection = connectionOf(local, id, editor.id)!;
+      // The Editor's connection never finishes its message, for the whole of the 1,000 ms of the bound.
+      vi.spyOn(connection, 'waitForPendingMessages').mockReturnValue(new Promise(() => {}));
+      await db().documentCollaborator.update({ where: where(id, editor.id), data: { role: 'VIEWER' } });
+      await db().documentCollaborator.delete({ where: where(id, viewer.id) });
+      const started = Date.now();
+      const run = local.recheck();
+      // The Viewer is closed at once, and not after the Editor's wait.
+      await until(() => sockets.viewer.closedFor(id, REFUSAL.ACCESS_ENDED), 700);
+      expect(Date.now() - started).toBeLessThan(900);
+      await run;
+      expect(connection.readOnly).toBe(true);
+    } finally {
+      await local.stop();
+    }
   });
 });

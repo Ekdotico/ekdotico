@@ -21,6 +21,7 @@ import { istorico } from '../istorico/index.ts';
 import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import type { DocumentRow } from './access.ts';
+import { deleteAccessNotificationsOf } from './access-notifications.ts';
 import { summary, type DocumentSummary } from './documents.ts';
 import { endOffersOf } from './ownership.ts';
 import { endInvitationsOf } from './sharing.ts';
@@ -262,6 +263,8 @@ async function deletePermanently(
       const { count } = await transaction.document.deleteMany({ where: claim });
       if (count !== 1) return 'elsewhere';
       await securityLogIn(transaction, { kind: 'document_deleted_permanently', documentId: document.id });
+      // FR-ED-42: the notifications of a change of role and of a removal named it, and have no subject now.
+      await deleteAccessNotificationsOf(transaction, document.id);
       return 'deleted';
     });
   } finally {

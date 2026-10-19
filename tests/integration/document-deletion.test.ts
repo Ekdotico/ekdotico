@@ -1193,6 +1193,30 @@ describe('the permanent deletion (FR-ED-36, NFR-RE-15; contract IC-50)', () => {
     expect(await logged()).toEqual([entry]);
   });
 
+  // FR-ED-42: the notifications of a change of role and of a removal have no subject once the document is gone.
+  it('takes the notifications that name the document with it, and no other', async () => {
+    const ended = await due();
+    const live = await documentOf(owner.id);
+    const other = await person();
+    const named = (documentId: string) => ({
+      recipientId: other.id,
+      payload: { documentId, role: 'viewer' },
+    });
+    await db().notification.createMany({
+      data: [
+        { ...named(ended), kind: 'role_changed' },
+        { ...named(ended), kind: 'removed' },
+        { ...named(live), kind: 'role_changed' },
+      ],
+    });
+    expect(await deleteExpiredDocuments()).toEqual({ deleted: 1, kept: 0 });
+    const left = await db().notification.findMany({
+      where: { recipientId: other.id },
+      select: { payload: true },
+    });
+    expect(left).toEqual([{ payload: { documentId: live, role: 'viewer' } }]);
+  });
+
   it('leaves the entry when the document is gone, beside the entry of the Owner’s deletion, until the log’s own retention', async () => {
     const id = await documentOf(owner.id);
     expect((await remove(owner.cookie, id)).status).toBe(204);
