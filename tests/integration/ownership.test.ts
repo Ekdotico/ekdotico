@@ -1154,6 +1154,88 @@ describe('what authorises an answer is read again under the lock of the document
   });
 });
 
+// ── Invitations after a transfer ────────────────────────────────────────────
+
+describe('an invitation request that was authorised before a transfer meets the rows as the transfer left them', () => {
+  const invitations = () => import('../../src/app/api/documents/[id]/invitations/route.ts');
+  const revocation = () => import('../../src/app/api/documents/[id]/invitations/[invitationId]/route.ts');
+  /** The acceptance's writes, committed under the hold. */
+  const transfer =
+    (id: string, owner: Person, editor: Person, row: string) =>
+    async (tx: Parameters<Parameters<ReturnType<typeof db>['$transaction']>[0]>[0]) => {
+      await tx.documentCollaborator.delete({ where: { id: row } });
+      await tx.document.update({ where: { id }, data: { ownerId: editor.id } });
+      await tx.documentCollaborator.create({ data: { documentId: id, userId: owner.id, role: 'EDITOR' } });
+    };
+
+  // Weakening: the inviter's role and permission not read again under the lock.
+  it('refuses the former Owner’s invitation, and creates none', async () => {
+    const { owner, editor, id, row } = await pair();
+    const { POST } = await invitations();
+    const response = await holding(
+      id,
+      () =>
+        POST(
+          request('POST', `/api/documents/${id}/invitations`, owner.cookie, {
+            emails: ['someone@example.com'],
+            role: 'viewer',
+          }),
+          at({ id }),
+        ),
+      transfer(id, owner, editor, row),
+    );
+    expect(response.status).toBe(403);
+    expect(await code(response)).toBe('forbidden');
+    expect(await db().documentInvitation.count({ where: { documentId: id } })).toBe(0);
+  });
+
+  it('refuses the former Owner’s revocation, and revokes none', async () => {
+    const { owner, editor, id, row } = await pair();
+    const made = await db().documentInvitation.create({
+      data: {
+        documentId: id,
+        email: 'someone@example.com',
+        role: 'VIEWER',
+        invitedById: owner.id,
+        tokenHash: `hash-${randomUUID()}`,
+        expiresAt: new Date(Date.now() + 1e6),
+      },
+    });
+    const { DELETE } = await revocation();
+    const response = await holding(
+      id,
+      () =>
+        DELETE(
+          request('DELETE', `/api/documents/${id}/invitations/${made.id}`, owner.cookie),
+          at({ id, invitationId: made.id }),
+        ),
+      transfer(id, owner, editor, row),
+    );
+    expect(response.status).toBe(403);
+    expect((await db().documentInvitation.findUniqueOrThrow({ where: { id: made.id } })).state).toBe(
+      'PENDING',
+    );
+  });
+});
+
+// ── Expired and removed ─────────────────────────────────────────────────────
+
+describe('an offer past its time is left to the timer', () => {
+  it('is written expired by the timer, and not withdrawn by a removal or a deletion that meets it first', async () => {
+    const { owner, editor, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    await db().ownershipOffer.updateMany({
+      where: { documentId: id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    expect((await removal(owner.cookie, id, row)).status).toBe(200);
+    expect((await offerOf(id)).state).toBe('PENDING');
+    expect(await expireOffers()).toBeGreaterThanOrEqual(1);
+    expect((await offerOf(id)).state).toBe('EXPIRED');
+    expect(editor.id).not.toBe(owner.id);
+  });
+});
+
 // ── Accept against the rest, at once ────────────────────────────────────────
 
 describe('an acceptance and a change at once are one after the other, and there is one Owner after each (FR-ED-19)', () => {
@@ -1299,8 +1381,8 @@ describe('an acceptance and a change at once are one after the other, and there 
       const after = await invariant(id);
       if (accepted.status === 200) {
         expect(after.ownerId).toBe(editor.id);
-        // The new Owner cannot leave.
-        expect(left.status).toBe(403);
+        // The new Owner cannot leave: refused by the permission (403), or the row is gone when the leave reaches the lock (404).
+        expect([403, 404]).toContain(left.status);
       } else {
         expect(left.status).toBe(204);
         expect(after.ownerId).toBe(owner.id);

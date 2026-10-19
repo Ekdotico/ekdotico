@@ -76,7 +76,7 @@ export async function withdrawOffersFor(
   now: Date,
 ): Promise<void> {
   const ended = await tx.ownershipOffer.updateManyAndReturn({
-    where: { documentId, toUserId: userId, state: 'PENDING' },
+    where: { documentId, toUserId: userId, ...open(now) },
     data: { state: 'WITHDRAWN', respondedAt: now },
     select: { id: true },
   });
@@ -86,8 +86,9 @@ export async function withdrawOffersFor(
 
 /** The deletion of a document ends its pending offer. Called in the transaction of the deletion. */
 export async function endOffersOf(tx: Tx, documentId: string, now: Date): Promise<void> {
+  // An offer past its time is left to the timer, which writes it expired, and not withdrawn.
   const ended = await tx.ownershipOffer.updateManyAndReturn({
-    where: { documentId, state: 'PENDING' },
+    where: { documentId, ...open(now) },
     data: { state: 'WITHDRAWN', respondedAt: now },
     select: { id: true },
   });

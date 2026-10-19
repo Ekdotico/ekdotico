@@ -102,7 +102,13 @@ export function TransferOwnership({
             </InBrowser>
           </p>
           <Cluster>
-            <Button variant="quiet" disabled={!ready || withdrawing} onClick={() => void withdraw()}>
+            <Button
+              variant="quiet"
+              disabled={!ready}
+              pending={withdrawing}
+              pendingLabel="Withdrawing offer…"
+              onClick={() => void withdraw()}
+            >
               Withdraw offer
             </Button>
           </Cluster>

@@ -497,7 +497,7 @@ describe('the notification list (FR-ED-42)', () => {
     expect(list.notifications).toEqual([
       expect.objectContaining({ read: false, inviterName: 'A Person', role: 'viewer' }),
     ]);
-    expect(await listOf(other.cookie)).toEqual({ unread: 0, notifications: [] });
+    expect(await listOf(other.cookie)).toEqual({ unread: 0, notifications: [], offers: [] });
     const notificationId = list.notifications[0]!.id;
     // Weakening: mark by identifier alone.
     expect((await markRead(other.cookie, notificationId)).status).toBe(404);

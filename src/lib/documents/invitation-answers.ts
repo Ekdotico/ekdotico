@@ -6,6 +6,7 @@
 // Nothing here is of Next.js: the route hands over its `after`.
 import { tooManyRequests } from '../auth/route-answers.ts';
 import { errorResponse } from '../http.ts';
+import { refusal } from './access.ts';
 import { ANSWER_STATEMENTS } from './invitation-texts.ts';
 import { deliverInvitations, type AnswerResult, type CreateResult } from './sharing.ts';
 
@@ -80,5 +81,8 @@ export async function createdAnswer(
       return tooManyRequests('INVITATIONS_PER_USER', inviterId, result.retryAfterSeconds, inviterId);
     case 'not_found':
       return errorResponse(404, 'not_found', INVITATION_MESSAGES.notFound);
+    case 'no_permission':
+      // Read under the document's row: ownership passed after the request was authorised (FR-ED-47).
+      return refusal({ outcome: 'forbidden' }, inviterId, documentId, 'document.collaborators.invite');
   }
 }

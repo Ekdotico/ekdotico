@@ -67,7 +67,9 @@ export type CreateResult =
   /** NFR-SE-07: past the invitations an inviter may create in an hour. */
   | { outcome: 'rate_limited'; retryAfterSeconds: number }
   /** Deleted by a request beside this one, after the caller was authorised. */
-  | { outcome: 'not_found' };
+  | { outcome: 'not_found' }
+  /** The caller's role no longer holds the permission under the lock (a transfer of ownership in between): a 403. */
+  | { outcome: 'no_permission' };
 
 /**
  * FR-ED-21, FR-ED-37: one invitation for each address, pending, with a new
@@ -116,6 +118,29 @@ export async function lockDocument(tx: Prisma.TransactionClient, documentId: str
   return held.length > 0;
 }
 
+/**
+ * The Owner of the document and whether the caller holds `document.collaborators.invite` NOW, read under
+ * the row the caller holds: ownership may have passed since `documentRoute` authorised the request
+ * (FR-ED-47), so the permission and the Owner are read again, as slice 15 and 16 do.
+ */
+async function inviterUnderLock(tx: Prisma.TransactionClient, documentId: string, callerId: string) {
+  const document = await tx.document.findUnique({
+    where: { id: documentId },
+    select: {
+      ownerId: true,
+      permissionSet: true,
+      collaborators: { where: { userId: callerId }, select: { role: true } },
+    },
+  });
+  if (!document) return null;
+  const held = document.collaborators[0]?.role;
+  const role = document.ownerId === callerId ? 'owner' : held ? COLLABORATOR_ROLE[held] : null;
+  return {
+    ownerId: document.ownerId,
+    may: role !== null && holds(document.permissionSet, role, 'document.collaborators.invite'),
+  };
+}
+
 async function creating(
   tx: Prisma.TransactionClient,
   document: Pick<DocumentRow, 'id' | 'ownerId'>,
@@ -126,6 +151,9 @@ async function creating(
   counted: (giveBack: () => Promise<void>) => void,
 ): Promise<CreateResult> {
   if (!(await lockDocument(tx, document.id))) return { outcome: 'not_found' };
+  const under = await inviterUnderLock(tx, document.id, inviterId);
+  if (!under) return { outcome: 'not_found' };
+  if (!under.may) return { outcome: 'no_permission' };
 
   // The two refusals of FR-ED-37 rest on what the Owner knows. A holder of
   // the permission who is not the Owner may not know them, so only the
@@ -137,7 +165,7 @@ async function creating(
     where: { documentId: document.id },
     select: { userId: true },
   });
-  if (inviterId === document.ownerId) {
+  if (inviterId === under.ownerId) {
     const accepted = await tx.documentInvitation.findFirst({
       where: {
         documentId: document.id,
@@ -219,13 +247,21 @@ export async function resendInvitation(
   return createInvitations(document, inviterId, [earlier.email], role, now);
 }
 
-/** FR-ED-37: revokes a pending invitation of this document. False where there is none. */
+/**
+ * FR-ED-37: revokes a pending invitation of this document. Null where there is none; `'forbidden'` where
+ * the caller's role does not hold the permission now, read under the document's row.
+ */
 export async function revokeInvitation(
   documentId: string,
   invitationId: string,
+  callerId: string,
   now: Date = new Date(),
-): Promise<{ email: string } | null> {
+): Promise<{ email: string } | null | 'forbidden'> {
   return db().$transaction(async (tx) => {
+    if (!(await lockDocument(tx, documentId))) return null;
+    const under = await inviterUnderLock(tx, documentId, callerId);
+    if (!under) return null;
+    if (!under.may) return 'forbidden';
     const [revoked] = await tx.documentInvitation.updateManyAndReturn({
       where: { id: invitationId, documentId, ...open(now) },
       data: { state: 'REVOKED', respondedAt: now },
