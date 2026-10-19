@@ -55,14 +55,12 @@ export const KIND_TEXT: Record<PermissionKind, string> = {
 
 /**
  * The owner's decisions of 19 October 2026 (register rows S16-1, S16-3, S16-7).
- * What the table says of a cell or a column that α 0.1.0 does not offer, as the
- * accessible description of a disabled checkbox and the note under a row; the
- * Reviewer column's header; and the one sentence that the Owner's "Leave" cell
+ * What the table says of a cell or a column that α 0.1.0 does not offer: the
+ * note under a row, which also describes the disabled checkbox of its Editor cell; the
+ * Reviewer column's header, which describes the disabled checkboxes of that column; and the one sentence that the Owner's "Leave" cell
  * and the refusal of an Owner who tries to leave both say. "Owner" is the
  * product's role name, capitalised.
  */
-export const NOT_OFFERED_REVIEWER = 'The Reviewer role is not offered in this release.';
-export const NOT_OFFERED_CELL = 'This permission is not offered in this release.';
 export const NOT_OFFERED_ROW = 'Not offered in this release.';
 export const REVIEWER_HEADER = 'Reviewer (not offered in this release)';
 export const OWNER_LEAVE = 'You are the Owner. You must transfer ownership before leaving.';

@@ -42,8 +42,8 @@ import cells from './permissions.module.css';
 export type CellView =
   /** `note`: what the cell says beyond its word, for the screen reader (the Owner's "Leave", S16-3). */
   | { state: 'always' | 'never'; note?: string }
-  /** `notOffered`: the cell is shown disabled, and this is why (S16-1). */
-  | { state: 'adjustable'; checked: boolean; notOffered?: string };
+  /** `notOffered`: the cell is shown disabled, and the text already on the page that says why describes it (S16-1): the Reviewer's header, or the row's note. */
+  | { state: 'adjustable'; checked: boolean; notOffered?: 'column' | 'row' };
 
 export interface PermissionRowView {
   permission: Permission;
@@ -164,7 +164,7 @@ export function PermissionSettings({
             <TableHeaderCell scope="col">Permission</TableHeaderCell>
             <TableHeaderCell scope="col">Kind</TableHeaderCell>
             {TABLE_ROLES.map((role) => (
-              <TableHeaderCell key={role} scope="col">
+              <TableHeaderCell key={role} scope="col" id={`head-${role}`}>
                 {/* S16-1: the column of a role that α 0.1.0 does not offer says so in its header. */}
                 {role === 'reviewer' ? REVIEWER_HEADER : ROLE_NAME[role]}
               </TableHeaderCell>
@@ -177,7 +177,11 @@ export function PermissionSettings({
               <TableHeaderCell scope="row">
                 {row.text}
                 {row.limit ? <p className={cells.limit}>{EDITOR_LIMIT}</p> : null}
-                {row.notOffered ? <p className={cells.limit}>{NOT_OFFERED_ROW}</p> : null}
+                {row.notOffered ? (
+                  <p id={`not-offered-${row.permission.replaceAll('.', '-')}`} className={cells.limit}>
+                    {NOT_OFFERED_ROW}
+                  </p>
+                ) : null}
                 {/* S16-3: shown to everyone, and the Owner's cell is described by it. */}
                 {row.ownerNote ? (
                   <p id={`note-${row.permission.replaceAll('.', '-')}`} className={cells.limit}>
@@ -210,8 +214,12 @@ export function PermissionSettings({
                         labelHidden
                         checked={cell.checked}
                         disabled
-                        // The accessible description, as an attribute: the package has no hidden description.
-                        aria-description={cell.notOffered}
+                        // Described by text that is on the page: no hidden text, and no ARIA 1.3 attribute.
+                        aria-describedby={
+                          cell.notOffered === 'column'
+                            ? `head-${role}`
+                            : `not-offered-${row.permission.replaceAll('.', '-')}`
+                        }
                         onChange={() => {}}
                       />
                     </TableCell>

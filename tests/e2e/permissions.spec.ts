@@ -62,8 +62,6 @@ const ROWS = [
 
 // What the table says of what α 0.1.0 does not offer (S16-1) and of the Owner's "Leave" cell (S16-3).
 const NOT_OFFERED_ROW = 'Not offered in this release.';
-const NOT_OFFERED_CELL = 'This permission is not offered in this release.';
-const NOT_OFFERED_REVIEWER = 'The Reviewer role is not offered in this release.';
 const REVIEWER_HEADER = 'Reviewer (not offered in this release)';
 const OWNER_LEAVE = 'You are the Owner. You must transfer ownership before leaving.';
 
@@ -123,10 +121,10 @@ test('the Owner sees the table of the set, in words and checkboxes, and every co
   await expect(grid.getByRole('checkbox')).toHaveCount(12);
   await expect(grid.locator('input:disabled')).toHaveCount(4);
   const disabled: [Parameters<typeof box>[1], string, string, boolean][] = [
-    ['Editor', 'Resolve and reopen any comment thread', NOT_OFFERED_CELL, true],
-    ['Reviewer', 'Resolve and reopen any comment thread', NOT_OFFERED_REVIEWER, false],
-    ['Reviewer', 'See the list of collaborators', NOT_OFFERED_REVIEWER, true],
-    ['Reviewer', 'Draft export', NOT_OFFERED_REVIEWER, false],
+    ['Editor', 'Resolve and reopen any comment thread', NOT_OFFERED_ROW, true],
+    ['Reviewer', 'Resolve and reopen any comment thread', REVIEWER_HEADER, false],
+    ['Reviewer', 'See the list of collaborators', REVIEWER_HEADER, true],
+    ['Reviewer', 'Draft export', REVIEWER_HEADER, false],
   ];
   for (const [role, name, why, on] of disabled) {
     const off = box(page, role, name);

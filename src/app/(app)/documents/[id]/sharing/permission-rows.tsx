@@ -12,8 +12,6 @@ import {
 } from '../../../../../lib/documents/permission-rules.ts';
 import {
   KIND_TEXT,
-  NOT_OFFERED_CELL,
-  NOT_OFFERED_REVIEWER,
   OWNER_LEAVE,
   PERMISSION_TEXT,
   ROWS_WITH_LIMIT,
@@ -47,7 +45,7 @@ export function permissionRows(stored: unknown): PermissionRowView[] {
               checked: holds(stored, role, permission),
               ...(offered
                 ? {}
-                : { notOffered: role === 'reviewer' ? NOT_OFFERED_REVIEWER : NOT_OFFERED_CELL }),
+                : { notOffered: role === 'reviewer' ? ('column' as const) : ('row' as const) }),
             } satisfies CellView)
           : {
               state,
