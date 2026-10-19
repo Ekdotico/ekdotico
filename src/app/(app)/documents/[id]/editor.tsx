@@ -94,6 +94,12 @@ const ROLE_NOW = (role: DocumentRole, canEdit: boolean) =>
   `The role of this account on this document is now ${ROLE_NAME[role]}. ${
     canEdit ? 'The document can be edited in this tab.' : 'The document is read-only in this tab.'
   }`;
+// F14-2: the role of this tab's connection became one that cannot edit while the tab held changes
+// the server had not received. They are not taken, and the person is told (docs/plan/presence-row.md,
+// section 5; for the owner's approval). It follows `ROLE_NOW`, which says the new role.
+const UNSAVED =
+  'Your last changes in this tab were not saved. Ekdotico had not received them when the role of this account changed.';
+const COPY_UNSAVED = 'Copy unsaved text';
 // A repair of the document that this browser did not write (register D180,
 // the browser's half). Written for the owner's approval.
 const UNREPAIRED =
@@ -404,6 +410,29 @@ function HeldChange({ held, text }: { held: Held; text: () => string }) {
   );
 }
 
+/**
+ * F14-2: the changes this tab made that the server never took, after the role
+ * of the account changed to one that cannot edit. The words in them can be
+ * copied; a change that was not words (a mark, a deletion) is stated, with
+ * nothing to copy. The text stays in the document of the tab as well, read-only.
+ */
+function Unsaved({ text }: { text: string }) {
+  const [copied, setCopied] = useState<boolean | null>(null);
+  return (
+    <>
+      <p>{UNSAVED}</p>
+      {text ? (
+        <Stack gap={3}>
+          <Cluster gap={3}>
+            <Button onClick={() => void copyText(text).then(setCopied)}>{COPY_UNSAVED}</Button>
+          </Cluster>
+          <p role="status">{copied === null ? '' : copied ? 'Text copied.' : TEXT_NOT_COPIED_HERE}</p>
+        </Stack>
+      ) : null}
+    </>
+  );
+}
+
 function OpenDocument({ connection, canEdit }: { connection: DocumentConnection; canEdit: boolean }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
   const [check, setCheck] = useState<'checking' | 'in-sync' | 'unconfirmed' | null>(null);
@@ -489,6 +518,7 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
           autoFocus={false}
         >
           <p>{ROLE_NOW(state.notice.role, state.notice.canEdit)}</p>
+          {state.unsaved ? <Unsaved text={state.unsaved.text} /> : null}
         </FormFault>
       ) : null}
       {state.permissions ? (

@@ -75,7 +75,10 @@ function connect(port: number, cookie: string, documentId: string) {
   });
   const synced = new Promise<void>((resolve) => provider.on('synced', () => resolve()));
   const notices: string[] = [];
-  provider.on('stateless', ({ payload }: { payload: string }) => notices.push(payload));
+  // The list of the people present is another message (FR-ED-17); it is not what these tests count.
+  provider.on('stateless', ({ payload }: { payload: string }) => {
+    if (!payload.startsWith('{"kind":"people"')) notices.push(payload);
+  });
   provider.attach();
   return {
     socket,

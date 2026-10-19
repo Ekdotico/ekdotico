@@ -6,6 +6,7 @@
 // Nothing here reads a setting, the database, or anything of Next.js or of
 // Node.js: it loads in a browser as it is.
 import { ROLES, type DocumentRole } from '../documents/permissions.ts';
+import { COLLABORATOR_COLOURS, isSlot } from './presence.ts';
 import type { Limit } from './shape.ts';
 
 /**
@@ -212,4 +213,76 @@ export function readRoleNotice(payload: string): RoleNotice | null {
   const { kind, role, canEdit, ...rest } = read as Record<string, unknown>;
   if (kind !== 'role' || Object.keys(rest).length > 0 || typeof canEdit !== 'boolean') return null;
   return (ROLES as readonly unknown[]).includes(role) ? { role: role as DocumentRole, canEdit } : null;
+}
+
+/**
+ * FR-ED-17, the owner's decision of 18 October 2026: who has the document open.
+ * The server sends this to each open connection of the document, in its own
+ * words, when a connection is made or closed and when one is switched; the
+ * editor shows the people present as a row of pictures, Viewers included.
+ *
+ * It is a stateless message and not a field of awareness (register row PR-4 of
+ * docs/plan/presence-row.md): awareness is one state for every peer under the
+ * client's own clock, and a role that the server changes cannot be written
+ * into it again without racing the client's next update, nor be left out for
+ * the one recipient whose permission set hides the people.
+ */
+export interface Person {
+  /** The colour of the person's connection (`--collab-N`), the server's. */
+  slot: number;
+  /** The server's: the account's name, or the part of its address before the @ (`displayNameOf`). */
+  name: string;
+  /**
+   * The connection's role as the server holds it. Absent for a recipient whose
+   * role does not hold `document.collaborators.view`: the sharing page hides
+   * the roles of the people from it, and this list does not show what that
+   * page hides (register row PR-2).
+   */
+  role?: DocumentRole;
+  /** This is the recipient's own connection. */
+  you?: true;
+}
+
+/** The longest name a person is read with: a name the account settings accept is far shorter. */
+const PERSON_NAME_MOST = 1000;
+
+export function peopleNotice(people: readonly Person[]): string {
+  return JSON.stringify({ kind: 'people', people });
+}
+
+/**
+ * The people of `peopleNotice`, or null for anything else: text that is not
+ * JSON, another kind, more people than a document holds connections, and a
+ * person with a field more or fewer than these, a slot outside the colour set,
+ * a name that is not text or is very long, or a role that is not one. Read
+ * field by field, so nothing else a message carries goes further. A client
+ * sends this server nothing of the kind and no peer is relayed it.
+ */
+export function readPeopleNotice(payload: string): Person[] | null {
+  let read: unknown;
+  try {
+    read = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (typeof read !== 'object' || read === null || Array.isArray(read)) return null;
+  const { kind, people, ...rest } = read as Record<string, unknown>;
+  if (kind !== 'people' || Object.keys(rest).length > 0) return null;
+  if (!Array.isArray(people) || people.length > COLLABORATOR_COLOURS) return null;
+  const present: Person[] = [];
+  for (const each of people as unknown[]) {
+    if (typeof each !== 'object' || each === null || Array.isArray(each)) return null;
+    const { slot, name, role, you, ...more } = each as Record<string, unknown>;
+    if (Object.keys(more).length > 0 || !isSlot(slot)) return null;
+    if (typeof name !== 'string' || name.length > PERSON_NAME_MOST) return null;
+    if (role !== undefined && !(ROLES as readonly unknown[]).includes(role)) return null;
+    if (you !== undefined && you !== true) return null;
+    present.push({
+      slot,
+      name,
+      ...(role === undefined ? {} : { role: role as DocumentRole }),
+      ...(you ? { you } : {}),
+    });
+  }
+  return present;
 }

@@ -559,6 +559,191 @@ describe('the role of an open connection changes (FR-ED-40 (b), FR-ED-41)', () =
   });
 });
 
+/** A paragraph of the document as the editor's binding writes one. */
+function paragraphOf(text: string): Y.XmlElement {
+  const element = new Y.XmlElement('paragraph');
+  const body = new Y.XmlText();
+  element.insert(0, [body]);
+  body.insert(0, text);
+  return element;
+}
+
+describe('the words of changes the server did not take (F14-2)', () => {
+  const viewer = JSON.stringify({ kind: 'role', role: 'viewer', canEdit: false });
+  const editor = JSON.stringify({ kind: 'role', role: 'editor', canEdit: true });
+  /** The server's acknowledgement of one message that carried an update. */
+  const acknowledge = (socket: Socket) => socket.receive(toFrame(8, 1));
+
+  /** A tab with a paragraph the server acknowledged. */
+  async function acknowledged() {
+    const { connection, socket } = await opened();
+    const fragment = connection.document.getXmlFragment('default');
+    const first = paragraphOf('Kept. ');
+    fragment.insert(0, [first]);
+    await vi.advanceTimersByTimeAsync(0);
+    acknowledge(socket);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsent).toBe(false);
+    return { connection, socket, fragment, first, text: first.get(0) as Y.XmlText };
+  }
+
+  it('keeps the words typed after the last acknowledgement when the role becomes one that cannot edit', async () => {
+    const { connection, socket, text } = await acknowledged();
+    text.insert(6, 'Typed as an Editor.');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsent).toBe(true);
+    expect(connection.getState().unsaved).toBeUndefined();
+
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState()).toMatchObject({
+      canEdit: false,
+      notice: { role: 'viewer', canEdit: false },
+      // Only what was not acknowledged: the paragraph before it is the server's.
+      unsaved: { text: 'Typed as an Editor.' },
+    });
+    connection.stop();
+  });
+
+  it('keeps the words that waited for their batch in the tab, which the server was never sent', async () => {
+    const { connection, socket, text } = await acknowledged();
+    // Eight keys use the bucket, and the ninth waits 250 ms for its batch.
+    for (let key = 0; key < BURST_MESSAGES; key += 1) text.insert(text.length, 'x');
+    text.insert(text.length, ' waiting');
+    await vi.advanceTimersByTimeAsync(0);
+    const sentBefore = socket.updates.length;
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved?.text).toBe('xxxxxxxx waiting');
+    // The server took none of it, and the tab is not sending any more that waits.
+    expect(socket.updates.length).toBe(sentBefore);
+    connection.stop();
+  });
+
+  it('says nothing of unsaved words where the server acknowledged everything before it told the role', async () => {
+    const { connection, socket, text } = await acknowledged();
+    text.insert(6, 'Typed and taken.');
+    await vi.advanceTimersByTimeAsync(0);
+    acknowledge(socket);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsent).toBe(false);
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().notice).toEqual({ role: 'viewer', canEdit: false });
+    expect(connection.getState().unsaved).toBeUndefined();
+    connection.stop();
+  });
+
+  it('keeps a change that was not words as unsaved with no words to copy', async () => {
+    const { connection, socket, text } = await acknowledged();
+    text.delete(0, 3);
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved).toEqual({ text: '' });
+    connection.stop();
+  });
+
+  it('offers the words typed while the socket was lost, when the new handshake says the role cannot edit', async () => {
+    const { connection, socket, text } = await acknowledged();
+    text.insert(6, 'Typed offline.');
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(authenticated('readonly'));
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState()).toMatchObject({ canEdit: false, unsaved: { text: 'Typed offline.' } });
+    connection.stop();
+  });
+
+  // The library sets its count of unacknowledged messages to 1 at every (re)connection, for the answer
+  // to its first step, whether or not a change waits: the count cannot say that the tab holds one.
+  it('says nothing of unsaved words where the tab reconnects with every change acknowledged', async () => {
+    const { connection, socket } = await acknowledged();
+    (connection as unknown as { provider: { forceSync(): void } }).provider.forceSync();
+    expect(connection.getState().unsent).toBe(true);
+    socket.receive(authenticated('readonly'));
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState()).toMatchObject({
+      canEdit: false,
+      notice: { role: 'viewer', canEdit: false },
+    });
+    expect(connection.getState().unsaved).toBeUndefined();
+    connection.stop();
+  });
+
+  it('takes the statement away when the connection may edit again, which sends what the tab holds', async () => {
+    const { connection, socket, text } = await acknowledged();
+    text.insert(6, 'Typed as an Editor.');
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved).toBeDefined();
+    socket.receive(stateless(editor));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved).toBeUndefined();
+    expect(connection.getState().notice).toEqual({ role: 'editor', canEdit: true });
+    expect(asks(socket)).toHaveLength(1);
+    connection.stop();
+  });
+
+  it('does not keep unsaved words for a tab that never held a change, or for a change of one reader’s role to another', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(viewer));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved).toBeUndefined();
+    socket.receive(stateless(JSON.stringify({ kind: 'role', role: 'reviewer', canEdit: false })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsaved).toBeUndefined();
+    connection.stop();
+  });
+});
+
+describe('who has the document open (FR-ED-17)', () => {
+  const list = (people: unknown) => JSON.stringify({ kind: 'people', people });
+
+  it('is kept as the server last said it, and the next list replaces it', async () => {
+    const { connection, socket } = await opened();
+    expect(connection.getState().people).toBeUndefined();
+    socket.receive(stateless(list([{ slot: 1, name: 'Ada Owner', role: 'owner', you: true }])));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().people).toEqual([{ slot: 1, name: 'Ada Owner', role: 'owner', you: true }]);
+    socket.receive(stateless(list([])));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().people).toEqual([]);
+    // Nothing else of the connection moved.
+    expect(connection.getState()).toMatchObject({ phase: 'connected', canEdit: true });
+    expect(connection.getState().notice).toBeUndefined();
+    connection.stop();
+  });
+
+  it.each([
+    ['a slot past the colours', list([{ slot: 11, name: 'x' }])],
+    ['a field more', list([{ slot: 1, name: 'x', email: 'a@b' }])],
+    ['a role that is not one', list([{ slot: 1, name: 'x', role: 'admin' }])],
+    ['not a list', list('Ada')],
+  ])('keeps the last list where the next is %s', async (_, payload) => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(list([{ slot: 2, name: 'Ben Editor' }])));
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(stateless(payload));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().people).toEqual([{ slot: 2, name: 'Ben Editor' }]);
+    connection.stop();
+  });
+
+  it('is gone with the connection: a new one is told afresh', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(list([{ slot: 1, name: 'Ada Owner' }])));
+    await vi.advanceTimersByTimeAsync(0);
+    connection.stop();
+    connection.start();
+    expect(connection.getState().people).toBeUndefined();
+    connection.stop();
+  });
+});
+
 describe('awareness (FR-ED-17)', () => {
   it('is the provider’s own once the connection is started, and says nothing of this client but its cursor', async () => {
     const connection = new DocumentConnection({

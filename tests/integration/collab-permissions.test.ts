@@ -21,7 +21,7 @@ const database = prepare('collabpermissions', { TRUSTED_PROXY_COUNT: '1' });
 const { auth, db, valkey, settings } = await load();
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { defaultPermissionSet } = await import('../../src/lib/documents/permissions.ts');
-const { COLLAB_PATH, readPermissionsNotice, readRoleNotice } =
+const { COLLAB_PATH, readPeopleNotice, readPermissionsNotice, readRoleNotice } =
   await import('../../src/lib/collab/protocol.ts');
 const { COLLAB_EVENTS_CHANNEL } = await import('../../src/lib/collab/events.ts');
 const { createCollabServer } = await import('../../src/collab/server.ts');
@@ -47,7 +47,11 @@ function connect(port: number, cookie: string, documentId: string) {
   const synced = new Promise<void>((resolve) => provider.on('synced', () => resolve()));
   const notices: string[] = [];
   const closed: string[] = [];
-  provider.on('stateless', ({ payload }: { payload: string }) => notices.push(payload));
+  // The list of the people present is another message (FR-ED-17); it is not what these tests count.
+  const lists: string[] = [];
+  provider.on('stateless', ({ payload }: { payload: string }) => {
+    (payload.startsWith('{"kind":"people"') ? lists : notices).push(payload);
+  });
   provider.on('close', ({ event }: { event: { reason: string } }) => closed.push(event.reason));
   provider.attach();
   return {
@@ -55,6 +59,7 @@ function connect(port: number, cookie: string, documentId: string) {
     provider,
     synced,
     notices,
+    lists,
     closed,
     changes: provider.document.getArray<string>('changes'),
   };
@@ -487,6 +492,51 @@ describe('the permission to edit content, for each role, at the handshake and af
       }
       await sleep(600);
       expect(held.getArray('changes').toArray().sort()).toEqual(['written as editor', 'written as owner']);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+// ── FR-ED-17: who is present, and the permission that hides the people ─────
+
+describe('the people present and the permission that hides the people (register row PR-2)', () => {
+  const lastList = (client: { lists: string[] }) => readPeopleNotice(client.lists.at(-1) ?? '');
+  /** The last list as name to role, which is the same whatever order the three handshakes arrived in. */
+  const rolesIn = (client: { lists: string[] }) =>
+    Object.fromEntries((lastList(client) ?? []).map(({ name, role }) => [name, role]));
+  const SEEN = { 'Ada Owner': 'owner', 'Ben Editor': 'editor', 'Cy Viewer': 'viewer' };
+  const HIDDEN = { 'Ada Owner': undefined, 'Ben Editor': undefined, 'Cy Viewer': undefined };
+
+  it('leaves the roles out of the list of a role that may not see the people, sends the lists again at the change, and puts them back', async () => {
+    const local = await inProcess();
+    try {
+      const { id, owner, clients } = await three(local);
+      // By default every role sees the people, and each list marks its recipient's own entry.
+      await until(() => lastList(clients.viewer)?.length === 3);
+      expect(rolesIn(clients.viewer)).toEqual(SEEN);
+      expect(
+        lastList(clients.viewer)!
+          .filter(({ you }) => you)
+          .map(({ name }) => name),
+      ).toEqual(['Cy Viewer']);
+      expect(new Set(lastList(clients.viewer)!.map(({ slot }) => slot)).size).toBe(3);
+
+      await within(
+        () => setCell(owner.cookie, id, 'document.collaborators.view', 'viewer', false),
+        () => Object.values(rolesIn(clients.viewer)).every((role) => role === undefined),
+      );
+      // The Viewer is shown who is there and in which colour, and no one's role.
+      expect(rolesIn(clients.viewer)).toEqual(HIDDEN);
+      expect(lastList(clients.viewer)).toHaveLength(3);
+      // The Editor's role still sees them.
+      expect(rolesIn(clients.editor)).toEqual(SEEN);
+
+      await within(
+        () => setCell(owner.cookie, id, 'document.collaborators.view', 'viewer', true),
+        () => Object.values(rolesIn(clients.viewer)).every((role) => role !== undefined),
+      );
+      expect(rolesIn(clients.viewer)).toEqual(SEEN);
     } finally {
       await local.stop();
     }

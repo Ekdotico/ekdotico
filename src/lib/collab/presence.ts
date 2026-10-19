@@ -50,6 +50,47 @@ export function isSlot(value: unknown): value is number {
  */
 export const AWARENESS_MAX_BYTES = 4096;
 
+/**
+ * The most awareness messages one connection may send in any second (the
+ * owner's decision of 19 October 2026, register row S14-5). A person's cursor
+ * sends a few a second, and the editor batches them (`flushDelay` of the
+ * provider, 250 ms), so the limit is for a client that is not the editor. A
+ * message past it is dropped and the connection is kept
+ * (`beforeHandleMessage` of src/collab/server.ts).
+ */
+export const AWARENESS_PER_SECOND = 60;
+
+/**
+ * The limit above, for one connection: a sliding window of one second that
+ * remembers the times of the last `limit` messages it let through. A message
+ * is let through when the one `limit` messages before it was more than the
+ * window ago, so no second, taken from any moment, holds more than `limit`.
+ * The clock is given for the tests.
+ */
+export class AwarenessRate {
+  private readonly times: number[] = [];
+  private oldest = 0;
+  private readonly limit: number;
+  private readonly windowMs: number;
+
+  constructor(limit = AWARENESS_PER_SECOND, windowMs = 1000) {
+    this.limit = limit;
+    this.windowMs = windowMs;
+  }
+
+  /** True where a message at `now` is let through, and then counts. False where it is past the limit, and counts for nothing. */
+  take(now: number = Date.now()): boolean {
+    if (this.times.length < this.limit) {
+      this.times.push(now);
+      return true;
+    }
+    if (now - this.times[this.oldest]! < this.windowMs) return false;
+    this.times[this.oldest] = now;
+    this.oldest = (this.oldest + 1) % this.limit;
+    return true;
+  }
+}
+
 // The type of a message that carries awareness (@hocuspocus/server, `MessageType`).
 const AWARENESS_MESSAGE = 1;
 
@@ -132,6 +173,22 @@ export function displayNameOf({ name, email }: { name: string | null; email: str
   if (!email) return '';
   const at = email.lastIndexOf('@');
   return at < 0 ? email : email.slice(0, at);
+}
+
+// A letter with the marks that follow it (an accent written as its own character), or a digit.
+const INITIAL = /\p{L}\p{M}*|\p{N}/u;
+
+/**
+ * The letters of a person's picture in the row of the people present (the
+ * owner's decision of 18 October 2026): the first letter of the first and of
+ * the last word of the name, in capitals, or the first letter alone for a name
+ * of one word. A whole character each, and not a byte or a half of a pair, as
+ * the names are often Greek. A word with no letter or digit in it (a bracket,
+ * an emoji) is passed over; a name with none gives ''.
+ */
+export function initialsOf(name: string): string {
+  const letters = name.split(/\s+/u).flatMap((word) => INITIAL.exec(word)?.[0] ?? []);
+  return (letters.length > 1 ? [letters[0]!, letters.at(-1)!] : letters).join('').toLocaleUpperCase();
 }
 
 /** What every peer is told of a connection: who, and in which colour. Both are the server's. */

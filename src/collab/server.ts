@@ -52,6 +52,7 @@ import { Places, type Place } from '../lib/collab/places.ts';
 import {
   awarenessClients,
   awarenessTooLong,
+  AwarenessRate,
   isAwareness,
   CONNECTIONS_PER_DOCUMENT,
   displayNameOf,
@@ -60,9 +61,11 @@ import {
 import {
   COLLAB_PATH,
   LIMIT_REFUSAL,
+  peopleNotice,
   permissionsNotice,
   REFUSAL,
   roleNotice,
+  type Person,
   type Refusal,
 } from '../lib/collab/protocol.ts';
 import { decide, RECHECK_MS, sessionStands, type SessionRow } from '../lib/collab/recheck.ts';
@@ -118,6 +121,8 @@ type ServerSettings = StoreSettings & {
 export interface CollabOptions {
   connectionsPerDocument?: number;
   recheckMs?: number;
+  /** How long a switch of a connection waits for the messages it has received (`PENDING_WAIT_MS`). */
+  pendingWaitMs?: number;
 }
 
 /**
@@ -161,6 +166,13 @@ const FINAL_STORE_MS = 2500;
 // What each read of the re-check may take: the database client bounds a query
 // at 5 seconds (src/lib/db.ts), and this is the same bound for the whole read.
 const RECHECK_READ_MS = 5000;
+/**
+ * How long a switch of a connection between editable and read-only waits for
+ * the messages the connection has already received (F14-2; register row PR-7).
+ * FR-ED-40 gives the whole change 5 seconds, and a client that never stops
+ * sending would otherwise keep a downgrade from ever taking effect.
+ */
+export const PENDING_WAIT_MS = 1000;
 // The mark of that period for a refused origin, kept as every such mark is (src/lib/rate-limit.ts).
 const ORIGIN_REFUSED = 'collab:origin-refused';
 // And for an update refused for a limit of its document, one for each document and user.
@@ -264,6 +276,9 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
   const places = new Places(options.connectionsPerDocument ?? CONNECTIONS_PER_DOCUMENT);
   // The client identifiers of the awareness message each connection is being handled for (see `beforeHandleMessage`).
   const speaking = new WeakMap<Connection<CollabContext>, ReadonlySet<number>>();
+  // S14-5: the awareness messages each connection has sent in the last second (see `beforeHandleMessage`).
+  const awarenessRates = new WeakMap<Connection<CollabContext>, AwarenessRate>();
+  const pendingWaitMs = options.pendingWaitMs ?? PENDING_WAIT_MS;
   // The messages each user has sent this instance (see `beforeSync`).
   const takeMessage = limitHere(messages);
   const messageLogDueHere = oncePerHere(messages.windowSeconds);
@@ -434,6 +449,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         connection.close({ code: 1000, reason: REFUSAL.SESSION_ENDED });
       }
     }
+    const switches: Promise<void>[] = [];
     for (const entry of open) {
       if (stopping) return;
       const { connection } = entry;
@@ -473,34 +489,105 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // since have changed.
       if ((decided.get(connection) ?? 0) > reading) continue;
       decided.set(connection, reading);
+      // Not awaited here: a switch may wait for the connection's messages, and the closes of the
+      // other connections of the run must not wait behind it (the 5 seconds of FR-ED-40).
       if (decision.action === 'switch') {
-        // FR-ED-40 (b): in place. The record is what the role holds now, and
-        // the library reads the flag at each message it applies.
-        const readOnly = isReadOnly(decision.record);
-        if (!readOnly && connection.readOnly) {
-          // Made editable only between messages: the library reads the flag after the hook that
-          // checks an update, and a read-only connection's updates are not checked (`beforeSync`).
-          // Nothing is awaited from here to the flag.
-          await connection.waitForPendingMessages();
-          if (!entry.document.hasConnection(connection)) continue;
-          // A fresher decision was applied while this one waited for the messages in flight.
-          if (decided.get(connection) !== reading) continue;
-        }
-        const { role: was, permissions: held } = connection.context;
-        const changed = readOnly !== connection.readOnly;
-        Object.assign(connection.context, {
-          role: decision.record.role,
-          permissions: decision.record.permissions,
-        });
-        connection.readOnly = readOnly;
-        if (changed || decision.record.role !== was) {
-          connection.sendStateless(roleNotice({ role: decision.record.role, canEdit: !readOnly }));
-        } else if (!sameList(held, decision.record.permissions)) {
-          // FR-ED-40 (g): the role is the same and what it holds on this document is not. The
-          // connection stays open and stays as editable as it was: that is fixed by role.
-          connection.sendStateless(permissionsNotice({ role: decision.record.role }));
-        }
+        switches.push(applySwitch(entry.document, connection, decision.record, reading));
       }
+    }
+    await Promise.all(switches);
+  }
+
+  /**
+   * Whether the messages this connection has already received have been
+   * handled, waiting at most `pendingWaitMs` for them (F14-2; register row PR-7).
+   * A client that keeps sending would otherwise keep the switch of its own
+   * connection from ever being made.
+   */
+  async function settled(connection: Connection<CollabContext>): Promise<boolean> {
+    try {
+      await within(pendingWaitMs, connection.waitForPendingMessages());
+      return true;
+    } catch (error) {
+      if (!(error instanceof TimedOut)) console.error(`collab: messages not awaited (${faultOf(error)})`);
+      return false;
+    }
+  }
+
+  /**
+   * FR-ED-40 (b), (g): the connection stays open with the record of the role it
+   * holds now, and is read-only or editable in place as that record says. The
+   * library reads the flag at each message it applies, after the hook that
+   * checks an update (`beforeSync`), and a read-only connection's updates are
+   * not checked. So a connection changes between the two only between its
+   * messages, and nothing is awaited from the last wait to the flag.
+   *
+   * - Made editable: after the messages it has received, so that none that
+   *   was not checked is applied. Where they have not been handled within
+   *   `pendingWaitMs` it is not made editable (the next look makes it).
+   * - Made read-only (F14-2): after the messages it has received too, so that
+   *   what the server had received while the person was an Editor is kept, as
+   *   a document that merged it before the change. Where they have not been
+   *   handled within `pendingWaitMs` it is made read-only all the same: the
+   *   downgrade takes effect, and what still waits is discarded. After the
+   *   flag turns the library applies nothing the connection sends.
+   */
+  async function applySwitch(
+    document: Document,
+    connection: Connection<CollabContext>,
+    record: CollabConnection,
+    reading: number,
+  ): Promise<void> {
+    const readOnly = isReadOnly(record);
+    if (readOnly !== connection.readOnly) {
+      const handled = await settled(connection);
+      // Closed while it waited: nothing is done to a connection that is gone.
+      if (!document.hasConnection(connection)) return;
+      // A fresher decision was applied while this one waited for the messages in flight.
+      if (decided.get(connection) !== reading) return;
+      if (!handled && !readOnly) return;
+      if (!handled) console.error('collab: a downgrade did not wait for all the messages it had received');
+    }
+    const { role: was, permissions: held } = connection.context;
+    const changed = readOnly !== connection.readOnly;
+    Object.assign(connection.context, { role: record.role, permissions: record.permissions });
+    connection.readOnly = readOnly;
+    if (changed || record.role !== was) {
+      connection.sendStateless(roleNotice({ role: record.role, canEdit: !readOnly }));
+    } else if (!sameList(held, record.permissions)) {
+      // FR-ED-40 (g): the role is the same and what it holds on this document is not. The
+      // connection stays open and stays as editable as it was: that is fixed by role.
+      connection.sendStateless(permissionsNotice({ role: record.role }));
+    }
+    tellPeople(document);
+  }
+
+  /**
+   * FR-ED-17, the owner's decision of 18 October 2026: tells every open
+   * connection of the document who has it open (`peopleNotice` of
+   * src/lib/collab/protocol.ts). Each is sent its own list: its own entry is
+   * marked, and the roles are left out for a connection whose role does not
+   * hold `document.collaborators.view` (register row PR-2). Name, slot and role
+   * are the server's, read from the connections' records and places.
+   */
+  function tellPeople(document: Document): void {
+    if (stopping) return;
+    try {
+      const present = (document.getConnections() as Connection<CollabContext>[]).sort(
+        (a, b) => a.context.place.slot - b.context.place.slot,
+      );
+      for (const to of present) {
+        const mayKnow = to.context.permissions.includes('document.collaborators.view');
+        const people: Person[] = present.map(({ context }) => ({
+          slot: context.place.slot,
+          name: context.place.name,
+          ...(mayKnow ? { role: context.role } : {}),
+          ...(context === to.context ? { you: true as const } : {}),
+        }));
+        to.sendStateless(peopleNotice(people));
+      }
+    } catch (error) {
+      console.error(`collab: people not told (${faultOf(error)})`);
     }
   }
 
@@ -950,12 +1037,18 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         connection.close({ code: 1000, reason: REFUSAL.UNAVAILABLE });
         return;
       }
-      connection.onClose(() => places.release(context.place));
+      connection.onClose((document) => {
+        places.release(context.place);
+        // The others are told that this connection is gone (FR-ED-17).
+        tellPeople(document);
+      });
       // FR-ED-40 (b), FR-ED-41: the role of this connection, told at every
       // connection and not only at a change. A client that was away while its
       // role changed learns it here (its scope says whether it may edit, and
       // this says in which role); one that was not takes it for what it knows.
       connection.sendStateless(roleNotice({ role: context.role, canEdit: !isReadOnly(context) }));
+      // And who is present, the new connection among them (FR-ED-17).
+      tellPeople(connection.document);
       const at = ended.get(documentName);
       if (at === undefined || Date.now() - at > ENDED_MEMORY_MS) return;
       let reason: Refusal | undefined;
@@ -1054,7 +1147,14 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // runs for this same message: the connection's messages are handled one at a time.
       // An awareness message that does not read to its end speaks for no one (the library may
       // still decode it): the set of the message before is never the set of this one.
-      if (isAwareness(update)) speaking.set(connection, new Set(awarenessClients(update) ?? []));
+      if (!isAwareness(update)) return;
+      // S14-5: a message past the limit of the connection speaks for no one either, so that
+      // `beforeHandleAwareness` takes every state out of it and nothing goes on to any peer. It is
+      // dropped and the connection is kept: the library offers no way to refuse one message but
+      // by closing the connection, and a client that moves its cursor fast has done no wrong.
+      let rate = awarenessRates.get(connection);
+      if (!rate) awarenessRates.set(connection, (rate = new AwarenessRate()));
+      speaking.set(connection, rate.take() ? new Set(awarenessClients(update) ?? []) : new Set());
     },
 
     /**
