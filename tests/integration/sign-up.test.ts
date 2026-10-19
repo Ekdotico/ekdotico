@@ -475,7 +475,11 @@ describe('a browser that already holds a session', () => {
     // The account stands (FR-AU-90), and the browser is signed in as no one.
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ signedIn: false });
+    // The read of the held session's user failed first (one line: no notice is sent), and then the deletion.
     expect(printed.mock.calls).toEqual([
+      [
+        'session end: the user of a session was not read, no notice is sent (PrismaClientKnownRequestError P2021)',
+      ],
       ['sign-up: account created, session not started (PrismaClientKnownRequestError P2021)'],
     ]);
     const cookies = response.headers.getSetCookie();
