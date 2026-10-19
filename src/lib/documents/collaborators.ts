@@ -25,6 +25,7 @@ import { displayNameOf } from '../collab/presence.ts';
 import { db } from '../db.ts';
 import { securityLogIn } from '../security-log.ts';
 import { mayAct, refusalOn, type CollaboratorAction } from './collaborator-rules.ts';
+import { withdrawOffersFor } from './ownership.ts';
 import { COLLABORATOR_ROLE, type DocumentRole } from './permissions.ts';
 import { lockDocument, OFFERED, type OfferedRole } from './sharing.ts';
 
@@ -141,6 +142,8 @@ export async function changeRole(
         data: { role: OFFERED[wanted], roleSince: now },
       });
       await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
+      // FR-ED-47: an offer of ownership to an Editor who stops being one is withdrawn.
+      if (OFFERED[wanted] !== 'EDITOR') await withdrawOffersFor(tx, documentId, found.userId, now);
       return { result: { outcome: 'changed', name, role: wanted }, userId: found.userId };
     },
   );
@@ -168,6 +171,7 @@ export async function removeCollaborator(
       const { found, name } = acted;
       await tx.documentCollaborator.delete({ where: { id: found.id } });
       await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
+      await withdrawOffersFor(tx, documentId, found.userId, new Date());
       return { result: { outcome: 'removed', name }, userId: found.userId };
     },
   );
@@ -189,6 +193,7 @@ export async function leaveDocument(documentId: string, callerId: string): Promi
     if (count !== 1) return { outcome: 'not_found' };
     // The one who acts is the one who goes.
     await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
+    await withdrawOffersFor(tx, documentId, callerId, new Date());
     return { outcome: 'left' };
   });
   if (done.outcome === 'left') await announce(documentId, callerId);

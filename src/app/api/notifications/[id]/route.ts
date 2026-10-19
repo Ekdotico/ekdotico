@@ -3,6 +3,7 @@
 // identifier is a 404, as one that does not exist. No body.
 import { fault, notAdmitted, refusedOrigin } from '../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../lib/auth/session.ts';
+import { markOfferNotificationRead } from '../../../../lib/documents/ownership.ts';
 import { markNotificationRead } from '../../../../lib/documents/sharing.ts';
 import { errorResponse } from '../../../../lib/http.ts';
 
@@ -23,7 +24,10 @@ export async function PATCH(
     const { session } = validation;
     if (!session) return await notAdmitted(validation);
     const { id } = await context.params;
-    if (!(await markNotificationRead(session.userId, id))) return errorResponse(404, 'not_found', NOT_FOUND);
+    const marked =
+      (await markNotificationRead(session.userId, id)) ||
+      (await markOfferNotificationRead(session.userId, id));
+    if (!marked) return errorResponse(404, 'not_found', NOT_FOUND);
     return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     return fault('notifications', error);

@@ -7,7 +7,9 @@
 import { notFound } from 'next/navigation';
 import { authorise } from '../../../../../lib/documents/access.ts';
 import { mayAct, refusalOn } from '../../../../../lib/documents/collaborator-rules.ts';
+import { openOfferOf } from '../../../../../lib/documents/ownership.ts';
 import { holds, ROLE_NAME } from '../../../../../lib/documents/permissions.ts';
+import { settings } from '../../../../../lib/settings.ts';
 import { sharingOf } from '../../../../../lib/documents/sharing.ts';
 import { reading } from '../../../../page-fault.ts';
 import styles from '../../../../pages.module.css';
@@ -17,6 +19,7 @@ import { LeaveDocument } from './collaborator-actions.tsx';
 import { PermissionSettings } from './permission-settings.tsx';
 import { permissionRows, RoleSummary } from './permission-rows.tsx';
 import { SharingSettings } from './sharing-settings.tsx';
+import { TransferOwnership } from './transfer-ownership.tsx';
 
 export const generateMetadata = () => titled('Sharing');
 
@@ -52,12 +55,29 @@ export default async function Sharing({ params }: { params: Promise<{ id: string
     );
   }
   const sharing = await reading(() => sharingOf(document, role, userId));
+  // FR-ED-47: the Owner alone is offered the transfer (`document.ownership.transfer` is fixed to the
+  // Owner); the server asks again, under the lock. The Editors are those the people list holds.
+  const open = role === 'owner' ? await reading(() => openOfferOf(document.id)) : null;
+  const transfer =
+    role === 'owner' ? (
+      <TransferOwnership
+        documentId={document.id}
+        editors={sharing.collaborators.filter(({ role: held }) => held === 'editor')}
+        offer={open ? { toName: open.toName, expiresAt: open.expiresAt.toISOString() } : null}
+        days={settings().ownershipOfferDays}
+      />
+    ) : null;
   const roles = mayAct(document.permissionSet, role, 'roles');
   const remove = mayAct(document.permissionSet, role, 'remove');
   return (
     <SharingSettings
       // FR-ED-46: the screen of the permission set is part of the sharing settings.
-      section={permissions}
+      section={
+        <>
+          {permissions}
+          {transfer}
+        </>
+      }
       view={{
         documentId: document.id,
         people: sharing.people,

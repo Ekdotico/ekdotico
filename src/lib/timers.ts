@@ -1,6 +1,7 @@
 // The timers of the application (NFR-RE-15): scheduled work that is not a queue
 // job. Started once when a process starts.
 import { deleteExpiredDocuments } from './documents/deletion.ts';
+import { expireOffers } from './documents/ownership.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
 import { faultOf } from './fault.ts';
@@ -24,6 +25,9 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // admission invitation 30 days on, is not built yet.
   'ended-session-removal': () => deleteEndedSessions(),
   'expired-token-removal': () => deleteExpiredTokens(),
+  // NFR-RE-15, "the expiry of the offer" (FR-ED-47): writes the offers past their time expired and
+  // deletes their notifications; it says how many it deleted.
+  'ownership-offer-expiry': () => expireOffers(),
 };
 
 function runTimers(): void {
