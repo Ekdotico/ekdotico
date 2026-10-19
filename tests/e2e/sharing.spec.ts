@@ -1,11 +1,14 @@
-// Sharing a document (FR-ED-21, FR-ED-37, FR-ED-42): inviting from the
-// sharing settings, the uniform confirmation, the email and the notification,
-// accepting and declining, revoking and sending again, expiry, and the limit
-// of ten people. A Viewer's editor that does not write (FR-ED-39) needs the
-// collaboration server, and is in tests/e2e/editor.spec.ts.
+// Sharing a document (FR-ED-21, FR-ED-37, FR-ED-38, FR-ED-42): inviting from
+// the sharing settings, the uniform confirmation, the email and the
+// notification, accepting and declining, revoking and sending again, expiry,
+// the limit of ten people, and changing a role, removing a collaborator and
+// leaving. A Viewer's editor that does not write (FR-ED-39), and what a
+// removal, a leave and a change of role do to an open page (FR-ED-40), need the
+// collaboration server, and are in tests/e2e/editor.spec.ts.
 import { expect, test, type Page } from './fixtures.ts';
-import { mailFor, newPerson, signUp, type Person } from './account.ts';
+import { expectNoSidewaysScroll, mailFor, newPerson, screens, signUp, type Person } from './account.ts';
 import {
+  accept,
   CONFIRMATION,
   expire,
   invite,
@@ -14,6 +17,8 @@ import {
   NO_LONGER_OPEN,
   NOT_OPEN_TO_ACCOUNT,
   pendingRow,
+  personRow,
+  setPermissions,
   shareNew,
 } from './sharing.ts';
 
@@ -142,4 +147,168 @@ test('a document holds ten people, the Owner and pending invitations counted', a
   await invite(page, [`ten-${stamp}-tenth@example.com`]);
   await expect(page.getByRole('alert').filter({ hasText: LIMIT })).toBeVisible();
   await expect(page.getByText('10 of 10 people')).toBeVisible();
+});
+
+// FR-ED-38, FR-ED-44 (b): the controls over the people, and what each statement says. The words are
+// those of docs/plan/slice-15.md, §7 (for the owner's approval), written out here.
+test('the Owner changes a role and removes a collaborator, a collaborator leaves, and a removed person is invited again', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  await enter(page, { ...newPerson(), name: 'Ada Owner' });
+  const id = await shareNew(page);
+  const bea = { ...newPerson(), name: 'Bea Editor' };
+  const cy = { ...newPerson(), name: 'Cy Viewer' };
+  const [beaContext, cyContext] = [await browser.newContext(), await browser.newContext()];
+  const [theirs, his] = [await beaContext.newPage(), await cyContext.newPage()];
+  await enter(theirs, bea);
+  await enter(his, cy);
+  await invite(page, [bea.email]);
+  await expect(page.getByRole('status')).toContainText(CONFIRMATION(bea.email));
+  await invite(page, [cy.email], 'Viewer');
+  await expect(page.getByRole('status')).toContainText(CONFIRMATION(cy.email));
+  await accept(theirs, bea.email, id);
+  await accept(his, cy.email, id);
+  const firstLink = (await mailFor(cy.email, INVITATION_LINK)).found;
+  await page.reload();
+  await expect(page.getByText('3 of 10 people')).toBeVisible();
+
+  // Each collaborator has a role control, "Change role" (off until another role is chosen), and "Remove".
+  const bea$ = personRow(page, 'Bea Editor');
+  const cy$ = personRow(page, 'Cy Viewer');
+  await expect(bea$).toContainText('Bea Editor, Editor');
+  await expect(cy$).toContainText('Cy Viewer, Viewer');
+  await expect(cy$.getByRole('combobox', { name: 'Role of Cy Viewer' })).toHaveValue('viewer');
+  await expect(cy$.getByRole('button', { name: 'Change role' })).toBeDisabled();
+  await expect(cy$.getByRole('button', { name: 'Remove' })).toHaveAccessibleDescription('Cy Viewer');
+  await screens(page, 'sharing-people-owner');
+
+  // A role is changed, and what was done is said, with focus on the statement (WCAG 2.4.3).
+  await cy$.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await cy$.getByRole('button', { name: 'Change role' }).click();
+  await expect(page.getByRole('status')).toHaveText('Role of Cy Viewer changed to Editor.');
+  await expect(page.getByRole('status')).toBeFocused();
+  await expect(cy$).toContainText('Cy Viewer, Editor');
+  await cy$.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('viewer');
+  await cy$.getByRole('button', { name: 'Change role' }).click();
+  await expect(page.getByRole('status')).toHaveText('Role of Cy Viewer changed to Viewer.');
+  await expect(cy$).toContainText('Cy Viewer, Viewer');
+
+  // An Editor holds no permission to act on the people: Bea sees them, and no control over them.
+  await theirs.goto(`/documents/${id}/sharing`);
+  await expect(theirs.getByRole('heading', { level: 1, name: 'Sharing' })).toBeVisible();
+  await expect(theirs.getByText('3 of 10 people')).toBeVisible();
+  await expect(theirs.getByRole('combobox')).toHaveCount(0);
+  await expect(theirs.getByRole('button', { name: 'Remove' })).toHaveCount(0);
+  await expect(theirs.getByRole('button', { name: 'Change role' })).toHaveCount(0);
+  // Nor does the Owner have the section of one who leaves (FR-ED-38: "The Owner cannot ... leave").
+  await expect(page.getByRole('heading', { name: 'Leave document' })).toHaveCount(0);
+
+  // A removal asks first, says what happens, and opens on Cancel, which removes no one.
+  await cy$.getByRole('button', { name: 'Remove' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Remove collaborator' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await expect(dialog).toContainText('Cy Viewer');
+  await expect(dialog).toContainText(
+    'Removing this collaborator ends their access to the document and closes their open connections to it. Their edits stay in the document. They can be invited again.',
+  );
+  await screens(page, 'sharing-remove-confirmation');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(cy$).toBeVisible();
+  await expect(page.getByText('3 of 10 people')).toBeVisible();
+
+  await cy$.getByRole('button', { name: 'Remove' }).click();
+  await dialog.getByRole('button', { name: 'Remove collaborator' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('status')).toHaveText('Cy Viewer removed from this document.');
+  await expect(page.getByRole('status')).toBeFocused();
+  await expect(cy$).toHaveCount(0);
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  // The document is no longer Cy's: it leaves the list, and the address is no page.
+  await his.goto('/');
+  await expect(his.getByRole('link', { name: 'Untitled document' })).toHaveCount(0);
+  await his.goto(`/documents/${id}`);
+  await expect(his.getByText('Page not found')).toBeVisible();
+
+  // A removed person may be invited again: a new invitation is a new grant.
+  await invite(page, [cy.email], 'Viewer');
+  await expect(page.getByRole('status')).toContainText(CONFIRMATION(cy.email));
+  await accept(his, cy.email, id, firstLink);
+  await his.goto('/');
+  await expect(his.getByRole('link', { name: 'Untitled document' })).toBeVisible();
+
+  // Bea leaves: the section, the statement before the control, and a confirmation that opens on Cancel.
+  await theirs.goto(`/documents/${id}/sharing`);
+  await expect(theirs.getByRole('heading', { level: 2, name: 'Leave document' })).toBeVisible();
+  // (The same sentence stands in the confirmation, which is closed: the first is the section's.)
+  await expect(
+    theirs
+      .getByText(
+        'Leaving removes this document from your list of documents and closes your open connections to it. Your edits stay in the document. You can be invited again.',
+      )
+      .first(),
+  ).toBeVisible();
+  await screens(theirs, 'sharing-leave');
+  await expectNoSidewaysScroll(theirs);
+  await theirs.getByRole('button', { name: 'Leave document' }).click();
+  const leaving = theirs.getByRole('dialog', { name: 'Leave document' });
+  await expect(leaving.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await leaving.getByRole('button', { name: 'Cancel' }).click();
+  await expect(theirs.getByRole('heading', { level: 2, name: 'Leave document' })).toBeVisible();
+  await theirs.getByRole('button', { name: 'Leave document' }).click();
+  await leaving.getByRole('button', { name: 'Leave document' }).click();
+  await theirs.waitForURL('**/');
+  await expect(theirs.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  await expect(theirs.getByRole('link', { name: 'Untitled document' })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  await expect(personRow(page, 'Bea Editor')).toHaveCount(0);
+  await beaContext.close();
+  await cyContext.close();
+});
+
+// FR-ED-44 (b), as the page shows it: the Owner has given Editors the permissions, and an Editor
+// then acts on a Viewer and is offered nothing over another Editor or oneself.
+test('an Editor who is given the permissions acts on a Viewer, and is offered nothing over an Editor or over oneself', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  await enter(page, { ...newPerson(), name: 'Ada Owner' });
+  const id = await shareNew(page);
+  const bea = { ...newPerson(), name: 'Bea Editor' };
+  const dan = { ...newPerson(), name: 'Dan Editor' };
+  const cy = { ...newPerson(), name: 'Cy Viewer' };
+  const contexts = await Promise.all([1, 2, 3].map(() => browser.newContext()));
+  const [beas, dans, cys] = await Promise.all(contexts.map((context) => context.newPage()));
+  await enter(beas!, bea);
+  await enter(dans!, dan);
+  await enter(cys!, cy);
+  await invite(page, [bea.email, dan.email]);
+  await expect(page.getByRole('status')).toContainText(CONFIRMATION(dan.email));
+  await invite(page, [cy.email], 'Viewer');
+  await expect(page.getByRole('status')).toContainText(CONFIRMATION(cy.email));
+  await accept(beas!, bea.email, id);
+  await accept(dans!, dan.email, id);
+  await accept(cys!, cy.email, id);
+
+  // The Owner gives Editors the permission, in the database of the run: the screen that gives it is slice 16.
+  setPermissions(id, ['document.collaborators.roles', 'document.collaborators.remove']);
+  await beas!.goto(`/documents/${id}/sharing`);
+  await expect(beas!.getByText('4 of 10 people')).toBeVisible();
+  // Over the Viewer, both controls; over the other Editor, and over oneself, none.
+  const viewer = personRow(beas!, 'Cy Viewer');
+  await expect(viewer.getByRole('combobox', { name: 'Role of Cy Viewer' })).toBeVisible();
+  await expect(viewer.getByRole('button', { name: 'Remove' })).toBeVisible();
+  await expect(personRow(beas!, 'Dan Editor').getByRole('button')).toHaveCount(0);
+  await expect(personRow(beas!, 'Bea Editor').getByRole('button')).toHaveCount(0);
+  // The Editor raises the Viewer to Editor, and then has no control over that person (FR-ED-44 (b)).
+  await viewer.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await viewer.getByRole('button', { name: 'Change role' }).click();
+  await expect(beas!.getByRole('status')).toHaveText('Role of Cy Viewer changed to Editor.');
+  await expect(personRow(beas!, 'Cy Viewer').getByRole('button')).toHaveCount(0);
+  for (const context of contexts) await context.close();
 });

@@ -18,11 +18,11 @@ import {
   type Person,
 } from './account.ts';
 import { connectAs, startCollab, stopCollab } from './collab.ts';
-import { invite, INVITATION_LINK, setRole, shareNew } from './sharing.ts';
+import { accept, invite, INVITATION_LINK, personRow, setRole, shareNew } from './sharing.ts';
 
 // One collaboration server for the file, and one test at a time: a test stops it.
 test.describe.configure({ mode: 'serial' });
-test.beforeAll(startCollab);
+test.beforeAll(() => startCollab());
 test.afterAll(stopCollab);
 
 // The fixed texts, written out here and not taken from the code under test.
@@ -4478,4 +4478,147 @@ test('an Editor whose role becomes Viewer is made read-only in place and told, a
   // The same connection throughout: the page opened no socket.
   expect(sockets.count).toBe(0);
   await other.close();
+});
+
+// FR-ED-40 (a), (b), (d), NFR-SE-03 (b), (c), FR-AU-27, FR-AU-84: a removal, a leave, a change of role,
+// and the end of a session act on an open page WITHIN 5 SECONDS of the change, made from the screens.
+// The collaboration server of these tests re-checks every 60 seconds here, so that nothing but the
+// event can have acted; the words are those already built (FR-ED-41, slice 14).
+test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () => {
+  test.beforeAll(async () => {
+    await stopCollab();
+    await startCollab('60000');
+  });
+  test.afterAll(async () => {
+    await stopCollab();
+    await startCollab();
+  });
+
+  const ended = (page: Page) =>
+    page.getByRole('status').filter({ hasText: 'Access to this document has ended' });
+
+  /** An Owner with a document open and its sharing settings open in a second tab, and an Editor who has accepted and has it open. */
+  async function owned(page: Page, browser: import('@playwright/test').Browser) {
+    const owner = { ...newPerson(), name: 'Ada Owner' };
+    await enter(page, owner);
+    const id = await openNew(page);
+    const manage = await page.context().newPage();
+    await manage.goto(`/documents/${id}/sharing`);
+    const editor = { ...newPerson(), name: 'Bea Editor' };
+    const context = await browser.newContext();
+    const theirs = await context.newPage();
+    await enter(theirs, editor);
+    await invite(manage, [editor.email], 'Editor');
+    await expect(manage.getByText('2 of 10 people')).toBeVisible();
+    await accept(theirs, editor.email, id);
+    await expect(status(theirs, 'In sync')).toBeVisible();
+    await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+    await manage.reload();
+    return { id, manage, theirs, context, owner, editor };
+  }
+
+  test('a removal closes every page of the person within 5 seconds, with the words of FR-ED-41, and no page connects again', async ({
+    page,
+    browser,
+  }) => {
+    test.slow();
+    const { id, manage, theirs, context } = await owned(page, browser);
+    const second = await context.newPage();
+    await second.goto(`/documents/${id}`);
+    await expect(status(second, 'In sync')).toBeVisible();
+    const sockets = [countSockets(theirs), countSockets(second)];
+
+    await personRow(manage, 'Bea Editor').getByRole('button', { name: 'Remove' }).click();
+    await manage
+      .getByRole('dialog', { name: 'Remove collaborator' })
+      .getByRole('button', { name: 'Remove collaborator' })
+      .click();
+    await expect(manage.getByRole('status')).toHaveText('Bea Editor removed from this document.');
+
+    // Neither the re-check (60 seconds here) nor a reconnection: the notice, and the close it asks for.
+    for (const closed of [theirs, second]) {
+      await expect(ended(closed)).toBeVisible({ timeout: 5000 });
+      await expect(ended(closed)).toContainText(
+        'Ekdotico closed the document in this tab. Ekdotico discarded the changes that it had not yet sent.',
+      );
+      await expect(text(closed)).toHaveCount(0);
+      await expect(closed.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
+    }
+    // The Owner's page is untouched, and the closed pages do not try again.
+    await expect(status(page, 'In sync')).toBeVisible();
+    await page.waitForTimeout(6000);
+    expect(sockets.map(({ count }) => count)).toEqual([0, 0]);
+    await context.close();
+  });
+
+  test('a change of role makes the open page read-only in place within 5 seconds, says so, and makes it editable in place again', async ({
+    page,
+    browser,
+  }) => {
+    test.slow();
+    const { manage, theirs, context } = await owned(page, browser);
+    const sockets = countSockets(theirs);
+    const role = (now: string, rest: string) =>
+      theirs
+        .getByRole('status')
+        .filter({ hasText: `The role of this account on this document is now ${now}. ${rest}` });
+    const row = personRow(manage, 'Bea Editor');
+
+    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('viewer');
+    await row.getByRole('button', { name: 'Change role' }).click();
+    await expect(manage.getByRole('status')).toHaveText('Role of Bea Editor changed to Viewer.');
+    await expect(role('Viewer', 'The document is read-only in this tab.')).toBeVisible({ timeout: 5000 });
+    await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
+    await text(theirs).click();
+    await theirs.keyboard.type('Nothing of this.');
+    await expect(text(theirs)).not.toContainText('Nothing of this.');
+
+    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('editor');
+    await row.getByRole('button', { name: 'Change role' }).click();
+    await expect(manage.getByRole('status')).toHaveText('Role of Bea Editor changed to Editor.');
+    await expect(role('Editor', 'The document can be edited in this tab.')).toBeVisible({ timeout: 5000 });
+    await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+    await placeAtEnd(text(theirs).locator('p').first());
+    await theirs.keyboard.type('Written again.');
+    await expect(text(page)).toContainText('Written again.');
+    // The same connection throughout: the page opened no socket.
+    expect(sockets.count).toBe(0);
+    await context.close();
+  });
+
+  test('leaving closes the person’s other open page within 5 seconds', async ({ page, browser }) => {
+    test.slow();
+    const { id, theirs, context } = await owned(page, browser);
+    // The person leaves from the sharing settings in one tab; the document is open in another.
+    const leaver = await context.newPage();
+    await leaver.goto(`/documents/${id}/sharing`);
+    await leaver.getByRole('button', { name: 'Leave document' }).click();
+    await leaver
+      .getByRole('dialog', { name: 'Leave document' })
+      .getByRole('button', { name: 'Leave document' })
+      .click();
+    await leaver.waitForURL('**/');
+    await expect(ended(theirs)).toBeVisible({ timeout: 5000 });
+    await expect(status(page, 'In sync')).toBeVisible();
+    await context.close();
+  });
+
+  test('a sign-out in another tab closes the open page within 5 seconds, with the words of the end of a session', async ({
+    page,
+    browser,
+  }) => {
+    test.slow();
+    const { theirs, context } = await owned(page, browser);
+    const sockets = countSockets(theirs);
+    const other = await context.newPage();
+    await other.goto('/');
+    await other.getByRole('button', { name: 'Sign out' }).click();
+    await expect(other).toHaveURL(/\/sign-in/);
+    const statement = theirs.getByRole('status').filter({ hasText: 'The session has ended' });
+    await expect(statement).toBeVisible({ timeout: 5000 });
+    await expect(text(theirs)).toHaveCount(0);
+    await theirs.waitForTimeout(6000);
+    expect(sockets.count).toBe(0);
+    await context.close();
+  });
 });

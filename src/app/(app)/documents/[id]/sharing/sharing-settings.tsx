@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Button,
   Cluster,
@@ -21,13 +21,25 @@ import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
 import styles from '../../../../pages.module.css';
 import { InBrowser, LocalTime } from '../../../local-time.tsx';
+import { LeaveDocument, RemoveDialog, RoleControl, type Answer } from './collaborator-actions.tsx';
 
 export interface SharingView {
   documentId: string;
   people: number;
   limit: number;
   owner: string;
-  collaborators: { id: string; name: string; role: string }[];
+  collaborators: {
+    id: string;
+    name: string;
+    /** The role as a person reads it, and as the request names it. */
+    role: string;
+    roleValue: string;
+    /** Whether the caller may change this person's role, or remove them (FR-ED-44 (b)): the server asks again. */
+    mayChangeRole: boolean;
+    mayRemove: boolean;
+  }[];
+  /** FR-ED-38: whether the caller may leave the document: every role but the Owner's. */
+  mayLeave: boolean;
   /** Present for a caller who may invite (FR-ED-44). */
   invitations?: { id: string; email: string; role: string; expiresAt: string }[];
 }
@@ -58,6 +70,21 @@ export function SharingSettings({ view }: { view: SharingView }) {
   const [said, setSaid] = useState<string[]>([]);
   const statusRef = useRef<HTMLDivElement>(null);
   const emailsRef = useRef<HTMLTextAreaElement>(null);
+  // FR-ED-38: the person whose removal is being confirmed, and how many answers of the people's
+  // controls there have been, so that focus goes to what was said once the dialog has closed.
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
+  const [answers, setAnswers] = useState(0);
+  useEffect(() => {
+    if (answers > 0) statusRef.current?.focus();
+  }, [answers]);
+
+  /** What a control of a person answered: its statement, or its refusal. The list is read again. */
+  function answered({ message, fault: refused }: Answer) {
+    setFault(refused ?? null);
+    setSaid(!refused && message ? [message] : []);
+    setAnswers((count) => count + 1);
+    router.refresh();
+  }
 
   async function act(path: string, body?: unknown, method: 'POST' | 'DELETE' = 'POST') {
     setSending(true);
@@ -108,11 +135,47 @@ export function SharingSettings({ view }: { view: SharingView }) {
           </li>
           {view.collaborators.map((collaborator) => (
             <li key={collaborator.id} className={styles.row}>
-              <bdi>{collaborator.name}</bdi>, {collaborator.role}
+              <Cluster gap={3}>
+                <span>
+                  <bdi id={`person-${collaborator.id}`}>{collaborator.name}</bdi>, {collaborator.role}
+                </span>
+                {collaborator.mayChangeRole ? (
+                  <RoleControl
+                    // A new role is a new control, whose choice is the role held.
+                    key={collaborator.roleValue}
+                    collaboratorId={collaborator.id}
+                    documentId={view.documentId}
+                    name={collaborator.name}
+                    role={collaborator.roleValue}
+                    describedBy={`person-${collaborator.id}`}
+                    busy={sending}
+                    onAnswer={answered}
+                  />
+                ) : null}
+                {collaborator.mayRemove ? (
+                  <Button
+                    variant="quiet"
+                    disabled={!ready || sending}
+                    aria-describedby={`person-${collaborator.id}`}
+                    onClick={() => setRemoving({ id: collaborator.id, name: collaborator.name })}
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </Cluster>
             </li>
           ))}
         </ul>
       </Stack>
+      <RemoveDialog
+        documentId={view.documentId}
+        person={removing}
+        onClose={() => setRemoving(null)}
+        onRemoved={(message) => {
+          setRemoving(null);
+          answered({ message });
+        }}
+      />
 
       {/* The confirmations, or the statement of a revocation; focus comes here after an action. */}
       <div role="status" ref={statusRef} tabIndex={-1}>
@@ -203,6 +266,8 @@ export function SharingSettings({ view }: { view: SharingView }) {
           </Stack>
         </>
       ) : null}
+
+      {view.mayLeave ? <LeaveDocument documentId={view.documentId} /> : null}
     </Stack>
   );
 }
