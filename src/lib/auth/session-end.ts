@@ -12,6 +12,7 @@
 // (FR-ED-41; src/lib/collab/events.ts).
 import { publishCollabEvent } from '../collab/events.ts';
 import { db } from '../db.ts';
+import { faultOf } from '../fault.ts';
 
 /** Publishes that a session of this user ended. It never rejects. */
 export async function sessionEnded(userId: string): Promise<void> {
@@ -41,7 +42,9 @@ export async function userOfSessionToken(token: string): Promise<string | null> 
   try {
     const held = await db().session.findFirst({ where: { token }, select: { userId: true } });
     return held?.userId ?? null;
-  } catch {
+  } catch (error) {
+    // One line, naming no person (NFR-SE-19): the connections of that session are closed by the re-check.
+    console.error(`session end: the user of a session was not read, no notice is sent (${faultOf(error)})`);
     return null;
   }
 }

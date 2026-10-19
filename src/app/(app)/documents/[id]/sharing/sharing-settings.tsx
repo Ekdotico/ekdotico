@@ -17,6 +17,7 @@ import {
   TableRow,
   TextArea,
 } from '@ekdotico/domico/components';
+import type { DocumentRole } from '../../../../../lib/documents/permissions.ts';
 import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
 import styles from '../../../../pages.module.css';
@@ -33,7 +34,7 @@ export interface SharingView {
     name: string;
     /** The role as a person reads it, and as the request names it. */
     role: string;
-    roleValue: string;
+    roleValue: DocumentRole;
     /** Whether the caller may change this person's role, or remove them (FR-ED-44 (b)): the server asks again. */
     mayChangeRole: boolean;
     mayRemove: boolean;
@@ -74,13 +75,18 @@ export function SharingSettings({ view }: { view: SharingView }) {
   // controls there have been, so that focus goes to what was said once the dialog has closed.
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const [answers, setAnswers] = useState(0);
+  // A refusal of a control over a person is stated by itself, and is no error of the field of addresses
+  // (the codes `invalid_request` and the others of FIELD_FAULTS name that field's faults).
+  const [peopleFault, setPeopleFault] = useState<Fault | null>(null);
   useEffect(() => {
-    if (answers > 0) statusRef.current?.focus();
-  }, [answers]);
+    // A refusal is met from its own statement (the `FormFault` takes focus, and again at each answer: WCAG 2.4.3, 4.1.3).
+    if (answers > 0 && !peopleFault) statusRef.current?.focus();
+  }, [answers, peopleFault]);
 
   /** What a control of a person answered: its statement, or its refusal. The list is read again. */
   function answered({ message, fault: refused }: Answer) {
-    setFault(refused ?? null);
+    setFault(null);
+    setPeopleFault(refused ?? null);
     setSaid(!refused && message ? [message] : []);
     setAnswers((count) => count + 1);
     router.refresh();
@@ -89,6 +95,7 @@ export function SharingSettings({ view }: { view: SharingView }) {
   async function act(path: string, body?: unknown, method: 'POST' | 'DELETE' = 'POST') {
     setSending(true);
     setFault(null);
+    setPeopleFault(null);
     setSaid([]);
     const sent = await sendFor(path, body, method);
     setSending(false);
@@ -147,7 +154,6 @@ export function SharingSettings({ view }: { view: SharingView }) {
                     documentId={view.documentId}
                     name={collaborator.name}
                     role={collaborator.roleValue}
-                    describedBy={`person-${collaborator.id}`}
                     busy={sending}
                     onAnswer={answered}
                   />
@@ -156,7 +162,8 @@ export function SharingSettings({ view }: { view: SharingView }) {
                   <Button
                     variant="quiet"
                     disabled={!ready || sending}
-                    aria-describedby={`person-${collaborator.id}`}
+                    // The visible words are "Remove"; the name begins with them and names the person (WCAG 2.5.3, 2.4.6).
+                    aria-label={`Remove ${collaborator.name}`}
                     onClick={() => setRemoving({ id: collaborator.id, name: collaborator.name })}
                   >
                     Remove
@@ -186,6 +193,7 @@ export function SharingSettings({ view }: { view: SharingView }) {
         ))}
       </div>
       {fault && !fieldFault ? <FormFault title={fault.message} autoFocus={false} /> : null}
+      {peopleFault ? <FormFault title={peopleFault.message} focusKey={answers} /> : null}
 
       {view.invitations ? (
         <>

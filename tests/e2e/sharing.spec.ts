@@ -19,6 +19,7 @@ import {
   pendingRow,
   personRow,
   setPermissions,
+  setRole,
   shareNew,
 } from './sharing.ts';
 
@@ -181,7 +182,7 @@ test('the Owner changes a role and removes a collaborator, a collaborator leaves
   await expect(cy$).toContainText('Cy Viewer, Viewer');
   await expect(cy$.getByRole('combobox', { name: 'Role of Cy Viewer' })).toHaveValue('viewer');
   await expect(cy$.getByRole('button', { name: 'Change role' })).toBeDisabled();
-  await expect(cy$.getByRole('button', { name: 'Remove' })).toHaveAccessibleDescription('Cy Viewer');
+  await expect(cy$.getByRole('button', { name: 'Remove Cy Viewer' })).toBeVisible();
   await screens(page, 'sharing-people-owner');
 
   // A role is changed, and what was done is said, with focus on the statement (WCAG 2.4.3).
@@ -305,6 +306,27 @@ test('an Editor who is given the permissions acts on a Viewer, and is offered no
   await expect(viewer.getByRole('button', { name: 'Remove' })).toBeVisible();
   await expect(personRow(beas!, 'Dan Editor').getByRole('button')).toHaveCount(0);
   await expect(personRow(beas!, 'Bea Editor').getByRole('button')).toHaveCount(0);
+
+  // The visible words stay "Remove" and "Change role"; each button is named for the person (WCAG 2.5.3, 2.4.6).
+  await expect(viewer.getByRole('button', { name: 'Remove Cy Viewer' })).toHaveText('Remove');
+  await expect(viewer.getByRole('button', { name: 'Change role of Cy Viewer' })).toHaveText('Change role');
+
+  // A refusal is stated by itself, and is met from there (WCAG 2.4.3, 4.1.3): the Owner made Cy an Editor
+  // since this page was read, so the Editor's request over an Editor is refused with a 403.
+  setRole(id, cy.email, 'editor');
+  await viewer.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await viewer.getByRole('button', { name: 'Change role of Cy Viewer' }).click();
+  const refused = beas!.getByRole('alert').filter({ hasText: 'never on an Editor' });
+  await expect(refused).toContainText(
+    'The role of this account on the document can act on a Reviewer or a Viewer and never on an Editor. The Owner of the document can act on an Editor.',
+  );
+  await expect(refused).toBeFocused();
+  // Not the error of a field, and not a change.
+  await expect(beas!.getByRole('status')).toHaveText('');
+  await expect(personRow(beas!, 'Cy Viewer').getByRole('button')).toHaveCount(0);
+  setRole(id, cy.email, 'viewer');
+  await beas!.reload();
+
   // The Editor raises the Viewer to Editor, and then has no control over that person (FR-ED-44 (b)).
   await viewer.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
   await viewer.getByRole('button', { name: 'Change role' }).click();

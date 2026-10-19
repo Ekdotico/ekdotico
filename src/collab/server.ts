@@ -403,6 +403,14 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     const maxMs = (store.sessionMaxSeconds ?? settings().sessionMaxSeconds) * 1000;
     // What `decide` is given where the session ended, which it answers before it looks at this.
     const NOT_READ: Access = { outcome: 'not_found' };
+    // A session that ended closes its connections before any access is read: the readings below are one
+    // after another, and a close that waits behind another pair's reading could pass the 5 seconds.
+    for (const { connection } of open) {
+      const { userId, sessionId } = connection.context;
+      if (!sessionStands(sessions.get(sessionId), userId, now, maxMs)) {
+        connection.close({ code: 1000, reason: REFUSAL.SESSION_ENDED });
+      }
+    }
     for (const entry of open) {
       if (stopping) return;
       const { connection } = entry;
@@ -577,8 +585,12 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
    * never a look for each.
    */
   async function look(key: string): Promise<void> {
-    if (waiting.size >= LOOK_KEYS_MOST) everything = true;
-    else waiting.add(key);
+    if (waiting.size >= LOOK_KEYS_MOST) {
+      // One line when the bound is first met, naming no one: the next look is the whole re-check.
+      if (!everything)
+        console.error(`collab: ${LOOK_KEYS_MOST} notices wait, the next look is the whole re-check`);
+      everything = true;
+    } else waiting.add(key);
     if (looking) return;
     looking = true;
     try {

@@ -489,6 +489,7 @@ describe('what a notice that the rows do not bear out does', () => {
     const local = await inProcess();
     try {
       const { editor, viewer, clients } = await three(local);
+      const lines = vi.spyOn(console, 'error').mockImplementation(() => {});
       // The first look, for the Editor, is held while the flood arrives.
       const original = db().session.findMany.bind(db().session) as (query: unknown) => Promise<unknown>;
       let release!: () => void;
@@ -522,6 +523,10 @@ describe('what a notice that the rows do not bear out does', () => {
       await until(() => clients.viewer.closedFor(REFUSAL.SESSION_ENDED), FIVE_SECONDS);
       // And the Editor, whose session stands, was kept by the look that was held.
       expect(clients.editor.closed()).toBe(false);
+      // The bound was met, and said so in one line that names no one.
+      expect(lines.mock.calls).toContainEqual([
+        'collab: 1000 notices wait, the next look is the whole re-check',
+      ]);
     } finally {
       await local.stop();
     }
@@ -566,6 +571,57 @@ describe('a reading never undoes a fresher one (FR-ED-40 (b), FR-ED-41)', () => 
       expect(connection.readOnly).toBe(true);
       expect(connection.context.role).toBe('viewer');
       expect(clients.editor.notices).toHaveLength(2);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+describe('the order of a look (FR-ED-40 (d): within 5 seconds)', () => {
+  // Weakening: the session of a connection tested only when the loop reaches it, behind other pairs' readings.
+  it('closes the connections of an ended session before it reads the access of any other pair', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person('Ada Owner');
+      const editor = await person('Ben Editor');
+      const [first, second] = [(await createDocument(owner.id)).id, (await createDocument(owner.id)).id];
+      await grant(first, editor, 'EDITOR');
+      await grant(second, editor, 'EDITOR');
+      // The connection whose session stands is made first, so that the loop meets its pair first.
+      const cookieB = await anotherSession(editor);
+      const standing = connect(local.port, cookieB, first);
+      await standing.synced;
+      const ending = connect(local.port, editor.cookie, second);
+      await ending.synced;
+      // The first session, the one of `ending`, is ended; the reading of the standing pair is held.
+      const original = db().document.findUnique.bind(db().document) as (query: unknown) => Promise<unknown>;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let held = false;
+      type Query = { where?: { id?: string }; include?: { collaborators?: { where?: { userId?: string } } } };
+      vi.spyOn(db().document, 'findUnique').mockImplementation((async (query: Query) => {
+        if (query.where?.id === first && query.include?.collaborators?.where?.userId === editor.id) {
+          held = true;
+          await gate;
+        }
+        return original(query);
+      }) as never);
+      const rows = await db().session.findMany({
+        where: { userId: editor.id },
+        orderBy: { createdAt: 'asc' },
+      });
+      await db().session.delete({ where: { id: rows[0]!.id } });
+      await forger.publish(
+        COLLAB_EVENTS_CHANNEL,
+        JSON.stringify({ kind: 'session-ended', userId: editor.id }),
+      );
+      await until(() => held);
+      // While that reading is held, the ended session's connection is already closed.
+      await until(() => ending.closedFor(REFUSAL.SESSION_ENDED), 2000);
+      expect(standing.closed()).toBe(false);
+      release();
+      await sleep(300);
+      expect(standing.closed()).toBe(false);
     } finally {
       await local.stop();
     }

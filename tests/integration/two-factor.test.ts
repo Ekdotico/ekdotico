@@ -872,6 +872,30 @@ describe('a recovery code (FR-AU-83)', () => {
     expect((await secondStep(auth, again, second, 'backup-code')).status).toBe(200);
   });
 
+  // FR-ED-40 (d), S15-3: a recovery code is taken under whatever session the browser holds, and that session ends
+  // with the claim. Weakening: the held session deleted in the transaction and not told to the collaboration server.
+  it('ends the live session the browser held, and tells the collaboration server of the account that held it', async () => {
+    const { email, id, recoveryCodes } = await enrolled();
+    const other = await person();
+    const step = await passwordStep(auth, email, fresh());
+    // The browser was signed in as another account meanwhile (another tab), and finishes with a recovery code.
+    expect(await stands(other.cookie)).toBe(true);
+    const done = await secondStep(auth, `${step}; ${other.cookie}`, recoveryCodes[0], 'backup-code');
+    expect(done.status).toBe(200);
+    expect(await stands(other.cookie)).toBe(false);
+    await until(() => channel.sessionsEnded(other.id).length === 1);
+    expect(channel.about(id)).toEqual([]);
+    // A code that is refused ends nothing and tells no one.
+    const third = await person();
+    const again = await passwordStep(auth, email, fresh());
+    expect((await secondStep(auth, `${again}; ${third.cookie}`, 'aaaaa-bbbbb', 'backup-code')).status).toBe(
+      401,
+    );
+    expect(await stands(third.cookie)).toBe(true);
+    await channel.quiet();
+    expect(channel.about(third.id)).toEqual([]);
+  });
+
   it('is its own kind: not a code of the authenticator, and not accepted where one is asked for', async () => {
     const { email, secret, recoveryCodes } = await enrolled();
     const step = await passwordStep(auth, email, fresh());

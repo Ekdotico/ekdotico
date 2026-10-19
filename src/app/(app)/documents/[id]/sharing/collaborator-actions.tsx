@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Button, Cluster, Dialog, FormFault, Select, Stack } from '@ekdotico/domico/components';
+import { ROLE_NAME, type DocumentRole } from '../../../../../lib/documents/permissions.ts';
 import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
 import styles from '../../../../pages.module.css';
@@ -48,7 +49,6 @@ export function RoleControl({
   documentId,
   name,
   role,
-  describedBy,
   busy,
   onAnswer,
 }: {
@@ -56,14 +56,12 @@ export function RoleControl({
   documentId: string;
   name: string;
   /** The role held now: `editor`, `viewer`, or a role that is not offered. */
-  role: string;
-  /** The identifier of the element that names the person. */
-  describedBy: string;
+  role: DocumentRole;
   busy: boolean;
   onAnswer: (answer: Answer) => void;
 }) {
   const ready = useReady();
-  const [chosen, setChosen] = useState(role);
+  const [chosen, setChosen] = useState<string>(role);
   const [sending, setSending] = useState(false);
   const offered = ROLES.some(({ value }) => value === role);
 
@@ -90,7 +88,7 @@ export function RoleControl({
       >
         {!offered ? (
           <option value={role} disabled>
-            {role.charAt(0).toUpperCase() + role.slice(1)}
+            {ROLE_NAME[role]}
           </option>
         ) : null}
         {ROLES.map(({ value, label }) => (
@@ -102,7 +100,8 @@ export function RoleControl({
       <Button
         variant="quiet"
         disabled={!ready || busy || sending || chosen === role}
-        aria-describedby={describedBy}
+        // The visible words are "Change role"; the name begins with them and names the person (WCAG 2.5.3, 2.4.6).
+        aria-label={`Change role of ${name}`}
         onClick={() => void change()}
       >
         Change role

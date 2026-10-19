@@ -139,7 +139,13 @@ describe('signing out (FR-AU-84)', () => {
     expect(response.status).toBe(500);
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await rows(sessionId)).toBe(1);
-    expect(errors.mock.calls).toEqual([['identity: request failed (PrismaClientKnownRequestError P2021)']]);
+    // The read of the session's user failed first (one line, no notice), and then the deletion, which is the fault.
+    expect(errors.mock.calls[0]).toEqual([
+      'session end: the user of a session was not read, no notice is sent (PrismaClientKnownRequestError P2021)',
+    ]);
+    expect(errors.mock.calls.slice(1)).toEqual([
+      ['identity: request failed (PrismaClientKnownRequestError P2021)'],
+    ]);
     // The session stands, and the browser still holds it: it can sign out again.
     expect((await signOut({ cookie })).status).toBe(200);
     expect(await rows(sessionId)).toBe(0);
@@ -239,6 +245,18 @@ describe('the collaboration server is told that the session ended (FR-ED-40 (d),
     } finally {
       channel.stop();
     }
+  });
+
+  it('still signs out, and says one line that names no one, where the user of the session cannot be read', async () => {
+    const lines = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cookie, id, sessionId } = await person();
+    const lost = Object.assign(new Error(`connection lost ${id}`), { code: 'P1001' });
+    vi.spyOn(db().session, 'findFirst').mockRejectedValueOnce(lost);
+    expect((await signOut({ cookie })).status).toBe(200);
+    expect(await rows(sessionId)).toBe(0);
+    expect(lines.mock.calls).toEqual([
+      ['session end: the user of a session was not read, no notice is sent (Error P1001)'],
+    ]);
   });
 
   it('still signs out, and says one line that names no one, where the notice cannot be published', async () => {
