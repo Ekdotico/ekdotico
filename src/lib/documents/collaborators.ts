@@ -50,8 +50,13 @@ export type RemoveResult = Outcome | { outcome: 'removed'; name: string };
 
 export type LeaveResult = { outcome: 'left' } | { outcome: 'not_found' };
 
-/** The caller's role on the document, from the rows; null where it holds none. */
-async function roleUnderLock(
+/**
+ * The caller's role on the document, from the rows, with the document's
+ * permission set, read under the document's row; null where the document is
+ * gone or deleted or the caller holds no role on it. The change of the
+ * permission set (./permission-settings.ts) asks it too.
+ */
+export async function roleUnderLock(
   tx: Prisma.TransactionClient,
   documentId: string,
   callerId: string,

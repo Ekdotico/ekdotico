@@ -6,7 +6,8 @@
 //
 // The events are the list of FR-ED-40 and no other. Built so far: (a) and (b),
 // a removal, a leave, and a change of role (`collaborator-changed`); (c), the
-// deletion of a document; and (d), the end of a session (`session-ended`). The
+// deletion of a document; (d), the end of a session (`session-ended`); and
+// (g), a change of the permission set (`permission-set-changed`). The
 // slices that build the others add a member to `CollabEvent`, a case to
 // `readEvent`, a publish after the commit of the change, and a case where the
 // collaboration server acts on an event.
@@ -47,7 +48,13 @@ export type CollabEvent =
    * server looks at every connection the user holds, and closes those whose
    * session no longer stands.
    */
-  | { kind: 'session-ended'; userId: string };
+  | { kind: 'session-ended'; userId: string }
+  /**
+   * FR-ED-40 (g): the Owner changed the permission set of this document. The
+   * server looks at every open connection to it and applies the new set in
+   * place, closing none and switching none between editable and read-only.
+   */
+  | { kind: 'permission-set-changed'; documentId: string };
 
 /** The one channel. Every instance of the collaboration server subscribes to it. */
 export const COLLAB_EVENTS_CHANNEL = 'ekdotico:collab-events';
@@ -79,6 +86,7 @@ export function readEvent(message: string): CollabEvent | null {
   if (kind === 'collaborator-changed' && document && user)
     return { kind, documentId: document, userId: user };
   if (kind === 'session-ended' && user) return { kind, userId: user };
+  if (kind === 'permission-set-changed' && document) return { kind, documentId: document };
   return null;
 }
 
@@ -96,6 +104,8 @@ function messageOf(event: CollabEvent): string {
       return JSON.stringify({ kind: event.kind, documentId: event.documentId, userId: event.userId });
     case 'session-ended':
       return JSON.stringify({ kind: event.kind, userId: event.userId });
+    case 'permission-set-changed':
+      return JSON.stringify({ kind: event.kind, documentId: event.documentId });
   }
 }
 

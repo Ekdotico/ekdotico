@@ -4586,6 +4586,44 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     await context.close();
   });
 
+  // FR-ED-40 (g): the Owner changes what a role may do, from the screen of the permission set. Nothing is
+  // closed and nothing changes between editable and read-only; the client is told and "states that the
+  // permissions of the role have changed". The words are those of docs/plan/slice-16.md, §7.
+  test('a change of what the role may do is stated on the open page within 5 seconds, which stays editable on the same connection', async ({
+    page,
+    browser,
+  }) => {
+    test.slow();
+    const { manage, theirs, context } = await owned(page, browser);
+    const sockets = countSockets(theirs);
+    const statement = theirs
+      .getByRole('status')
+      .filter({ hasText: 'The permissions of the Editor role on this document have changed.' });
+    await expect(statement).toHaveCount(0);
+    const rename = manage.getByRole('checkbox', { name: 'Editor: Rename the document', exact: true });
+
+    await rename.click();
+    await expect(rename).toBeChecked();
+    await expect(manage.getByText('Saved.')).toBeVisible();
+    await expect(statement).toBeVisible({ timeout: 5000 });
+    // Still editable, and the same connection: what is written is the Owner's to see, and no role was said.
+    await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+    await expect(theirs.getByRole('status').filter({ hasText: 'The role of this account' })).toHaveCount(0);
+    await text(theirs).click();
+    await theirs.keyboard.type('Written under the new permissions.');
+    await expect(text(page)).toContainText('Written under the new permissions.');
+    // The Owner's own page is told nothing: its role's cells do not change.
+    await expect(page.getByRole('status').filter({ hasText: 'The permissions of the' })).toHaveCount(0);
+
+    // Taken away: stated again, with nothing closed.
+    await rename.click();
+    await expect(rename).not.toBeChecked();
+    await expect(statement).toBeVisible({ timeout: 5000 });
+    await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+    expect(sockets.count).toBe(0);
+    await context.close();
+  });
+
   test('leaving closes the person’s other open page within 5 seconds', async ({ page, browser }) => {
     test.slow();
     const { id, theirs, context } = await owned(page, browser);

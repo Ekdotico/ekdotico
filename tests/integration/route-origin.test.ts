@@ -239,6 +239,15 @@ const CASES: Case[] = [
     status: 200,
   },
   {
+    // FR-ED-45: the Owner changes a cell of the permission set of the session's own document.
+    handler: 'src/app/api/documents/[id]/permissions/route.ts PUT',
+    body: { changes: { 'document.rename': { editor: true } } },
+    arrange: live,
+    path: (id) => `/api/documents/${id}/permissions`,
+    state: async (_, id) => JSON.stringify((await row(id)).permissionSet),
+    status: 200,
+  },
+  {
     // The session's account is a collaborator of another account's document, and leaves it. No body.
     handler: 'src/app/api/documents/[id]/leave/route.ts POST',
     arrange: async (owner) => {

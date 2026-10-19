@@ -18,6 +18,7 @@ import { Button, Cluster, Dialog, FormFault, Stack, SyncStatus } from '@ekdotico
 import { DocumentConnection, syncStatus, type Ending, type Held } from '../../../../lib/collab/client.ts';
 import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import type { Limit } from '../../../../lib/collab/shape.ts';
+import { PERMISSIONS_NOW } from '../../../../lib/documents/permission-texts.ts';
 import { ROLE_NAME, type DocumentRole } from '../../../../lib/documents/permissions.ts';
 import pageStyles from '../../../pages.module.css';
 import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
@@ -488,6 +489,13 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
           autoFocus={false}
         >
           <p>{ROLE_NOW(state.notice.role, state.notice.canEdit)}</p>
+        </FormFault>
+      ) : null}
+      {state.permissions ? (
+        // FR-ED-40 (g): "states that the permissions of the role have changed". Said again for each
+        // change, and not an error: the connection is as it was.
+        <FormFault key={state.permissions.changes} tone="neutral" announce="polite" autoFocus={false}>
+          <p>{PERMISSIONS_NOW(ROLE_NAME[state.permissions.role])}</p>
         </FormFault>
       ) : null}
       {/* FR-ED-18: read-only in the error state, "until the connection returns". */}

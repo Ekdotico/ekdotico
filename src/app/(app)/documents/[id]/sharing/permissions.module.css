@@ -1,0 +1,73 @@
+/* The permission settings of a document (FR-ED-46): placement only. Every
+   control is the package's, and every value is one of its tokens, with no
+   fallback and no token declared (@ekdotico/domico AGENTS.md, rules 1 to 3).
+   The properties are logical ones (NFR-I18-07). */
+
+/* The header of a row: the name of a permission (FR-ED-46: "row and column
+   headers that a screen reader announces"). The package's table styles the
+   cells of a body and the headers of its head, and not a header inside a body,
+   so this one is given what a cell of the body has, and the outline of the card
+   that the package draws on the first cell of each row. The outline is the
+   package's own width, 2px, so that the card stays closed. */
+.rowHeader {
+  padding: var(--sp-2) var(--sp-3);
+  border-block-end: 1px solid var(--rule-soft);
+  border-inline-start: 2px solid var(--rule);
+  vertical-align: top;
+  text-align: start;
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+  overflow-wrap: anywhere;
+}
+
+/* The last row closes the card, as the package closes it under its cells. */
+.rows tr:last-child > .rowHeader {
+  border-block-end: 2px solid var(--rule);
+  border-end-start-radius: var(--radius-lg);
+}
+
+/* The words of a cell that is not a checkbox: a kind, "Always" or "Never". They stay on a line, so that a column is as wide as its words. */
+.kind,
+.fixed {
+  white-space: nowrap;
+}
+
+.fixed {
+  font-weight: var(--fw-semi);
+  color: var(--fg-1);
+}
+
+/* A cell that holds a checkbox and the words said beside it. It is positioned
+   so that the visually hidden name of the checkbox (the reset's `.sr-only`,
+   which is absolute) is placed in the cell and clipped by the table's scroll
+   container with it: left to the page, it sits at the cell's place in the row
+   and widens the page at phone width. */
+.cell {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* What was said of the change: "Saved.", or why it was not. Text, so that no
+   state is shown by colour alone. It is a live region, so it is in the page
+   when it is empty, and takes no room until it holds words. */
+.note {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+
+.note:not(:empty) {
+  margin-inline-start: var(--sp-2);
+}
+
+/* The sentence that a row adds under its name. */
+.limit {
+  margin: var(--sp-1) var(--sp-0) var(--sp-0);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  color: var(--fg-3);
+}

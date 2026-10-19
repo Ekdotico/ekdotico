@@ -55,6 +55,9 @@ const PERMISSION: Record<string, Permission> = {
   'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts DELETE':
     'document.collaborators.remove',
   'src/app/api/documents/[id]/leave/route.ts POST': 'document.leave',
+  // FR-ED-45, FR-ED-46: the permission set. Any role may read what it holds; only the Owner changes the set.
+  'src/app/api/documents/[id]/permissions/route.ts GET': 'document.view',
+  'src/app/api/documents/[id]/permissions/route.ts PUT': 'document.permissions.edit',
 };
 
 // The handlers that act on a DELETED document: each is made by

@@ -14,7 +14,14 @@ import {
 } from '@hocuspocus/provider';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
-import { documentName, LIMIT_REFUSAL, readRoleNotice, REFUSAL, type RoleNotice } from './protocol.ts';
+import {
+  documentName,
+  LIMIT_REFUSAL,
+  readPermissionsNotice,
+  readRoleNotice,
+  REFUSAL,
+  type RoleNotice,
+} from './protocol.ts';
 
 /** The refusals after which the client does not try again (FR-ED-41; src/lib/collab/protocol.ts). */
 export type Ending = typeof REFUSAL.NO_ACCESS | typeof REFUSAL.ACCESS_ENDED | typeof REFUSAL.SESSION_ENDED;
@@ -73,6 +80,13 @@ export interface ConnectionState {
    * role is the one the page was opened with.
    */
   notice?: RoleNotice;
+  /**
+   * FR-ED-40 (g): the server told this client that the permissions of its role
+   * on the document changed, the role unchanged. `changes` counts the notices,
+   * so that each is stated again. Absent until one arrives, and taken away when
+   * the role changes: that statement says what the new role may do.
+   */
+  permissions?: { role: RoleNotice['role']; changes: number };
   /**
    * Whether this connection may edit, as the server last said: its scope at
    * every handshake, and the role it tells of after. It is read at each
@@ -283,8 +297,16 @@ export class DocumentConnection {
     if (unsent !== this.state.unsent) this.set({ unsent });
   }
 
-  /** What the server said, as a stateless message: the one kind there is, a change of role. Anything else is ignored. */
+  /** What the server said, as a stateless message: a change of role, or of what the role holds. Anything else is ignored. */
   private told(payload: string): void {
+    const permissions = readPermissionsNotice(payload);
+    if (permissions) {
+      // FR-ED-40 (g): nothing about the connection changes; the editor states it.
+      this.set({
+        permissions: { role: permissions.role, changes: (this.state.permissions?.changes ?? 0) + 1 },
+      });
+      return;
+    }
     const notice = readRoleNotice(payload);
     if (!notice) return;
     const { shown } = this;
@@ -293,7 +315,9 @@ export class DocumentConnection {
       (shown.canEdit !== notice.canEdit || (shown.role !== undefined && shown.role !== notice.role));
     const wasEditable = this.state.canEdit;
     this.shown = { canEdit: notice.canEdit, role: notice.role };
-    this.set(differs ? { notice, canEdit: notice.canEdit } : { canEdit: notice.canEdit });
+    this.set(
+      differs ? { notice, canEdit: notice.canEdit, permissions: undefined } : { canEdit: notice.canEdit },
+    );
     // Where the connection may edit again, what it holds that the server dropped
     // while it could not (a change not yet acknowledged when the role was taken)
     // is sent now: the server applies a later change only once the earlier ones
@@ -317,7 +341,7 @@ export class DocumentConnection {
     const canEdit = scope === 'read-write';
     const stale = this.shown !== undefined && this.shown.canEdit !== canEdit;
     this.shown ??= { canEdit };
-    this.set(stale ? { canEdit, notice: undefined } : { canEdit });
+    this.set(stale ? { canEdit, notice: undefined, permissions: undefined } : { canEdit });
   }
 
   /** FR-ED-17: where the cursors of the others are read from, and this client's own is set. Null before `start`. */

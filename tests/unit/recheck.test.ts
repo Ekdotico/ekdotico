@@ -2,7 +2,7 @@
 // when its session and its access are read again (src/lib/collab/recheck.ts).
 import { describe, expect, it } from 'vitest';
 import type { Access, DocumentRow } from '../../src/lib/documents/access.ts';
-import { recordConnection, type CollabConnection } from '../../src/lib/collab/connection.ts';
+import { isReadOnly, recordConnection, type CollabConnection } from '../../src/lib/collab/connection.ts';
 import { REFUSAL } from '../../src/lib/collab/protocol.ts';
 import { decide, RECHECK_MS, sessionStands, type SessionRow } from '../../src/lib/collab/recheck.ts';
 import { defaultPermissionSet, type DocumentRole } from '../../src/lib/documents/permissions.ts';
@@ -133,6 +133,55 @@ describe('what is done with an open connection', () => {
     );
     expect(decision.action).toBe('switch');
     expect(decision.action === 'switch' && decision.record.permissions).toContain('document.export.draft');
+  });
+
+  // FR-ED-40 (g): the set, and not the role alone, is what `decide` reads.
+  it('switches one whose role lost a permission to a change of the set, the role the same', () => {
+    const given = structuredClone(defaultPermissionSet());
+    given['document.rename'].editor = true;
+    const connection = recordConnection(
+      { userId: 'u1', sessionId: 's1' },
+      { id: DOCUMENT, permissionSet: given },
+      'editor',
+    );
+    expect(connection.permissions).toContain('document.rename');
+    const decision = decide(connection, standing(), allowed('editor'), NOW, MAX);
+    expect(decision.action).toBe('switch');
+    expect(decision.action === 'switch' && decision.record.role).toBe('editor');
+    expect(decision.action === 'switch' && decision.record.permissions).not.toContain('document.rename');
+  });
+
+  it('keeps one whose role holds what it held, though another role’s cell changed', () => {
+    const changed = structuredClone(defaultPermissionSet());
+    changed['document.rename'].editor = true;
+    expect(
+      decide(open('viewer'), standing(), allowed('viewer', { permissionSet: changed as never }), NOW, MAX),
+    ).toEqual({ action: 'keep' });
+    expect(
+      decide(open('owner'), standing(), allowed('owner', { permissionSet: changed as never }), NOW, MAX),
+    ).toEqual({ action: 'keep' });
+  });
+
+  it('makes no connection editable or read-only by a change of the set: that is fixed by role (FR-ED-44)', () => {
+    const everything = structuredClone(defaultPermissionSet());
+    for (const permission of Object.keys(everything) as (keyof typeof everything)[]) {
+      everything[permission].editor = true;
+      everything[permission].viewer = true;
+      everything[permission].reviewer = true;
+    }
+    for (const role of ['editor', 'viewer', 'reviewer'] as const) {
+      const decision = decide(
+        open(role),
+        standing(),
+        allowed(role, { permissionSet: everything as never }),
+        NOW,
+        MAX,
+      );
+      if (decision.action === 'switch') {
+        expect(isReadOnly(decision.record)).toBe(isReadOnly(open(role)));
+      }
+      expect(isReadOnly(open(role))).toBe(role !== 'editor');
+    }
   });
 
   it('carries the session and the user of the connection into the new record, and no other', () => {

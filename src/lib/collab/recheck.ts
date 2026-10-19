@@ -12,7 +12,7 @@
 //
 // Nothing here is of Next.js.
 import type { Access } from '../documents/access.ts';
-import { recordConnection, type CollabConnection } from './connection.ts';
+import { recordConnection, sameList, type CollabConnection } from './connection.ts';
 import { REFUSAL } from './protocol.ts';
 
 /** FR-ED-41: the period of the re-check, "at least once every 60 seconds". */
@@ -74,9 +74,9 @@ export function decide(
     access.document,
     access.role,
   );
-  const same =
-    record.role === open.role &&
-    record.permissions.length === open.permissions.length &&
-    record.permissions.every((permission, at) => permission === open.permissions[at]);
+  // The record holds what the document's permission set gives the role (`recordConnection` asks
+  // `holds` of the set the access carries), so a change of the set with the role unchanged is a
+  // switch too (FR-ED-40 (g)).
+  const same = record.role === open.role && sameList(record.permissions, open.permissions);
   return same ? { action: 'keep' } : { action: 'switch', record };
 }

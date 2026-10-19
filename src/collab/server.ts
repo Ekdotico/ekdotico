@@ -21,6 +21,12 @@
 // seconds (`look`, `recheckOnce` with a scope). There is no second instance
 // (NFR-SC-04, withdrawn from α by D168).
 //
+// HERE of FR-ED-40 (g): a change of a document's permission set. The event
+// names the document, `look` reads the rows for every connection to it, and
+// `decide` finds what each role holds now (the permission set, and not the
+// role alone); a connection whose permissions differ is switched in place and,
+// where its role did not change, told with `permissionsNotice`.
+//
 // HERE of FR-ED-40: event (c), the deletion of a document. Every instance is
 // told of it on the channel of src/lib/collab/events.ts, reads the document's
 // row, and where the row says so stores what it had received and closes its
@@ -36,7 +42,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { Server, type Connection, type Document } from '@hocuspocus/server';
 import { messageYjsSyncStep1 } from 'y-protocols/sync';
 import { validateSessionRow, type ValidSession } from '../lib/auth/session.ts';
-import { isReadOnly, recordConnection, type CollabConnection } from '../lib/collab/connection.ts';
+import { isReadOnly, recordConnection, sameList, type CollabConnection } from '../lib/collab/connection.ts';
 import {
   subscribeCollabEvents,
   type CollabEvent,
@@ -51,7 +57,14 @@ import {
   displayNameOf,
   pinAwareness,
 } from '../lib/collab/presence.ts';
-import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL, roleNotice, type Refusal } from '../lib/collab/protocol.ts';
+import {
+  COLLAB_PATH,
+  LIMIT_REFUSAL,
+  permissionsNotice,
+  REFUSAL,
+  roleNotice,
+  type Refusal,
+} from '../lib/collab/protocol.ts';
 import { decide, RECHECK_MS, sessionStands, type SessionRow } from '../lib/collab/recheck.ts';
 import { ISOLATION_HEADERS, STATIC_POLICY } from '../lib/csp.ts';
 import {
@@ -222,6 +235,8 @@ function within<T>(ms: number, work: PromiseLike<T>): Promise<T> {
 
 /** The key of one user's connections to one document, in the scope of a look (`recheckOnce`). Neither part holds a space. */
 const pairKey = (documentId: string, userId: string) => `${documentId} ${userId}`;
+/** The key of every connection to one document, for a change that is about the document and no one in particular (FR-ED-40 (g)). The prefix holds a space, as `pairKey` does, so that it is no user's identifier. */
+const documentKey = (documentId: string) => `document ${documentId}`;
 // How many keys wait for the next look before the next look is the whole re-check: anything
 // that reaches Valkey can publish an event, so what waits is bounded (`onEvent`).
 const LOOK_KEYS_MOST = 1000;
@@ -341,8 +356,9 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
    * connections the scope names and no others, with each read bounded at the
    * 2 seconds of a notice and the sessions read once, so that a connection is
    * closed or switched "within 5 seconds of the change being committed". The
-   * scope holds keys: a user's identifier (every connection of the user), or
-   * a document's and a user's (`pairKey`).
+   * scope holds keys: a user's identifier (every connection of the user), a
+   * document's and a user's (`pairKey`), or a document's (`documentKey`: every
+   * connection to it, for a change of its permission set).
    *
    * A READING NEVER UNDOES A FRESHER ONE. A run of the timer and a run of an
    * event can overlap. Each reading of access takes its number before it
@@ -356,7 +372,14 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     for (const document of server.hocuspocus.documents.values()) {
       for (const connection of document.getConnections()) {
         const { userId, documentId } = connection.context;
-        if (scope && !scope.has(userId) && !scope.has(pairKey(documentId, userId))) continue;
+        if (
+          scope &&
+          !scope.has(userId) &&
+          !scope.has(pairKey(documentId, userId)) &&
+          !scope.has(documentKey(documentId))
+        ) {
+          continue;
+        }
         open.push({ document, connection });
       }
     }
@@ -463,7 +486,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
           // A fresher decision was applied while this one waited for the messages in flight.
           if (decided.get(connection) !== reading) continue;
         }
-        const { role: was } = connection.context;
+        const { role: was, permissions: held } = connection.context;
         const changed = readOnly !== connection.readOnly;
         Object.assign(connection.context, {
           role: decision.record.role,
@@ -472,6 +495,10 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         connection.readOnly = readOnly;
         if (changed || decision.record.role !== was) {
           connection.sendStateless(roleNotice({ role: decision.record.role, canEdit: !readOnly }));
+        } else if (!sameList(held, decision.record.permissions)) {
+          // FR-ED-40 (g): the role is the same and what it holds on this document is not. The
+          // connection stays open and stays as editable as it was: that is fixed by role.
+          connection.sendStateless(permissionsNotice({ role: decision.record.role }));
         }
       }
     }
@@ -572,8 +599,9 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
   }
 
   /**
-   * FR-ED-40 (a), (b), (d): an event says that the access of a user to one
-   * document, or the session of a user, changed. THE ROWS DECIDE, as for the
+   * FR-ED-40 (a), (b), (d), (g): an event says that the access of a user to one
+   * document, or the session of a user, or the permission set of a document,
+   * changed. THE ROWS DECIDE, as for the
    * deletion of a document: the event names only whom to look at, and the look
    * is the re-check's own, for the connections it names (`recheckOnce`). So an
    * event that is forged, late, or for no one here changes nothing that the
@@ -614,6 +642,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     if (stopping) return;
     if (event.kind === 'document-deleted') await endDocument(event.documentId);
     else if (event.kind === 'collaborator-changed') await look(pairKey(event.documentId, event.userId));
+    else if (event.kind === 'permission-set-changed') await look(documentKey(event.documentId));
     else await look(event.userId);
   }
 
