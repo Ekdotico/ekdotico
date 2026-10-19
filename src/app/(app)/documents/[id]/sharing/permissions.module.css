@@ -1,14 +1,26 @@
 /* The permission settings of a document (FR-ED-46): placement only. Every
    control is the package's, and every value is one of its tokens, with no
    fallback and no token declared (@ekdotico/domico AGENTS.md, rules 1 to 3).
-   The properties are logical ones (NFR-I18-07). */
+   The properties are logical ones (NFR-I18-07).
+
+   THIS FILE HOLDS A LOCAL SHIM FOR THREE GAPS IN @ekdotico/domico 0.29.0
+   (register row S16-8, docs/plan/slice-16.md): the header of a row in a table
+   body is unstyled (`.rowHeader` and `.rows`), its props type has no `scope`
+   (permission-settings.tsx), and the checkbox has no visually hidden label
+   whose `.sr-only` stays inside the table's scroll container (`.cell`). Delete
+   each when the package ships what it stands for. */
 
 /* The header of a row: the name of a permission (FR-ED-46: "row and column
    headers that a screen reader announces"). The package's table styles the
    cells of a body and the headers of its head, and not a header inside a body,
    so this one is given what a cell of the body has, and the outline of the card
    that the package draws on the first cell of each row. The outline is the
-   package's own width, 2px, so that the card stays closed. */
+   package's own width, 2px, so that the card stays closed. S16-8 (a): delete
+   when the package styles the header of a row.
+
+   The package's `tbody td` is padded 9px 14px with a line height of 1.45, both
+   literals and no token. The nearest tokens are used instead (--sp-2 and --sp-3,
+   --lh-normal), so a header is within a pixel or two of the cells beside it. */
 .rowHeader {
   padding: var(--sp-2) var(--sp-3);
   border-block-end: 1px solid var(--rule-soft);
@@ -21,6 +33,11 @@
   line-height: var(--lh-normal);
   color: var(--fg-1);
   overflow-wrap: anywhere;
+}
+
+/* The package washes the cells of a row under the pointer; so does its header. */
+.rows tr:hover > .rowHeader {
+  background: color-mix(in srgb, var(--bg-surface-2) 60%, transparent);
 }
 
 /* The last row closes the card, as the package closes it under its cells. */
@@ -44,7 +61,8 @@
    so that the visually hidden name of the checkbox (the reset's `.sr-only`,
    which is absolute) is placed in the cell and clipped by the table's scroll
    container with it: left to the page, it sits at the cell's place in the row
-   and widens the page at phone width. */
+   and widens the page at phone width. S16-8 (c): delete this `position` when
+   the package offers a checkbox with a hidden label that stays in its cell. */
 .cell {
   position: relative;
   display: flex;

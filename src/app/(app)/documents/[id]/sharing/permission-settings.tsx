@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type HTMLAttributes } from 'react';
 import {
   Button,
   Checkbox,
@@ -30,6 +30,14 @@ import cells from './permissions.module.css';
 // rule: the route decides, again, under the lock of the document
 // (src/lib/documents/permission-settings.ts). Text for a person: plan Q6;
 // docs/plan/slice-16.md, §7.
+
+// Register row S16-8 (b): the package types the props of `TableHeaderCell` as `HTMLAttributes`, which
+// has no `scope`, though the component spreads its props onto the `th` (checked in 0.29.0). FR-ED-46
+// needs row and column headers that a screen reader announces, and WebKit with VoiceOver needs
+// `scope` for that. These two objects are the only place a `scope` is passed; delete them when the
+// package types it.
+const COLUMN = { scope: 'col' } as unknown as HTMLAttributes<HTMLTableCellElement>;
+const ROW = { scope: 'row' } as unknown as HTMLAttributes<HTMLTableCellElement>;
 
 /** One cell: its words where it cannot be changed, its state where it can. */
 export type CellView = { state: 'always' | 'never' } | { state: 'adjustable'; checked: boolean };
@@ -106,6 +114,7 @@ export function PermissionSettings({
 
   async function save(permission: Permission, role: Roles, allowed: boolean) {
     const key = keyOf(permission, role);
+    setResetSaid('');
     setNotes((was) => ({ ...was, [key]: '' }));
     const sent = await sendFor(path, { changes: { [permission]: { [role]: allowed } } }, 'PUT');
     if ('fault' in sent) {
@@ -120,6 +129,9 @@ export function PermissionSettings({
   }
 
   async function reset() {
+    // Emptied first, in a render of its own, so that the statement of a second reset is a change of the
+    // live region and is announced again.
+    setResetSaid('');
     setPending(true);
     const sent = await sendFor(path, { defaults: true }, 'PUT');
     setPending(false);
@@ -142,17 +154,19 @@ export function PermissionSettings({
       <Table label={SETTINGS_TEXT.table}>
         <TableHead>
           <TableRow>
-            <TableHeaderCell>Permission</TableHeaderCell>
-            <TableHeaderCell>Kind</TableHeaderCell>
+            <TableHeaderCell {...COLUMN}>Permission</TableHeaderCell>
+            <TableHeaderCell {...COLUMN}>Kind</TableHeaderCell>
             {SCREEN_ROLES.map((role) => (
-              <TableHeaderCell key={role}>{ROLE_NAME[role]}</TableHeaderCell>
+              <TableHeaderCell key={role} {...COLUMN}>
+                {ROLE_NAME[role]}
+              </TableHeaderCell>
             ))}
           </TableRow>
         </TableHead>
         <TableBody className={cells.rows}>
           {rows.map((row) => (
             <TableRow key={row.permission}>
-              <TableHeaderCell className={cells.rowHeader}>
+              <TableHeaderCell className={cells.rowHeader} {...ROW}>
                 {row.text}
                 {row.limit ? <p className={cells.limit}>{EDITOR_LIMIT}</p> : null}
               </TableHeaderCell>

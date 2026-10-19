@@ -76,6 +76,13 @@ test('the Owner sees the table of the set, in words and checkboxes, and every co
     'Viewer',
   ]);
   await expect(grid.getByRole('row')).toHaveCount(ROWS.length + 1);
+  // `scope` on every header, for WebKit with VoiceOver (register row S16-8 (b)).
+  await expect(grid.locator('thead th')).toHaveCount(5);
+  for (const header of await grid.locator('thead th').all())
+    await expect(header).toHaveAttribute('scope', 'col');
+  await expect(grid.locator('tbody th')).toHaveCount(ROWS.length);
+  for (const header of await grid.locator('tbody th').all())
+    await expect(header).toHaveAttribute('scope', 'row');
   for (const [text, kind, words] of ROWS) {
     const row = grid
       .getByRole('row')
@@ -213,6 +220,13 @@ test('the set is returned to its defaults after a confirmation that opens on Can
   await expect(page.getByText('Permissions reset to the defaults.')).toBeVisible();
   await expect(box(page, 'Editor', 'Rename the document')).not.toBeChecked();
   await expect(box(page, 'Viewer', 'See the list of collaborators')).toBeChecked();
+  // Any save of a cell clears the statement of the reset, so that the next reset is said again.
+  await box(page, 'Editor', 'Rename the document').click();
+  await expect(cellOf(box(page, 'Editor', 'Rename the document'))).toContainText('Saved.');
+  await expect(page.getByText('Permissions reset to the defaults.')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Reset to defaults' }).click();
+  await dialog.getByRole('button', { name: 'Reset permissions' }).click();
+  await expect(page.getByText('Permissions reset to the defaults.')).toBeVisible();
   await page.reload();
   await expect(box(page, 'Editor', 'Rename the document')).not.toBeChecked();
   await expect(box(page, 'Viewer', 'See the list of collaborators')).toBeChecked();
