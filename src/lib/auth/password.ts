@@ -33,6 +33,7 @@ import { settings } from '../settings.ts';
 import { hashToken, newToken, RESET_LINK, TOKEN } from '../token.ts';
 import { voidAddressLinks } from './address-links.ts';
 import { notAdmitted, refusedOrigin, tooManyRequests, unauthenticated } from './route-answers.ts';
+import { sessionEnded } from './session-end.ts';
 import { validateSessionRow } from './session.ts';
 import { checkCredentials, clearFailedSignIns, SIGN_IN_REFUSED } from './sign-in.ts';
 import { SECOND_STEP } from './second-step.ts';
@@ -255,8 +256,9 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
   });
   if (!completed) return notValid();
 
-  // FR-ED-40 (d): the slice that builds the collaboration server publishes the
-  // end of the account's sessions here, once the transaction has committed.
+  // FR-ED-40 (d): the connections opened under any session of the account close
+  // within 5 seconds. After the commit, and never before.
+  await sessionEnded(reset.userId);
 
   // NFR-SE-07: "clears the counters of failed sign-ins for the address", so
   // that the person can sign in at once. The reset stands whether or not this
@@ -401,8 +403,8 @@ export const changePassword = createAuthEndpoint(
     // answer to a wrong one, with its entry (NFR-SE-19: a 403). Not counted as
     // a failed sign-in: it was the right password when it was checked.
     if (outcome === 'outrun') return refused();
-    // FR-ED-40 (d): the slice that builds the collaboration server publishes
-    // the end of the other sessions here.
+    // FR-ED-40 (d): the connections opened under the other sessions close within 5 seconds.
+    await sessionEnded(session.userId);
 
     // FR-AU-87 (d): the notice, after the answer.
     const { email } = user;

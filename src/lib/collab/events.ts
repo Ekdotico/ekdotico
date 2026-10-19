@@ -4,10 +4,12 @@
 // (NFR-SC-04). The web application publishes; each collaboration server
 // subscribes (src/collab/server.ts) and acts on the connections it holds.
 //
-// The events are the list of FR-ED-40 and no other. Built so far: (c), the
-// deletion of a document. The slices that build the others add a member to
-// `CollabEvent`, a case to `readEvent`, a publish after the commit of the
-// change, and a case where the collaboration server acts on an event.
+// The events are the list of FR-ED-40 and no other. Built so far: (a) and (b),
+// a removal, a leave, and a change of role (`collaborator-changed`); (c), the
+// deletion of a document; and (d), the end of a session (`session-ended`). The
+// slices that build the others add a member to `CollabEvent`, a case to
+// `readEvent`, a publish after the commit of the change, and a case where the
+// collaboration server acts on an event.
 //
 // A notice can be lost: Valkey keeps no message for a subscriber that is not
 // connected, and a publish can fail after its change was committed. The
@@ -32,13 +34,28 @@ import { valkey } from '../valkey.ts';
 /** One change, as it is published. A union: each event of FR-ED-40 that is built is a member. */
 export type CollabEvent =
   /** FR-ED-40 (c): the document was deleted; every connection to it is closed. */
-  { kind: 'document-deleted'; documentId: string };
+  | { kind: 'document-deleted'; documentId: string }
+  /**
+   * FR-ED-40 (a), (b): this user was removed from the document, or left it, or
+   * holds another role on it. The server looks at that user's connections to
+   * that document, and closes them or switches them as the rows say.
+   */
+  | { kind: 'collaborator-changed'; documentId: string; userId: string }
+  /**
+   * FR-ED-40 (d): a session of this user ended, by sign-out, by revocation, by
+   * a change of the password or of the address, or with the account. The
+   * server looks at every connection the user holds, and closes those whose
+   * session no longer stands.
+   */
+  | { kind: 'session-ended'; userId: string };
 
 /** The one channel. Every instance of the collaboration server subscribes to it. */
 export const COLLAB_EVENTS_CHANNEL = 'ekdotico:collab-events';
 
 // `Document.id` as the application writes it (FR-ED-35).
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// `User.id` as the identity library writes it; a session's identifier is of the same form.
+const USER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * The event a message holds, or null for anything else: text that is not
@@ -55,11 +72,31 @@ export function readEvent(message: string): CollabEvent | null {
     return null;
   }
   if (typeof read !== 'object' || read === null) return null;
-  const { kind, documentId } = read as Record<string, unknown>;
-  if (kind === 'document-deleted' && typeof documentId === 'string' && UUID.test(documentId)) {
-    return { kind, documentId };
-  }
+  const { kind, documentId, userId } = read as Record<string, unknown>;
+  const document = typeof documentId === 'string' && UUID.test(documentId) ? documentId : null;
+  const user = typeof userId === 'string' && USER_ID.test(userId) ? userId : null;
+  if (kind === 'document-deleted' && document) return { kind, documentId: document };
+  if (kind === 'collaborator-changed' && document && user)
+    return { kind, documentId: document, userId: user };
+  if (kind === 'session-ended' && user) return { kind, userId: user };
   return null;
+}
+
+/** What a line says a change was about: its document where it has one, else its user (NFR-SE-19: identifiers only). */
+function subjectOf(event: CollabEvent): string {
+  return 'documentId' in event ? `document ${event.documentId}` : `user ${event.userId}`;
+}
+
+/** The message of an event, field by field, so that nothing else an object carries is sent. */
+function messageOf(event: CollabEvent): string {
+  switch (event.kind) {
+    case 'document-deleted':
+      return JSON.stringify({ kind: event.kind, documentId: event.documentId });
+    case 'collaborator-changed':
+      return JSON.stringify({ kind: event.kind, documentId: event.documentId, userId: event.userId });
+    case 'session-ended':
+      return JSON.stringify({ kind: event.kind, userId: event.userId });
+  }
 }
 
 /**
@@ -67,19 +104,16 @@ export function readEvent(message: string): CollabEvent | null {
  * whether the notice was handed to Valkey: the change stands either way, so a
  * caller neither fails its request nor undoes anything for a notice that was
  * not sent. The failure is not silent: one line, with the kind, the document's
- * identifier, and the class of the fault (NFR-SE-19). What it leaves open is
+ * identifier (or the user's, for an event that has no document), and the class
+ * of the fault (NFR-SE-19). What it leaves open is
  * closed by the re-check (see the head of this file).
  */
 export async function publishCollabEvent(event: CollabEvent): Promise<boolean> {
   try {
-    // Written field by field, so that nothing else an object carries is sent.
-    const message = JSON.stringify({ kind: event.kind, documentId: event.documentId });
-    await valkey().publish(COLLAB_EVENTS_CHANNEL, message);
+    await valkey().publish(COLLAB_EVENTS_CHANNEL, messageOf(event));
     return true;
   } catch (error) {
-    console.error(
-      `collab events: ${event.kind} not published for document ${event.documentId} (${faultOf(error)})`,
-    );
+    console.error(`collab events: ${event.kind} not published for ${subjectOf(event)} (${faultOf(error)})`);
     return false;
   }
 }
@@ -190,9 +224,7 @@ export function subscribeCollabEvents(
     if (!event) return;
     // `handle` may throw or reject: both end here.
     new Promise<void>((resolve) => resolve(handle(event))).catch((error: unknown) => {
-      console.error(
-        `collab events: ${event.kind} not handled for document ${event.documentId} (${faultOf(error)})`,
-      );
+      console.error(`collab events: ${event.kind} not handled for ${subjectOf(event)} (${faultOf(error)})`);
     });
   });
   return { subscribed, isSubscribed: () => live, client };

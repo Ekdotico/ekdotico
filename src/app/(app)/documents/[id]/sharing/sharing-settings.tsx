@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Button,
   Cluster,
@@ -17,17 +17,30 @@ import {
   TableRow,
   TextArea,
 } from '@ekdotico/domico/components';
+import type { DocumentRole } from '../../../../../lib/documents/permissions.ts';
 import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
 import styles from '../../../../pages.module.css';
 import { InBrowser, LocalTime } from '../../../local-time.tsx';
+import { LeaveDocument, RemoveDialog, RoleControl, type Answer } from './collaborator-actions.tsx';
 
 export interface SharingView {
   documentId: string;
   people: number;
   limit: number;
   owner: string;
-  collaborators: { id: string; name: string; role: string }[];
+  collaborators: {
+    id: string;
+    name: string;
+    /** The role as a person reads it, and as the request names it. */
+    role: string;
+    roleValue: DocumentRole;
+    /** Whether the caller may change this person's role, or remove them (FR-ED-44 (b)): the server asks again. */
+    mayChangeRole: boolean;
+    mayRemove: boolean;
+  }[];
+  /** FR-ED-38: whether the caller may leave the document: every role but the Owner's. */
+  mayLeave: boolean;
   /** Present for a caller who may invite (FR-ED-44). */
   invitations?: { id: string; email: string; role: string; expiresAt: string }[];
 }
@@ -58,10 +71,31 @@ export function SharingSettings({ view }: { view: SharingView }) {
   const [said, setSaid] = useState<string[]>([]);
   const statusRef = useRef<HTMLDivElement>(null);
   const emailsRef = useRef<HTMLTextAreaElement>(null);
+  // FR-ED-38: the person whose removal is being confirmed, and how many answers of the people's
+  // controls there have been, so that focus goes to what was said once the dialog has closed.
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
+  const [answers, setAnswers] = useState(0);
+  // A refusal of a control over a person is stated by itself, and is no error of the field of addresses
+  // (the codes `invalid_request` and the others of FIELD_FAULTS name that field's faults).
+  const [peopleFault, setPeopleFault] = useState<Fault | null>(null);
+  useEffect(() => {
+    // A refusal is met from its own statement (the `FormFault` takes focus, and again at each answer: WCAG 2.4.3, 4.1.3).
+    if (answers > 0 && !peopleFault) statusRef.current?.focus();
+  }, [answers, peopleFault]);
+
+  /** What a control of a person answered: its statement, or its refusal. The list is read again. */
+  function answered({ message, fault: refused }: Answer) {
+    setFault(null);
+    setPeopleFault(refused ?? null);
+    setSaid(!refused && message ? [message] : []);
+    setAnswers((count) => count + 1);
+    router.refresh();
+  }
 
   async function act(path: string, body?: unknown, method: 'POST' | 'DELETE' = 'POST') {
     setSending(true);
     setFault(null);
+    setPeopleFault(null);
     setSaid([]);
     const sent = await sendFor(path, body, method);
     setSending(false);
@@ -108,11 +142,47 @@ export function SharingSettings({ view }: { view: SharingView }) {
           </li>
           {view.collaborators.map((collaborator) => (
             <li key={collaborator.id} className={styles.row}>
-              <bdi>{collaborator.name}</bdi>, {collaborator.role}
+              <Cluster gap={3}>
+                <span>
+                  <bdi id={`person-${collaborator.id}`}>{collaborator.name}</bdi>, {collaborator.role}
+                </span>
+                {collaborator.mayChangeRole ? (
+                  <RoleControl
+                    // A new role is a new control, whose choice is the role held.
+                    key={collaborator.roleValue}
+                    collaboratorId={collaborator.id}
+                    documentId={view.documentId}
+                    name={collaborator.name}
+                    role={collaborator.roleValue}
+                    busy={sending}
+                    onAnswer={answered}
+                  />
+                ) : null}
+                {collaborator.mayRemove ? (
+                  <Button
+                    variant="quiet"
+                    disabled={!ready || sending}
+                    // The visible words are "Remove"; the name begins with them and names the person (WCAG 2.5.3, 2.4.6).
+                    aria-label={`Remove ${collaborator.name}`}
+                    onClick={() => setRemoving({ id: collaborator.id, name: collaborator.name })}
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </Cluster>
             </li>
           ))}
         </ul>
       </Stack>
+      <RemoveDialog
+        documentId={view.documentId}
+        person={removing}
+        onClose={() => setRemoving(null)}
+        onRemoved={(message) => {
+          setRemoving(null);
+          answered({ message });
+        }}
+      />
 
       {/* The confirmations, or the statement of a revocation; focus comes here after an action. */}
       <div role="status" ref={statusRef} tabIndex={-1}>
@@ -123,6 +193,7 @@ export function SharingSettings({ view }: { view: SharingView }) {
         ))}
       </div>
       {fault && !fieldFault ? <FormFault title={fault.message} autoFocus={false} /> : null}
+      {peopleFault ? <FormFault title={peopleFault.message} focusKey={answers} /> : null}
 
       {view.invitations ? (
         <>
@@ -203,6 +274,8 @@ export function SharingSettings({ view }: { view: SharingView }) {
           </Stack>
         </>
       ) : null}
+
+      {view.mayLeave ? <LeaveDocument documentId={view.documentId} /> : null}
     </Stack>
   );
 }

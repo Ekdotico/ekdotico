@@ -50,6 +50,11 @@ const PERMISSION: Record<string, Permission> = {
     'document.collaborators.invite',
   // API design: "List the document's collaborators and their roles".
   'src/app/api/documents/[id]/collaborators/route.ts GET': 'document.collaborators.view',
+  // FR-ED-38, FR-ED-44 (b): changing a role, removing a collaborator, and leaving (register row S15-1).
+  'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts PATCH': 'document.collaborators.roles',
+  'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts DELETE':
+    'document.collaborators.remove',
+  'src/app/api/documents/[id]/leave/route.ts POST': 'document.leave',
 };
 
 // The handlers that act on a DELETED document: each is made by

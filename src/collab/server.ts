@@ -13,12 +13,13 @@
 // connection may say of itself is its cursor, under the name and the slot that
 // this server holds for it (src/lib/collab/presence.ts).
 //
-// NOT HERE YET, and so true of this process until the slice that ends and
-// switches connections is built (NFR-SE-03 (b) to (d), FR-ED-40 (a), (b), (d)):
-// a sign-out, a revocation, the removal of a collaborator, and a change of
-// role are acted on by the re-check, so within 60 seconds and not the 5 that
-// FR-ED-40 gives them; nothing publishes them on the channel yet. Nor is there
-// a second instance (NFR-SC-04, withdrawn from α by D168).
+// HERE of FR-ED-40 (a), (b), (d), NFR-SE-03 (b) to (d): the removal of a
+// collaborator, a leave, a change of role, and the end of a session by
+// sign-out, revocation, or a change of the password or address. The web
+// application publishes each on the channel of src/lib/collab/events.ts after
+// its commit, and the connections it reaches are closed or switched within 5
+// seconds (`look`, `recheckOnce` with a scope). There is no second instance
+// (NFR-SC-04, withdrawn from α by D168).
 //
 // HERE of FR-ED-40: event (c), the deletion of a document. Every instance is
 // told of it on the channel of src/lib/collab/events.ts, reads the document's
@@ -26,7 +27,8 @@
 // connections to the document (`endDocument`). The channel can lose a
 // notice, and the re-check then closes the connection (FR-ED-41): a
 // connection whose notice was lost is closed within 60 seconds, and what it
-// changed meanwhile is received and never stored.
+// changed meanwhile is received and never stored. The same holds for every
+// other event: the channel is the fast path, and the re-check the guarantee.
 import { randomUUID } from 'node:crypto';
 import { STATUS_CODES, type IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -218,6 +220,12 @@ function within<T>(ms: number, work: PromiseLike<T>): Promise<T> {
   return Promise.race([work, late]);
 }
 
+/** The key of one user's connections to one document, in the scope of a look (`recheckOnce`). Neither part holds a space. */
+const pairKey = (documentId: string, userId: string) => `${documentId} ${userId}`;
+// How many keys wait for the next look before the next look is the whole re-check: anything
+// that reaches Valkey can publish an event, so what waits is bounded (`onEvent`).
+const LOOK_KEYS_MOST = 1000;
+
 // The library carries on to its own answer unless a hook rejects, and throws
 // a rejection on where it carries a value (@hocuspocus/server, Server.ts). A
 // hook that has answered rejects with none.
@@ -269,6 +277,15 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
   const storedChanges = new WeakMap<Document, number>();
   // What asks the limits of each document in memory (`limitsOf`), made at its first update.
   const keepers = new WeakMap<Document, ReturnType<typeof limitsOf>>();
+  // The number of the reading that each connection's last decision rested on, and the last number
+  // given (see `recheckOnce`).
+  const decided = new WeakMap<Connection<CollabContext>, number>();
+  let readings = 0;
+  // The keys of the events that are waiting to be looked at, whether the next look is the whole
+  // re-check, and whether a look is running (see `onEvent`).
+  let waiting = new Set<string>();
+  let everything = false;
+  let looking = false;
 
   /** One store, by either of the two of src/lib/collab/state.ts, which notes what it stored. */
   async function storeNow(write: typeof storeState, documentName: string, document: Document) {
@@ -318,13 +335,34 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
    * read the row (`endDocument`): each client keeps its changes, asks again,
    * and its handshake reads the row. Nothing is kept open on what could not
    * be read.
+   *
+   * WITH A SCOPE it is the look that an event of FR-ED-40 (a), (b), (d) asks
+   * for (`onEvent`): the same readings and the same decision, for the open
+   * connections the scope names and no others, with each read bounded at the
+   * 2 seconds of a notice and the sessions read once, so that a connection is
+   * closed or switched "within 5 seconds of the change being committed". The
+   * scope holds keys: a user's identifier (every connection of the user), or
+   * a document's and a user's (`pairKey`).
+   *
+   * A READING NEVER UNDOES A FRESHER ONE. A run of the timer and a run of an
+   * event can overlap. Each reading of access takes its number before it
+   * starts, and a connection keeps the number its last decision rested on: a
+   * decision made on an earlier reading is dropped. Without this, a reading
+   * of "Editor" taken a moment before a downgrade could make the connection
+   * editable again after the event had made it read-only.
    */
-  async function recheckOnce(): Promise<void> {
+  async function recheckOnce(scope?: ReadonlySet<string>): Promise<void> {
     const open: { document: Document; connection: Connection<CollabContext> }[] = [];
     for (const document of server.hocuspocus.documents.values()) {
-      for (const connection of document.getConnections()) open.push({ document, connection });
+      for (const connection of document.getConnections()) {
+        const { userId, documentId } = connection.context;
+        if (scope && !scope.has(userId) && !scope.has(pairKey(documentId, userId))) continue;
+        open.push({ document, connection });
+      }
     }
     if (open.length === 0) return;
+    const readMs = scope ? NOTICE_READ_MS : RECHECK_READ_MS;
+    const attempts = scope ? 1 : 2;
     const unreadable = (entries: typeof open) => {
       for (const { connection } of entries) connection.close({ code: 1000, reason: REFUSAL.UNAVAILABLE });
     };
@@ -333,10 +371,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     const ids = [...new Set(open.map(({ connection }) => connection.context.sessionId))];
     // Read twice at most before every connection of the run is given up: one query that fails is
     // no reason to drop them all, and an outage fails the second as it failed the first.
+    // (Once for an event, which has 5 seconds.)
     for (let attempt = 1; ; attempt++) {
       try {
         const rows = await within(
-          RECHECK_READ_MS,
+          readMs,
           db().session.findMany({
             where: { id: { in: ids } },
             select: {
@@ -354,35 +393,46 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         break;
       } catch (error) {
         console.error(`collab: re-check not read for sessions (${faultOf(error)})`);
-        if (attempt === 2 || stopping) return unreadable(open);
+        if (attempt === attempts || stopping) return unreadable(open);
       }
     }
 
-    // The same user in several tabs of one document is one reading.
-    const access = new Map<string, Access | null>();
+    // The same user in several tabs of one document is one reading, with the number it was taken under.
+    const access = new Map<string, { read: Access | null; reading: number }>();
     const now = Date.now();
     const maxMs = (store.sessionMaxSeconds ?? settings().sessionMaxSeconds) * 1000;
     // What `decide` is given where the session ended, which it answers before it looks at this.
     const NOT_READ: Access = { outcome: 'not_found' };
+    // A session that ended closes its connections before any access is read: the readings below are one
+    // after another, and a close that waits behind another pair's reading could pass the 5 seconds.
+    for (const { connection } of open) {
+      const { userId, sessionId } = connection.context;
+      if (!sessionStands(sessions.get(sessionId), userId, now, maxMs)) {
+        connection.close({ code: 1000, reason: REFUSAL.SESSION_ENDED });
+      }
+    }
     for (const entry of open) {
       if (stopping) return;
       const { connection } = entry;
       const { userId, documentId, sessionId } = connection.context;
       const row = sessions.get(sessionId);
       let seen: Access | null = NOT_READ;
+      let reading = 0;
       // A session that ended closes its connections whatever the access: it is not read.
       if (sessionStands(row, userId, now, maxMs)) {
-        const key = `${userId} ${documentId}`;
+        const key = pairKey(documentId, userId);
         if (!access.has(key)) {
+          // The number first, and then the reading: whatever begins later has a greater one.
+          const number = ++readings;
           let read: Access | null = null;
           try {
-            read = await within(RECHECK_READ_MS, authorise(userId, documentId, 'document.view'));
+            read = await within(readMs, authorise(userId, documentId, 'document.view'));
           } catch (error) {
             console.error(`collab: re-check not read for access (${faultOf(error)})`);
           }
-          access.set(key, read);
+          access.set(key, { read, reading: number });
         }
-        seen = access.get(key) ?? null;
+        ({ read: seen, reading } = access.get(key)!);
       }
       // Closed while the readings were made: nothing is done to a connection that is gone.
       if (!entry.document.hasConnection(connection)) continue;
@@ -393,7 +443,14 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       const decision = decide(connection.context, row, seen, now, maxMs);
       if (decision.action === 'close') {
         connection.close({ code: 1000, reason: decision.reason });
-      } else if (decision.action === 'switch') {
+        continue;
+      }
+      // A decision that rests on an earlier reading than the last one applied to this connection
+      // is dropped, a `keep` too: it says the connection is as it was, which a fresher one may
+      // since have changed.
+      if ((decided.get(connection) ?? 0) > reading) continue;
+      decided.set(connection, reading);
+      if (decision.action === 'switch') {
         // FR-ED-40 (b): in place. The record is what the role holds now, and
         // the library reads the flag at each message it applies.
         const readOnly = isReadOnly(decision.record);
@@ -403,6 +460,8 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
           // Nothing is awaited from here to the flag.
           await connection.waitForPendingMessages();
           if (!entry.document.hasConnection(connection)) continue;
+          // A fresher decision was applied while this one waited for the messages in flight.
+          if (decided.get(connection) !== reading) continue;
         }
         const { role: was } = connection.context;
         const changed = readOnly !== connection.readOnly;
@@ -512,10 +571,50 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     closeDocument(documentId, REFUSAL.ACCESS_ENDED);
   }
 
+  /**
+   * FR-ED-40 (a), (b), (d): an event says that the access of a user to one
+   * document, or the session of a user, changed. THE ROWS DECIDE, as for the
+   * deletion of a document: the event names only whom to look at, and the look
+   * is the re-check's own, for the connections it names (`recheckOnce`). So an
+   * event that is forged, late, or for no one here changes nothing that the
+   * rows do not.
+   *
+   * One look at a time. Events that come while one runs wait as keys, and are
+   * looked at together by the next; past `LOOK_KEYS_MOST` of them the next look
+   * is the whole re-check. A flood of events therefore costs one look more, and
+   * never a look for each.
+   */
+  async function look(key: string): Promise<void> {
+    if (waiting.size >= LOOK_KEYS_MOST) {
+      // One line when the bound is first met, naming no one: the next look is the whole re-check.
+      if (!everything)
+        console.error(`collab: ${LOOK_KEYS_MOST} notices wait, the next look is the whole re-check`);
+      everything = true;
+    } else waiting.add(key);
+    if (looking) return;
+    looking = true;
+    try {
+      while (!stopping && (everything || waiting.size > 0)) {
+        const scope = everything ? undefined : waiting;
+        waiting = new Set();
+        everything = false;
+        try {
+          await recheckOnce(scope);
+        } catch (error) {
+          console.error(`collab: look at an event failed (${faultOf(error)})`);
+        }
+      }
+    } finally {
+      looking = false;
+    }
+  }
+
   /** What this instance does for each event of the channel: one case for each kind of FR-ED-40 that is built. */
   async function onEvent(event: CollabEvent): Promise<void> {
     if (stopping) return;
     if (event.kind === 'document-deleted') await endDocument(event.documentId);
+    else if (event.kind === 'collaborator-changed') await look(pairKey(event.documentId, event.userId));
+    else await look(event.userId);
   }
 
   /**

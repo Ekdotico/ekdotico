@@ -1,6 +1,8 @@
 // Changes the role of a collaborator on a document in the database of the run,
-// as the route that changes a role will (FR-ED-40 (b); slice 15). It publishes
-// nothing: the collaboration server learns of it by its re-check (FR-ED-41).
+// with no route (FR-ED-40 (b)). It publishes nothing: the collaboration server
+// learns of it by its re-check (FR-ED-41), which is what the tests that use it
+// are about. A change made from the screen, and its notice, are the tests of
+// slice 15 (tests/e2e/editor.spec.ts, "a change acts on an open page").
 //
 //   node tests/e2e/set-role.ts <document> <address> <editor|reviewer|viewer>
 import { db } from '../../src/lib/db.ts';

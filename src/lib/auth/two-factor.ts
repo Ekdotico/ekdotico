@@ -46,6 +46,7 @@ import { valkey } from '../valkey.ts';
 import { stoppedByFoundingGate, type GatedAccount } from './founding-gate.ts';
 import { notAdmitted, refusedOrigin, unauthenticated } from './route-answers.ts';
 import { LINK_STEP, SECOND_STEP, SECOND_STEP_COOKIE } from './second-step.ts';
+import { sessionEnded, userOfSessionToken } from './session-end.ts';
 import { holdSession, validateSessionRow, type ValidSession } from './session.ts';
 import {
   claimSignInLink,
@@ -611,6 +612,8 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
     // may have been given another since, and a recovery code is taken here under
     // a session too (`verifyBackupCode`).
     const held = await ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, secret);
+    // Whose it is, read before the transaction deletes it, to tell the collaboration server once it has.
+    const heldUser = held ? await userOfSessionToken(held) : null;
     const fewer = left ? await seal(ctx, JSON.stringify(left)) : null;
     // One transaction, so that none of the three happens without the others; a
     // fault of any is a fault of the request, and nothing is swallowed. The
@@ -655,6 +658,8 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
       await db().session.deleteMany({ where: { token: session.token } });
       return outcome === CODE_GONE ? wrong() : refused('sign_in_again', MESSAGES.again);
     }
+    // FR-ED-40 (d): the session the browser held ended with the claim.
+    if (heldUser) await sessionEnded(heldUser);
     // FR-AU-81: "the counters of failed sign-ins for the address are cleared
     // when that sign-in completes". The sign-in stands whether or not this
     // succeeds, as a reset does (password.ts), with the ceiling stated where

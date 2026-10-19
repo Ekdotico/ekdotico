@@ -588,7 +588,7 @@ describe('the notice of a deletion (NFR-SE-03 (d), NFR-SE-19)', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const received: string[] = [];
     const subscription = subscribeCollabEvents((event) => {
-      received.push(event.documentId);
+      received.push('documentId' in event ? event.documentId : event.userId);
       const fault = new Error(`a handler that quotes ${TITLE}`);
       // The first throws, and every other rejects.
       if (received.length === 1) throw fault;

@@ -5,6 +5,7 @@
 // two files cannot each run one.
 import { spawnSync } from 'node:child_process';
 import { expect, type Page } from '@playwright/test';
+import { mailFor } from './account.ts';
 import { APP_ORIGIN, AUTH_SECRET } from './origin.ts';
 
 // The fixed texts of FR-ED-21 and FR-ED-37.
@@ -38,12 +39,48 @@ export async function invite(page: Page, addresses: string[], role: 'Editor' | '
   await page.getByRole('button', { name: 'Invite' }).click();
 }
 
+/**
+ * The person invited at this address opens the link of the email, and accepts: the document is theirs to
+ * open. `except` is the link of an earlier invitation to the address, for a person who is invited again:
+ * the email of the new one is handed over after the response, and the newest message may still be the old.
+ */
+export async function accept(page: Page, address: string, documentId: string, except?: string) {
+  let link = '';
+  await expect
+    .poll(async () => (link = (await mailFor(address, INVITATION_LINK)).found), { timeout: 15_000 })
+    .not.toBe(except ?? '');
+  await page.goto(new URL(link).pathname);
+  await page.getByRole('button', { name: 'Accept' }).click();
+  await page.waitForURL(`**/documents/${documentId}`);
+}
+
+/** The row of a person in the list of people of the sharing settings (FR-ED-38). */
+export const personRow = (page: Page, name: string) =>
+  page.getByRole('listitem').filter({ has: page.locator('bdi', { hasText: name }) });
+
 export const pendingRow = (page: Page, address: string) =>
   page.getByRole('group', { name: 'Pending invitations' }).getByRole('row').filter({ hasText: address });
 
 /** Changes a collaborator's role in the database of the run (tests/e2e/set-role.ts); the server learns of it by its re-check. */
 export function setRole(documentId: string, address: string, role: 'editor' | 'reviewer' | 'viewer') {
   const ran = spawnSync('node', ['tests/e2e/set-role.ts', documentId, address, role], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN,
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(ran.status, ran.stderr).toBe(0);
+}
+
+/** Gives the Editor role these permissions on a document, in the database of the run (tests/e2e/set-permissions.ts). */
+export function setPermissions(documentId: string, permissions: string[]) {
+  const ran = spawnSync('node', ['tests/e2e/set-permissions.ts', documentId, permissions.join(',')], {
     env: {
       ...process.env,
       FOUNDING_TEAM_EMAILS: '',

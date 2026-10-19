@@ -207,6 +207,50 @@ const CASES: Case[] = [
     status: 201,
   },
   {
+    // FR-ED-38: a collaborator of the session's own document, named by the identifier of its row.
+    handler: 'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts PATCH',
+    body: { role: 'viewer' },
+    arrange: async (owner) => {
+      const documentId = await live(owner);
+      const row = await db().documentCollaborator.create({
+        data: { documentId, userId: (await person()).id, role: 'EDITOR' },
+      });
+      return `${documentId} ${row.id}`;
+    },
+    path: (id) => `/api/documents/${pair(id)[0]}/collaborators/${pair(id)[1]}`,
+    params: (id) => ({ id: pair(id)[0], collaboratorId: pair(id)[1] }),
+    state: async (_, id) =>
+      (await db().documentCollaborator.findUniqueOrThrow({ where: { id: pair(id)[1] } })).role,
+    status: 200,
+  },
+  {
+    // It reads no body.
+    handler: 'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts DELETE',
+    arrange: async (owner) => {
+      const documentId = await live(owner);
+      const row = await db().documentCollaborator.create({
+        data: { documentId, userId: (await person()).id, role: 'VIEWER' },
+      });
+      return `${documentId} ${row.id}`;
+    },
+    path: (id) => `/api/documents/${pair(id)[0]}/collaborators/${pair(id)[1]}`,
+    params: (id) => ({ id: pair(id)[0], collaboratorId: pair(id)[1] }),
+    state: (_, id) => db().documentCollaborator.count({ where: { id: pair(id)[1] } }),
+    status: 200,
+  },
+  {
+    // The session's account is a collaborator of another account's document, and leaves it. No body.
+    handler: 'src/app/api/documents/[id]/leave/route.ts POST',
+    arrange: async (owner) => {
+      const documentId = await live(await person());
+      await db().documentCollaborator.create({ data: { documentId, userId: owner.id, role: 'EDITOR' } });
+      return documentId;
+    },
+    path: (id) => `/api/documents/${id}/leave`,
+    state: (owner, id) => db().documentCollaborator.count({ where: { documentId: id, userId: owner.id } }),
+    status: 204,
+  },
+  {
     // The session's account is the one invited, by another account's document.
     handler: 'src/app/api/invitations/[token]/[answer]/route.ts POST',
     arrange: async (owner) => {

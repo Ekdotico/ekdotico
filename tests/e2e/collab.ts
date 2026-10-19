@@ -14,7 +14,12 @@ import { APP_ORIGIN, AUTH_SECRET, COLLAB_PORT } from './origin.ts';
 
 let running: ChildProcess | undefined;
 
-export async function startCollab(): Promise<void> {
+/**
+ * Starts the server, with its re-check every 3 seconds unless `recheckMs` says
+ * otherwise. A test of an event of FR-ED-40 (the 5 seconds) starts it with the
+ * 60 seconds of FR-ED-41, so that nothing but the event can have acted.
+ */
+export async function startCollab(recheckMs = '3000'): Promise<void> {
   if (running) return;
   const child = spawn('node', ['src/collab/server.ts'], {
     env: {
@@ -26,7 +31,7 @@ export async function startCollab(): Promise<void> {
       AUTH_SECRET,
       COLLAB_PORT,
       // FR-ED-41: the re-check, 60 seconds where unset; a test of a role that changes would wait that long.
-      COLLAB_RECHECK_MS: '3000',
+      COLLAB_RECHECK_MS: recheckMs,
     },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
