@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type HTMLAttributes } from 'react';
+import { useRef, useState } from 'react';
 import {
   Button,
   Checkbox,
@@ -37,14 +37,6 @@ import cells from './permissions.module.css';
 // rule: the route decides, again, under the lock of the document
 // (src/lib/documents/permission-settings.ts). Text for a person: plan Q6;
 // docs/plan/slice-16.md, §7.
-
-// Register row S16-8 (b): the package types the props of `TableHeaderCell` as `HTMLAttributes`, which
-// has no `scope`, though the component spreads its props onto the `th` (checked in 0.29.0). FR-ED-46
-// needs row and column headers that a screen reader announces, and WebKit with VoiceOver needs
-// `scope` for that. These two objects are the only place a `scope` is passed; delete them when the
-// package types it.
-const COLUMN = { scope: 'col' } as unknown as HTMLAttributes<HTMLTableCellElement>;
-const ROW = { scope: 'row' } as unknown as HTMLAttributes<HTMLTableCellElement>;
 
 /** One cell: its words where it cannot be changed, its state where it can. */
 export type CellView =
@@ -169,27 +161,26 @@ export function PermissionSettings({
       <Table label={SETTINGS_TEXT.table}>
         <TableHead>
           <TableRow>
-            <TableHeaderCell {...COLUMN}>Permission</TableHeaderCell>
-            <TableHeaderCell {...COLUMN}>Kind</TableHeaderCell>
+            <TableHeaderCell scope="col">Permission</TableHeaderCell>
+            <TableHeaderCell scope="col">Kind</TableHeaderCell>
             {TABLE_ROLES.map((role) => (
-              <TableHeaderCell key={role} {...COLUMN}>
+              <TableHeaderCell key={role} scope="col">
                 {/* S16-1: the column of a role that α 0.1.0 does not offer says so in its header. */}
                 {role === 'reviewer' ? REVIEWER_HEADER : ROLE_NAME[role]}
               </TableHeaderCell>
             ))}
           </TableRow>
         </TableHead>
-        <TableBody className={cells.rows}>
+        <TableBody>
           {rows.map((row) => (
             <TableRow key={row.permission}>
-              <TableHeaderCell className={cells.rowHeader} {...ROW}>
+              <TableHeaderCell scope="row">
                 {row.text}
                 {row.limit ? <p className={cells.limit}>{EDITOR_LIMIT}</p> : null}
                 {row.notOffered ? <p className={cells.limit}>{NOT_OFFERED_ROW}</p> : null}
-                {/* S16-3: shown to everyone; the Owner's cell carries the same sentence for a screen
-                    reader, so this copy is hidden from one and is not read twice. */}
+                {/* S16-3: shown to everyone, and the Owner's cell is described by it. */}
                 {row.ownerNote ? (
-                  <p className={cells.limit} aria-hidden="true">
+                  <p id={`note-${row.permission.replaceAll('.', '-')}`} className={cells.limit}>
                     {row.ownerNote}
                   </p>
                 ) : null}
@@ -200,33 +191,29 @@ export function PermissionSettings({
                 const key = keyOf(row.permission, role);
                 if (cell.state !== 'adjustable') {
                   return (
-                    <TableCell key={role}>
-                      <div className={cells.cell}>
-                        <span className={cells.fixed}>{cell.state === 'always' ? ALWAYS : NEVER}</span>
-                        {/* Read after the word, and not shown: the sentence is under the row's name. */}
-                        {cell.note ? <span className="sr-only">{`. ${cell.note}`}</span> : null}
-                      </div>
+                    <TableCell
+                      key={role}
+                      // The sentence under the row's name describes the cell (S16-3).
+                      aria-describedby={cell.note ? `note-${row.permission.replaceAll('.', '-')}` : undefined}
+                    >
+                      <span className={cells.fixed}>{cell.state === 'always' ? ALWAYS : NEVER}</span>
                     </TableCell>
                   );
                 }
                 if (cell.notOffered) {
                   // S16-1: shown, disabled, and described; no request is made from it, and the server
                   // refuses one (422 not_offered).
-                  const whyId = `why-${row.permission.replaceAll('.', '-')}-${role}`;
                   return (
                     <TableCell key={role}>
-                      <div className={cells.cell}>
-                        <Checkbox
-                          label={<span className="sr-only">{`${ROLE_NAME[role]}: ${row.short}`}</span>}
-                          checked={cell.checked}
-                          disabled
-                          aria-describedby={whyId}
-                          onChange={() => {}}
-                        />
-                        <span id={whyId} className="sr-only">
-                          {cell.notOffered}
-                        </span>
-                      </div>
+                      <Checkbox
+                        label={`${ROLE_NAME[role]}: ${row.short}`}
+                        labelHidden
+                        checked={cell.checked}
+                        disabled
+                        // The accessible description, as an attribute: the package has no hidden description.
+                        aria-description={cell.notOffered}
+                        onChange={() => {}}
+                      />
                     </TableCell>
                   );
                 }
@@ -236,7 +223,8 @@ export function PermissionSettings({
                     <div className={cells.cell}>
                       <Checkbox
                         // The name states the permission and the role (FR-ED-46); the page shows the box.
-                        label={<span className="sr-only">{`${ROLE_NAME[role]}: ${row.short}`}</span>}
+                        label={`${ROLE_NAME[role]}: ${row.short}`}
+                        labelHidden
                         checked={checked[key] ?? false}
                         disabled={!ready}
                         aria-describedby={noteId}

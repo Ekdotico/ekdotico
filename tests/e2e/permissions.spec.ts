@@ -137,12 +137,13 @@ test('the Owner sees the table of the set, in words and checkboxes, and every co
   }
   // The three rows that are not offered say so under their names, once each.
   await expect(grid.getByText(NOT_OFFERED_ROW, { exact: true })).toHaveCount(3);
-  // S16-3: the Owner's "Leave" cell says why it is "Never": under the row's name, and for a screen reader in the cell.
+  // S16-3: the Owner's "Leave" cell says why it is "Never": under the row's name, and describes the cell.
   const leave = grid
     .getByRole('row')
     .filter({ has: page.getByRole('rowheader', { name: 'Leave the document' }) });
   await expect(leave.getByRole('rowheader')).toContainText(OWNER_LEAVE);
-  await expect(leave.getByRole('cell').nth(1)).toContainText(`Never. ${OWNER_LEAVE}`);
+  await expect(leave.getByRole('cell').nth(1)).toHaveText('Never');
+  await expect(leave.getByRole('cell').nth(1)).toHaveAccessibleDescription(OWNER_LEAVE);
 
   // The defaults of FR-ED-44, which are the stored set of a new document.
   await expect(box(page, 'Editor', 'See the list of collaborators')).toBeChecked();
