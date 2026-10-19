@@ -23,6 +23,7 @@ import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken } from '../token.ts';
 import type { DocumentRow } from './access.ts';
+import { listAccessNotifications, type AccessNotificationView } from './access-notifications.ts';
 import { COLLABORATOR_ROLE, holds, ROLE_NAME, type DocumentRole } from './permissions.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -534,6 +535,7 @@ export async function sharingOf(
 // ── The notification list (FR-ED-42) ───────────────────────────────────────
 
 export interface NotificationView {
+  kind: typeof INVITATION_NOTIFICATION;
   id: string;
   createdAt: Date;
   read: boolean;
@@ -541,6 +543,9 @@ export interface NotificationView {
   role: DocumentRole;
   invitationId: string;
 }
+
+/** Every kind the list holds: an invitation, a change of role, a removal (./access-notifications.ts). Kinds are added here. */
+export type ListedNotification = NotificationView | AccessNotificationView;
 
 /**
  * The account's notifications whose subject still exists, newest first, with
@@ -552,7 +557,7 @@ export interface NotificationView {
 export async function listNotifications(
   userId: string,
   now: Date = new Date(),
-): Promise<{ unread: number; notifications: NotificationView[] }> {
+): Promise<{ unread: number; notifications: ListedNotification[] }> {
   const rows = await db().notification.findMany({
     where: { recipientId: userId, kind: INVITATION_NOTIFICATION },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -573,12 +578,13 @@ export async function listNotifications(
       })
     ).map((invitation) => [invitation.id, invitation]),
   );
-  const notifications = rows.flatMap((row) => {
+  const invited = rows.flatMap((row): NotificationView[] => {
     const invitationId = (row.payload as { invitationId?: string }).invitationId ?? '';
     const invitation = invitations.get(invitationId);
     if (!invitation) return [];
     return [
       {
+        kind: INVITATION_NOTIFICATION,
         id: row.id,
         createdAt: row.createdAt,
         read: row.readAt !== null,
@@ -588,6 +594,10 @@ export async function listNotifications(
       },
     ];
   });
+  // FR-ED-42, S15-2: one list, newest first, whatever the kind.
+  const notifications = [...invited, ...(await listAccessNotifications(userId, now))].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+  );
   return { unread: notifications.filter(({ read }) => !read).length, notifications };
 }
 

@@ -271,6 +271,98 @@ test('the Owner changes a role and removes a collaborator, a collaborator leaves
   await cyContext.close();
 });
 
+// FR-ED-42, S15-2: a change of role and a removal are in the notification list of the person they
+// are about, and in no one else's. The words are those of docs/plan/presence-row.md, §5 (for the
+// owner's approval), written out here.
+test('a change of role and a removal are notified to the person affected, and never to the Owner who acted, and a leave is notified to no one', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  await enter(page, { ...newPerson(), name: 'Ada Owner' });
+  const id = await shareNew(page);
+  const cy = { ...newPerson(), name: 'Cy Viewer' };
+  const bea = { ...newPerson(), name: 'Bea Editor' };
+  const [cyContext, beaContext] = [await browser.newContext(), await browser.newContext()];
+  const [his, theirs] = [await cyContext.newPage(), await beaContext.newPage()];
+  await enter(his, cy);
+  await enter(theirs, bea);
+  await invite(page, [cy.email], 'Viewer');
+  await expect(page.getByRole('status')).toContainText(CONFIRMATION(cy.email));
+  await invite(page, [bea.email]);
+  await expect(page.getByRole('status')).toContainText(CONFIRMATION(bea.email));
+  await accept(his, cy.email, id);
+  await accept(theirs, bea.email, id);
+  await page.reload();
+
+  const notifications = async (who: Page) => {
+    await who.goto('/notifications');
+    await expect(who.getByRole('heading', { level: 1, name: 'Notifications' })).toBeVisible();
+  };
+
+  // A change of role: Cy is told, with the title as it stands and a link to the document.
+  const cy$ = personRow(page, 'Cy Viewer');
+  await cy$.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await cy$.getByRole('button', { name: 'Change role' }).click();
+  await expect(page.getByRole('status')).toHaveText('Role of Cy Viewer changed to Editor.');
+  await notifications(his);
+  const changed = his.getByText('Your role on Untitled document was changed to Editor.');
+  await expect(changed).toBeVisible();
+  const item = his.getByRole('listitem').filter({ has: changed });
+  await expect(item.getByRole('link', { name: 'Open the document' })).toHaveAttribute(
+    'href',
+    `/documents/${id}`,
+  );
+  await expect(item.getByText('Unread', { exact: true })).toBeVisible();
+  await screens(his, 'notifications-role-changed');
+  await item.getByRole('button', { name: 'Mark as read' }).click();
+  // WCAG 2.4.3: the button goes; focus moves to the link of the same notification.
+  await expect(item.getByRole('link', { name: 'Open the document' })).toBeFocused();
+  await expect(item.getByText('Unread', { exact: true })).toBeHidden();
+
+  // The Owner who acted, and Bea who was not touched, are told nothing.
+  await notifications(page);
+  await expect(page.getByText('There are no notifications.')).toBeVisible();
+  await notifications(theirs);
+  await expect(theirs.getByText(/Your role on|You no longer have access/)).toHaveCount(0);
+
+  // A removal: Cy is told, in words that name no document and with no link; the change of role goes with the role.
+  await page.goto(`/documents/${id}/sharing`);
+  await personRow(page, 'Cy Viewer').getByRole('button', { name: 'Remove' }).click();
+  await page
+    .getByRole('dialog', { name: 'Remove collaborator' })
+    .getByRole('button', { name: 'Remove collaborator' })
+    .click();
+  await expect(page.getByRole('status')).toHaveText('Cy Viewer removed from this document.');
+  await notifications(his);
+  const removed = his.getByText('You no longer have access to a document.');
+  await expect(removed).toBeVisible();
+  await expect(his.getByText(/Your role on/)).toHaveCount(0);
+  const gone = his.getByRole('listitem').filter({ has: removed });
+  await expect(gone.getByRole('link')).toHaveCount(0);
+  await expect(his.locator('a[href*="/documents/"]')).toHaveCount(0);
+  await screens(his, 'notifications-removed');
+  await gone.getByRole('button', { name: 'Mark as read' }).click();
+  // No link to take the focus: it moves to the words of the notification.
+  await expect(removed).toBeFocused();
+  await expectNoSidewaysScroll(his);
+
+  // A leave tells no one: not the Owner, and not the one who left.
+  await theirs.goto(`/documents/${id}/sharing`);
+  await theirs.getByRole('button', { name: 'Leave document' }).click();
+  await theirs
+    .getByRole('dialog', { name: 'Leave document' })
+    .getByRole('button', { name: 'Leave document' })
+    .click();
+  await theirs.waitForURL('**/');
+  await notifications(theirs);
+  await expect(theirs.getByText(/You no longer have access|Your role on/)).toHaveCount(0);
+  await notifications(page);
+  await expect(page.getByText('There are no notifications.')).toBeVisible();
+  await cyContext.close();
+  await beaContext.close();
+});
+
 // FR-ED-44 (b), as the page shows it: the Owner has given Editors the permissions, and an Editor
 // then acts on a Viewer and is offered nothing over another Editor or oneself.
 test('an Editor who is given the permissions acts on a Viewer, and is offered nothing over an Editor or over oneself', async ({

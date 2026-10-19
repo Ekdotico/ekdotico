@@ -12,6 +12,9 @@ vi.mock('../../src/lib/documents/deletion.ts', () => ({ deleteExpiredDocuments }
 // (tests/integration/session-list.test.ts runs them against a database).
 vi.mock('../../src/lib/auth/password.ts', () => ({ deleteExpiredTokens: async () => 0 }));
 vi.mock('../../src/lib/auth/session-list.ts', () => ({ deleteEndedSessions: async () => 0 }));
+vi.mock('../../src/lib/documents/access-notifications.ts', () => ({
+  deleteExpiredRemovedNotifications: async () => 0,
+}));
 
 const HOUR_MS = 60 * 60 * 1000;
 let stdout: ReturnType<typeof vi.spyOn>;

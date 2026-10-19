@@ -14,8 +14,11 @@
 //
 // The entry of `collaborators_changed` is written in the transaction of the
 // change (NFR-SE-19, D163): the user who acted and the document, and nothing
-// of the person it affects. The event is published after the commit, and never
-// before: a connection must not be closed for a change that was not made.
+// of the person it affects. So is the notification of the person affected
+// (FR-ED-42, S15-2; ./access-notifications.ts), for a change of role and for a
+// removal, never for the person who acted and none for a leave. The event is
+// published after the commit, and never before: a connection must not be
+// closed for a change that was not made.
 //
 // NFR-SE-19: nothing here logs a name or an address. The name of a
 // collaborator leaves this module in the statement the route answers with.
@@ -24,6 +27,7 @@ import { publishCollabEvent } from '../collab/events.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { db } from '../db.ts';
 import { securityLogIn } from '../security-log.ts';
+import { endRoleChanges, notifyRemoved, notifyRoleChanged } from './access-notifications.ts';
 import { mayAct, refusalOn, type CollaboratorAction } from './collaborator-rules.ts';
 import { COLLABORATOR_ROLE, type DocumentRole } from './permissions.ts';
 import { lockDocument, OFFERED, type OfferedRole } from './sharing.ts';
@@ -141,6 +145,8 @@ export async function changeRole(
         data: { role: OFFERED[wanted], roleSince: now },
       });
       await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
+      // FR-ED-42, S15-2: the person whose role it is is told, in this transaction.
+      await notifyRoleChanged(tx, { recipientId: found.userId, actorId: callerId, documentId, role: wanted });
       return { result: { outcome: 'changed', name, role: wanted }, userId: found.userId };
     },
   );
@@ -168,6 +174,8 @@ export async function removeCollaborator(
       const { found, name } = acted;
       await tx.documentCollaborator.delete({ where: { id: found.id } });
       await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
+      // FR-ED-42, S15-2: the person removed is told, in this transaction.
+      await notifyRemoved(tx, { recipientId: found.userId, actorId: callerId, documentId });
       return { result: { outcome: 'removed', name }, userId: found.userId };
     },
   );
@@ -189,6 +197,8 @@ export async function leaveDocument(documentId: string, callerId: string): Promi
     if (count !== 1) return { outcome: 'not_found' };
     // The one who acts is the one who goes.
     await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
+    // No notification of a leave (the person's own act), and none of the changes of the role that ended.
+    await endRoleChanges(tx, callerId, documentId);
     return { outcome: 'left' };
   });
   if (done.outcome === 'left') await announce(documentId, callerId);

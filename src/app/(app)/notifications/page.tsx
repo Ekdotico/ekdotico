@@ -4,7 +4,7 @@ import { ROLE_NAME } from '../../../lib/documents/permissions.ts';
 import { listNotifications } from '../../../lib/documents/sharing.ts';
 import { reading } from '../../page-fault.ts';
 import { currentAccount, titled } from '../account.ts';
-import { NotificationList } from './notification-list.tsx';
+import { NotificationList, type NotificationItem } from './notification-list.tsx';
 
 export const generateMetadata = () => titled('Notifications');
 
@@ -15,11 +15,12 @@ export default async function Notifications() {
   const { notifications } = await reading(() => listNotifications(userId));
   return (
     <NotificationList
-      notifications={notifications.map((notification) => ({
-        ...notification,
-        role: ROLE_NAME[notification.role],
-        createdAt: notification.createdAt.toISOString(),
-      }))}
+      notifications={notifications.map((notification): NotificationItem => {
+        const createdAt = notification.createdAt.toISOString();
+        // A removal names no role; the others name the one in words.
+        if (notification.kind === 'removed') return { ...notification, createdAt };
+        return { ...notification, role: ROLE_NAME[notification.role], createdAt };
+      })}
     />
   );
 }

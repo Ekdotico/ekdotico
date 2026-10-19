@@ -26,6 +26,9 @@ export function prepare(label: string, env: Record<string, string> = {}) {
     // The limiter keys its counters by this secret, so a secret of its own
     // gives each run counters of its own in the shared Valkey.
     AUTH_SECRET: `test-${randomBytes(24).toString('hex')}`,
+    // The channel of the events for the collaboration server (src/lib/collab/events.ts) is shared by
+    // every run on the machine too: a run of its own does not hear another's, and another does not hear it.
+    COLLAB_EVENTS_CHANNEL: `ekdotico:collab-events:test-${randomBytes(8).toString('hex')}`,
     ...env,
   });
   return database;

@@ -50,11 +50,52 @@ export function isSlot(value: unknown): value is number {
  */
 export const AWARENESS_MAX_BYTES = 4096;
 
+/**
+ * The most awareness messages one connection may send in any second (the
+ * owner's decision of 19 October 2026, register row S14-5). A person's cursor
+ * sends a few a second, and the editor batches them (`flushDelay` of the
+ * provider, 250 ms), so the limit is for a client that is not the editor. A
+ * message past it is dropped and the connection is kept
+ * (`beforeHandleMessage` of src/collab/server.ts).
+ */
+export const AWARENESS_PER_SECOND = 60;
+
+/**
+ * The limit above, for one connection: a sliding window of one second that
+ * remembers the times of the last `limit` messages it let through. A message
+ * is let through when the one `limit` messages before it was more than the
+ * window ago, so no second, taken from any moment, holds more than `limit`.
+ * The clock is given for the tests.
+ */
+export class AwarenessRate {
+  private readonly times: number[] = [];
+  private oldest = 0;
+  private readonly limit: number;
+  private readonly windowMs: number;
+
+  constructor(limit = AWARENESS_PER_SECOND, windowMs = 1000) {
+    this.limit = limit;
+    this.windowMs = windowMs;
+  }
+
+  /** True where a message at `now` is let through, and then counts. False where it is past the limit, and counts for nothing. */
+  take(now: number = Date.now()): boolean {
+    if (this.times.length < this.limit) {
+      this.times.push(now);
+      return true;
+    }
+    if (now - this.times[this.oldest]! < this.windowMs) return false;
+    this.times[this.oldest] = now;
+    this.oldest = (this.oldest + 1) % this.limit;
+    return true;
+  }
+}
+
 // The type of a message that carries awareness (@hocuspocus/server, `MessageType`).
 const AWARENESS_MESSAGE = 1;
 
 /** One number of the protocol (lib0's variable-length integer): its value and the offset after it, or null where the bytes end. */
-function varUint(bytes: Uint8Array, at: number): [value: number, next: number] | null {
+export function varUint(bytes: Uint8Array, at: number): [value: number, next: number] | null {
   let value = 0;
   for (let shift = 0; shift < 35; shift += 7) {
     const byte = bytes[at++];
@@ -76,6 +117,16 @@ export function awarenessTooLong(message: Uint8Array): boolean {
   if (!name) return false;
   const type = varUint(message, name[1] + name[0]);
   return type !== null && type[0] === AWARENESS_MESSAGE && message.length - type[1] > AWARENESS_MAX_BYTES;
+}
+
+// The type of a message that asks for the awareness of every client (`MessageType.QueryAwareness`).
+const QUERY_AWARENESS_MESSAGE = 3;
+
+/** Whether this message, as a client sent it, asks for the awareness of every client. */
+export function isQueryAwareness(message: Uint8Array): boolean {
+  const name = varUint(message, 0);
+  const type = name && varUint(message, name[1] + name[0]);
+  return !!type && type[0] === QUERY_AWARENESS_MESSAGE;
 }
 
 /** Whether this message, as a client sent it, is of the awareness type (and not whether it reads to its end). */

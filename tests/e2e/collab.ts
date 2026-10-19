@@ -30,6 +30,8 @@ export async function startCollab(recheckMs = '3000'): Promise<void> {
       VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
       AUTH_SECRET,
       COLLAB_PORT,
+      // The channel of this run, which the web application publishes on (playwright.config.ts).
+      COLLAB_EVENTS_CHANNEL: process.env.E2E_EVENTS_CHANNEL,
       // FR-ED-41: the re-check, 60 seconds where unset; a test of a role that changes would wait that long.
       COLLAB_RECHECK_MS: recheckMs,
     },

@@ -22,6 +22,7 @@ import styles from '../../../pages.module.css';
 import { currentAccount, titled } from '../../account.ts';
 import { NOT_RECORDED, NOT_RECORDED_EXPLANATION } from '../../not-recorded.ts';
 import { DocumentView } from './document-view.tsx';
+import { PEOPLE_SLOT } from './people-slot.ts';
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -57,6 +58,8 @@ export default async function DocumentPage({ params }: Props) {
         ) : null}
         {/* FR-ED-21, FR-ED-37: the sharing settings, for every role. */}
         <Link href={`/documents/${document.id}/sharing`}>Sharing</Link>
+        {/* FR-ED-17: the people who have the document open, which the editor draws here once it is connected. */}
+        <span id={PEOPLE_SLOT} className={styles.peopleSlot} />
       </Cluster>
       <DocumentView
         documentId={document.id}
