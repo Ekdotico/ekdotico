@@ -4624,6 +4624,51 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     await context.close();
   });
 
+  // FR-ED-40 (h), FR-ED-47: ownership passes when the Editor accepts, from the screens. The pages of both
+  // people stay open on the same connections, and each states its new role within 5 seconds.
+  test('a transfer of ownership changes the role on both open pages within 5 seconds, which stay editable on the same connections', async ({
+    page,
+    browser,
+  }) => {
+    test.slow();
+    const { manage, theirs, context } = await owned(page, browser);
+    const sockets = [countSockets(page), countSockets(theirs)];
+    const role = (on: Page, now: string) =>
+      on.getByRole('status').filter({
+        hasText: `The role of this account on this document is now ${now}. The document can be edited in this tab.`,
+      });
+
+    // The Owner offers from the sharing settings in her second tab.
+    await manage.getByRole('button', { name: 'Offer ownership' }).click();
+    await manage
+      .getByRole('dialog', { name: 'Offer ownership' })
+      .getByRole('button', { name: 'Offer ownership' })
+      .click();
+    await expect(manage.getByText('Ownership offered to Bea Editor.')).toBeVisible();
+    // The Editor accepts in another tab of hers; the document is open in `theirs` all the time.
+    const answering = await context.newPage();
+    await answering.goto('/notifications');
+    await answering.getByRole('link', { name: 'Open the offer' }).click();
+    await answering.getByRole('button', { name: 'Accept' }).click();
+    await answering.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+
+    // Neither the re-check (60 seconds here) nor a reconnection: the notice, and the roles it asks for.
+    await expect(role(theirs, 'Owner')).toBeVisible({ timeout: 5000 });
+    await expect(role(page, 'Editor')).toBeVisible({ timeout: 5000 });
+    await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+    await expect(text(page)).toHaveAttribute('aria-readonly', 'false');
+    // Both go on writing to the one document, and see each other's words.
+    await text(theirs).click();
+    await theirs.keyboard.type('Written by the new Owner.');
+    await expect(text(page)).toContainText('Written by the new Owner.');
+    await placeAtEnd(text(page).locator('p').first());
+    await page.keyboard.type('Written by the former Owner.');
+    await expect(text(theirs)).toContainText('Written by the former Owner.');
+    // The same connections throughout: neither page opened a socket.
+    expect(sockets.map(({ count }) => count)).toEqual([0, 0]);
+    await context.close();
+  });
+
   test('leaving closes the person’s other open page within 5 seconds', async ({ page, browser }) => {
     test.slow();
     const { id, theirs, context } = await owned(page, browser);
