@@ -48,6 +48,7 @@ export type Held =
   | typeof REFUSAL.TOO_DANGLING
   | typeof REFUSAL.INCOMPLETE
   | typeof REFUSAL.TABLE_BOUNDS
+  | typeof REFUSAL.IMAGE_ATTRIBUTES
   | (typeof LIMIT_REFUSAL)[keyof typeof LIMIT_REFUSAL];
 
 const HELD: readonly string[] = [
@@ -56,6 +57,7 @@ const HELD: readonly string[] = [
   REFUSAL.TOO_DANGLING,
   REFUSAL.INCOMPLETE,
   REFUSAL.TABLE_BOUNDS,
+  REFUSAL.IMAGE_ATTRIBUTES,
   ...Object.values(LIMIT_REFUSAL),
 ];
 // The code a socket is closed with for a message longer than it takes (RFC

@@ -83,6 +83,10 @@ const HELD: Record<Held, string> = {
   [REFUSAL.INCOMPLETE]:
     'A change in this tab adds a block without the content it must hold, so it cannot be applied',
   [REFUSAL.TABLE_BOUNDS]: TABLE_PAST_BOUNDS,
+  // FR-ED-08: this editor writes an image block with its four attributes under their rules, so
+  // the words are for a client that does not. For the owner's approval.
+  [REFUSAL.IMAGE_ATTRIBUTES]:
+    'A change in this tab gives an image something it cannot hold, so it cannot be applied',
   // The limits of a document (register D184, D192, D193), for the owner's approval.
   ...(Object.fromEntries(
     Object.entries(LIMIT_REFUSAL).map(([limit, reason]) => [reason, heldTitle(limit as Limit)]),

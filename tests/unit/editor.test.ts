@@ -137,6 +137,7 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
     REFUSAL.TOO_DANGLING,
     REFUSAL.INCOMPLETE,
     REFUSAL.TABLE_BOUNDS,
+    REFUSAL.IMAGE_ATTRIBUTES,
     // Register D184, D192, D193: a limit of the document.
     ...Object.values(LIMIT_REFUSAL),
   ])('never tries again after %s', (reason) => {

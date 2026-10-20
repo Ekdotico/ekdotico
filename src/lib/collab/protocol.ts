@@ -114,6 +114,12 @@ export const REFUSAL = {
   INCOMPLETE: 'incomplete',
   TABLE_BOUNDS: 'table-bounds',
   /**
+   * `image-attributes`: it gives an image block an attribute that the block may not hold, or a
+   * value outside its form (FR-ED-08, NFR-SE-06 A01; src/lib/images/node.ts). The editor never
+   * sends one: the words are for a client that does. The name is provisional, for the owner's approval.
+   */
+  IMAGE_ATTRIBUTES: 'image-attributes',
+  /**
    * A limit of the document (`LIMITS` of src/lib/collab/shape.ts; register
    * D184, D192, D193), refused in the same way: the change would leave the
    * document with more of a block than its limit and more than it had, a list

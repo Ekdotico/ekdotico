@@ -65,6 +65,7 @@ import type { Awareness } from 'y-protocols/awareness';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
 import { shapeOf } from '../../../../lib/collab/shape.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
+import { IMAGE_WIDTH_MOST, imageAttributeAllowed } from '../../../../lib/images/node.ts';
 import styles from './editor.module.css';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
@@ -567,6 +568,55 @@ const TableCaption = Node.create({
   },
 });
 
+// ── Image (FR-ED-08) ────────────────────────────────────────────────────────
+
+/**
+ * The image block, as the schema has it and no more: the identifier of an
+ * uploaded image, the alt text, the caption, and the width. THERE IS NO
+ * ADDRESS in it, under any name (NFR-SE-06 A01): the one thing an image block
+ * can name is the row of an image uploaded to this application, and the
+ * server answers a link only for an image of the document the block stands
+ * in (src/lib/images/node.ts; docs/plan/slice-19.md).
+ *
+ * What is HTML here is the clipboard's. An `img` that a page supplies is no
+ * node of this schema, so pasted content that refers to an image at another
+ * address is inserted without it (FR-ED-08). The block's own `figure` is read
+ * back, with the four attributes under the rules below: a page that writes
+ * one by hand can name an identifier, which opens nothing the server does not
+ * check.
+ *
+ * No node view, no control, no upload yet: those wait for the design package's
+ * resize handle (register row S19-8) and for the object store (S19-1). Nothing
+ * makes an image block until they do.
+ */
+const ImageBlock = Node.create({
+  name: 'image',
+  group: 'block',
+  atom: true,
+  draggable: false,
+  addAttributes() {
+    return {
+      id: { default: null, parseHTML: (element) => element.getAttribute('data-image-id') },
+      alt: { default: '', parseHTML: (element) => element.getAttribute('data-alt') },
+      caption: { default: '', parseHTML: (element) => element.getAttribute('data-caption') },
+      width: {
+        default: IMAGE_WIDTH_MOST,
+        parseHTML: (element) => {
+          const given = element.getAttribute('data-width');
+          return given !== null && /^[0-9]{1,3}$/.test(given) ? Number(given) : null;
+        },
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'figure.ekd-image' }];
+  },
+  renderHTML({ node }) {
+    // The identifier, and no address: nothing here is loaded by a browser.
+    return ['figure', { class: 'ekd-image', 'data-image-id': String(node.attrs.id ?? '') }];
+  },
+});
+
 // ── What an attribute may hold ──────────────────────────────────────────────
 
 // The bounds are this file's: the Docs give none (reported for the register).
@@ -618,6 +668,14 @@ export const ATTRIBUTE_RULES: Record<string, Record<string, Rule>> = {
   tableCell: CELL,
   tableHeader: CELL,
   link: { href: linkAddress },
+  // FR-ED-08: each held to the rule the server keeps (src/lib/images/node.ts), and to its default otherwise.
+  image: {
+    id: (given) => (typeof given === 'string' && imageAttributeAllowed('id', given) ? given : null),
+    alt: (given) => (typeof given === 'string' && imageAttributeAllowed('alt', given) ? given : ''),
+    caption: (given) => (typeof given === 'string' && imageAttributeAllowed('caption', given) ? given : ''),
+    width: (given) =>
+      typeof given === 'number' && imageAttributeAllowed('width', given) ? given : IMAGE_WIDTH_MOST,
+  },
 };
 
 const count = (given: unknown): number => (typeof given === 'number' ? given : 1);
@@ -1612,6 +1670,7 @@ export function extensions(
     TableCell,
     TableBlock,
     TableCaption,
+    ImageBlock,
     Placeholder.configure({
       showOnlyCurrent: false,
       placeholder: ({ node }) => (node.type.name === 'tableCaption' ? 'Caption' : ''),

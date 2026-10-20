@@ -1264,6 +1264,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
             waiting: REFUSAL.TOO_DANGLING,
             incomplete: REFUSAL.INCOMPLETE,
             table: REFUSAL.TABLE_BOUNDS,
+            image: REFUSAL.IMAGE_ATTRIBUTES,
             ...LIMIT_REFUSAL,
           }[past],
         );

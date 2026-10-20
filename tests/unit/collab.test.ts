@@ -40,6 +40,8 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
       // Register D170, D180 and D171: one for each rule of the shape of a document.
       INCOMPLETE: 'incomplete',
       TABLE_BOUNDS: 'table-bounds',
+      // FR-ED-08, NFR-SE-06 A01: an image block given what it may not hold.
+      IMAGE_ATTRIBUTES: 'image-attributes',
       // Register D184, D192, D193: one for each limit of the blocks of a document.
       TOO_MANY_TABLES: 'too-many-tables',
       TOO_MANY_CODE_BLOCKS: 'too-many-code-blocks',
@@ -53,7 +55,7 @@ describe('the contract of the connection (src/lib/collab/protocol.ts)', () => {
       CODE_BLOCK_TOO_LARGE: 'code-block-too-large',
       TOO_MANY_BLOCKS: 'too-many-blocks',
     });
-    expect(new Set(Object.values(REFUSAL)).size).toBe(22);
+    expect(new Set(Object.values(REFUSAL)).size).toBe(23);
   });
 });
 

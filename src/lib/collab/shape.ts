@@ -47,6 +47,7 @@
 // that the two hold the same.
 import { Schema, type NodeSpec } from '@tiptap/pm/model';
 import * as Y from 'yjs';
+import { imageAttributeAllowed } from '../images/node.ts';
 import { FRAGMENT_NAME } from './protocol.ts';
 
 /** The most rows of a table, and the most cells of a row (FR-ED-09). */
@@ -83,6 +84,9 @@ export const NODES: Record<string, NodeSpec> = {
   tableCell: { content: 'block+' },
   tableBlock: { content: 'table tableCaption', group: 'block' },
   tableCaption: { content: 'text*' },
+  // FR-ED-08: an image, as the block that holds the identifier of an uploaded image and the words
+  // that go with it (src/lib/images/node.ts). It holds no content.
+  image: { group: 'block' },
 };
 const SCHEMA = new Schema({ nodes: NODES, topNode: 'doc' });
 
@@ -138,6 +142,8 @@ export const ONE_BLOCK: ReadonlySet<string> = new Set([
   'pageBreak',
   'tableOfContents',
   'tableBlock',
+  // An image block is one block, as a paragraph is (register row S19-6, recommended).
+  'image',
 ]);
 const LIST_PARTS = new Set([...LISTS, 'listItem']);
 
@@ -170,8 +176,11 @@ export function textBytes(texts: readonly string[]): number {
 export const pastLimit = (limit: Limit, before: number, after: number) =>
   after > LIMITS[limit] && after > before;
 
-/** Which rule an update would break: `incomplete` (D170, D180), `table` (D171, D172), or a limit (D184, D192, D193). */
-export type Shape = 'incomplete' | 'table' | Limit;
+/**
+ * Which rule an update would break: `incomplete` (D170, D180), `table` (D171, D172), `image` (an
+ * image block given an attribute it may not hold: FR-ED-08, NFR-SE-06 A01), or a limit (D184, D192, D193).
+ */
+export type Shape = 'incomplete' | 'table' | 'image' | Limit;
 
 /** A node of a document as a rule reads it: its name, and what it holds that is not deleted. */
 interface Tree<Node> {
@@ -451,17 +460,41 @@ function was(document: Y.Doc, type: Shared): Shared | null {
 const TABLES = new Set(['table']);
 
 /**
+ * FR-ED-08, NFR-SE-06 A01: whether an attribute that an update sets on an
+ * element is one the element may not hold. Only an image block's attributes
+ * are looked at: its `id`, `alt`, `caption` and `width` (src/lib/images/node.ts)
+ * and nothing else, so that no address can be written into one, whatever the
+ * name it is written under. The value is held to its form and its bounds; one
+ * that is not a plain value (a shared type, binary data, a subdocument) is
+ * refused. A deleted value is no value.
+ */
+function imageAttributeRefused(parentName: string | null, key: string | null, content: unknown): boolean {
+  if (parentName !== 'image' || key === null || content instanceof Y.ContentDeleted) return false;
+  if (!(content instanceof Y.ContentAny) || content.arr.length !== 1) return true;
+  return !imageAttributeAllowed(key, content.arr[0]);
+}
+
+/**
  * Which rule an update would break, asked before it is applied, or null where
  * it keeps both. It throws where Yjs throws applying it, as `pastLimits` does.
  */
 export function shapeOf(document: Y.Doc, update: Uint8Array): Shape | null {
   const read = Y.decodeUpdate(update);
-  // No element in it and no text: no element is made, no table and no count
-  // grows, and no code block is longer.
+  // No element in it, no text and no value of an attribute: no element is made, no table
+  // and no count grows, no code block is longer, and no image is given a value. A value of
+  // an attribute is a plain value, binary data, a subdocument, or a shared type, and it is
+  // read by its content and not by its name: an item that replaces an earlier value of the
+  // same attribute carries no name, only the earlier item it follows.
   if (
     !read.structs.some(
       (struct) =>
-        struct instanceof Y.Item && (nameOf(struct) !== null || struct.content instanceof Y.ContentString),
+        struct instanceof Y.Item &&
+        (nameOf(struct) !== null ||
+          struct.content instanceof Y.ContentString ||
+          struct.content instanceof Y.ContentAny ||
+          struct.content instanceof Y.ContentBinary ||
+          struct.content instanceof Y.ContentDoc ||
+          struct.content instanceof Y.ContentType),
     )
   )
     return null;
@@ -497,6 +530,12 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
       for (let at = Y.findIndexSS(structs, from); at < structs.length; at += 1) {
         const item = structs[at];
         if (!(item instanceof Y.Item) || item.deleted) continue;
+        // An attribute of an image block (`imageAttributeRefused`).
+        if (
+          item.parentSub !== null &&
+          imageAttributeRefused(nameOfType(item.parent as Shared), item.parentSub, item.content)
+        )
+          return 'image';
         if (item.content instanceof Y.ContentString) {
           // Text written into a code block.
           const block = (item.parent as Shared)._item?.parent as Shared | undefined;
@@ -682,6 +721,11 @@ export function withoutCopy(
     const stands = parent !== null && standsIn(parent) && !(item.content instanceof Y.ContentDeleted);
     if (stands) placed.add(item);
     alive.set(item, stands && !Y.isDeleted(ds, item.id));
+    // An attribute of an image block (`imageAttributeRefused`), where it stands after the update.
+    if (alive.get(item) && key !== null && parent !== null && typeof parent !== 'string') {
+      const holder = parent instanceof Y.Item ? nameOf(parent) : nameOfType(parent);
+      if (imageAttributeRefused(holder, key, item.content)) return 'image';
+    }
     // Where it is put inside an item of text of the document, between the two
     // halves of a pair, Yjs puts U+FFFD for each: the copy's to count.
     if (left && splitsPair(left, origin!.clock - left.id.clock + 1)) return undefined;
