@@ -1256,6 +1256,29 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       );
     });
 
+    // FR-ED-08, NFR-SE-06 A01: an image block is given an identifier and words, and never an address under any name.
+    const imageWith = (attributes: Record<string, string | number>) => {
+      const made = new Y.XmlElement('image');
+      for (const [name, value] of Object.entries(attributes)) made.setAttribute(name, value as string);
+      return made;
+    };
+    it.each([
+      ['an address under src', { src: 'https://example.com/pixel.png' }],
+      ['a script under onerror', { onerror: 'alert(1)' }],
+      ['an address as the identifier', { id: 'https://example.com/pixel.png' }],
+      ['a width written as text', { width: '50' }],
+    ] as const)(
+      'refuses an update that gives an image %s',
+      { timeout: 60_000 },
+      async (_name, attributes) => {
+        await expectRefusedUpdate(
+          await opened(),
+          (document) => document.getXmlFragment('default').push([imageWith(attributes)]),
+          REFUSAL.IMAGE_ATTRIBUTES,
+        );
+      },
+    );
+
     // Register D184, D192, D193: the limits of a document, each with a reason of its own.
     const listOf = (items: number, inner: () => Y.XmlElement[] = () => []) =>
       element(

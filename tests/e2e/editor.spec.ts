@@ -723,6 +723,18 @@ const SLASH_ROWS: [command: string, row: string, made: string, words?: string][]
   ['page-break', 'Page break', '.ekd-page-break'],
 ];
 
+// What the palette lists: those rows, and `/image` (FR-ED-12) after the code block. Its choice opens the
+// picker and puts no block of its own, so it is not among the rows above, which are chosen one after
+// another; tests/e2e/images.spec.ts chooses it.
+const LISTED: [command: string, row: string][] = SLASH_ROWS.flatMap(([command, row]): [string, string][] =>
+  command === 'code'
+    ? [
+        [command, row],
+        ['image', 'Image'],
+      ]
+    : [[command, row]],
+);
+
 /** Every block of the rows above, once, as it was inserted. */
 async function inserted(doc: Locator) {
   for (const [command, , made, words] of SLASH_ROWS) {
@@ -801,9 +813,9 @@ test('the slash palette opens where the requirement says, filters by name and al
   await doc.focus();
   await expect(doc).not.toHaveAttribute('aria-controls');
 
-  // FR-ED-10: a slash at the beginning of an empty block. FR-ED-12: the thirteen rows of the cut.
+  // FR-ED-10: a slash at the beginning of an empty block. FR-ED-12: the fourteen rows of the cut.
   await page.keyboard.type('/');
-  await expect(rows(page)).toHaveText(SLASH_ROWS.map(([command, row]) => `${row}/${command}`));
+  await expect(rows(page)).toHaveText(LISTED.map(([command, row]) => `${row}/${command}`));
   await expect(rows(page).first()).toHaveAttribute('aria-selected', 'true');
   await expect(rows(page).and(page.locator('[aria-selected="true"]'))).toHaveCount(1);
   // NFR-IC-19: the focus stays in the text, which names the list, and no row while the query is typed.
@@ -812,7 +824,7 @@ test('the slash palette opens where the requirement says, filters by name and al
   await expect(list).toHaveAttribute('id', LIST_ID);
   await expect(doc).not.toHaveAttribute('aria-activedescendant');
   // What a screen reader is told once the count has settled: the count, and the row Enter chooses.
-  await expect(page.getByRole('status').filter({ hasText: '13 blocks. Text first.' })).toBeAttached();
+  await expect(page.getByRole('status').filter({ hasText: '14 blocks. Text first.' })).toBeAttached();
 
   // FR-ED-11: "a maximum of eight results at a time and shall be scrollable".
   const whole = () =>
@@ -825,7 +837,7 @@ test('the slash palette opens where the requirement says, filters by name and al
     });
   expect(await whole()).toBe(8);
   expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await expect(rows(page).nth(12)).not.toBeInViewport();
+  await expect(rows(page).nth(13)).not.toBeInViewport();
 
   // The arrow keys move in the list, and the text then names the row; the cursor does not move.
   await page.keyboard.press('ArrowDown');
@@ -835,10 +847,10 @@ test('the slash palette opens where the requirement says, filters by name and al
   await page.keyboard.press('ArrowUp');
   await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(0).getAttribute('id'))!);
   // To the last row, which is scrolled into view; Down stops there.
-  for (let press = 0; press < 14; press += 1) await page.keyboard.press('ArrowDown');
-  await expect(rows(page).nth(12)).toHaveAttribute('aria-selected', 'true');
-  await expect(rows(page).nth(12)).toBeInViewport();
-  await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(12).getAttribute('id'))!);
+  for (let press = 0; press < 15; press += 1) await page.keyboard.press('ArrowDown');
+  await expect(rows(page).nth(13)).toHaveAttribute('aria-selected', 'true');
+  await expect(rows(page).nth(13)).toBeInViewport();
+  await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(13).getAttribute('id'))!);
   await expect(doc).toBeFocused();
   await expect(doc).toHaveText('/');
 
@@ -887,7 +899,7 @@ test('the slash palette opens where the requirement says, filters by name and al
   await expect(doc).toHaveText('/OLq');
   // A slash that follows a space is a new request; one that follows a letter is none.
   await page.keyboard.type(' /');
-  await expect(rows(page)).toHaveCount(13);
+  await expect(rows(page)).toHaveCount(LISTED.length);
   // FR-ED-10: "or clicks outside it".
   await page.getByRole('heading', { level: 1 }).click();
   await expect(list).toBeHidden();
@@ -965,7 +977,7 @@ test('the slash palette opens where the requirement says, filters by name and al
   await page.setViewportSize({ width: 320, height: 640 });
   await newLastLine(page);
   await page.keyboard.type('A line that runs on to the far edge of it /');
-  await expect(rows(page)).toHaveCount(13);
+  await expect(rows(page)).toHaveCount(LISTED.length);
   await expect(list).toBeInViewport({ ratio: 1 });
   const box = (await list.boundingBox())!;
   expect(box.x).toBeGreaterThanOrEqual(0);
@@ -979,7 +991,7 @@ test('the slash palette opens where the requirement says, filters by name and al
   await page.setViewportSize({ width: 640, height: 360 });
   await newLastLine(page);
   await page.keyboard.type('/');
-  await expect(rows(page)).toHaveCount(13);
+  await expect(rows(page)).toHaveCount(LISTED.length);
   const drawn = (await list.locator('xpath=..').boundingBox())!;
   const line = (await doc.locator('.slash-command').boundingBox())!;
   expect(line.y).toBeGreaterThanOrEqual(0);
@@ -1465,12 +1477,12 @@ test('the slash palette: Tab, the cursor inside the command and out of it, and o
   expect(await focus()).toBe('the text');
   expect(previous).not.toBe('nothing');
 
-  // Tab, with the whole list open: thirteen rows, so the list scrolls, and a
+  // Tab, with the whole list open: fourteen rows, so the list scrolls, and a
   // scroller is a stop of Tab in Chromium. The list closes before the browser
   // looks for the next stop: the focus goes where it goes with no list, comes
   // back to the text, and is never in the list.
   await page.keyboard.type('/');
-  await expect(rows(page)).toHaveCount(13);
+  await expect(rows(page)).toHaveCount(LISTED.length);
   await page.keyboard.press('Tab');
   await closed('after Tab');
   expect(await focus()).toBe(next);
@@ -1481,7 +1493,7 @@ test('the slash palette: Tab, the cursor inside the command and out of it, and o
   // And Shift+Tab, back and forth.
   await page.keyboard.press('Backspace');
   await page.keyboard.type('/');
-  await expect(rows(page)).toHaveCount(13);
+  await expect(rows(page)).toHaveCount(LISTED.length);
   await page.keyboard.press('Shift+Tab');
   await closed('after Shift+Tab');
   expect(await focus()).toBe(previous);
@@ -1493,7 +1505,7 @@ test('the slash palette: Tab, the cursor inside the command and out of it, and o
   await page.keyboard.type('- one');
   await page.keyboard.press('Enter');
   await page.keyboard.type('two /');
-  await expect(rows(page)).toHaveCount(13);
+  await expect(rows(page)).toHaveCount(LISTED.length);
   await page.keyboard.press('Tab');
   await closed('after Tab in a list item');
   await expect(doc).toBeFocused();
@@ -1692,6 +1704,7 @@ test('an account without a role on a document reaches neither its page nor its c
 });
 
 test('hostile content, pasted or sent by another client, stays inert', async ({ page }) => {
+  test.slow();
   page.on('dialog', () => {
     throw new Error('a dialog was opened by content');
   });
@@ -1732,8 +1745,7 @@ test('hostile content, pasted or sent by another client, stays inert', async ({ 
     const script = new Y.XmlElement('script');
     script.insert(0, [new Y.XmlText('window.__pwned = 14')]);
     const image = new Y.XmlElement('image');
-    image.setAttribute('src', 'x');
-    image.setAttribute('onerror', 'window.__pwned = 15');
+    image.setAttribute('id', 'c' + 'z'.repeat(24));
     const callout = new Y.XmlElement('callout');
     callout.setAttribute('type', '"><img src=x onerror="window.__pwned = 16">');
     callout.setAttribute('onmouseover', 'window.__pwned = 17');
@@ -1755,6 +1767,29 @@ test('hostile content, pasted or sent by another client, stays inert', async ({ 
   await expect(text(page)).toContainText('sent callout');
   await expect(text(page)).toContainText('sent heading');
   hostile.close();
+
+  // An image block that is given an address, under any name, is refused by the server whole (FR-ED-08,
+  // NFR-SE-06 A01): none of the update is applied and the connection that sent it is closed (the server's log
+  // says why: the reason is that of `REFUSAL.IMAGE_ATTRIBUTES`, which tests/integration/collab.test.ts reads).
+  const addressing = await connectAs(page.context(), id);
+  await holds(addressing, 'sent callout');
+  const closed = new Promise<string>((resolve) =>
+    addressing.provider.configuration.websocketProvider.on(
+      'close',
+      ({ event }: { event: { reason: string } }) => resolve(event.reason),
+    ),
+  );
+  addressing.provider.document.transact(() => {
+    const picture = new Y.XmlElement('image');
+    picture.setAttribute('src', 'https://example.com/pixel.png');
+    picture.setAttribute('onerror', 'window.__pwned = 15');
+    const sentence = new Y.XmlElement('paragraph');
+    sentence.insert(0, [new Y.XmlText('sent with an address')]);
+    addressing.provider.document.getXmlFragment('default').push([sentence, picture]);
+  });
+  await closed;
+  await expect(text(page)).not.toContainText('sent with an address');
+  addressing.close();
 
   // Markup that arrived as text is shown as text.
   await expect(text(page)).toContainText('<img src=x onerror="window.__pwned = 13">');
@@ -2318,7 +2353,7 @@ test('a table is put in a cell of a table from the palette, by keyboard alone: i
   // No table a level deeper: the row is not listed there.
   await page.keyboard.type('/');
   await expect(palette(page)).toBeVisible();
-  await expect(rows(page)).toHaveCount(SLASH_ROWS.length - 1);
+  await expect(rows(page)).toHaveCount(LISTED.length - 1);
   await expect(rows(page).filter({ hasText: '/table' })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await page.keyboard.press('Backspace');
@@ -2768,7 +2803,7 @@ test('a writer brings a document to a hundred tables and no further, and is told
   await page.keyboard.type('/');
   await expect(palette(page)).toBeVisible();
   await expect(rows(page).filter({ hasText: '/table' })).toHaveCount(0);
-  await expect(rows(page)).toHaveCount(SLASH_ROWS.length - 1);
+  await expect(rows(page)).toHaveCount(LISTED.length - 1);
   await page.keyboard.press('Escape');
   await page.keyboard.press('Backspace');
   await expect(said).toHaveCount(0);

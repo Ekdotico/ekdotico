@@ -42,7 +42,22 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
   use: { baseURL: APP_ORIGIN },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Two files start the collaboration server of their own, on the one port the application's rewrite names
+  // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor.
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: ['**/editor.spec.ts', '**/images.spec.ts'],
+    },
+    { name: 'editor', use: { ...devices['Desktop Chrome'] }, testMatch: '**/editor.spec.ts' },
+    {
+      name: 'images',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: '**/images.spec.ts',
+      dependencies: ['editor'],
+    },
+  ],
   webServer: {
     // Built here, in CI too, and not in a step before: the build holds the
     // rewrite that serves `/collab` (COLLAB_PROXY_TARGET below), which a build
