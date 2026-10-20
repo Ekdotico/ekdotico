@@ -15,6 +15,7 @@
 // read when the list is read.
 import type { Prisma } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
+import { OFFER_ENDED_NOTIFICATION } from './ownership-notifications.ts';
 import { COLLABORATOR_ROLE, type DocumentRole } from './permissions.ts';
 
 export const ROLE_CHANGED_NOTIFICATION = 'role_changed';
@@ -100,14 +101,14 @@ export async function notifyRemoved(
   });
 }
 
-/** The permanent deletion of a document takes these notifications with it. */
+/** The permanent deletion of a document takes these notifications with it, and the Owner's notices of ended offers (S17-5). */
 export async function deleteAccessNotificationsOf(
   tx: Prisma.TransactionClient,
   documentId: string,
 ): Promise<void> {
   await tx.notification.deleteMany({
     where: {
-      kind: { in: [ROLE_CHANGED_NOTIFICATION, REMOVED_NOTIFICATION] },
+      kind: { in: [ROLE_CHANGED_NOTIFICATION, REMOVED_NOTIFICATION, OFFER_ENDED_NOTIFICATION] },
       payload: { path: ['documentId'], equals: documentId },
     },
   });

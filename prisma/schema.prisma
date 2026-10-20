@@ -344,6 +344,10 @@ model DocumentInvitation {
   acceptedById      String?
   emailClaimedAt    DateTime?
   reminderClaimedAt DateTime?
+  // D202, Q49: the words that stand for the document's title when the inviter hid it from the invitee, made
+  // once when the invitation is created ("Flying Hippos — {display name}") and shown on the page, in the
+  // notification and in the email. Null is "the title is shown"; it is never the title itself.
+  titlePseudonym    String?
 
   document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   invitedBy User     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)

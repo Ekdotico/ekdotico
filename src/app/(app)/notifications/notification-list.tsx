@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Badge, Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
 import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
+import { InvitedBy } from '../invitations/invitation-view.tsx';
 import { InBrowser, LocalTime } from '../local-time.tsx';
 import { NOTIFICATIONS_CHANGED } from './changed.ts';
 
@@ -18,7 +19,16 @@ interface Shown {
 
 /** One notification, by kind (src/lib/documents/sharing.ts, `ListedNotification`). */
 export type NotificationItem =
-  | (Shown & { kind: 'document_invitation'; inviterName: string; role: string; invitationId: string })
+  // D202, Q49: the sender by name and by email address, and the title or the pseudonym that stands for it.
+  | (Shown & {
+      kind: 'document_invitation';
+      inviterName: string;
+      inviterEmail: string | null;
+      role: string;
+      invitationId: string;
+      title: string | null;
+      pseudonym: string | null;
+    })
   // FR-ED-42, FR-ED-48: the one reminder, 3 days before the invitation expires; it names no title (S18-4).
   | (Shown & {
       kind: 'document_invitation_reminder';
@@ -33,16 +43,28 @@ export type NotificationItem =
   // FR-ED-42, S15-2: the person was removed. It names no document and links to nothing (register row PR-5).
   | (Shown & { kind: 'removed' })
   // FR-ED-42, FR-ED-47: ownership of a document is offered to the person; the title is shown, behind sign-in (S17-2, D202).
-  | (Shown & { kind: 'ownership_offer'; ownerName: string; title: string; offerId: string });
+  | (Shown & { kind: 'ownership_offer'; ownerName: string; title: string; offerId: string })
+  // FR-ED-42, S17-5: the Owner's offer ended without the Owner's own action; the Owner holds the document still.
+  | (Shown & {
+      kind: 'ownership_offer_ended';
+      end: 'declined' | 'expired' | 'ended';
+      documentId: string;
+      title: string;
+      editorName: string;
+    });
 
 /** What a notification says, in the words approved with docs/plan/presence-row.md, section 5. */
 function Statement({ notification }: { notification: NotificationItem }) {
   switch (notification.kind) {
     case 'document_invitation':
       return (
-        <>
-          <bdi>{notification.inviterName}</bdi> invited you to a document as {notification.role}.
-        </>
+        <InvitedBy
+          inviterName={notification.inviterName}
+          inviterEmail={notification.inviterEmail}
+          title={notification.title}
+          pseudonym={notification.pseudonym}
+          role={notification.role}
+        />
       );
     case 'document_invitation_reminder':
       return (
@@ -70,6 +92,44 @@ function Statement({ notification }: { notification: NotificationItem }) {
           <bdi>{notification.ownerName}</bdi> offered you ownership of <bdi>{notification.title}</bdi>.
         </>
       );
+    case 'ownership_offer_ended':
+      return <OfferEnded notification={notification} />;
+  }
+}
+
+/**
+ * S17-5: what the Owner is told when an offer ends without the Owner's own action. The words are the
+ * owner's to approve. An Editor whose account is deleted has no name left, and is "the Editor".
+ */
+function OfferEnded({
+  notification,
+}: {
+  notification: Extract<NotificationItem, { kind: 'ownership_offer_ended' }>;
+}) {
+  const { end, title, editorName } = notification;
+  const named = editorName === '' ? null : <bdi>{editorName}</bdi>;
+  switch (end) {
+    case 'declined':
+      return (
+        <>
+          {named ?? 'The Editor'} declined your offer of ownership of <bdi>{title}</bdi>. You are still its
+          Owner.
+        </>
+      );
+    case 'expired':
+      return (
+        <>
+          Your offer of ownership of <bdi>{title}</bdi> to {named ?? 'the Editor'} expired without an answer.
+          You are still its Owner.
+        </>
+      );
+    case 'ended':
+      return (
+        <>
+          Your offer of ownership of <bdi>{title}</bdi> to {named ?? 'the Editor'} ended, because{' '}
+          {named ?? 'the Editor'} no longer holds the Editor role on it. You are still its Owner.
+        </>
+      );
   }
 }
 
@@ -87,6 +147,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
         </Link>
       );
     case 'role_changed':
+    case 'ownership_offer_ended':
       return (
         <Link
           id={`open-${notification.id}`}

@@ -229,6 +229,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(settings.limits).toEqual({
       API_PER_USER: { max: 120, windowSeconds: 60 },
       INVITATIONS_PER_USER: { max: 20, windowSeconds: 3600 },
+      OFFERS_PER_USER: { max: 20, windowSeconds: 3600 },
       IMAGE_UPLOADS_PER_USER: { max: 30, windowSeconds: 600 },
       EXPORTS_PER_USER: { max: 10, windowSeconds: 3600 },
       HANDSHAKES_PER_USER: { max: 30, windowSeconds: 60 },

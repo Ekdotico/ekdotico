@@ -3,6 +3,7 @@
 // docs/plan/slice-17.md, section 7).
 //
 // Nothing here is of Next.js: the route hands over its `after`.
+import { tooManyRequests } from '../auth/route-answers.ts';
 import { errorResponse } from '../http.ts';
 import { refusal } from './access.ts';
 import { deliverOffer, type AnswerResult, type OfferResult, type WithdrawResult } from './ownership.ts';
@@ -44,6 +45,9 @@ export async function offeredAnswer(
       return errorResponse(409, 'offer_pending', OFFER_MESSAGES.pending);
     case 'not_transferable':
       return errorResponse(409, 'not_transferable', OFFER_MESSAGES.notTransferable);
+    case 'rate_limited':
+      // NFR-SE-07, S17-7: the same answer, in the same words, as the limit of invitations.
+      return tooManyRequests('OFFERS_PER_USER', userId, result.retryAfterSeconds, userId);
   }
 }
 

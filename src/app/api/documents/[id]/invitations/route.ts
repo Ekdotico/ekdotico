@@ -25,9 +25,13 @@ const ADDRESSES_MOST = PEOPLE_MOST;
 const ENTRY_SHOWN = 80;
 
 /**
- * The body: `{ "emails": ["…", …], "role": "editor" | "viewer" }`, and nothing
- * else. An address given twice receives one invitation (FR-ED-37). The
- * Reviewer is not offered (D56) and is refused with a 422 (plan Q7).
+ * The body: `{ "emails": ["…", …], "role": "editor" | "viewer", "hideTitle"?: boolean }`,
+ * and nothing else. An address given twice receives one invitation (FR-ED-37).
+ * The Reviewer is not offered (D56) and is refused with a 422 (plan Q7).
+ * `hideTitle` (D202, Q49) is off where it is absent, and anything but a
+ * boolean is refused: a title is never shown by a value the server did not
+ * understand to mean the opposite. It is for every caller this route admits:
+ * the Owner, and an Editor who holds `document.collaborators.invite` (Q49 (5)).
  */
 export const POST = documentRoute('document.collaborators.invite', async ({ request, document, session }) => {
   const unsupported = notJson(request);
@@ -36,10 +40,11 @@ export const POST = documentRoute('document.collaborators.invite', async ({ requ
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return errorResponse(422, 'invalid_request', INVITATION_MESSAGES.invalid);
   }
-  const { emails, role, ...rest } = body as Record<string, unknown>;
+  const { emails, role, hideTitle = false, ...rest } = body as Record<string, unknown>;
   if (role === 'reviewer') return errorResponse(422, 'role_not_offered', INVITATION_MESSAGES.reviewer);
   if (
     Object.keys(rest).length > 0 ||
+    typeof hideTitle !== 'boolean' ||
     typeof role !== 'string' ||
     !Object.hasOwn(OFFERED, role) ||
     !Array.isArray(emails) ||
@@ -57,6 +62,13 @@ export const POST = documentRoute('document.collaborators.invite', async ({ requ
     }
     if (!accepted.includes(email)) accepted.push(email);
   }
-  const result = await createInvitations(document, session.userId, accepted, role as OfferedRole);
+  const result = await createInvitations(
+    document,
+    session.userId,
+    accepted,
+    role as OfferedRole,
+    new Date(),
+    hideTitle,
+  );
   return createdAnswer(result, document.id, session.userId, after);
 });

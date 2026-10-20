@@ -55,7 +55,11 @@ test('an invitation by email and notification, accepted as Viewer', async ({ pag
   await expect(header).toHaveAccessibleName('Notifications 1 unread');
   await header.click();
   await expect(theirs.getByRole('heading', { level: 1, name: 'Notifications' })).toBeVisible();
-  await expect(theirs.getByText(`${owner.name} invited you to a document as Viewer.`)).toBeVisible();
+  await expect(
+    theirs.getByText(
+      `${owner.name} (${owner.email}) invited you to the document Untitled document as Viewer.`,
+    ),
+  ).toBeVisible();
   await theirs.getByRole('button', { name: 'Mark as read' }).click();
   // WCAG 2.4.3: the button goes; focus moves to the link of the same notification.
   await expect(theirs.getByRole('link', { name: 'Open the invitation' })).toBeFocused();
@@ -69,7 +73,11 @@ test('an invitation by email and notification, accepted as Viewer', async ({ pag
   await expect(page.getByText(NOT_OPEN_TO_ACCOUNT)).toBeVisible();
   await theirs.goto(path);
   await expect(theirs.getByRole('heading', { level: 1, name: 'Invitation to a document' })).toBeVisible();
-  await expect(theirs.getByText(`${owner.name} invited you to a document as Viewer.`)).toBeVisible();
+  await expect(
+    theirs.getByText(
+      `${owner.name} (${owner.email}) invited you to the document Untitled document as Viewer.`,
+    ),
+  ).toBeVisible();
   await theirs.getByRole('button', { name: 'Accept' }).click();
   await theirs.waitForURL(`**/documents/${id}`);
 

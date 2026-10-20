@@ -344,7 +344,8 @@ describe('the reminder in the one list (FR-ED-42)', () => {
       role: 'viewer',
       expiresAt: row.expiresAt.toISOString(),
     });
-    expect(JSON.stringify(before)).not.toContain(TITLE);
+    // The reminder names no title (S18-4; D202 changes the invitation's notification, not the reminder).
+    expect(JSON.stringify(reminder)).not.toContain(TITLE);
 
     const marked = await notification.PATCH(
       request('PATCH', `/api/notifications/${reminder.id}`, invitee.cookie),

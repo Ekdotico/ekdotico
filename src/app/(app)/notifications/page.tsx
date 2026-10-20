@@ -17,8 +17,12 @@ export default async function Notifications() {
     <NotificationList
       notifications={notifications.map((notification): NotificationItem => {
         const createdAt = notification.createdAt.toISOString();
-        // A removal and an offer name no role; the others name the one in words.
-        if (notification.kind === 'removed' || notification.kind === 'ownership_offer') {
+        // A removal, an offer and the end of an offer name no role; the others name the one in words.
+        if (
+          notification.kind === 'removed' ||
+          notification.kind === 'ownership_offer' ||
+          notification.kind === 'ownership_offer_ended'
+        ) {
           return { ...notification, createdAt };
         }
         if (notification.kind === 'document_invitation_reminder') {
