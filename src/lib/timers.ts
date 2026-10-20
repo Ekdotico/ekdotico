@@ -12,6 +12,7 @@ import { deliverUnsentOffers, expireOffers } from './documents/ownership.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
 import { faultOf } from './fault.ts';
+import { deleteExpiredImagesNow } from './images/deletion.ts';
 import { deleteExpiredSecurityLog } from './security-log.ts';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -51,6 +52,9 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // notice of an ended offer (D217), which the same run deletes. The name
   // is kept: a claim row and the logs know it.
   'removed-notification-removal': () => deleteExpiredRemovedNotifications(),
+  // NFR-RE-15, "deletion from storage of an image that no longer appears in its document" (NFR-SE-18):
+  // the images out of their documents for 30 days, the object and the row; says how many it deleted.
+  'image-deletion': () => deleteExpiredImagesNow(),
 };
 
 function runTimers(): void {

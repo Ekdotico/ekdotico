@@ -1,10 +1,13 @@
 # Local equivalents of the production services, for development only.
 # Production is DigitalOcean Frankfurt and is the owner's to provision.
 #
-# The object store for images joins this file with the slice that first uses
-# it. There is no reverse proxy here: on a development machine the web
-# application serves the collaboration server on its own origin itself
-# (COLLAB_PROXY_TARGET; README.md).
+# The object store for images (FR-ED-08, NFR-SE-18) is a local store of the S3
+# protocol, with one identity whose keys are written in docker/object-store-s3.json
+# and exist nowhere else: a request that is not signed with them is refused, as
+# the bucket of DigitalOcean Spaces refuses it. Its bucket is made by
+# `node scripts/create-bucket.ts` (README.md). There is no reverse proxy here:
+# on a development machine the web application serves the collaboration server on
+# its own origin itself (COLLAB_PROXY_TARGET; README.md).
 services:
   postgres:
     image: postgres:17
@@ -22,5 +25,16 @@ services:
     ports:
       - '6379:6379'
 
+  # SeaweedFS 4.48 (Apache-2.0): the S3 interface on 8333. See docs/plan/slice-19.md, S19-1.
+  objectstore:
+    image: chrislusf/seaweedfs:4.48
+    command: server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
+    ports:
+      - '8333:8333'
+    volumes:
+      - ./docker/object-store-s3.json:/etc/seaweedfs/s3.json:ro
+      - objectstore:/data
+
 volumes:
   postgres:
+  objectstore:

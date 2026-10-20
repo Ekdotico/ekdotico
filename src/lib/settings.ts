@@ -49,6 +49,23 @@ const LIMITS = {
 
 export type LimitName = keyof typeof LIMITS;
 
+/** The object store of the images (NFR-SE-18). The two secrets are read here and nowhere else (NFR-SE-19). */
+export interface ImageStorageSettings {
+  /** The origin of the store's API: `https://fra1.digitaloceanspaces.com`, or `http://localhost:9000` on a development machine. */
+  endpoint: string;
+  bucket: string;
+  region: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  /** Whether the bucket is in the path of an address (a store on this machine) and not in its host (Spaces). */
+  pathStyle: boolean;
+  /**
+   * The one origin an image is loaded from, which the policy of a page names in `img-src` and nowhere
+   * else (the owner's decision of 20 October 2026, S19-4): the origin of a link as the store writes it.
+   */
+  origin: string;
+}
+
 export interface Settings {
   /** The founding team's addresses, lower case (FR-AU-83; register D114, A102). */
   foundingTeamEmails: readonly string[];
@@ -122,6 +139,14 @@ export interface Settings {
   imageDocumentBytes: number;
   /** NFR-SE-18: how long an image that no longer appears in its document is kept, "30 days (an initial value)". */
   imageUnreferencedDays: number;
+  /** NFR-SE-18: how long a link to an image is valid, "5 minutes (an initial value)", in seconds. */
+  imageLinkSeconds: number;
+  /**
+   * Where the images are stored: DigitalOcean Spaces in FRA1 in production, a local S3-compatible store on
+   * a development machine (the owner's decision of 20 October 2026, S19-1). Absent where none of its
+   * settings is given, and then no image can be uploaded or shown.
+   */
+  imageStorage: ImageStorageSettings | undefined;
   /** Where the local sink writes each message (register D70 (the three checks stand), D92: no real email yet). */
   emailSinkDirectory: string;
   /** The address messages are sent from. */
@@ -190,8 +215,80 @@ function admissionSecret(env: Env): string | undefined {
   return value;
 }
 
+const STORAGE_NAMES = [
+  'IMAGE_STORAGE_ENDPOINT',
+  'IMAGE_STORAGE_BUCKET',
+  'IMAGE_STORAGE_ACCESS_KEY_ID',
+  'IMAGE_STORAGE_SECRET_ACCESS_KEY',
+] as const;
+
+/**
+ * The settings of the object store, or none. All of them or none: with some
+ * given and others not, the process does not start, so that a deployment does
+ * not lose its images by a name misspelt. With none, no image can be uploaded
+ * or shown (the routes answer 503, and the policy of a page names no origin
+ * beside its own); a deployment says so at start, when it is not on
+ * localhost (src/instrumentation.ts). The message holds the names and never a
+ * value (NFR-SE-19).
+ */
+function imageStorage(env: Env, secrets: readonly (string | undefined)[]): ImageStorageSettings | undefined {
+  const given = STORAGE_NAMES.filter((name) => env[name]);
+  if (given.length === 0) return undefined;
+  const absent = STORAGE_NAMES.filter((name) => !env[name]);
+  if (absent.length > 0)
+    throw new Error(
+      `${absent.join(', ')} ${absent.length === 1 ? 'is' : 'are'} not set: the object store needs all four settings.`,
+    );
+  const endpoint = env.IMAGE_STORAGE_ENDPOINT!;
+  if (!URL.canParse(endpoint) || new URL(endpoint).origin !== endpoint) {
+    throw new Error(
+      'IMAGE_STORAGE_ENDPOINT must be an origin: a scheme, a host and an optional port, with nothing after.',
+    );
+  }
+  const { protocol, hostname, host } = new URL(endpoint);
+  const here = ['localhost', '127.0.0.1'].includes(hostname);
+  if (protocol !== 'https:' && !(protocol === 'http:' && here)) {
+    throw new Error('IMAGE_STORAGE_ENDPOINT must use https, except on localhost.');
+  }
+  const bucket = env.IMAGE_STORAGE_BUCKET!;
+  if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket)) {
+    throw new Error(
+      'IMAGE_STORAGE_BUCKET must be a bucket name: 3 to 63 characters of a to z, 0 to 9 and -.',
+    );
+  }
+  const region = env.IMAGE_STORAGE_REGION || 'fra1';
+  if (!/^[a-z0-9-]{2,32}$/.test(region))
+    throw new Error('IMAGE_STORAGE_REGION must be 2 to 32 characters of a to z, 0 to 9 and -.');
+  const secretAccessKey = env.IMAGE_STORAGE_SECRET_ACCESS_KEY!;
+  // NFR-SE-17 (e): the secrets differ from one another, so that one that leaks opens one door.
+  if (secrets.includes(secretAccessKey)) {
+    throw new Error('IMAGE_STORAGE_SECRET_ACCESS_KEY must differ from the other secrets of the application.');
+  }
+  // A store on this machine has the bucket in the path; Spaces has it in the host, where the origin of a link is the bucket's.
+  const pathStyle = here;
+  return {
+    endpoint,
+    bucket,
+    region,
+    accessKeyId: env.IMAGE_STORAGE_ACCESS_KEY_ID!,
+    secretAccessKey,
+    pathStyle,
+    origin: pathStyle ? endpoint : `${protocol}//${bucket}.${host}`,
+  };
+}
+
+function imageLinkSeconds(env: Env): number {
+  const seconds = wholeNumber(env, 'IMAGE_LINK_SECONDS', 300, 1);
+  if (seconds > IMAGE_LINK_MOST_SECONDS) {
+    throw new Error(`IMAGE_LINK_SECONDS must be no more than ${IMAGE_LINK_MOST_SECONDS}.`);
+  }
+  return seconds;
+}
+
 const DAY = 24 * 60 * 60;
 const DELETED_DOCUMENT_RETENTION_MAX_DAYS = 3650;
+/** The longest a link to an image may be valid: Signature Version 4 itself allows seven days; an hour is far more than the 5 minutes of NFR-SE-18. */
+const IMAGE_LINK_MOST_SECONDS = 3600;
 /** §2.7: the invited address of an invitation that ended is cleared 30 days after, the longest it may be kept. */
 const DOCUMENT_INVITATION_ADDRESS_MAX_DAYS = 30;
 
@@ -405,6 +502,8 @@ export function loadSettings(env: Env = process.env): Settings {
     // at the next run after it left the document, with undo able to bring it back no more.
     imageDocumentBytes: wholeNumber(env, 'IMAGE_DOCUMENT_MEGABYTES', 100, 1) * 1024 * 1024,
     imageUnreferencedDays: wholeNumber(env, 'IMAGE_UNREFERENCED_DAYS', 30, 1),
+    imageLinkSeconds: imageLinkSeconds(env),
+    imageStorage: imageStorage(env, [authSecret, admission]),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     collabStoreDelayMs,

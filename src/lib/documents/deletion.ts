@@ -17,6 +17,7 @@
 import { publishCollabEvent } from '../collab/events.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
+import { deleteImagesOfDocumentNow } from '../images/deletion.ts';
 import { istorico } from '../istorico/index.ts';
 import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
@@ -240,8 +241,12 @@ async function deletePermanently(
     }
     if (!erased) return 'kept';
 
-    // NFR-SE-18: the images of the document are deleted from storage HERE,
-    // after Istorico and before the row, by the slice that builds images.
+    // NFR-SE-18, FR-ED-36: the images of the document are deleted from storage
+    // HERE, after Istorico and before the row, objects first and then their
+    // rows (the row of the document is restricted while one remains). One that
+    // cannot be removed rejects, and the document is kept for the next run,
+    // which asks again; an object that is gone is no fault.
+    await deleteImagesOfDocumentNow(document.id);
 
     // The row, and with it the document's state. Only while this claim is the
     // one it holds: a claim taken over belongs to the run that took it.

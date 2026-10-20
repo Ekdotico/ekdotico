@@ -16,11 +16,11 @@ export class MemoryStorage implements ImageStorage {
     this.objects.set(key, { bytes, contentType });
   }
 
-  async remove(key: string): Promise<boolean> {
+  async remove(key: string): Promise<void> {
     this.removals.push(key);
     const fault = this.failing.get(key);
     if (fault) throw fault;
-    return this.objects.delete(key);
+    this.objects.delete(key);
   }
 
   async link(key: string, seconds: number): Promise<string> {

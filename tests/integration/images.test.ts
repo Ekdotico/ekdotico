@@ -24,6 +24,7 @@ const { forgetReferences, imageIdsIn, recordReferences } = await import('../../s
 const { IMAGE_CLAIM_STALE_MS, deleteExpiredImages, deleteImagesOfDocument } =
   await import('../../src/lib/images/deletion.ts');
 const { storeState } = await import('../../src/lib/collab/state.ts');
+const { useImageStorage } = await import('../../src/lib/images/store.ts');
 
 afterAll(async () => {
   await db().$disconnect();
@@ -641,6 +642,133 @@ describe('the deletion of images (NFR-SE-18; NFR-RE-15: scheduled, and idempoten
       storage.failing.clear();
       expect(await deleteImagesOfDocument(storage, document)).toBeGreaterThanOrEqual(1);
       expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
+  });
+});
+
+describe('the wiring of the deletion (NFR-RE-15, FR-ED-36)', () => {
+  let storage: MemoryStorage;
+  const now = new Date();
+  beforeEach(async () => {
+    storage = new MemoryStorage();
+    useImageStorage(storage);
+    await db().documentImage.deleteMany();
+  });
+  afterAll(() => useImageStorage(undefined));
+
+  /** A document that was deleted this long ago, with images that stand in it. */
+  async function deletedDocument(user: string, images: number, daysAgo = 40) {
+    const document = await documentOf(user);
+    await db().document.update({
+      where: { id: document },
+      data: { deletedAt: new Date(Date.now() - daysAgo * DAY), deletedById: user },
+    });
+    const rows = [];
+    for (let each = 0; each < images; each += 1) {
+      rows.push(await imageOf(document, user, { unreferencedAt: null, storage }));
+    }
+    return { document, rows };
+  }
+  const exists = async (id: string) => (await db().document.findUnique({ where: { id } })) !== null;
+
+  describe('the timer image-deletion', () => {
+    it('is in TIMERS, and deletes the images that have been out of their documents for 30 days on the store of the process', async () => {
+      const { TIMERS } = await import('../../src/lib/timers.ts');
+      const user = await owner();
+      const document = await documentOf(user);
+      const due = await imageOf(document, user, {
+        unreferencedAt: new Date(now.getTime() - 31 * DAY),
+        storage,
+      });
+      const kept = await imageOf(document, user, {
+        unreferencedAt: new Date(now.getTime() - 29 * DAY),
+        storage,
+      });
+      expect(await TIMERS['image-deletion']!()).toBe(1);
+      expect(await rowOf(due.id)).toBeNull();
+      expect(storage.objects.has(due.objectKey)).toBe(false);
+      expect(await rowOf(kept.id)).not.toBeNull();
+      // Run again, and on a second instance at once, it finds nothing and fails nowhere.
+      expect(await Promise.all([TIMERS['image-deletion']!(), TIMERS['image-deletion']!()])).toEqual([0, 0]);
+    });
+
+    it('does nothing where there is no store and no image, and is a fault, said again each hour, where there is an image and no store', async () => {
+      const { deleteExpiredImagesNow } = await import('../../src/lib/images/deletion.ts');
+      const user = await owner();
+      const document = await documentOf(user);
+      useImageStorage(null);
+      expect(await deleteExpiredImagesNow()).toBe(0);
+      await imageOf(document, user, { unreferencedAt: new Date(now.getTime() - 40 * DAY) });
+      await expect(deleteExpiredImagesNow()).rejects.toThrow('no object store set');
+      expect(await db().documentImage.count()).toBe(1);
+    });
+  });
+
+  describe('the permanent deletion of a document', () => {
+    it('removes the objects and the rows of its images, and then the document, and leaves another document’s images', async () => {
+      const { deleteExpiredDocuments } = await import('../../src/lib/documents/deletion.ts');
+      const user = await owner();
+      const { document, rows } = await deletedDocument(user, 3);
+      const other = await documentOf(user);
+      const others = await imageOf(other, user, { unreferencedAt: null, storage });
+      expect(await deleteExpiredDocuments()).toEqual({ deleted: 1, kept: 0 });
+      expect(await exists(document)).toBe(false);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+      for (const row of rows) expect(storage.objects.has(row.objectKey)).toBe(false);
+      expect(storage.objects.has(others.objectKey)).toBe(true);
+      expect(await rowOf(others.id)).not.toBeNull();
+    });
+
+    it('is kept where an object cannot be removed, with its rows, and deleted by a later run once it can', async () => {
+      const { deleteExpiredDocuments } = await import('../../src/lib/documents/deletion.ts');
+      const user = await owner();
+      const { document, rows } = await deletedDocument(user, 2);
+      storage.failing.set(rows[1]!.objectKey, new Error('store unavailable'));
+      const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        expect(await deleteExpiredDocuments()).toEqual({ deleted: 0, kept: 1 });
+        expect(await exists(document)).toBe(true);
+        expect(await db().documentImage.count({ where: { documentId: document } })).toBeGreaterThanOrEqual(1);
+        // The claim of the document is an hour old before another run takes it (src/lib/documents/deletion.ts).
+        storage.failing.clear();
+        await db().document.update({ where: { id: document }, data: { deletionClaimedAt: null } });
+        expect(await deleteExpiredDocuments()).toEqual({ deleted: 1, kept: 0 });
+        expect(await exists(document)).toBe(false);
+        for (const row of rows) expect(storage.objects.has(row.objectKey)).toBe(false);
+      } finally {
+        printed.mockRestore();
+      }
+    });
+
+    it('is kept where there are images and no store, and deleted where there are none', async () => {
+      const { deleteExpiredDocuments } = await import('../../src/lib/documents/deletion.ts');
+      const user = await owner();
+      const withImages = await deletedDocument(user, 1);
+      const without = await deletedDocument(user, 0);
+      useImageStorage(null);
+      const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const result = await deleteExpiredDocuments();
+        expect(result).toEqual({ deleted: 1, kept: 1 });
+        // Kept for the absence of a store, which is a plain error of ours, and not for the restriction of the
+        // database that a row of an image puts on the deletion of its document (a Prisma fault with a code).
+        expect(printed.mock.calls.map((call) => String(call[0]))).toEqual([
+          `permanent deletion: document ${withImages.document} kept (Error)`,
+        ]);
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(await exists(withImages.document)).toBe(true);
+      expect(await exists(without.document)).toBe(false);
+    });
+
+    it('deletes nothing from a document that is not past its retention', async () => {
+      const { deleteExpiredDocuments } = await import('../../src/lib/documents/deletion.ts');
+      const user = await owner();
+      const { document, rows } = await deletedDocument(user, 1, 5);
+      expect(await deleteExpiredDocuments()).toEqual({ deleted: 0, kept: 0 });
+      expect(await exists(document)).toBe(true);
+      expect(storage.objects.has(rows[0]!.objectKey)).toBe(true);
     });
   });
 });

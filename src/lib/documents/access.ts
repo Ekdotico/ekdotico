@@ -136,6 +136,8 @@ const FORBIDDEN_FOR: Partial<Record<Permission, string>> = {
   // The same, for the deletion that a transfer overtook (register row S17-11).
   'document.delete': ONLY_OWNER,
   'document.leave': OWNER_LEAVE,
+  // The one route that asks for this permission is the upload of an image (FR-ED-08, NFR-SE-18; slice 19).
+  'document.content.edit': 'You can read this document but not change it, so the image was not added.',
 };
 
 /**

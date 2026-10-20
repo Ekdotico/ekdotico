@@ -10,7 +10,11 @@ export async function register() {
       const { startTimers } = await import('./lib/timers.ts');
       const { auth } = await import('./lib/auth/auth.ts');
       const { readFileSync } = await import('node:fs');
-      const { appOrigin } = loadSettings();
+      const { appOrigin, imageStorage } = loadSettings();
+      // NFR-SE-18: a deployment with no object store stores no image: said once, where it can be read in the log.
+      if (!imageStorage && !['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) {
+        console.warn('No object store is set (IMAGE_STORAGE_*): no image can be uploaded or shown.');
+      }
       // docs/operations/deployment.md, item 9: the rewrites this process serves
       // are those of the build, read from where `next start` reads them.
       let manifest: string | null = null;

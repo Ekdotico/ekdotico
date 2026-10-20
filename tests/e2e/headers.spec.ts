@@ -14,7 +14,7 @@ import { APP_ORIGIN } from './origin.ts';
 const NOTHING = "default-src 'none'; frame-ancestors 'none'";
 // A production build on localhost: without `upgrade-insecure-requests`, and nothing else differs.
 const PAGE =
-  /^default-src 'self'; script-src 'self' 'nonce-([A-Za-z0-9+/]{22}==)'; style-src 'self' 'nonce-\1'; style-src-attr 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'$/;
+  /^default-src 'self'; script-src 'self' 'nonce-([A-Za-z0-9+/]{22}==)'; style-src 'self' 'nonce-\1'; style-src-attr 'unsafe-inline'; img-src 'self'(?: http:\/\/localhost:[0-9]+)?; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'$/;
 
 const TOKEN = 'A'.repeat(43);
 /** The address of a file of `src/app`, with a value for each of its parameters. */

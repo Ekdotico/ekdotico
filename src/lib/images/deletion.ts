@@ -2,12 +2,11 @@
 // storage of an image that no longer appears in its document"): scheduled, at
 // least once a day, a timer in the application, and idempotent.
 //
-// NOT YET IN `TIMERS`, AND NOT YET CALLED BY THE PERMANENT DELETION OF A
-// DOCUMENT: both need a store, and the adapter waits on the owner's answer to
-// register row S19-1 (docs/plan/slice-19.md). The functions take the store as a
-// parameter and are tested against the in-memory one. With no route that
-// uploads, no row exists to delete, so the foreign key that restricts the
-// document's deletion cannot yet be met.
+// `deleteExpiredImagesNow` is the timer `image-deletion` of src/lib/timers.ts, and
+// `deleteImagesOfDocumentNow` is the step of the permanent deletion of a document
+// that removes its images (src/lib/documents/deletion.ts); the functions beneath
+// them take the store as a parameter and are tested against the in-memory one as
+// well as a real one.
 //
 // Order, for a fault at any step to leave nothing lost and nothing orphaned
 // that a later run cannot finish:
@@ -26,6 +25,7 @@ import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { settings } from '../settings.ts';
 import type { ImageStorage } from './storage.ts';
+import { imageStorage } from './store.ts';
 
 /** How old a claim is when another run may take it: the run that made it has died. As `CLAIM_STALE_MS` of the permanent deletion of a document. */
 export const IMAGE_CLAIM_STALE_MS = 60 * 60 * 1000;
@@ -80,6 +80,37 @@ export async function deleteExpiredImages(storage: ImageStorage, now: Date = new
     }
   }
   return deleted;
+}
+
+/**
+ * The timer `image-deletion` (NFR-RE-15): `deleteExpiredImages` on the store of
+ * this process. Where there is none, which a development machine that stores no
+ * image has not, there is nothing to delete unless a row says otherwise: a row
+ * with no store to delete its object from is a fault, said every hour, and not a
+ * silence that would keep the object.
+ */
+export async function deleteExpiredImagesNow(): Promise<number> {
+  const storage = imageStorage();
+  if (storage) return deleteExpiredImages(storage);
+  if ((await db().documentImage.count()) === 0) return 0;
+  throw new Error('image deletion: images are stored and there is no object store set');
+}
+
+/**
+ * The step of the permanent deletion of a document that removes its images
+ * (FR-ED-36, NFR-SE-18): `deleteImagesOfDocument` on the store of this process.
+ * It rejects where the images cannot be removed, and the document is then kept
+ * and tried again by the next run (src/lib/documents/deletion.ts).
+ */
+export async function deleteImagesOfDocumentNow(documentId: string): Promise<void> {
+  const storage = imageStorage();
+  if (storage) {
+    await deleteImagesOfDocument(storage, documentId);
+    return;
+  }
+  if ((await db().documentImage.count({ where: { documentId } })) > 0) {
+    throw new Error('image deletion: images are stored and there is no object store set');
+  }
 }
 
 /**

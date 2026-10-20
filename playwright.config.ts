@@ -68,6 +68,18 @@ export default defineConfig({
       ADMISSION_SECRET: process.env.E2E_ADMISSION_SECRET,
       COLLAB_EVENTS_CHANNEL: process.env.E2E_EVENTS_CHANNEL,
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
+      // The object store of the images (FR-ED-08, NFR-SE-18), where the run is given one: the local store of
+      // compose.yaml, or the one CI starts. Without it the application stores no image and the tests of
+      // images say so and are skipped (tests/e2e/images.spec.ts).
+      ...Object.fromEntries(
+        [
+          'IMAGE_STORAGE_ENDPOINT',
+          'IMAGE_STORAGE_BUCKET',
+          'IMAGE_STORAGE_ACCESS_KEY_ID',
+          'IMAGE_STORAGE_SECRET_ACCESS_KEY',
+          'IMAGE_STORAGE_REGION',
+        ].flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])),
+      ),
       // With no trusted proxy every request without a session shares one count
       // of 20 a minute (docs/operations/deployment.md), which one run of the
       // tests would use up.

@@ -237,6 +237,129 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     }
   });
 
+  describe('the object store of the images (NFR-SE-18; S19-1, S19-4)', () => {
+    const SECRET = 'a-secret-access-key-that-is-distinct';
+    const spaces = {
+      IMAGE_STORAGE_ENDPOINT: 'https://fra1.digitaloceanspaces.com',
+      IMAGE_STORAGE_BUCKET: 'ekdotico-images',
+      IMAGE_STORAGE_ACCESS_KEY_ID: 'DO00ACCESSKEY',
+      IMAGE_STORAGE_SECRET_ACCESS_KEY: SECRET,
+    };
+    const local = {
+      ...spaces,
+      IMAGE_STORAGE_ENDPOINT: 'http://localhost:9000',
+      APP_ORIGIN: 'http://localhost:3000',
+      TRUSTED_PROXY_COUNT: undefined,
+    };
+
+    it('is none where none of its settings is given', () => {
+      expect(loadSettings(env).imageStorage).toBeUndefined();
+      expect(loadSettings({ ...env, IMAGE_STORAGE_BUCKET: '' }).imageStorage).toBeUndefined();
+    });
+
+    it('has the bucket in the host of an address for Spaces, and the origin of a link is the bucket’s', () => {
+      expect(loadSettings({ ...env, ...spaces }).imageStorage).toEqual({
+        endpoint: 'https://fra1.digitaloceanspaces.com',
+        bucket: 'ekdotico-images',
+        region: 'fra1',
+        accessKeyId: 'DO00ACCESSKEY',
+        secretAccessKey: SECRET,
+        pathStyle: false,
+        origin: 'https://ekdotico-images.fra1.digitaloceanspaces.com',
+      });
+    });
+
+    it('has the bucket in the path on a store of this machine, and the origin of a link is the store’s', () => {
+      expect(loadSettings({ ...env, ...local }).imageStorage).toMatchObject({
+        pathStyle: true,
+        origin: 'http://localhost:9000',
+        region: 'fra1',
+      });
+      expect(loadSettings({ ...env, ...local, IMAGE_STORAGE_REGION: 'us-east-1' }).imageStorage?.region).toBe(
+        'us-east-1',
+      );
+    });
+
+    it('refuses to start where some are given and not all, by name and never by value', () => {
+      for (const name of Object.keys(spaces)) {
+        const rest = Object.fromEntries(Object.entries(spaces).filter(([each]) => each !== name));
+        const start = () => loadSettings({ ...env, ...rest });
+        expect(start).toThrow(`${name} is not set: the object store needs all four settings.`);
+        expect(start).not.toThrow(new RegExp(`${SECRET}|DO00ACCESSKEY|digitaloceanspaces`));
+      }
+    });
+
+    it.each([
+      [
+        'an endpoint that is not an origin',
+        { IMAGE_STORAGE_ENDPOINT: 'https://fra1.digitaloceanspaces.com/bucket' },
+        'IMAGE_STORAGE_ENDPOINT must be an origin',
+      ],
+      [
+        'an endpoint with a trailing slash',
+        { IMAGE_STORAGE_ENDPOINT: 'https://fra1.digitaloceanspaces.com/' },
+        'IMAGE_STORAGE_ENDPOINT must be an origin',
+      ],
+      [
+        'an endpoint that is not an address',
+        { IMAGE_STORAGE_ENDPOINT: 'fra1.digitaloceanspaces.com' },
+        'IMAGE_STORAGE_ENDPOINT must be an origin',
+      ],
+      [
+        'an endpoint over http away from localhost',
+        { IMAGE_STORAGE_ENDPOINT: 'http://store.example.test' },
+        'IMAGE_STORAGE_ENDPOINT must use https, except on localhost.',
+      ],
+      [
+        'a bucket with a capital',
+        { IMAGE_STORAGE_BUCKET: 'Images' },
+        'IMAGE_STORAGE_BUCKET must be a bucket name',
+      ],
+      [
+        'a bucket with a dot',
+        { IMAGE_STORAGE_BUCKET: 'a.b.c' },
+        'IMAGE_STORAGE_BUCKET must be a bucket name',
+      ],
+      [
+        'a bucket that is a path',
+        { IMAGE_STORAGE_BUCKET: '../x' },
+        'IMAGE_STORAGE_BUCKET must be a bucket name',
+      ],
+      ['a region that is not one', { IMAGE_STORAGE_REGION: 'FRA 1' }, 'IMAGE_STORAGE_REGION must be'],
+      [
+        'the secret of the application’s own',
+        { IMAGE_STORAGE_SECRET_ACCESS_KEY: env.AUTH_SECRET },
+        'IMAGE_STORAGE_SECRET_ACCESS_KEY must differ',
+      ],
+    ])('refuses %s', (_name, change, message) => {
+      expect(() => loadSettings({ ...env, ...spaces, ...change })).toThrow(message);
+    });
+
+    it('refuses a secret that is the admission secret', () => {
+      const admission = 'A'.repeat(43);
+      expect(() =>
+        loadSettings({
+          ...env,
+          ...spaces,
+          ADMISSION_SECRET: admission,
+          IMAGE_STORAGE_SECRET_ACCESS_KEY: admission,
+        }),
+      ).toThrow('IMAGE_STORAGE_SECRET_ACCESS_KEY must differ');
+    });
+
+    it('lets a link be valid for 5 minutes, or as long as it is told, and for no more than an hour', () => {
+      expect(settings.imageLinkSeconds).toBe(300);
+      expect(loadSettings({ ...env, IMAGE_LINK_SECONDS: '60' }).imageLinkSeconds).toBe(60);
+      expect(loadSettings({ ...env, IMAGE_LINK_SECONDS: '3600' }).imageLinkSeconds).toBe(3600);
+      expect(() => loadSettings({ ...env, IMAGE_LINK_SECONDS: '3601' })).toThrow(
+        'IMAGE_LINK_SECONDS must be no more than 3600.',
+      );
+      expect(() => loadSettings({ ...env, IMAGE_LINK_SECONDS: '0' })).toThrow(
+        'IMAGE_LINK_SECONDS must be a whole number, 1 or more.',
+      );
+    });
+  });
+
   it('trusts no proxy unless told how many there are, which only localhost admits', () => {
     const local = { ...env, APP_ORIGIN: 'http://localhost:3000', TRUSTED_PROXY_COUNT: undefined };
     expect(loadSettings(local).trustedProxyCount).toBe(0);

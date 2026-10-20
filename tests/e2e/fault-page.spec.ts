@@ -18,7 +18,7 @@ const STATEMENT =
   'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.';
 const QUOTE = 'Quote this reference when you report the fault.';
 const POLICY =
-  /^default-src 'self'; script-src 'self' 'nonce-([A-Za-z0-9+/]{22}==)'; style-src 'self' 'nonce-\1'; style-src-attr 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'$/;
+  /^default-src 'self'; script-src 'self' 'nonce-([A-Za-z0-9+/]{22}==)'; style-src 'self' 'nonce-\1'; style-src-attr 'unsafe-inline'; img-src 'self'(?: http:\/\/localhost:[0-9]+)?; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'$/;
 
 let server: ChildProcess | undefined;
 /** Everything the server wrote: its log. */

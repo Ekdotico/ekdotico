@@ -53,6 +53,12 @@ jobs:
       FOUNDING_TEAM_EMAILS: ''
       ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       VALKEY_URL: redis://localhost:6379
+      # The local object store of the images, started below (FR-ED-08, NFR-SE-18). The keys are the
+      # ones in docker/object-store-s3.json: they open that store and nothing else.
+      IMAGE_STORAGE_ENDPOINT: http://localhost:8333
+      IMAGE_STORAGE_BUCKET: ekdotico-images
+      IMAGE_STORAGE_ACCESS_KEY_ID: ekdotico-dev-access
+      IMAGE_STORAGE_SECRET_ACCESS_KEY: ekdotico-dev-secret-key-0000000000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,6 +80,13 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # A `services:` entry cannot be given the command the store is started with, so it is run here.
+      - name: Object store of the images (S3 protocol), and its bucket
+        run: |
+          docker run -d --name objectstore -p 8333:8333 \
+            -v "$PWD/docker/object-store-s3.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:4.48 server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
+          node scripts/create-bucket.ts
       - name: Integration tests against PostgreSQL and Valkey (provisioning and migrations of contract IC-51 among them)
         run: pnpm test:integration
       - run: pnpm build

@@ -82,6 +82,22 @@ export const COMPANION_HEADERS: readonly { key: string; value: string }[] = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
 ];
 
+/**
+ * An origin as a source of the policy, and nothing broader: a scheme, a host
+ * and an optional port, with no path, no wildcard and nothing beside it. Anything
+ * else throws, so that a value that is not an origin cannot widen the policy.
+ */
+function exactOrigin(given: string): string {
+  if (
+    !/^https?:\/\/[a-z0-9.-]+(:[0-9]{1,5})?$/.test(given) ||
+    !URL.canParse(given) ||
+    new URL(given).origin !== given
+  ) {
+    throw new Error('The origin of the image store is not an origin: a scheme, a host and an optional port.');
+  }
+  return given;
+}
+
 /** A nonce for one request: 128 random bits. */
 export function newNonce(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64');
@@ -114,21 +130,26 @@ export function newNonce(): string {
  *   its toolbar by one, and the design package's components carry some. A
  *   `style` attribute loads nothing under this policy (`img-src`, `font-src`).
  * - `img-src 'self'`, without `data:`: every icon and the QR code are SVG in
- *   the page, and no stylesheet of the build names an image.
+ *   the page, and no stylesheet of the build names an image. Where the
+ *   application stores images, ONE ORIGIN MORE: the origin of the store the
+ *   links of an image are signed for (the owner's decision of 20 October
+ *   2026, S19-4), configured for each environment and never a wildcard, a
+ *   scheme or a list. An image is loaded from that origin by a link that the
+ *   application issued, and from no address a person supplied (FR-ED-08).
  * - `connect-src 'self'` is the application's own origin, the WebSocket of
  *   `/collab` on it included.
  * - `upgrade-insecure-requests` away from localhost, where there is no HTTPS.
  */
 export function pagePolicy(
   nonce: string,
-  { development, local }: { development: boolean; local: boolean },
+  { development, local, imageOrigin }: { development: boolean; local: boolean; imageOrigin?: string },
 ): string {
   return [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}'${development ? " 'unsafe-eval'" : ''}`,
     `style-src 'self' ${development ? "'unsafe-inline'" : `'nonce-${nonce}'`}`,
     "style-src-attr 'unsafe-inline'",
-    "img-src 'self'",
+    `img-src 'self'${imageOrigin === undefined ? '' : ` ${exactOrigin(imageOrigin)}`}`,
     "font-src 'self'",
     "connect-src 'self'",
     "object-src 'none'",

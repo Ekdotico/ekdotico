@@ -31,6 +31,11 @@ vi.mock('../../src/lib/documents/access-notifications.ts', () => ({
   deleteExpiredRemovedNotifications: async () => 0,
 }));
 
+// NFR-RE-15, NFR-SE-18: the deletion of images out of their documents for 30 days
+// (tests/integration/images.test.ts runs it against a database and a store).
+const deleteExpiredImagesNow = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));
+vi.mock('../../src/lib/images/deletion.ts', () => ({ deleteExpiredImagesNow }));
+
 const HOUR_MS = 60 * 60 * 1000;
 let stdout: ReturnType<typeof vi.spyOn>;
 let stderr: ReturnType<typeof vi.spyOn>;
@@ -92,6 +97,29 @@ it('each runs at start and each hour; prints a count above 0, nothing for 0, and
   deleteExpiredDocuments.mockResolvedValueOnce({ deleted: 0, kept: 1 });
   await vi.advanceTimersByTimeAsync(HOUR_MS);
   expect(stdout.mock.calls.at(-1)).toEqual(['timer ran: document-deletion (0 deleted, 1 kept)']);
+});
+
+it('runs the deletion of images at start and each hour, as a timer of its own, and says how many it deleted', async () => {
+  vi.resetModules();
+  deleteExpiredSecurityLog.mockResolvedValue(0);
+  deleteExpiredDocuments.mockResolvedValue({ deleted: 0, kept: 0 });
+  deleteExpiredImagesNow.mockResolvedValueOnce(0);
+  const { startTimers, TIMERS } = await import('../../src/lib/timers.ts');
+  expect(Object.keys(TIMERS)).toContain('image-deletion');
+  startTimers();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(deleteExpiredImagesNow).toHaveBeenCalledTimes(1);
+  expect(stdout).not.toHaveBeenCalled();
+  deleteExpiredImagesNow.mockResolvedValueOnce(3);
+  await vi.advanceTimersByTimeAsync(HOUR_MS);
+  expect(deleteExpiredImagesNow).toHaveBeenCalledTimes(2);
+  expect(stdout.mock.calls).toEqual([['timer ran: image-deletion (3 deleted)']]);
+  // A fault is the class and the code of it, and the other timers go on.
+  deleteExpiredImagesNow.mockRejectedValueOnce(
+    Object.assign(new Error('secret key abc'), { code: 'AccessDenied' }),
+  );
+  await vi.advanceTimersByTimeAsync(HOUR_MS);
+  expect(stderr.mock.calls).toEqual([['timer failed: image-deletion (Error AccessDenied)']]);
 });
 
 it('says "cleared", and not "deleted", of an address a clearing emptied from a row that stays', async () => {
