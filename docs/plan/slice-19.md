@@ -143,7 +143,7 @@ No dependency, no service, no route, and nothing in the page. Each rule has test
 - `src/lib/images/sniff.ts`, `prepare.ts`, `node.ts`: the type from the content (four signatures, nothing else is looked at), the 20 MB, the form of an image block's attributes.
 - `src/lib/images/metadata/`: the four whitelist removers, and `policy.ts`, the one file that S19-2 changes (`keepColour`, `keepOrientation`; the recommended answer is its default).
 - `src/lib/images/storage.ts`: the interface and the key. No adapter. `tests/integration/image-storage.ts` is the store of the tests.
-- `prisma/migrations/20261020000000_images`: `DocumentImage` with `deletionClaimedAt` and a check of the type and of the size; `src/lib/images/quota.ts`: the 100 MB under a lock; `IMAGE_DOCUMENT_MEGABYTES` and `IMAGE_UNREFERENCED_DAYS` in the settings.
+- `prisma/migrations/20261021010000_images`: `DocumentImage` with `deletionClaimedAt` and a check of the type and of the size; `src/lib/images/quota.ts`: the 100 MB under a lock; `IMAGE_DOCUMENT_MEGABYTES` and `IMAGE_UNREFERENCED_DAYS` in the settings.
 - `src/lib/images/references.ts`, called by the store of `src/lib/collab/state.ts`: the clock of an image that is in no block.
 - `src/lib/images/deletion.ts`: `deleteExpiredImages` (the timer's function, with its claim) and `deleteImagesOfDocument`. **Neither is wired yet**: the timer is not in `TIMERS` and the permanent deletion of a document does not call the second, since both need the store (S19-1). Nothing can create a row until the upload route exists, so the restriction that the table puts on a document's deletion cannot be met in the meantime.
 - `src/lib/collab/shape.ts`: the `image` element, its attributes held to `node.ts` on both paths (with the copy and without), and one block of the 5,000. A new reason for the close, `image-attributes`, with a text for the owner's approval ("This tab tried to change an image in a way that is not allowed, so the change was not saved." (the owner's words of 21 October 2026): an editor never sends one).
@@ -195,6 +195,8 @@ Two independent reviews and a cross-review (`artifacts/review-52-*.md`). Fixed, 
 - **S6** One text for a block whose image is gone, whichever the cause (below); the number of days is `IMAGE_UNREFERENCED_DAYS`, in that text and in the 413.
 - **S7** A block that holds no content (image, divider, table of contents, page break) is refused children by the server's shape check, with a close reason of its own, `leaf-content`.
 - Nits: `.env.example` and the settings comment give the port 8333; the tests of the store and the end-to-end tests of images fail under `CI=true` where no store is given; `LAST` of `references.ts` holds at most 1000 documents and the references are read from the same moment as the state; the Try again button is out of the live region; `docs/operations/deployment.md` says the Spaces key is scoped to the bucket, a lifecycle rule for versions, the 21 MB of the proxy, and why the list of references is one instance only.
+
+- Rebased onto main after pull request 53 (migration `20261021000000_invitation_title`): the migration of this slice is renamed from `20261020000000_images` to `20261021010000_images`, so that it sorts after the one main already has and a database that applied main's migration meets this one as the next, not as one that came before. Nothing in it depends on the other.
 
 Not done, and why:
 
