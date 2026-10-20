@@ -87,10 +87,10 @@ const HELD: Record<Held, string> = {
   // FR-ED-08: this editor writes an image block with its four attributes under their rules, so
   // the words are for a client that does not. For the owner's approval.
   [REFUSAL.IMAGE_ATTRIBUTES]:
-    'A change in this tab gives an image something it cannot hold, so it cannot be applied',
+    'This tab tried to change an image in a way that is not allowed, so the change was not saved.',
   // The same for content put inside a block that holds none: an image, a divider, a table of contents, a page break.
   [REFUSAL.LEAF_CONTENT]:
-    'A change in this tab puts content inside a block that holds none, so it cannot be applied',
+    'This tab tried to put content inside a block that cannot contain any, so the change was not saved.',
   // The limits of a document (register D184, D192, D193), for the owner's approval.
   ...(Object.fromEntries(
     Object.entries(LIMIT_REFUSAL).map(([limit, reason]) => [reason, heldTitle(limit as Limit)]),
