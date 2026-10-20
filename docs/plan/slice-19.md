@@ -2,7 +2,7 @@
 
 Written on 20 October 2026 against Docs commit `f4ec614` (the SRS files read here, FR-ED-08, FR-ED-36, NFR-SE-05 to NFR-SE-08, NFR-SE-17 to NFR-SE-19, NFR-RE-10 and NFR-RE-15, are unchanged at `origin/main`, `e667736`), the Data models and API design pages and the draft register at `docs-decisions@d2ad757`. Row 19 of `alpha-0.1.0-plan.md`: "Upload with everything NFR-SE-18 requires; the 5-minute link; the orphan timer".
 
-**Status: stopped before any code, on two items that the working rules reserve to the owner (section 2).** The part of the slice that does not wait on either is described in section 3 and can be built the moment the owner answers; nothing in it changes with the answer.
+**Status: stopped on two items that the working rules reserve to the owner (section 2); what does not wait on either is built (section 10).** The upload route, the link route, the adapter, the policy for the bucket's origin, the editor's block with its controls, and the resize handle wait for the owner's answers to S19-1, S19-4, S19-2 and S19-8.
 
 ## 1. Requirements, and the part of each built here
 
@@ -135,3 +135,16 @@ No requirement gives any of these. Each states what happened and what to do, bla
 ## 9. Not built, or not testable here, whatever the answer
 
 The Spaces adapter against a real Spaces bucket: `response-content-disposition` and `response-content-type` on a signed link, an `X-Content-Type-Options: nosniff` on the storage's response (an object's headers are the storage's, and nothing on this side can add one), and "no public read, no listing" are properties of the bucket and of DigitalOcean's service that MinIO resembles and does not prove; they are for the owner to check once, when the bucket exists. The restore of the images (NFR-RE-10) and the second copy are the owner's.
+
+## 10. Built while the owner's answers are awaited
+
+No dependency, no service, no route, and nothing in the page. Each rule has tests that fail where it is broken (`tests/unit/image-*.test.ts`, `tests/unit/collab-shape-images.test.ts`, `tests/integration/images.test.ts`); each was broken once, in a source file restored from a saved copy, and the test that failed was named.
+
+- `src/lib/images/sniff.ts`, `prepare.ts`, `node.ts`: the type from the content (four signatures, nothing else is looked at), the 20 MB, the form of an image block's attributes.
+- `src/lib/images/metadata/`: the four whitelist removers, and `policy.ts`, the one file that S19-2 changes (`keepColour`, `keepOrientation`; the recommended answer is its default).
+- `src/lib/images/storage.ts`: the interface and the key. No adapter. `tests/integration/image-storage.ts` is the store of the tests.
+- `prisma/migrations/20261020000000_images`: `DocumentImage` with `deletionClaimedAt` and a check of the type and of the size; `src/lib/images/quota.ts`: the 100 MB under a lock; `IMAGE_DOCUMENT_MEGABYTES` and `IMAGE_UNREFERENCED_DAYS` in the settings.
+- `src/lib/images/references.ts`, called by the store of `src/lib/collab/state.ts`: the clock of an image that is in no block.
+- `src/lib/images/deletion.ts`: `deleteExpiredImages` (the timer's function, with its claim) and `deleteImagesOfDocument`. **Neither is wired yet**: the timer is not in `TIMERS` and the permanent deletion of a document does not call the second, since both need the store (S19-1). Nothing can create a row until the upload route exists, so the restriction that the table puts on a document's deletion cannot be met in the meantime.
+- `src/lib/collab/shape.ts`: the `image` element, its attributes held to `node.ts` on both paths (with the copy and without), and one block of the 5,000. A new reason for the close, `image-attributes`, with a text for the owner's approval ("A change in this tab gives an image something it cannot hold, so it cannot be applied": an editor never sends one).
+- `extensions.tsx`: the `image` node in the editor's schema and its four attribute rules, so that the schema and the server's copy of it agree (the test of that exists). It has no node view, no control, and nothing makes one: `parseHTML` reads only the block's own `figure`, so a pasted `img` is no node.
