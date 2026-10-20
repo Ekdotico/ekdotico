@@ -220,6 +220,23 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     }
   });
 
+  // NFR-SE-18: "100 MB (an initial value)" of images for a document, and "within 30 days (an initial value)".
+  it('holds 100 MB of images for a document and deletes an image 30 days after it left, or as it is told', () => {
+    expect(settings.imageDocumentBytes).toBe(100 * 1024 * 1024);
+    expect(settings.imageUnreferencedDays).toBe(30);
+    const set = loadSettings({ ...env, IMAGE_DOCUMENT_MEGABYTES: '5', IMAGE_UNREFERENCED_DAYS: '7' });
+    expect(set.imageDocumentBytes).toBe(5 * 1024 * 1024);
+    expect(set.imageUnreferencedDays).toBe(7);
+  });
+
+  it.each(['IMAGE_DOCUMENT_MEGABYTES', 'IMAGE_UNREFERENCED_DAYS'])('refuses 0, and text, as %s', (name) => {
+    for (const value of ['0', '-1', '1.5', 'ten']) {
+      expect(() => loadSettings({ ...env, [name]: value })).toThrow(
+        `${name} must be a whole number, 1 or more.`,
+      );
+    }
+  });
+
   it('trusts no proxy unless told how many there are, which only localhost admits', () => {
     const local = { ...env, APP_ORIGIN: 'http://localhost:3000', TRUSTED_PROXY_COUNT: undefined };
     expect(loadSettings(local).trustedProxyCount).toBe(0);

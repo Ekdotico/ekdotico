@@ -115,6 +115,13 @@ export interface Settings {
   securityLogRetentionDays: number;
   /** FR-ED-36: how long a deleted document is retained, and can be restored, before it is deleted permanently. */
   deletedDocumentRetentionDays: number;
+  /**
+   * NFR-SE-18: the most a document holds of images, "100 MB (an initial value)", in bytes. Every stored
+   * object counts, one taken out of the document included until it is deleted (the owner's answer to Q14).
+   */
+  imageDocumentBytes: number;
+  /** NFR-SE-18: how long an image that no longer appears in its document is kept, "30 days (an initial value)". */
+  imageUnreferencedDays: number;
   /** Where the local sink writes each message (register D70 (the three checks stand), D92: no real email yet). */
   emailSinkDirectory: string;
   /** The address messages are sent from. */
@@ -394,6 +401,10 @@ export function loadSettings(env: Env = process.env): Settings {
     ownershipOfferDays: wholeNumber(env, 'OWNERSHIP_OFFER_DAYS', 14, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     deletedDocumentRetentionDays,
+    // At least 1 each: a limit of 0 would refuse every image, a period of 0 would delete an image
+    // at the next run after it left the document, with undo able to bring it back no more.
+    imageDocumentBytes: wholeNumber(env, 'IMAGE_DOCUMENT_MEGABYTES', 100, 1) * 1024 * 1024,
+    imageUnreferencedDays: wholeNumber(env, 'IMAGE_UNREFERENCED_DAYS', 30, 1),
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
     collabStoreDelayMs,

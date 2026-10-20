@@ -287,6 +287,7 @@ model Document {
   collaborators DocumentCollaborator[]
   invitations   DocumentInvitation[]
   offers        OwnershipOffer[]
+  images        DocumentImage[]
 
   @@index([ownerId, deletedAt])
 }
@@ -426,4 +427,37 @@ enum OwnershipOfferState {
 enum RecordingState {
   RECORDED
   UNRECORDED
+}
+
+// ─── Images (FR-ED-08, NFR-SE-18; Data models, "Images") ────────────────────
+
+// One row for each uploaded image. The document refers to an image by its id
+// and never by an address; the object is in the storage under objectKey, which
+// names its document and is never in the document. The byteSize of a document's
+// rows is what its 100 MB limit counts, every stored object among them (the
+// owner's answer to Q14). unreferencedAt is when the image stopped appearing
+// in its document, set by the collaboration server when it stores the document
+// (src/lib/images/references.ts), and the row starts with it set: an image
+// that was never placed is deleted as one that was taken out. The object and
+// the row are deleted 30 days after it (src/lib/images/deletion.ts).
+//
+// Departures from Data models (docs/plan/slice-19.md, S19-7): deletionClaimedAt,
+// the claim of that deletion, so that with two instances one of them deletes
+// an image, in the manner of Document.deletionClaimedAt; and by hand in the
+// migration, a check of the size and of the type. The document's relation
+// restricts: the permanent deletion removes the objects and the rows first.
+model DocumentImage {
+  id                String    @id @default(cuid())
+  documentId        String    @db.Uuid
+  objectKey         String    @unique
+  contentType       String
+  byteSize          Int
+  uploadedById      String
+  createdAt         DateTime  @default(now())
+  unreferencedAt    DateTime?
+  deletionClaimedAt DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@index([documentId])
 }
