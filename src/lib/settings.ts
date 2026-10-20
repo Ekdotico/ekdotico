@@ -183,6 +183,8 @@ function admissionSecret(env: Env): string | undefined {
 
 const DAY = 24 * 60 * 60;
 const DELETED_DOCUMENT_RETENTION_MAX_DAYS = 3650;
+/** §2.7: the invited address of an invitation that ended is cleared 30 days after, the longest it may be kept. */
+const DOCUMENT_INVITATION_ADDRESS_MAX_DAYS = 30;
 
 export function loadSettings(env: Env = process.env): Settings {
   // NFR-SE-17 (b), (c): the identity library also reads variables of its own,
@@ -324,6 +326,25 @@ export function loadSettings(env: Env = process.env): Settings {
     );
   }
 
+  // FR-ED-48: "3 days before the expiry". A reminder period as long as the
+  // invitation's own would send the reminder within the hour, beside the
+  // invitation's email, and a longer one would send none (S18-3), each without
+  // a word: so neither starts.
+  const documentInvitationDays = wholeNumber(env, 'DOCUMENT_INVITATION_DAYS', 14, 1);
+  const invitationReminderDays = wholeNumber(env, 'INVITATION_REMINDER_DAYS', 3, 1);
+  if (invitationReminderDays >= documentInvitationDays) {
+    throw new Error('INVITATION_REMINDER_DAYS must be less than DOCUMENT_INVITATION_DAYS.');
+  }
+  // FR-ED-37 and §2.7 (the row "Document invitations, with the invited email address"): the address is
+  // cleared 30 days after the invitation ended. A shorter period clears sooner, which the row allows; a
+  // longer one would keep an address past the retention the schedule states, so it does not start.
+  const documentInvitationAddressDays = wholeNumber(env, 'DOCUMENT_INVITATION_ADDRESS_DAYS', 30, 1);
+  if (documentInvitationAddressDays > DOCUMENT_INVITATION_ADDRESS_MAX_DAYS) {
+    throw new Error(
+      `DOCUMENT_INVITATION_ADDRESS_DAYS must be no more than ${DOCUMENT_INVITATION_ADDRESS_MAX_DAYS} (§2.7).`,
+    );
+  }
+
   // The owner's decision of 9 October 2026: an entry that no account can have
   // as its address (src/lib/field-text.ts) matches none, and the account it
   // was meant for would be exempt from the gate without a word. The message
@@ -364,10 +385,10 @@ export function loadSettings(env: Env = process.env): Settings {
     admissionSecret: admission,
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
-    documentInvitationDays: wholeNumber(env, 'DOCUMENT_INVITATION_DAYS', 14, 1),
+    documentInvitationDays,
     // At least 1: a reminder of 0 days would come as the invitation expires, a clearing of 0 as it ends.
-    invitationReminderDays: wholeNumber(env, 'INVITATION_REMINDER_DAYS', 3, 1),
-    documentInvitationAddressDays: wholeNumber(env, 'DOCUMENT_INVITATION_ADDRESS_DAYS', 30, 1),
+    invitationReminderDays,
+    documentInvitationAddressDays,
     ownershipOfferDays: wholeNumber(env, 'OWNERSHIP_OFFER_DAYS', 14, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     deletedDocumentRetentionDays,

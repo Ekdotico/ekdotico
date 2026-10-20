@@ -350,6 +350,32 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     ).toBe(7);
   });
 
+  // FR-ED-48, S18-3: a reminder as long as the invitation, or longer, would come with the invitation's
+  // own email or never, and says nothing.
+  it('refuses a reminder period of the invitation period or more, and admits less', () => {
+    const refusal = 'INVITATION_REMINDER_DAYS must be less than DOCUMENT_INVITATION_DAYS.';
+    expect(() => loadSettings({ ...env, INVITATION_REMINDER_DAYS: '14' })).toThrow(refusal);
+    expect(() => loadSettings({ ...env, INVITATION_REMINDER_DAYS: '15' })).toThrow(refusal);
+    expect(() => loadSettings({ ...env, DOCUMENT_INVITATION_DAYS: '3' })).toThrow(refusal);
+    expect(loadSettings({ ...env, INVITATION_REMINDER_DAYS: '13' }).invitationReminderDays).toBe(13);
+    expect(
+      loadSettings({ ...env, DOCUMENT_INVITATION_DAYS: '2', INVITATION_REMINDER_DAYS: '1' }),
+    ).toMatchObject({ documentInvitationDays: 2, invitationReminderDays: 1 });
+  });
+
+  // FR-ED-37, §2.7: 30 days is the retention the schedule states for the invited address.
+  it('refuses an address period longer than the 30 days of §2.7, and admits 30 and less', () => {
+    expect(() => loadSettings({ ...env, DOCUMENT_INVITATION_ADDRESS_DAYS: '31' })).toThrow(
+      'DOCUMENT_INVITATION_ADDRESS_DAYS must be no more than 30 (§2.7).',
+    );
+    expect(
+      loadSettings({ ...env, DOCUMENT_INVITATION_ADDRESS_DAYS: '30' }).documentInvitationAddressDays,
+    ).toBe(30);
+    expect(
+      loadSettings({ ...env, DOCUMENT_INVITATION_ADDRESS_DAYS: '1' }).documentInvitationAddressDays,
+    ).toBe(1);
+  });
+
   // FR-AU-81, NFR-SE-07: a lock that ended while its failures were still
   // counted would begin again, with its email, at each single failure.
   describe('SIGN_IN_LOCK_SECONDS and the period of RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL', () => {

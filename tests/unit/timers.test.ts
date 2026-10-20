@@ -20,9 +20,10 @@ vi.mock('../../src/lib/documents/ownership.ts', () => ({
 }));
 // The reminder, the two clearings of addresses and the notifications of ended invitations
 // (tests/integration/invitation-clearing.test.ts runs them against a database).
+const clearInvitationAddresses = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));
 vi.mock('../../src/lib/documents/invitation-timers.ts', () => ({
   remindInvitations: async () => 0,
-  clearInvitationAddresses: async () => 0,
+  clearInvitationAddresses,
   deleteEndedInvitationNotifications: async () => 0,
 }));
 vi.mock('../../src/lib/admission/invitations.ts', () => ({ clearAdmissionAddresses: async () => 0 }));
@@ -91,4 +92,15 @@ it('each runs at start and each hour; prints a count above 0, nothing for 0, and
   deleteExpiredDocuments.mockResolvedValueOnce({ deleted: 0, kept: 1 });
   await vi.advanceTimersByTimeAsync(HOUR_MS);
   expect(stdout.mock.calls.at(-1)).toEqual(['timer ran: document-deletion (0 deleted, 1 kept)']);
+});
+
+it('says "cleared", and not "deleted", of an address a clearing emptied from a row that stays', async () => {
+  vi.resetModules();
+  deleteExpiredSecurityLog.mockResolvedValue(0);
+  deleteExpiredDocuments.mockResolvedValue({ deleted: 0, kept: 0 });
+  clearInvitationAddresses.mockResolvedValueOnce(4);
+  const { startTimers } = await import('../../src/lib/timers.ts');
+  startTimers();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(stdout.mock.calls).toEqual([['timer ran: invitation-address-clearing (4 cleared)']]);
 });

@@ -50,7 +50,7 @@ export const REMINDER_NOTIFICATION = 'document_invitation_reminder';
 export const INVITATION_NOTIFICATIONS = [INVITATION_NOTIFICATION, REMINDER_NOTIFICATION];
 
 /** The notifications of these invitations, the invitation's own and its reminder. */
-const notificationsOf = (invitationIds: string[]): Prisma.NotificationWhereInput => ({
+export const notificationsOf = (invitationIds: string[]): Prisma.NotificationWhereInput => ({
   kind: { in: INVITATION_NOTIFICATIONS },
   OR: invitationIds.map((id) => ({ payload: { path: ['invitationId'], equals: id } })),
 });
@@ -395,11 +395,14 @@ async function deliver(
     return true;
   });
   if (!claimed) return;
-  const inviter = await db().user.findUnique({ where: { id: inviterId }, select: { name: true } });
+  const inviter = await db().user.findUnique({
+    where: { id: inviterId },
+    select: { name: true, email: true },
+  });
   await send(
     invitationEmail(
       invitation.email,
-      inviter?.name ?? '',
+      inviter ? displayNameOf(inviter) : '',
       invitation.role,
       invitation.token,
       invitation.expiresAt,
@@ -431,7 +434,7 @@ async function judge(client: Client, userId: string, ref: InvitationRef, now: Da
   const invitation = await client.documentInvitation.findUnique({
     where: whereRef(ref),
     include: {
-      invitedBy: { select: { name: true } },
+      invitedBy: { select: { name: true, email: true } },
       document: {
         select: {
           ownerId: true,
@@ -466,7 +469,7 @@ async function judge(client: Client, userId: string, ref: InvitationRef, now: Da
   return {
     view: {
       outcome: 'open',
-      inviterName: invitation.invitedBy.name ?? '',
+      inviterName: displayNameOf(invitation.invitedBy),
       role: COLLABORATOR_ROLE[invitation.role],
       expiresAt: invitation.expiresAt,
     } as InvitationView,
@@ -607,7 +610,8 @@ export interface NotificationView {
 /** FR-ED-42, FR-ED-48: the one reminder of an invitation, with the day it expires. It names no title. */
 export interface ReminderNotificationView extends Omit<NotificationView, 'kind'> {
   kind: typeof REMINDER_NOTIFICATION;
-  expiresAt: Date;
+  /** Null once the invitation was accepted (S18-2). */
+  expiresAt: Date | null;
 }
 
 /** Every kind the list holds: an invitation and its reminder, a change of role, a removal (./access-notifications.ts). Kinds are added here. */
@@ -641,7 +645,13 @@ export async function listNotifications(
           document: { deletedAt: null },
           OR: [open(now), { state: 'ACCEPTED' }],
         },
-        select: { id: true, role: true, expiresAt: true, invitedBy: { select: { name: true } } },
+        select: {
+          id: true,
+          role: true,
+          expiresAt: true,
+          state: true,
+          invitedBy: { select: { name: true, email: true } },
+        },
       })
     ).map((invitation) => [invitation.id, invitation]),
   );
@@ -653,13 +663,18 @@ export async function listNotifications(
       id: row.id,
       createdAt: row.createdAt,
       read: row.readAt !== null,
-      inviterName: invitation.invitedBy.name ?? '',
+      inviterName: displayNameOf(invitation.invitedBy),
       role: COLLABORATOR_ROLE[invitation.role],
       invitationId,
     };
     return [
       row.kind === REMINDER_NOTIFICATION
-        ? { ...shown, kind: REMINDER_NOTIFICATION, expiresAt: invitation.expiresAt }
+        ? {
+            ...shown,
+            kind: REMINDER_NOTIFICATION,
+            // S18-2: once accepted the invitation no longer expires, so the reminder states no expiry.
+            expiresAt: invitation.state === 'ACCEPTED' ? null : invitation.expiresAt,
+          }
         : { ...shown, kind: INVITATION_NOTIFICATION },
     ];
   });

@@ -26,7 +26,7 @@ export default async function Notifications() {
             ...notification,
             role: ROLE_NAME[notification.role],
             createdAt,
-            expiresAt: notification.expiresAt.toISOString(),
+            expiresAt: notification.expiresAt?.toISOString() ?? null,
           };
         }
         return { ...notification, role: ROLE_NAME[notification.role], createdAt };

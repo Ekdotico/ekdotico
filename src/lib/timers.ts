@@ -56,7 +56,9 @@ function runTimers(): void {
     run().then(
       // A run that found nothing to delete says nothing, or the log would hold a line an hour.
       (count) => {
-        if (count > 0) console.log(`timer ran: ${name} (${count} deleted)`);
+        // A clearing empties an address from a row that stays: it says "cleared", not "deleted".
+        if (count > 0)
+          console.log(`timer ran: ${name} (${count} ${name.endsWith('-clearing') ? 'cleared' : 'deleted'})`);
       },
       // The name of the timer, and the class and code of the fault: an error's
       // message can quote a row (NFR-SE-19).

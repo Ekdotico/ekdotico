@@ -33,6 +33,7 @@ const { remindInvitations, clearInvitationAddresses, deleteEndedInvitationNotifi
 const { clearAdmissionAddresses, createInvitation, listInvitations } =
   await import('../../src/lib/admission/invitations.ts');
 const collection = await import('../../src/app/api/documents/route.ts');
+const documentRoute = await import('../../src/app/api/documents/[id]/route.ts');
 const inviting = await import('../../src/app/api/documents/[id]/invitations/route.ts');
 const revoking = await import('../../src/app/api/documents/[id]/invitations/[invitationId]/route.ts');
 const resending = await import('../../src/app/api/documents/[id]/invitations/[invitationId]/resend/route.ts');
@@ -102,6 +103,11 @@ async function documentOf(cookie: string): Promise<string> {
 const mailTo = async (email: string) => (await sunk(SINK)).filter(({ to }) => to === email);
 const remindersTo = async (email: string) =>
   (await mailTo(email)).filter(({ subject }) => subject === SUBJECT);
+/** How many notifications of this person name this invitation (the invitation's own and its reminder). */
+const naming = async (recipientId: string, invitationId: string) =>
+  (await db().notification.findMany({ where: { recipientId } })).filter(
+    ({ payload }) => (payload as { invitationId?: string }).invitationId === invitationId,
+  ).length;
 const reminderNotifications = (recipientId: string) =>
   db().notification.findMany({ where: { recipientId, kind: 'document_invitation_reminder' } });
 
@@ -179,6 +185,20 @@ describe('the one reminder (FR-ED-48)', () => {
     await remindInvitations(undefined, new Date(second.row.expiresAt.getTime() + 5 * DAY));
     expect(await remindersTo(second.invitee.email)).toHaveLength(0);
     expect((await rowOf(second.row.id)).reminderClaimedAt).toBeNull();
+  });
+
+  it("does not claim an invitation that expired while the run was going: the claim reads the clock, not the run's start (weakening: claim at the run's start)", async () => {
+    const { invitee, row } = await sent();
+    const expiresAt = new Date(Date.now() - 1000);
+    await db().documentInvitation.update({
+      where: { id: row.id },
+      data: { createdAt: new Date(expiresAt.getTime() - 14 * DAY), expiresAt },
+    });
+    // The run began a day before the expiry, as a slow run of an hour's timer would have, and reaches the row now.
+    await remindInvitations(undefined, new Date(expiresAt.getTime() - DAY));
+    expect(await remindersTo(invitee.email)).toHaveLength(0);
+    expect(await reminderNotifications(invitee.id)).toHaveLength(0);
+    expect((await rowOf(row.id)).reminderClaimedAt).toBeNull();
   });
 
   it('is sent only while the invitation is pending: none for a revoked, accepted, or declined one', async () => {
@@ -339,21 +359,61 @@ describe('the reminder in the one list (FR-ED-42)', () => {
     expect((await listOf(invitee.cookie)).notifications).toHaveLength(2);
   });
 
-  it("goes with a revocation, a decline and the deletion of the document, as the invitation's own does", async () => {
-    const revoked = await sent();
-    const declined = await sent();
-    for (const { row } of [revoked, declined]) {
-      await remindInvitations(undefined, new Date(row.expiresAt.getTime() - 3 * DAY));
-    }
-    expect(await reminderNotifications(revoked.invitee.id)).toHaveLength(1);
-    expect(await reminderNotifications(declined.invitee.id)).toHaveLength(1);
+  it('states no expiry once the invitation was accepted, and states it before (S18-2)', async () => {
+    const { invitee, row } = await sent();
+    await remindInvitations(undefined, new Date(row.expiresAt.getTime() - 3 * DAY));
+    const reminderOf = async () =>
+      (await listOf(invitee.cookie)).notifications.find(
+        ({ kind }) => kind === 'document_invitation_reminder',
+      )!;
+    expect(await reminderOf()).toMatchObject({ expiresAt: row.expiresAt.toISOString() });
+    expect((await answer(invitee.cookie, row.id, 'accept')).status).toBe(200);
+    expect(await reminderOf()).toMatchObject({ invitationId: row.id, expiresAt: null });
+  });
 
-    expect((await revoke(revoked.owner.cookie, revoked.documentId, revoked.row.id)).status).toBe(200);
-    expect((await answer(declined.invitee.cookie, declined.row.id, 'decline')).status).toBe(200);
-    for (const { invitee } of [revoked, declined]) {
-      expect(await db().notification.count({ where: { recipientId: invitee.id } })).toBe(0);
-      expect((await listOf(invitee.cookie)).notifications).toEqual([]);
-    }
+  /** An invitation sent and reminded, and the reminder's notification as the database holds it. */
+  async function reminded() {
+    const made = await sent();
+    await remindInvitations(undefined, new Date(made.row.expiresAt.getTime() - 3 * DAY));
+    expect(await reminderNotifications(made.invitee.id)).toHaveLength(1);
+    return made;
+  }
+
+  it("goes with a revocation, as the invitation's own does", async () => {
+    const { owner, invitee, documentId, row } = await reminded();
+    expect((await revoke(owner.cookie, documentId, row.id)).status).toBe(200);
+    expect(await db().notification.count({ where: { recipientId: invitee.id } })).toBe(0);
+    expect((await listOf(invitee.cookie)).notifications).toEqual([]);
+  });
+
+  it("goes with a decline, as the invitation's own does", async () => {
+    const { invitee, row } = await reminded();
+    expect((await answer(invitee.cookie, row.id, 'decline')).status).toBe(200);
+    expect(await db().notification.count({ where: { recipientId: invitee.id } })).toBe(0);
+    expect((await listOf(invitee.cookie)).notifications).toEqual([]);
+  });
+
+  it('goes with the sending again of the invitation: the new one is reminded later, the old reminder is gone', async () => {
+    const { owner, invitee, documentId, row } = await reminded();
+    expect((await resend(owner.cookie, documentId, row.id)).status).toBe(201);
+    await runLater();
+    expect(await reminderNotifications(invitee.id)).toHaveLength(0);
+    expect(await naming(invitee.id, row.id)).toBe(0);
+    const list = (await listOf(invitee.cookie)).notifications;
+    expect(list.map(({ kind }) => kind)).toEqual(['document_invitation']);
+  });
+
+  it('goes with the deletion of the document (DELETE /api/documents/:id)', async () => {
+    const { owner, invitee, documentId, row } = await reminded();
+    const deleting = await documentRoute.DELETE(
+      request('DELETE', `/api/documents/${documentId}`, owner.cookie),
+      at({ id: documentId }),
+    );
+    expect(deleting.status).toBe(204);
+    expect((await db().document.findUniqueOrThrow({ where: { id: documentId } })).deletedAt).not.toBeNull();
+    expect(await naming(invitee.id, row.id)).toBe(0);
+    expect(await reminderNotifications(invitee.id)).toHaveLength(0);
+    expect((await listOf(invitee.cookie)).notifications).toEqual([]);
   });
 });
 
@@ -376,6 +436,12 @@ describe("the clearing of a document invitation's address (FR-ED-37, §2.7)", ()
       const { invitee, id } = await ended(state, endedAt);
       const period = endedAt.getTime() + 30 * DAY;
 
+      // The invitee holds a notification that names the invitation, which the timer of S13-6 then deletes
+      // (weakening: the timer keeps what it should delete).
+      expect(await naming(invitee.id, id)).toBe(1);
+      await deleteEndedInvitationNotifications(new Date(period - 1));
+      expect(await naming(invitee.id, id)).toBe(0);
+
       await clearInvitationAddresses(new Date(period - 1));
       expect((await rowOf(id)).email).toBe(invitee.email);
 
@@ -386,16 +452,25 @@ describe("the clearing of a document invitation's address (FR-ED-37, §2.7)", ()
       expect(row.state).toBe(state === 'PENDING' ? 'EXPIRED' : state);
       expect(row.tokenHash).toBeTruthy();
       expect(row.role).toBe('EDITOR');
-      // What is left holds no address: not the row, not the notifications, not the log (NFR-SE-19).
+      // What is left holds no address: not the row, not the log (NFR-SE-19), and no notification names
+      // the invitation, so nothing leads from the person to the row.
       expect(JSON.stringify(row)).not.toContain(invitee.email);
-      expect(
-        JSON.stringify(await db().notification.findMany({ where: { recipientId: invitee.id } })),
-      ).not.toContain(invitee.email);
+      expect(await naming(invitee.id, id)).toBe(0);
       expect(
         JSON.stringify(await db().securityLogEntry.findMany({ where: { documentId: row.documentId } })),
       ).not.toContain(invitee.email);
     },
   );
+
+  it('deletes the notifications that name the rows it clears, whatever the notification timer has done (defence in depth)', async () => {
+    const endedAt = new Date(Date.now() - 40 * DAY);
+    const rows = await Promise.all(
+      (['DECLINED', 'REVOKED', 'EXPIRED', 'PENDING'] as const).map((s) => ended(s, endedAt)),
+    );
+    for (const { invitee, id } of rows) expect(await naming(invitee.id, id)).toBe(1);
+    await clearInvitationAddresses(new Date());
+    for (const { invitee, id } of rows) expect(await naming(invitee.id, id)).toBe(0);
+  });
 
   it('never clears a pending invitation that is open, an expired one inside its 30 days, or an accepted one (weakening: clear an accepted invitation)', async () => {
     const open = await sent();

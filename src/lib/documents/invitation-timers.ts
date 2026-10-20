@@ -15,7 +15,12 @@ import { sendEmail, type EmailMessage } from '../email/index.ts';
 import { faultOf } from '../fault.ts';
 import { settings } from '../settings.ts';
 import { COLLABORATOR_ROLE, ROLE_NAME } from './permissions.ts';
-import { INVITATION_NOTIFICATIONS, openInvitation, REMINDER_NOTIFICATION } from './sharing.ts';
+import {
+  INVITATION_NOTIFICATIONS,
+  notificationsOf,
+  openInvitation,
+  REMINDER_NOTIFICATION,
+} from './sharing.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -82,11 +87,14 @@ async function remind(
   // The row is marked first, by one conditional statement: of two runs, or of a run and a revocation, an
   // acceptance or an expiry, one wins and the other matches nothing. The notification is written in the
   // same transaction, so that no reminder is marked and left without it.
+  // The claim reads the clock itself, never earlier than the run's: a run that is slow does not claim an
+  // invitation that has expired since it began (the run's `now` is a parameter for the tests).
+  const claimAt = new Date(Math.max(now.getTime(), Date.now()));
   const message = await db().$transaction(async (tx) => {
     const { count } = await tx.documentInvitation.updateMany({
       where: {
         id: invitationId,
-        ...openInvitation(now),
+        ...openInvitation(claimAt),
         emailClaimedAt: { not: null },
         reminderClaimedAt: null,
       },
@@ -143,11 +151,12 @@ async function remind(
  */
 export async function clearInvitationAddresses(now: Date = new Date()): Promise<number> {
   const before = new Date(now.getTime() - settings().documentInvitationAddressDays * DAY_MS);
-  const stale = await db().documentInvitation.updateMany({
+  const stale = await db().documentInvitation.updateManyAndReturn({
     where: { email: { not: null }, state: 'PENDING', expiresAt: { lte: before } },
     data: { email: null, state: 'EXPIRED' },
+    select: { id: true },
   });
-  const ended = await db().documentInvitation.updateMany({
+  const ended = await db().documentInvitation.updateManyAndReturn({
     where: {
       email: { not: null },
       OR: [
@@ -156,8 +165,13 @@ export async function clearInvitationAddresses(now: Date = new Date()): Promise<
       ],
     },
     data: { email: null },
+    select: { id: true },
   });
-  return stale.count + ended.count;
+  // Defence in depth: the notifications of these rows are gone long before (a decline and a revocation
+  // delete them at once, the notification timer an expiry), and none stands that names a row without an address.
+  const cleared = [...stale, ...ended].map(({ id }) => id);
+  if (cleared.length > 0) await db().notification.deleteMany({ where: notificationsOf(cleared) });
+  return cleared.length;
 }
 
 // ── The notifications of invitations that are no longer open (S13-6) ────────

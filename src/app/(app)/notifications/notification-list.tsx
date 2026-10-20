@@ -25,8 +25,8 @@ export type NotificationItem =
       inviterName: string;
       role: string;
       invitationId: string;
-      /** ISO 8601, UTC. */
-      expiresAt: string;
+      /** ISO 8601, UTC; null once the invitation was accepted (S18-2). */
+      expiresAt: string | null;
     })
   // FR-ED-42, S15-2: the person's role on a document was changed; they hold it still.
   | (Shown & { kind: 'role_changed'; documentId: string; title: string; role: string })
@@ -48,9 +48,11 @@ function Statement({ notification }: { notification: NotificationItem }) {
       return (
         <>
           Reminder: <bdi>{notification.inviterName}</bdi> invited you to a document as {notification.role}.{' '}
-          <InBrowser>
-            The invitation expires on <LocalTime at={notification.expiresAt} />.
-          </InBrowser>
+          {notification.expiresAt === null ? null : (
+            <InBrowser>
+              The invitation expires on <LocalTime at={notification.expiresAt} />.
+            </InBrowser>
+          )}
         </>
       );
     case 'role_changed':
