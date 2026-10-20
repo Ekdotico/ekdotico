@@ -132,8 +132,14 @@ test('takes an image from the slash palette, in place of the command, and from a
   await enter(page);
   await openNew(page);
   await text(page).click();
+  // Listened for before the typing, and not in the same step as the key: Playwright turns on its interception of the
+  // picker when the listener is made, which takes a round trip, and a key pressed at once can open the picker before
+  // that, which headless Chromium cancels (one run in eight, the run of pull request 52). A click on a button
+  // is slow enough not to meet it.
+  const asked = page.waitForEvent('filechooser');
   await page.keyboard.type('/image');
-  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.keyboard.press('Enter')]);
+  await page.keyboard.press('Enter');
+  const chooser = await asked;
   await chooser.setFiles(picture);
   await expect(figure(page)).toHaveCount(1);
   await expect(figure(page).locator('img')).toBeVisible();
