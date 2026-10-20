@@ -131,8 +131,11 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    if (await act(`/api/documents/${view.documentId}/invitations`, { emails: entered, role, hideTitle }))
+    if (await act(`/api/documents/${view.documentId}/invitations`, { emails: entered, role, hideTitle })) {
       setEmails('');
+      // Q49 (3): off unless the person turns it on, for each batch of invitations.
+      setHideTitle(false);
+    }
   }
 
   const fieldFault = fault && FIELD_FAULTS.includes(fault.code) ? fault.message : undefined;

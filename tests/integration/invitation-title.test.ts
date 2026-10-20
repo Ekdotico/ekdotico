@@ -36,6 +36,7 @@ const inviting = await import('../../src/app/api/documents/[id]/invitations/rout
 const resending = await import('../../src/app/api/documents/[id]/invitations/[invitationId]/resend/route.ts');
 const people = await import('../../src/app/api/documents/[id]/collaborators/route.ts');
 const one = await import('../../src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts');
+const leaving = await import('../../src/app/api/documents/[id]/leave/route.ts');
 const byLink = await import('../../src/app/api/invitations/[token]/[answer]/route.ts');
 const notifications = await import('../../src/app/api/notifications/route.ts');
 
@@ -349,10 +350,82 @@ describe('hiding the title behind a pseudonym (Q49)', () => {
 
     const listed = await listOf(invitee.cookie);
     expect(JSON.stringify(listed)).not.toContain(TITLE);
+    // Neither the title nor the pseudonym: the invitation was accepted, so "until you accept" would be false.
+    expect(JSON.stringify(listed)).not.toContain(row.titlePseudonym!);
     expect(listed.notifications.find(({ kind }) => kind === 'document_invitation')).toMatchObject({
       title: null,
-      pseudonym: row.titlePseudonym,
+      pseudonym: null,
     });
+  });
+
+  it('shows nothing of a title that was shown to an account that accepted and then lost its role, however the role was lost, and not the title as it is renamed (weakening: drop the PENDING check in the list)', async () => {
+    for (const how of ['removed', 'left'] as const) {
+      const owner = await person();
+      const invitee = await person('Ina Invitee');
+      const documentId = await documentOf(owner);
+      const { token } = await sent(owner, documentId, invitee);
+      expect((await accept(invitee.cookie, token)).status).toBe(200);
+      expect((await listOf(invitee.cookie)).notifications[0]).toMatchObject({ title: TITLE });
+
+      if (how === 'removed') {
+        const { collaborators } = (await (
+          await people.GET(
+            request('GET', `/api/documents/${documentId}/collaborators`, owner.cookie),
+            at({ id: documentId }),
+          )
+        ).json()) as { collaborators: { id: string }[] };
+        const collaboratorId = collaborators[0]!.id;
+        const done = await one.DELETE(
+          request('DELETE', `/api/documents/${documentId}/collaborators/${collaboratorId}`, owner.cookie),
+          at({ id: documentId, collaboratorId }),
+        );
+        expect(done.status).toBe(200);
+      } else {
+        const done = await leaving.POST(
+          request('POST', `/api/documents/${documentId}/leave`, invitee.cookie),
+          at({ id: documentId }),
+        );
+        expect(done.status).toBe(204);
+      }
+      await db().document.update({
+        where: { id: documentId },
+        data: { title: 'Renamed since, in confidence' },
+      });
+
+      const listed = await listOf(invitee.cookie);
+      expect(JSON.stringify(listed)).not.toContain(TITLE);
+      expect(JSON.stringify(listed)).not.toContain('Renamed since');
+      expect(listed.notifications.find(({ kind }) => kind === 'document_invitation')).toMatchObject({
+        title: null,
+        pseudonym: null,
+        inviterName: 'Ada Owner',
+      });
+    }
+  });
+
+  it('shows neither the title nor the pseudonym to an account that no longer holds the invited address, hidden or not (weakening: the pseudonym before the address check)', async () => {
+    const owner = await person();
+    const invitee = await person('Ina Invitee');
+    const documentId = await documentOf(owner);
+    const { row } = await sent(owner, documentId, invitee, { hideTitle: true });
+    await db().user.update({ where: { id: invitee.id }, data: { email: 'moved-away-too@example.com' } });
+    const listed = await listOf(invitee.cookie);
+    expect(JSON.stringify(listed)).not.toContain(TITLE);
+    expect(JSON.stringify(listed)).not.toContain(row.titlePseudonym!);
+    expect(listed.notifications).toEqual([
+      expect.objectContaining({ invitationId: row.id, title: null, pseudonym: null }),
+    ]);
+  });
+
+  it('shows nothing of the title where the address is the invited one but is not verified (weakening: no check of the verified address in the list)', async () => {
+    const owner = await person();
+    const invitee = await person('Ina Invitee');
+    const documentId = await documentOf(owner);
+    await sent(owner, documentId, invitee);
+    await db().user.update({ where: { id: invitee.id }, data: { emailVerified: false } });
+    const listed = await listOf(invitee.cookie);
+    expect(JSON.stringify(listed)).not.toContain(TITLE);
+    expect(listed.notifications).toEqual([expect.objectContaining({ title: null, pseudonym: null })]);
   });
 
   it('is the inviter’s to choose: the Owner, and an Editor who may invite, and no one who may not (Q49 (5); weakening: refuse the Editor, or admit one without the permission)', async () => {

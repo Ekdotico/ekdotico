@@ -31,8 +31,9 @@ const ENDS: readonly string[] = ['declined', 'expired', 'ended'];
 
 /**
  * The Owner is told, in the transaction that ended the offer, so that an offer never ends without it and the
- * reverse. Never to the Editor who declined, and only to the account that is the Owner: where the maker of the
- * offer is no longer the Owner (which the backstop of `settle` may find), nothing is written.
+ * reverse. Never to the Editor who declined. The caller names the Owner it has checked to be the maker of the offer
+ * (`tellOwnerOffersEnded` in ./ownership.ts: where the maker is no longer the Owner, which the backstop of `settle`
+ * may find, nothing is written).
  */
 export async function notifyOfferEnded(
   tx: Prisma.TransactionClient,

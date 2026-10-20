@@ -93,3 +93,21 @@ export function newPseudonym(senderName: string, pick: (n: number) => number = r
   const animal = PSEUDONYM_ANIMALS[pick(PSEUDONYM_ANIMALS.length)];
   return `${adjective} ${animal} — ${senderName}`;
 }
+
+/** How many times a pseudonym that is already in use is drawn again before one is kept (1,024 pairs, a handful in use). */
+const REDRAWS = 32;
+
+/**
+ * As `newPseudonym`, drawn again where the words are among `taken`: the open hidden invitations of this sender to
+ * this address, so that an invitee who holds several can tell them apart ("what to look for"). After
+ * `REDRAWS` draws the last is kept: a pseudonym is not a key, and two alike harm nothing but that.
+ */
+export function newPseudonymAvoiding(
+  senderName: string,
+  taken: ReadonlySet<string>,
+  pick: (n: number) => number = randomInt,
+): string {
+  let made = newPseudonym(senderName, pick);
+  for (let n = 1; n < REDRAWS && taken.has(made); n += 1) made = newPseudonym(senderName, pick);
+  return made;
+}

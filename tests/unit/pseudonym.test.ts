@@ -3,7 +3,12 @@
 // of neutral words.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { newPseudonym, PSEUDONYM_ADJECTIVES, PSEUDONYM_ANIMALS } from '../../src/lib/documents/pseudonym.ts';
+import {
+  newPseudonym,
+  newPseudonymAvoiding,
+  PSEUDONYM_ADJECTIVES,
+  PSEUDONYM_ANIMALS,
+} from '../../src/lib/documents/pseudonym.ts';
 
 const source = readFileSync('src/lib/documents/pseudonym.ts', 'utf8')
   .replaceAll(/\/\*[\s\S]*?\*\//g, '')
@@ -39,6 +44,27 @@ describe('a pseudonym', () => {
       return 0;
     });
     expect(asked).toEqual([PSEUDONYM_ADJECTIVES.length, PSEUDONYM_ANIMALS.length]);
+  });
+
+  it('is drawn again where the words are in use, and kept after the draws are used up (weakening: no draw again)', () => {
+    const first = newPseudonym('X', () => 0);
+    const second = newPseudonym('X', () => 1);
+    const draws = [0, 0, 0, 0, 1, 1]; // the first pair twice, then the second pair
+    let at = 0;
+    const pick = () => draws[at++]!;
+    expect(newPseudonymAvoiding('X', new Set([first]), pick)).toBe(second);
+    expect(at).toBe(6);
+    // Nothing is in use: the first draw stands.
+    expect(newPseudonymAvoiding('X', new Set(), () => 0)).toBe(first);
+    // Everything is in use: one is kept, after a bounded number of draws.
+    let drawn = 0;
+    expect(
+      newPseudonymAvoiding('X', new Set([first]), () => {
+        drawn += 1;
+        return 0;
+      }),
+    ).toBe(first);
+    expect(drawn).toBe(64);
   });
 
   it('can be any pair of the lists, with the platform’s own source', () => {

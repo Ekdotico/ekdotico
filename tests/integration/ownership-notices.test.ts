@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { until } from './channel.ts';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
 const later = vi.hoisted(() => [] as (() => unknown)[]);
@@ -28,6 +29,7 @@ const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { deleteDocument } = await import('../../src/lib/documents/deletion.ts');
 const { deleteAccessNotificationsOf } = await import('../../src/lib/documents/access-notifications.ts');
 const { expireOffers } = await import('../../src/lib/documents/ownership.ts');
+const { notifyOfferEnded } = await import('../../src/lib/documents/ownership-notifications.ts');
 const offering = await import('../../src/app/api/documents/[id]/ownership-offer/route.ts');
 const answering = await import('../../src/app/api/ownership-offers/[offerId]/[answer]/route.ts');
 const one = await import('../../src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts');
@@ -296,6 +298,76 @@ describe('the Owner is told when an offer ends without the Owner’s own action 
     expect((await offer(owner.cookie, id, row)).status).toBe(201);
     expect(await expireOffers(new Date(Date.now() + 1000))).toBe(0);
     expect((await endedOf(owner.cookie)).map(({ end }) => end)).toEqual(['expired', 'expired']);
+  });
+
+  it('is told once where the timer’s expiry is not yet committed when the next offer settles the same offer (weakening: no PENDING guard on the write of settle)', async () => {
+    const { owner, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    const made = await pendingOf(id);
+    await db().ownershipOffer.update({
+      where: { id: made.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    // The timer's transaction: the offer written expired and the Owner's notice, held uncommitted.
+    let held!: () => void;
+    let release!: () => void;
+    const holds = new Promise<void>((resolve) => (held = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const timer = db().$transaction(
+      async (tx) => {
+        await tx.ownershipOffer.update({
+          where: { id: made.id },
+          data: { state: 'EXPIRED', respondedAt: new Date() },
+        });
+        await notifyOfferEnded(tx, {
+          ownerId: owner.id,
+          toUserId: made.toUserId,
+          documentId: id,
+          end: 'expired',
+        });
+        held();
+        await gate;
+      },
+      { timeout: 20_000 },
+    );
+    await holds;
+    // The next offer reads the offer as pending (the expiry is not committed), then waits on its row.
+    const next = offer(owner.cookie, id, row);
+    await until(() =>
+      /(^|\n)[1-9]\d*$/.test(
+        database.sql(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`),
+      ),
+    );
+    release();
+    await timer;
+    expect((await next).status).toBe(201);
+
+    expect(await storedFor(owner.id)).toHaveLength(1);
+    expect(await endedOf(owner.cookie)).toEqual([expect.objectContaining({ end: 'expired' })]);
+  });
+
+  it('writes the notice in the transaction of an expiry and of the system’s ending, so that neither stands without it (weakening: the notice written after the commit)', async () => {
+    const { owner, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    const made = await pendingOf(id);
+
+    // The system's ending: the Editor is removed while the notice cannot be written.
+    const removed = await refusing('ownership_offer_ended', () => removal(owner.cookie, id, row));
+    expect(removed.status).toBe(500);
+    expect((await pendingOf(id)).id).toBe(made.id);
+    expect(await db().documentCollaborator.count({ where: { documentId: id } })).toBe(1);
+
+    // The expiry: the timer's transaction fails as a whole.
+    await db().ownershipOffer.update({
+      where: { id: made.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    await refusing('ownership_offer_ended', async () => {
+      await expect(expireOffers(new Date())).rejects.toThrow();
+    });
+    expect((await pendingOf(id)).id).toBe(made.id);
+    expect(await storedFor(owner.id)).toEqual([]);
   });
 
   it('is told that the system ended it where the Editor stops holding the role: removed, left, or given another role', async () => {

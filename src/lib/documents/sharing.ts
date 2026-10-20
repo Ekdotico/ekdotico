@@ -32,7 +32,7 @@ import {
   type OfferNotificationView,
 } from './ownership-notifications.ts';
 import { COLLABORATOR_ROLE, holds, ROLE_NAME, type DocumentRole } from './permissions.ts';
-import { newPseudonym } from './pseudonym.ts';
+import { newPseudonymAvoiding } from './pseudonym.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -252,7 +252,20 @@ async function creating(
     const token = newToken();
     // D202, Q49 (1): made here, when the invitation is created, and kept in its row.
     // Where the inviter's row is somehow not found the title is still hidden: the name is empty, never the rule.
-    const pseudonym = hideTitle ? newPseudonym(displayNameOf(inviter ?? { name: null, email: null })) : null;
+    // Not the words of an invitation of this sender to this address that is open, in any document.
+    const taken = hideTitle
+      ? new Set(
+          (
+            await tx.documentInvitation.findMany({
+              where: { invitedById: inviterId, email, titlePseudonym: { not: null }, ...open(now) },
+              select: { titlePseudonym: true },
+            })
+          ).flatMap(({ titlePseudonym }) => (titlePseudonym === null ? [] : [titlePseudonym])),
+        )
+      : new Set<string>();
+    const pseudonym = hideTitle
+      ? newPseudonymAvoiding(displayNameOf(inviter ?? { name: null, email: null }), taken)
+      : null;
     const { id } = await tx.documentInvitation.create({
       data: {
         documentId: document.id,
@@ -277,7 +290,7 @@ async function creating(
  * there is nothing to send again: an invitation of another document, one that
  * was accepted, or one whose address has been cleared. A title that was hidden
  * stays hidden, with a new pseudonym (the invitation is a new one; register row
- * D202-1, built as the recommendation: the spec says nothing of sending again).
+ * built as the recommendation, for the owner to confirm: the spec says nothing of sending again).
  */
 export async function resendInvitation(
   document: Pick<DocumentRow, 'id' | 'ownerId'>,
@@ -674,7 +687,7 @@ export interface NotificationView {
   inviterEmail: string | null;
   role: DocumentRole;
   invitationId: string;
-  /** D202, Q49: the title, the pseudonym that stands for it, or neither (see `titleOfInvitation`). */
+  /** D202, Q49: the title, the pseudonym that stands for it, or neither (see `listNotifications`). */
   title: string | null;
   pseudonym: string | null;
 }
@@ -774,20 +787,21 @@ export async function listNotifications(
       ];
     }
     // D202, Q49 (2): once the invitation is accepted and the account holds a role on the document, it is
-    // shown the real title. Before that, or where the role has gone, a hidden title stays hidden, and a
-    // title that was shown is shown only while the account holds the invited address (as the page of the
-    // invitation judges it).
+    // shown the real title. While it is pending, an account that holds the invited address is shown the
+    // title, or the pseudonym where the inviter hid it (as the page of the invitation judges it). In any
+    // other case, an address that has gone, or a role lost after accepting, neither is shown: the title
+    // is read live and the pseudonym's "until you accept" would be false.
     const holdsRole =
       invitation.state === 'ACCEPTED' &&
       (invitation.document.ownerId === userId || invitation.document.collaborators.length > 0);
     const holdsAddress = reader?.emailVerified === true && reader.email === invitation.email;
     const titleShown: TitleShown = holdsRole
       ? { title: invitation.document.title, pseudonym: null }
-      : invitation.titlePseudonym !== null
-        ? { title: null, pseudonym: invitation.titlePseudonym }
-        : holdsAddress && invitation.state === 'PENDING'
+      : holdsAddress && invitation.state === 'PENDING'
+        ? invitation.titlePseudonym === null
           ? { title: invitation.document.title, pseudonym: null }
-          : { title: null, pseudonym: null };
+          : { title: null, pseudonym: invitation.titlePseudonym }
+        : { title: null, pseudonym: null };
     return [
       {
         ...shown,

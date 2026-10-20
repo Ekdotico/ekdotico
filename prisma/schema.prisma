@@ -347,6 +347,10 @@ model DocumentInvitation {
   // D202, Q49: the words that stand for the document's title when the inviter hid it from the invitee, made
   // once when the invitation is created ("Flying Hippos — {display name}") and shown on the page, in the
   // notification and in the email. Null is "the title is shown"; it is never the title itself.
+  // PERSONAL DATA: it holds a copy of the sender's display name (or, where there is none, the local part of
+  // the sender's address), which nothing clears. Slice 22 (account deletion, FR-AU-58) must clear or replace
+  // it on the invitations of a deleted sender, and the invitation's own clearing of the address (FR-ED-37)
+  // does not reach it. The Data models page is owed an amendment for D207 (this column and its meaning).
   titlePseudonym    String?
 
   document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)

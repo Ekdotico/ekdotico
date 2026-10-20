@@ -85,7 +85,7 @@ export async function withdrawOffersFor(
   const ended = await tx.ownershipOffer.updateManyAndReturn({
     where: { documentId, toUserId: userId, ...open(now) },
     data: { state: 'WITHDRAWN', respondedAt: now },
-    select: { id: true, toUserId: true },
+    select: { id: true, fromUserId: true, toUserId: true },
   });
   if (ended.length === 0) return;
   await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
@@ -94,21 +94,23 @@ export async function withdrawOffersFor(
 }
 
 /**
- * S17-5: the Owner of the document is told that offers ended without the Owner's own action. The Owner is read
- * from the document, not taken from the offer, so that nobody who is not the Owner is told; the document's row
- * is held by the caller, so the Owner is who it is when the offer ends.
+ * S17-5: the maker of an offer is told that it ended without the maker's own action, where the maker is the
+ * Owner of the document. The Owner is read from the document (inside the transaction that ended the offer),
+ * and where the maker is not the Owner, which should not be found, nothing is written. The timer does not
+ * hold the document's row; the maker is read against the Owner as the document stands when the offer ends.
  */
 async function tellOwnerOffersEnded(
   tx: Tx,
   documentId: string,
-  offers: { toUserId: string }[],
+  offers: { fromUserId: string; toUserId: string }[],
   end: OfferEnd,
 ): Promise<void> {
   if (offers.length === 0) return;
   const document = await tx.document.findUnique({ where: { id: documentId }, select: { ownerId: true } });
   if (!document) return;
-  for (const { toUserId } of offers) {
-    await notifyOfferEnded(tx, { ownerId: document.ownerId, toUserId, documentId, end });
+  for (const { fromUserId, toUserId } of offers) {
+    if (fromUserId !== document.ownerId) continue;
+    await notifyOfferEnded(tx, { ownerId: fromUserId, toUserId, documentId, end });
   }
 }
 
@@ -137,7 +139,7 @@ async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
     select: { id: true, fromUserId: true, toUserId: true, expiresAt: true },
   });
   if (pending.length === 0) return;
-  const tell = new Map<OfferEnd, { toUserId: string }[]>();
+  const tell = new Map<OfferEnd, { fromUserId: string; toUserId: string }[]>();
   const { ownerId } = await tx.document.findUniqueOrThrow({
     where: { id: documentId },
     select: { ownerId: true },
@@ -164,7 +166,7 @@ async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
     const done = await tx.ownershipOffer.updateManyAndReturn({
       where: { id: { in: ids }, state: 'PENDING' },
       data: { state, respondedAt: now },
-      select: { id: true, toUserId: true },
+      select: { id: true, fromUserId: true, toUserId: true },
     });
     await tx.notification.deleteMany({ where: notificationsOf(ids) });
     tell.set(end, done);
@@ -183,13 +185,13 @@ export async function expireOffers(now: Date = new Date()): Promise<number> {
     const ended = await tx.ownershipOffer.updateManyAndReturn({
       where: { state: 'PENDING', expiresAt: { lte: now } },
       data: { state: 'EXPIRED', respondedAt: now },
-      select: { id: true, documentId: true, toUserId: true },
+      select: { id: true, documentId: true, fromUserId: true, toUserId: true },
     });
     if (ended.length === 0) return 0;
     await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
     // S17-5: the Owner is told that the offer expired, in the transaction that expired it.
-    for (const { documentId, toUserId } of ended) {
-      await tellOwnerOffersEnded(tx, documentId, [{ toUserId }], 'expired');
+    for (const { documentId, fromUserId, toUserId } of ended) {
+      await tellOwnerOffersEnded(tx, documentId, [{ fromUserId, toUserId }], 'expired');
     }
     return ended.length;
   });
