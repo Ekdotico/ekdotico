@@ -53,10 +53,15 @@ export function removeGifMetadata(bytes: Uint8Array, _policy: RemovalPolicy): Bu
       if (end < 0) return null;
       const block = file.subarray(at, end);
       if (label === 0xf9) {
-        control = block;
+        // The four bytes of the graphic control (a flag, the delay, the transparent colour) and the end of the
+        // block, written afresh: a sub-block that follows them is not kept. One that is not four bytes is no control.
+        control = block[2] === 4 ? Buffer.concat([block.subarray(0, 7), Buffer.from([0])]) : null;
       } else if (label === 0xff) {
-        // The first sub-block is 11 bytes: the application and its code.
-        if (block[2] === 11 && block.subarray(3, 14).equals(LOOP_ID)) parts.push(block);
+        // The first sub-block is 11 bytes: the application and its code. Of NETSCAPE2.0 the three bytes of the loop
+        // count are kept (a sub-block of 3 that begins with 1) and nothing after them.
+        if (block[2] === 11 && block.subarray(3, 14).equals(LOOP_ID) && block[14] === 3 && block[15] === 1) {
+          parts.push(Buffer.concat([block.subarray(0, 18), Buffer.from([0])]));
+        }
       } else if (label === 0x01) {
         // A plain text extension is a graphic block the control extension before it belongs to.
         control = null;

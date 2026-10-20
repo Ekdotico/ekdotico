@@ -27,6 +27,13 @@ const given = Boolean(process.env.IMAGE_STORAGE_ENDPOINT);
 const BUCKET = `ekdotico-test-${randomBytes(6).toString('hex')}`;
 const DOCUMENT = '2a7f6c1e-5b1c-4d3e-9a58-0d8c3a9d4e11';
 
+// A run on a machine without a store skips the tests below. A run of CI does not: there a store that is not given
+// is a failure, or a pipeline that lost its store would pass with the tests of the adapter silently not run
+// (the review of pull request 52).
+it.runIf(process.env.CI === 'true' && !given)('is given a store by a run of CI (IMAGE_STORAGE_*)', () => {
+  expect(given).toBe(true);
+});
+
 describe.skipIf(!given)('the object store of the images (a store of the S3 protocol)', () => {
   let config: ImageStorageSettings;
   let admin: S3Client;

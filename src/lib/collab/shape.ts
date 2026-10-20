@@ -180,7 +180,19 @@ export const pastLimit = (limit: Limit, before: number, after: number) =>
  * Which rule an update would break: `incomplete` (D170, D180), `table` (D171, D172), `image` (an
  * image block given an attribute it may not hold: FR-ED-08, NFR-SE-06 A01), or a limit (D184, D192, D193).
  */
-export type Shape = 'incomplete' | 'table' | 'image' | Limit;
+export type Shape = 'incomplete' | 'table' | 'image' | 'leaf' | Limit;
+
+/**
+ * The blocks that hold nothing: no content in the schema, and no text (a line break, a divider, a
+ * table of contents, a page break, an image). An update that puts an element or text inside one is
+ * refused whole (`leaf`): the editor never shows what stands in one, and an image hidden in a
+ * divider would count as placed and never be deleted (the review of pull request 52).
+ */
+const LEAVES: ReadonlySet<string> = new Set(
+  Object.entries(NODES)
+    .filter(([name, spec]) => name !== 'text' && !spec.content)
+    .map(([name]) => name),
+);
 
 /** A node of a document as a rule reads it: its name, and what it holds that is not deleted. */
 interface Tree<Node> {
@@ -480,22 +492,15 @@ function imageAttributeRefused(parentName: string | null, key: string | null, co
  */
 export function shapeOf(document: Y.Doc, update: Uint8Array): Shape | null {
   const read = Y.decodeUpdate(update);
-  // No element in it, no text and no value of an attribute: no element is made, no table
-  // and no count grows, no code block is longer, and no image is given a value. A value of
-  // an attribute is a plain value, binary data, a subdocument, or a shared type, and it is
-  // read by its content and not by its name: an item that replaces an earlier value of the
-  // same attribute carries no name, only the earlier item it follows.
+  // An update that only deletes: its structs are all gaps, skips, or items whose content is a
+  // deletion. Nothing is made, nothing grows, and no value is given to an attribute, so it
+  // keeps every rule. EVERY OTHER update is asked, whatever its items hold: a list of what
+  // may be skipped was a list of what a client may hide a value in (the review of pull
+  // request 52). A value of an attribute can be a plain value, JSON, an embed, binary data, a
+  // subdocument, a shared type, or a format, and an item that replaces an earlier value of
+  // the same attribute carries no name, only the earlier item it follows.
   if (
-    !read.structs.some(
-      (struct) =>
-        struct instanceof Y.Item &&
-        (nameOf(struct) !== null ||
-          struct.content instanceof Y.ContentString ||
-          struct.content instanceof Y.ContentAny ||
-          struct.content instanceof Y.ContentBinary ||
-          struct.content instanceof Y.ContentDoc ||
-          struct.content instanceof Y.ContentType),
-    )
+    read.structs.every((struct) => !(struct instanceof Y.Item) || struct.content instanceof Y.ContentDeleted)
   )
     return null;
   const quick = withoutCopy(document, read);
@@ -536,6 +541,13 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
           imageAttributeRefused(nameOfType(item.parent as Shared), item.parentSub, item.content)
         )
           return 'image';
+        // An element or text inside a block that holds nothing (`LEAVES`).
+        if (
+          item.parentSub === null &&
+          item.content instanceof Y.ContentType &&
+          LEAVES.has(nameOfType(item.parent as Shared) ?? '')
+        )
+          return 'leaf';
         if (item.content instanceof Y.ContentString) {
           // Text written into a code block.
           const block = (item.parent as Shared)._item?.parent as Shared | undefined;
@@ -725,6 +737,17 @@ export function withoutCopy(
     if (alive.get(item) && key !== null && parent !== null && typeof parent !== 'string') {
       const holder = parent instanceof Y.Item ? nameOf(parent) : nameOfType(parent);
       if (imageAttributeRefused(holder, key, item.content)) return 'image';
+    }
+    // An element or text inside a block that holds nothing (`LEAVES`), where it stands after the update.
+    if (
+      alive.get(item) &&
+      key === null &&
+      item.content instanceof Y.ContentType &&
+      parent !== null &&
+      typeof parent !== 'string'
+    ) {
+      const holder = parent instanceof Y.Item ? nameOf(parent) : nameOfType(parent);
+      if (LEAVES.has(holder ?? '')) return 'leaf';
     }
     // Where it is put inside an item of text of the document, between the two
     // halves of a pair, Yjs puts U+FFFD for each: the copy's to count.

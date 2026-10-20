@@ -155,8 +155,10 @@ describe('a PNG file', () => {
     expect(leaks(output)).toBe(false);
   });
 
-  const colour = ['gAMA', 'cHRM', 'sRGB', 'iCCP', 'cICP'].map((type) =>
-    pngChunk(type, Buffer.from([1, 2, 3, 4])),
+  // Each of the length the format gives it: a colour chunk of another length is dropped (below).
+  const COLOUR_LENGTHS: Record<string, number> = { gAMA: 4, cHRM: 32, sRGB: 1, iCCP: 4, cICP: 4 };
+  const colour = Object.entries(COLOUR_LENGTHS).map(([type, length]) =>
+    pngChunk(type, Buffer.alloc(length, 1)),
   );
 
   it('keeps its colour chunks by the policy of S19-2, and loses them where it says so', () => {
@@ -176,12 +178,102 @@ describe('a PNG file', () => {
   });
 
   it('keeps the chunks of an animation and of a palette and of transparency', () => {
-    const picture = ['PLTE', 'tRNS', 'acTL', 'fcTL'].map((type) => pngChunk(type, Buffer.from([1, 2, 3])));
+    // Of the lengths the format gives them: a palette of one entry, one colour for transparency (the image is
+    // truecolour), and the two controls of an animation.
+    const picture = [
+      pngChunk('PLTE', Buffer.alloc(3, 1)),
+      pngChunk('tRNS', Buffer.alloc(6, 1)),
+      pngChunk('acTL', Buffer.alloc(8, 1)),
+      pngChunk('fcTL', Buffer.alloc(26, 1)),
+    ];
     const output = removePngMetadata(
       png({ before: picture, after: [pngChunk('fdAT', Buffer.from([0, 0, 0, 1, 9]))] }),
       NONE,
     )!;
     expect(pngTypes(output)).toEqual(['IHDR', 'PLTE', 'tRNS', 'acTL', 'fcTL', 'IDAT', 'fdAT', 'IEND']);
+  });
+
+  // The review of pull request 52 (S4): a part whose length the format fixes keeps no more than that, and a
+  // string that a writer hid in one does not survive. Each of these carried one.
+  describe('a part of a length the format gives it (S4)', () => {
+    const HIDDEN = Buffer.from('GPS 37.9838N 23.7275E');
+    const hides = (output: Buffer | null) => output !== null && output.includes(HIDDEN);
+
+    it('writes the end of the image again with no data, whatever the one that came held', () => {
+      const file = png();
+      // The IEND of the fixture, replaced by one that holds the string, with the check value that goes with it.
+      const end = pngChunk('IEND');
+      const hiding = Buffer.concat([file.subarray(0, file.length - end.length), pngChunk('IEND', HIDDEN)]);
+      expect(hides(hiding)).toBe(true);
+      const output = removePngMetadata(hiding, NONE)!;
+      expect(hides(output)).toBe(false);
+      expect(output.subarray(-12).equals(pngChunk('IEND'))).toBe(true);
+    });
+
+    it('refuses a palette that is no palette: not a multiple of 3 entries, or more than 256', () => {
+      for (const length of [1, 2, 4, 769, 771, 3000]) {
+        expect(
+          removePngMetadata(png({ before: [pngChunk('PLTE', Buffer.alloc(length, 7))] }), NONE),
+          String(length),
+        ).toBeNull();
+      }
+      expect(
+        removePngMetadata(png({ before: [pngChunk('PLTE', Buffer.alloc(768, 7))] }), NONE),
+      ).not.toBeNull();
+    });
+
+    it('drops a transparency that is not the length for this kind of image, and keeps the one that is', () => {
+      // The fixture is truecolour: one colour, 6 bytes.
+      for (const length of [1, 2, 7, 21, 300]) {
+        const output = removePngMetadata(png({ before: [pngChunk('tRNS', Buffer.alloc(length, 7))] }), NONE)!;
+        expect(pngTypes(output), String(length)).not.toContain('tRNS');
+      }
+      expect(
+        pngTypes(removePngMetadata(png({ before: [pngChunk('tRNS', HIDDEN.subarray(0, 6))] }), NONE)!),
+      ).toContain('tRNS');
+    });
+
+    it('holds a transparency to the length of each kind of image: grey, palette, and the kinds that have an alpha', () => {
+      const ihdrOf = (colourType: number) => {
+        const header = Buffer.alloc(13);
+        header.writeUInt32BE(1, 0);
+        header.writeUInt32BE(1, 4);
+        header[8] = 8;
+        header[9] = colourType;
+        return pngChunk('IHDR', header);
+      };
+      const kept = (colourType: number, length: number) =>
+        pngTypes(
+          removePngMetadata(
+            png({ ihdr: ihdrOf(colourType), before: [pngChunk('tRNS', Buffer.alloc(length, 7))] }),
+            NONE,
+          )!,
+        ).includes('tRNS');
+      // Grey: one value of 2 bytes.
+      for (const length of [1, 3, 6, 40]) expect(kept(0, length), `grey ${length}`).toBe(false);
+      expect(kept(0, 2)).toBe(true);
+      // Palette: one byte for each entry, 256 at most.
+      for (const length of [0, 257, 4000]) expect(kept(3, length), `palette ${length}`).toBe(false);
+      for (const length of [1, 17, 256]) expect(kept(3, length), `palette ${length}`).toBe(true);
+      // An alpha channel is the transparency of those kinds; a chunk for it is no part of the picture.
+      for (const colourType of [4, 6]) expect(kept(colourType, 6), `type ${colourType}`).toBe(false);
+    });
+
+    it('refuses the controls of an animation that are not their length, and drops a colour chunk that is not', () => {
+      expect(removePngMetadata(png({ before: [pngChunk('acTL', HIDDEN)] }), NONE)).toBeNull();
+      expect(removePngMetadata(png({ before: [pngChunk('fcTL', HIDDEN)] }), NONE)).toBeNull();
+      for (const type of ['gAMA', 'cHRM', 'sRGB', 'cICP']) {
+        const output = removePngMetadata(png({ before: [pngChunk(type, HIDDEN)] }), KEEP_BOTH)!;
+        expect(hides(output), type).toBe(false);
+        expect(pngTypes(output), type).not.toContain(type);
+      }
+    });
+
+    it('keeps the colour profile whole, text and all, as the owner decided (S19-2)', () => {
+      const profile = Buffer.concat([Buffer.from('profile\0\0'), HIDDEN]);
+      const output = removePngMetadata(png({ before: [pngChunk('iCCP', profile)] }), KEEP_BOTH)!;
+      expect(hides(output)).toBe(true);
+    });
   });
 
   describe('the orientation (S19-2)', () => {
@@ -597,5 +689,137 @@ describe('a WebP file', () => {
     ['an SVG file', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')],
   ])('is refused as %s', (_name, bytes) => {
     expect(removeWebpMetadata(bytes, KEEP_BOTH)).toBeNull();
+  });
+});
+
+// The review of pull request 52 (S4): the parts that the removers kept whole and a writer could fill. Each
+// has a string hidden in it, which must not come out; the colour profile, which the owner kept whole, does.
+describe('a part that is kept whole for its length is rebuilt for what it is defined to hold (S4)', () => {
+  const HIDDEN = Buffer.from('GPS 37.9838N 23.7275E');
+  const hides = (output: Buffer | null) => output !== null && output.includes(HIDDEN);
+
+  describe('a JPEG file', () => {
+    it('keeps the 12 bytes of APP14 "Adobe" and nothing after them, at whatever length it declares', () => {
+      const adobe = Buffer.from('Adobe\0\x64\0\0\0\0\x01', 'latin1');
+      for (const extra of [
+        HIDDEN,
+        Buffer.alloc(60_000, 0x41),
+        Buffer.concat([HIDDEN, Buffer.alloc(40_000)]),
+      ]) {
+        const hiding = jpeg({ before: [jpegSegment(0xee, Buffer.concat([adobe, extra]))] });
+        if (extra === HIDDEN) expect(hides(hiding)).toBe(true);
+        const output = removeJpegMetadata(hiding, NONE)!;
+        expect(hides(output)).toBe(false);
+        expect(output.length).toBeLessThan(jpeg().length + 4 + 12 + 1);
+        expect(jpegMarkers(output)).toContain(0xee);
+        // The segment as it was defined: marker, the length 14, and the 12 bytes.
+        const at = output.indexOf(Buffer.from([0xff, 0xee]));
+        expect(output.readUInt16BE(at + 2)).toBe(14);
+        expect(output.subarray(at + 4, at + 16).equals(adobe)).toBe(true);
+      }
+    });
+
+    it('drops an APP14 that is shorter than the 12 bytes', () => {
+      const output = removeJpegMetadata(
+        jpeg({ before: [jpegSegment(0xee, Buffer.from('Adobe\0\x64'))] }),
+        NONE,
+      )!;
+      expect(jpegMarkers(output)).not.toContain(0xee);
+    });
+  });
+
+  describe('a GIF file', () => {
+    const loop = (...after: Buffer[]) =>
+      Buffer.concat([
+        Buffer.from([0x21, 0xff, 11]),
+        Buffer.from('NETSCAPE2.0'),
+        Buffer.from([3, 1, 0, 0]),
+        ...after,
+        Buffer.from([0]),
+      ]);
+    const sub = (data: Buffer) => Buffer.concat([Buffer.from([data.length]), data]);
+
+    it('keeps the three bytes of the loop count of NETSCAPE2.0, and no sub-block after them', () => {
+      const hiding = gif({ before: [loop(sub(HIDDEN))] });
+      expect(hides(hiding)).toBe(true);
+      const output = removeGifMetadata(hiding, NONE)!;
+      expect(hides(output)).toBe(false);
+      expect(output.equals(gif({ before: [loop()] }))).toBe(true);
+    });
+
+    it('drops a NETSCAPE2.0 whose first sub-block is not the loop count', () => {
+      const odd = Buffer.concat([
+        Buffer.from([0x21, 0xff, 11]),
+        Buffer.from('NETSCAPE2.0'),
+        sub(HIDDEN),
+        Buffer.from([0]),
+      ]);
+      const output = removeGifMetadata(gif({ before: [odd] }), NONE)!;
+      expect(hides(output)).toBe(false);
+      expect(output.equals(gif())).toBe(true);
+    });
+
+    it('keeps the four bytes of the graphic control and no sub-block after them', () => {
+      const hiding = Buffer.concat([
+        Buffer.from([0x21, 0xf9, 4, 0, 10, 0, 0]),
+        sub(HIDDEN),
+        Buffer.from([0]),
+      ]);
+      expect(hides(gif({ frames: [hiding, GIF_FRAME] }))).toBe(true);
+      const output = removeGifMetadata(gif({ frames: [hiding, GIF_FRAME] }), NONE)!;
+      expect(hides(output)).toBe(false);
+      expect(output.equals(gif({ frames: [GIF_CONTROL, GIF_FRAME] }))).toBe(true);
+    });
+
+    it('drops a graphic control that is not four bytes', () => {
+      const odd = Buffer.concat([Buffer.from([0x21, 0xf9]), sub(HIDDEN), Buffer.from([0])]);
+      const output = removeGifMetadata(gif({ frames: [odd, GIF_FRAME] }), NONE)!;
+      expect(hides(output)).toBe(false);
+      expect(output.equals(gif({ frames: [GIF_FRAME] }))).toBe(true);
+    });
+  });
+
+  describe('a WebP file', () => {
+    const header = Buffer.alloc(16);
+    const animated = (frame: Buffer) =>
+      webp([vp8x(0x12), webpChunk('ANIM', Buffer.alloc(6)), webpChunk('ANMF', frame)]);
+
+    it('rebuilds a frame from its header, its alpha and its bitstream, and drops what else it holds', () => {
+      const alpha = webpChunk('ALPH', Buffer.from([1, 2, 3, 4]));
+      const clean = Buffer.concat([header, alpha, WEBP_PICTURE]);
+      const hiding = Buffer.concat([
+        header,
+        alpha,
+        WEBP_PICTURE,
+        webpChunk('EXIF', exifTiff(null)),
+        webpChunk('XMP ', Buffer.from(`<x:xmpmeta>${SECRET}</x:xmpmeta>`)),
+        webpChunk('ZZZZ', HIDDEN),
+      ]);
+      expect(hides(animated(hiding))).toBe(true);
+      const output = removeWebpMetadata(animated(hiding), NONE)!;
+      expect(hides(output)).toBe(false);
+      expect(leaks(output)).toBe(false);
+      expect(output.equals(removeWebpMetadata(animated(clean), NONE)!)).toBe(true);
+      expect(output.includes(WEBP_PICTURE)).toBe(true);
+      expect(output.includes(alpha)).toBe(true);
+    });
+
+    it('refuses a frame that is cut, that has a chunk that runs past it, or that holds no bitstream', () => {
+      expect(removeWebpMetadata(animated(header.subarray(0, 10)), NONE)).toBeNull();
+      const past = Buffer.concat([Buffer.from('ZZZZ'), Buffer.from([0xff, 0, 0, 0]), HIDDEN]);
+      expect(removeWebpMetadata(animated(Buffer.concat([header, WEBP_PICTURE, past])), NONE)).toBeNull();
+      expect(
+        removeWebpMetadata(animated(Buffer.concat([header, webpChunk('ZZZZ', HIDDEN)])), NONE),
+      ).toBeNull();
+    });
+
+    it('refuses an animation whose loop chunk is not six bytes', () => {
+      const file = webp([
+        vp8x(0x12),
+        webpChunk('ANIM', Buffer.concat([Buffer.alloc(6), HIDDEN])),
+        webpChunk('ANMF', Buffer.concat([header, WEBP_PICTURE])),
+      ]);
+      expect(removeWebpMetadata(file, NONE)).toBeNull();
+    });
   });
 });

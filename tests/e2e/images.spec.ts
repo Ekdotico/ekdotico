@@ -12,8 +12,9 @@ import { expectNoSidewaysScroll, mailFor, newPerson, signUp, type Person } from 
 import { APP_ORIGIN, AUTH_SECRET } from './origin.ts';
 import { startCollab, stopCollab } from './collab.ts';
 
+// Skipped on a machine with no store; under CI the tests run, and fail where no store was given (the review of pull request 52).
 test.skip(
-  !process.env.IMAGE_STORAGE_ENDPOINT,
+  !process.env.IMAGE_STORAGE_ENDPOINT && process.env.CI !== 'true',
   'No object store is given to this run (IMAGE_STORAGE_*): the application stores no image.',
 );
 test.describe.configure({ mode: 'serial' });
@@ -24,7 +25,7 @@ test.afterAll(stopCollab);
 const NOT_AN_IMAGE =
   'That file is not a PNG, JPEG, GIF, or WebP image, so it was not added. Choose an image in one of those formats.';
 const GONE =
-  'This image is no longer available. It was deleted from storage after it had been out of the document for 30 days.';
+  'This image is no longer available. An image that has been out of the document for more than 30 days is deleted from storage.';
 const STORE = process.env.IMAGE_STORAGE_ENDPOINT!;
 
 const PNG = png();
@@ -160,6 +161,63 @@ test('takes an image from the slash palette, in place of the command, and from a
   await expect(figure(page).nth(1).locator('img')).toBeVisible();
 });
 
+// The review of pull request 52 (S5): a drop is a place in the shared document, which a change above it made
+// during the upload does not move. The upload is held at the browser until the text above has been changed.
+test('puts the block where the file was dropped, though the text above it changed during the upload', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('first');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('second');
+  await inSync(page);
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/api\/documents\/[^/]+\/images$/, async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    await held;
+    return route.fallback();
+  });
+  await text(page)
+    .locator('p', { hasText: 'second' })
+    .evaluate(
+      (element, bytes) => {
+        const data = new DataTransfer();
+        data.items.add(new File([new Uint8Array(bytes)], 'dropped.png', { type: 'image/png' }));
+        const box = element.getBoundingClientRect();
+        element.dispatchEvent(
+          new DragEvent('drop', {
+            dataTransfer: data,
+            bubbles: true,
+            cancelable: true,
+            clientX: box.left + 2,
+            clientY: box.top + box.height / 2,
+          }),
+        );
+      },
+      [...PNG],
+    );
+  // Text above the drop, while the upload waits: the number of the drop would now point into the word below.
+  await text(page).locator('p', { hasText: 'first' }).click();
+  await page.keyboard.press('Home');
+  await page.keyboard.type('Longer text than before, so that every position after it has moved: ');
+  release();
+  await expect(figure(page)).toHaveCount(1);
+  const order = await text(page).evaluate((element) =>
+    [...element.children].map(
+      (child) =>
+        `${child.querySelector('figure') ? 'FIGURE' : child.tagName}:${child.textContent?.slice(0, 6)}`,
+    ),
+  );
+  // After the paragraph that was dropped on, which is where it was; not after the first, where the number points now.
+  expect(order.map((entry) => entry.split(':')[0])).toEqual(['P', 'P', 'FIGURE', 'P']);
+  expect(order[1]).toBe('P:second');
+});
+
 // FR-ED-08: "The maximum upload size per image shall be 20 MB". The request passes the proxy of the
 // application before the route (src/proxy.ts), which Next.js keeps the first 10 MB of unless it is told
 // more (next.config.ts, `proxyClientMaxBodySize`): an image of 15 MB arrives whole, and one of 21 MB is told its size.
@@ -167,7 +225,7 @@ test('takes an image of 15 MB whole, and refuses one of 21 MB with its size', as
   test.slow();
   await enter(page);
   await openNew(page);
-  const big = (size: number) => png({ before: [pngChunk('PLTE', Buffer.alloc(size - png().length - 12))] });
+  const big = (size: number) => png({ before: [pngChunk('IDAT', Buffer.alloc(size - png().length - 12))] });
   await choose(page, { name: 'big.png', mimeType: 'image/png', buffer: big(15 * 1024 * 1024) });
   await expect(page.getByText('Image added')).toBeVisible({ timeout: 30_000 });
   await expect(figure(page)).toHaveCount(1);

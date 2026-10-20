@@ -120,6 +120,12 @@ export const REFUSAL = {
    */
   IMAGE_ATTRIBUTES: 'image-attributes',
   /**
+   * `leaf-content`: it puts an element or text inside a block that holds nothing (an image, a divider, a
+   * table of contents, a page break, a line break; src/lib/collab/shape.ts, `LEAVES`). The editor never
+   * sends one. The name is provisional, for the owner's approval.
+   */
+  LEAF_CONTENT: 'leaf-content',
+  /**
    * A limit of the document (`LIMITS` of src/lib/collab/shape.ts; register
    * D184, D192, D193), refused in the same way: the change would leave the
    * document with more of a block than its limit and more than it had, a list

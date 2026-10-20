@@ -18,6 +18,12 @@ import { Extension } from '@tiptap/core';
 import { Plugin, Selection } from '@tiptap/pm/state';
 import { NodeViewWrapper, type Editor, type NodeViewProps } from '@tiptap/react';
 import {
+  absolutePositionToRelativePosition,
+  relativePositionToAbsolutePosition,
+  ySyncPluginKey,
+} from '@tiptap/y-tiptap';
+import type * as Y from 'yjs';
+import {
   attachImageResize,
   IMAGE_RESIZE_EVENT,
   IMAGE_WIDTH_PROPERTY,
@@ -41,8 +47,13 @@ export const IMAGE_TEXT = {
   added: 'Image added',
   notUploaded: 'The image could not be uploaded. Check your connection and try again.',
   loading: 'Loading the image…',
-  // Q14: an image that the timer has deleted; a block with no identifier, or one of another document, shows it too.
-  gone: 'This image is no longer available. It was deleted from storage after it had been out of the document for 30 days.',
+  // Q14: an image that the timer has deleted; a block with no identifier, or one of another document, shows it too,
+  // which is why it says what the application does and not what happened to this image.
+  gone: (days: number) =>
+    `This image is no longer available. An image that has been out of the document for more than ${days} ${days === 1 ? 'day' : 'days'} is deleted from storage.`,
+  // The image was uploaded and the document did not take its block (it cannot be edited just now, or a limit of it is passed).
+  notPlaced:
+    'The image was uploaded, but it could not be put in the document just now, so it is not shown. Try again when the document can be edited.',
   notLoaded: 'The image could not be loaded. Check your connection and try again.',
   retry: 'Try again',
   altLabel: 'Alt text',
@@ -85,7 +96,9 @@ export async function uploadImage(documentId: string, file: File): Promise<Uploa
     }
     const body = (await response.json().catch(() => null)) as { error?: { message?: unknown } } | null;
     const words = body?.error?.message;
-    return { ok: false, words: typeof words === 'string' ? words : IMAGE_TEXT.notUploaded };
+    if (typeof words === 'string') return { ok: false, words };
+    // A reverse proxy that refuses a body that is too large answers in its own words, which are not ours.
+    return { ok: false, words: response.status === 413 ? IMAGE_MESSAGES.tooLarge : IMAGE_TEXT.notUploaded };
   } catch {
     return { ok: false, words: IMAGE_TEXT.notUploaded };
   }
@@ -113,7 +126,7 @@ export function insertImageBlock(editor: Editor, id: string, at?: number): boole
     const after = $at.pos + node.nodeSize;
     if (!tr.doc.resolve(after).nodeAfter) tr.insert(after, paragraph.create());
     editor.view.dispatch(tr.setSelection(Selection.near(tr.doc.resolve(after), 1)).scrollIntoView());
-    return true;
+    return holdsBlock(editor, id);
   }
   for (let depth = $at.depth; depth >= 1; depth -= 1) {
     const parent = $at.node(depth - 1);
@@ -130,9 +143,51 @@ export function insertImageBlock(editor: Editor, id: string, at?: number): boole
     const after = from + node.nodeSize;
     if (!tr.doc.resolve(after).nodeAfter) tr.insert(after, paragraph.create());
     editor.view.dispatch(tr.setSelection(Selection.near(tr.doc.resolve(after), 1)).scrollIntoView());
-    return true;
+    return holdsBlock(editor, id);
   }
   return false;
+}
+
+/**
+ * Whether the document holds a block for this image now. `dispatch` says nothing of a change that the filters of
+ * the editor refuse (the document cannot be edited just now, the connection is held, a limit of the document is
+ * passed): the change is dropped, and the only way to know is to look (the review of pull request 52).
+ */
+function holdsBlock(editor: Editor, id: string): boolean {
+  let found = false;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === 'image' && node.attrs.id === id) found = true;
+    return !found;
+  });
+  return found;
+}
+
+/**
+ * A place in the document that other people's changes do not move: a position of the shared document, which
+ * the binding keeps, where a number would be stale once someone typed above it during an upload of 20 MB.
+ * Null where the editor has no binding to the shared document.
+ */
+function anchorAt(editor: Editor, position: number): Y.RelativePosition | null {
+  const synced = ySyncPluginKey.getState(editor.state) as
+    { type?: Y.XmlFragment; binding?: { mapping: never } } | undefined;
+  if (!synced?.type || !synced.binding) return null;
+  try {
+    return absolutePositionToRelativePosition(position, synced.type, synced.binding.mapping);
+  } catch {
+    return null;
+  }
+}
+
+/** Where an anchor is in the document now, or null where it is nowhere (the place was deleted, or there is no binding). */
+function positionOf(editor: Editor, anchor: Y.RelativePosition): number | null {
+  const synced = ySyncPluginKey.getState(editor.state) as
+    { doc?: Y.Doc; type?: Y.XmlFragment; binding?: { mapping: never } } | undefined;
+  if (!synced?.doc || !synced.type || !synced.binding) return null;
+  try {
+    return relativePositionToAbsolutePosition(synced.doc, synced.type, anchor, synced.binding.mapping);
+  } catch {
+    return null;
+  }
 }
 
 interface UploadOptions {
@@ -149,7 +204,8 @@ async function take(editor: Editor, options: UploadOptions, files: File[], at?: 
   const { documentId, report, announce } = options;
   if (!documentId) return;
   report(null);
-  let place = at;
+  // Where it was dropped, as a place that the changes of others do not move; the second of two files follows the first.
+  let anchor = at === undefined ? null : anchorAt(editor, at);
   for (const file of files) {
     announce(IMAGE_TEXT.uploading);
     const result = await uploadImage(documentId, file);
@@ -159,9 +215,12 @@ async function take(editor: Editor, options: UploadOptions, files: File[], at?: 
       report(result.words);
       continue;
     }
-    // Where the document has changed since the drop, the cursor is the better place; the second of two files follows the first.
-    if (insertImageBlock(editor, result.id, place)) announce(IMAGE_TEXT.added);
-    place = undefined;
+    // Where the drop is now; where it is nowhere (its block was deleted meanwhile), the cursor.
+    const place = anchor ? (positionOf(editor, anchor) ?? undefined) : undefined;
+    anchor = null;
+    // The block is in the document, or it is not: a change that the editor refuses is dropped without a word,
+    // and "Image added" would be false. The image is uploaded all the same and counts until it is deleted.
+    announce(insertImageBlock(editor, result.id, place) ? IMAGE_TEXT.added : IMAGE_TEXT.notPlaced);
   }
 }
 
@@ -313,7 +372,10 @@ const WIDTHS = [25, 50, 75, 100];
  */
 export function ImageBlockView({ node, editor, extension, updateAttributes }: NodeViewProps) {
   const editable = useContext(Editable);
-  const documentId = (extension.options as { documentId: string | null }).documentId;
+  const { documentId, unreferencedDays } = extension.options as {
+    documentId: string | null;
+    unreferencedDays: number;
+  };
   const id = typeof node.attrs.id === 'string' ? node.attrs.id : null;
   const alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : '';
   const caption = typeof node.attrs.caption === 'string' ? node.attrs.caption : '';
@@ -386,7 +448,7 @@ export function ImageBlockView({ node, editor, extension, updateAttributes }: No
       : 'uploading';
   const words =
     link.status === 'gone'
-      ? IMAGE_TEXT.gone
+      ? IMAGE_TEXT.gone(unreferencedDays)
       : link.status === 'failed'
         ? IMAGE_TEXT.notLoaded
         : shown
@@ -445,15 +507,13 @@ export function ImageBlockView({ node, editor, extension, updateAttributes }: No
         {/* In the page before its words change, so that a screen reader says them (the package's README). */}
         <p className="ekd-image-status" role="status">
           {words}
-          {link.status === 'failed' ? (
-            <>
-              {' '}
-              <Button variant="quiet" onClick={retry}>
-                {IMAGE_TEXT.retry}
-              </Button>
-            </>
-          ) : null}
         </p>
+        {/* After the live region and not in it: what is said when the words change is the words alone. */}
+        {link.status === 'failed' ? (
+          <Button variant="quiet" onClick={retry}>
+            {IMAGE_TEXT.retry}
+          </Button>
+        ) : null}
         {hasHandle ? (
           <div ref={handle} className="ekd-image-resize" aria-label={IMAGE_TEXT.handleLabel} />
         ) : null}

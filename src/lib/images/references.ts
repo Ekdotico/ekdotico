@@ -68,22 +68,28 @@ export async function recordReferences(
 // its first store writes whatever differs, and the set a restart lost is found
 // again. An entry is made only once the write has succeeded.
 const LAST = new Map<string, string>();
+// The most documents it remembers: the oldest entry is forgotten past it, and a document without one is only written
+// once more (the review of pull request 52). One instance of the collaboration server only
+// (docs/operations/deployment.md): a second would hold entries the first has made stale.
+const LAST_MOST = 1000;
 
 /**
  * Called by the store of a document (src/lib/collab/state.ts) after the state is
- * written. It rejects with nothing: a fault is one line, with the document's
- * identifier and the class of the fault and nothing else (NFR-SE-19), and the
- * next store tries again, since no entry was made. A reference that is not
- * written is not lost: an image is only ever deleted after 30 days with no
- * store that found it in a block.
+ * written, with the identifiers `imageIdsIn` read from the state that was
+ * written, and not from the document as it is by then. It rejects with
+ * nothing: a fault is one line, with the document's identifier and the class of
+ * the fault and nothing else (NFR-SE-19), and the next store tries again, since
+ * no entry was made. A reference that is not written is not lost: an image is
+ * only ever deleted after 30 days with no store that found it in a block.
  */
-export async function trackReferences(documentId: string, document: Y.Doc): Promise<void> {
+export async function trackReferences(documentId: string, referenced: ReadonlySet<string>): Promise<void> {
   try {
-    const referenced = imageIdsIn(document);
     const key = [...referenced].sort().join(',');
     if (LAST.get(documentId) === key) return;
     await recordReferences(documentId, referenced);
+    LAST.delete(documentId);
     LAST.set(documentId, key);
+    if (LAST.size > LAST_MOST) LAST.delete(LAST.keys().next().value!);
   } catch (error) {
     console.error(`image references: document ${documentId} not recorded (${faultOf(error)})`);
   }

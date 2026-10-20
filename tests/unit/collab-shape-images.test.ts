@@ -240,6 +240,152 @@ describe('the server holds an image element to its attributes', () => {
   });
 });
 
+// The review of pull request 52 (B1): a value of an attribute is not always a plain value. Yjs decodes
+// JSON, an embed and a format as the content of an item too, and `getAttribute` hands the first two back as
+// it does a plain value. A client that is no editor can write any of them, and the tests above never did:
+// `setAttribute` makes a plain value every time. Here the item is made, and its content is replaced before
+// the update is encoded, which is what such a client sends.
+describe('an image block is held to its attributes whatever the content that carries a value (B1)', () => {
+  const base = () => opened(doc(p(), imageJson(), p()));
+
+  /** An update that sets `name` on the image block, its item holding `make()` where a client would hold a plain value. */
+  function carried(server: Y.Doc, name: string, value: string | number, make: () => Y.Item['content']) {
+    const peer = peerOf(server);
+    peer.transact(() =>
+      (peer.getXmlFragment('default').get(1) as Y.XmlElement).setAttribute(name, value as string),
+    );
+    const element = peer.getXmlFragment('default').get(1) as Y.XmlElement;
+    const item = element._map.get(name) as Y.Item;
+    item.content = make();
+    return sentBy(peer, server);
+  }
+
+  const JSON_OF = (value: unknown) => () => new Y.ContentJSON([value]);
+  const EMBED_OF = (value: unknown) => () => new Y.ContentEmbed(value as object);
+  const FORMAT_OF = () => new Y.ContentFormat('src', 'https://example.com/pixel.png');
+
+  it.each([
+    [
+      'JSON carrying an address under src',
+      'src',
+      'https://evil.example/x.png',
+      JSON_OF('https://evil.example/x.png'),
+    ],
+    [
+      'JSON carrying a path as the identifier',
+      'id',
+      '../../api/auth/sign-out',
+      JSON_OF('../../api/auth/sign-out'),
+    ],
+    ['JSON carrying an alt text of 100,000 characters', 'alt', 'x', JSON_OF('x'.repeat(100_000))],
+    ['JSON carrying a width of 9999', 'width', 9999, JSON_OF(9999)],
+    [
+      'an embed carrying an address under src',
+      'src',
+      'https://evil.example/x.png',
+      EMBED_OF('https://evil.example/x.png'),
+    ],
+    ['an embed carrying a path as the identifier', 'id', '../x', EMBED_OF('../x')],
+    ['an embed carrying a width of 9999', 'width', 9999, EMBED_OF(9999)],
+    ['a format that hides the identifier', 'id', ID, FORMAT_OF],
+    ['a format that hides the width', 'width', 50, FORMAT_OF],
+    ['a format under src', 'src', 'x', FORMAT_OF],
+  ] as const)('refuses %s', (_name, attribute, value, make) => {
+    const server = base();
+    const update = carried(server, attribute, value, make);
+    expect(answer(server, update)).toBe('image');
+    // Without the copy, as a browser's update is answered, and not by the copy alone.
+    expect(withoutCopy(server, Y.decodeUpdate(update))).toBe('image');
+  });
+
+  it('is what the early return of the check let through: an update of this one struct is not skipped as no value', () => {
+    const server = base();
+    const update = carried(
+      server,
+      'src',
+      'https://evil.example/x.png',
+      JSON_OF('https://evil.example/x.png'),
+    );
+    const read = Y.decodeUpdate(update);
+    expect(read.structs).toHaveLength(1);
+    expect(read.structs[0]).toBeInstanceOf(Y.Item);
+    expect((read.structs[0] as Y.Item).content).toBeInstanceOf(Y.ContentJSON);
+    expect(shapeOf(server, update)).toBe('image');
+  });
+
+  it('still takes an update that only deletes', () => {
+    const server = base();
+    expect(
+      answer(
+        server,
+        sent(server, (fragment) => fragment.delete(0, 1)),
+      ),
+    ).toBeNull();
+  });
+
+  // The editor writes a plain value and no other kind, so a value in form that arrives as JSON is refused as well.
+  it('refuses a value that is in form where it is carried as the editor never carries one', () => {
+    const server = base();
+    expect(answer(server, carried(server, 'alt', 'fine', JSON_OF('fine')))).toBe('image');
+    expect(answer(server, carried(server, 'width', 50, EMBED_OF(50)))).toBe('image');
+  });
+});
+
+// The review of pull request 52 (S7): a block that holds nothing holds nothing. An image hidden in a divider
+// would count as placed (`imageIdsIn` walks into every element) and its row would never be deleted.
+describe('a block that holds nothing is refused an element or text inside it (S7)', () => {
+  it.each([
+    ['an image', 'image'],
+    ['a divider', 'horizontalRule'],
+    ['a table of contents', 'tableOfContents'],
+    ['a page break', 'pageBreak'],
+  ])('refuses text put inside %s that is there already', (_name, type) => {
+    const server = opened(doc(p(), { type }, p()));
+    const update = sent(server, (fragment) =>
+      (fragment.get(1) as Y.XmlElement).insert(0, [new Y.XmlText('hidden')]),
+    );
+    expect(answer(server, update)).toBe('leaf');
+    expect(withoutCopy(server, Y.decodeUpdate(update))).toBe('leaf');
+  });
+
+  it('refuses an image hidden in a divider, which would count as placed and never be deleted', () => {
+    const server = opened(doc(p(), { type: 'horizontalRule' }, p()));
+    const update = sent(server, (fragment) =>
+      (fragment.get(1) as Y.XmlElement).insert(0, [image({ id: ID })]),
+    );
+    expect(answer(server, update)).toBe('leaf');
+  });
+
+  it('refuses an element made with a child in one change, an image or a divider among them', () => {
+    const server = opened(doc(p()));
+    for (const name of ['image', 'horizontalRule', 'tableOfContents', 'pageBreak']) {
+      const update = sent(server, (fragment) => {
+        const made = new Y.XmlElement(name);
+        made.insert(0, [new Y.XmlElement('paragraph')]);
+        fragment.insert(fragment.length, [made]);
+      });
+      expect(answer(server, update), name).toBe('leaf');
+    }
+  });
+
+  it('takes a child that is deleted in the same update, and every block that is meant to hold something', () => {
+    const server = opened(doc(p(), imageJson(), p()));
+    const hidden = sent(server, (fragment) => {
+      const block = fragment.get(1) as Y.XmlElement;
+      block.insert(0, [new Y.XmlText('gone')]);
+      block.delete(0, 1);
+    });
+    expect(answer(server, hidden)).toBeNull();
+    const holding = sent(server, (fragment) => {
+      const quote = new Y.XmlElement('blockquote');
+      quote.insert(0, [new Y.XmlElement('paragraph')]);
+      fragment.insert(fragment.length, [quote]);
+    });
+    expect(answer(server, holding)).toBeNull();
+    expect(answer(server, edited(server, doc(p(), imageJson(), p(), imageJson(OTHER))))).toBeNull();
+  });
+});
+
 describe('an image block is one block of the 5,000 (register row S19-6)', () => {
   const blocksOf = (server: Y.Doc) =>
     countsOf(yXmlFragmentToProseMirrorRootNode(server.getXmlFragment('default'), schema)).blocks;

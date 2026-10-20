@@ -20,7 +20,8 @@ const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { IMAGE_ID } = await import('../../src/lib/images/node.ts');
 const { documentOfKey, newObjectKey } = await import('../../src/lib/images/storage.ts');
 const { discardReservation, reserveImage } = await import('../../src/lib/images/quota.ts');
-const { forgetReferences, imageIdsIn, recordReferences } = await import('../../src/lib/images/references.ts');
+const { forgetReferences, imageIdsIn, recordReferences, trackReferences } =
+  await import('../../src/lib/images/references.ts');
 const { IMAGE_CLAIM_STALE_MS, deleteExpiredImages, deleteImagesOfDocument } =
   await import('../../src/lib/images/deletion.ts');
 const { storeState } = await import('../../src/lib/collab/state.ts');
@@ -145,10 +146,20 @@ describe('the 100 MB of a document (NFR-SE-18; Q14: every stored object counts)'
     const user = await owner();
     const document = await documentOf(user);
     expect((await reserve(document, user, 600_000)).ok).toBe(true);
-    expect(await reserve(document, user, 600_000)).toEqual({ ok: false, heldBytes: 600_000, limitBytes: MB });
+    expect(await reserve(document, user, 600_000)).toEqual({
+      ok: false,
+      reason: 'full',
+      heldBytes: 600_000,
+      limitBytes: MB,
+    });
     // Exactly the limit is admitted, and not one byte more.
     expect((await reserve(document, user, MB - 600_000)).ok).toBe(true);
-    expect(await reserve(document, user, 1)).toEqual({ ok: false, heldBytes: MB, limitBytes: MB });
+    expect(await reserve(document, user, 1)).toEqual({
+      ok: false,
+      reason: 'full',
+      heldBytes: MB,
+      limitBytes: MB,
+    });
   });
 
   it('counts every stored object: one that is out of the document counts until it is deleted', async () => {
@@ -351,6 +362,23 @@ describe('what the stored document holds of images (NFR-SE-18; Q14: an image tha
       await storeState(document, ydoc);
       expect((await rowOf(one.id))!.unreferencedAt).not.toBeNull();
     });
+
+    it('remembers the last store of a bounded number of documents, and writes once more for one it forgot', async () => {
+      const user = await owner();
+      const document = await documentOf(user);
+      const one = await imageOf(document, user, { unreferencedAt: null });
+      const ydoc = shared(image(one.id));
+      await storeState(document, ydoc);
+      // The same blocks: nothing is written, the mark made by hand stays.
+      const marker = new Date(Date.now() - 1000);
+      await db().documentImage.update({ where: { id: one.id }, data: { unreferencedAt: marker } });
+      await storeState(document, ydoc);
+      expect((await rowOf(one.id))!.unreferencedAt).toEqual(marker);
+      // More documents than it keeps (1000) are stored after it, and it is the oldest that is forgotten.
+      for (let at = 0; at < 1000; at += 1) await trackReferences(globalThis.crypto.randomUUID(), new Set());
+      await storeState(document, ydoc);
+      expect((await rowOf(one.id))!.unreferencedAt).toBeNull();
+    }, 60_000);
 
     it('is never a reason for a store to fail: a fault is one line without a message, and the next store tries again', async () => {
       const user = await owner();

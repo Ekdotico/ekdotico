@@ -22,6 +22,8 @@ const EXIF_ID = Buffer.from('Exif\0\0', 'latin1');
 const ICC_ID = Buffer.from('ICC_PROFILE\0', 'latin1');
 const JFIF_ID = Buffer.from('JFIF\0', 'latin1');
 const ADOBE_ID = Buffer.from('Adobe', 'latin1');
+/** What an APP14 "Adobe" segment holds: the five letters, a version of two bytes, two flags of two, and the transform of one. */
+const ADOBE_BYTES = 12;
 
 // Markers with no length, and the markers of the picture that are kept with theirs.
 const NO_LENGTH = (marker: number) => marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8);
@@ -101,8 +103,12 @@ export function removeJpegMetadata(bytes: Uint8Array, policy: RemovalPolicy): Bu
       header[4 + 12] = 0;
       header[4 + 13] = 0;
       parts.push({ jfif: true, bytes: header });
-    } else if (marker === 0xee && startsWith(data, ADOBE_ID)) {
-      parts.push({ jfif: false, bytes: segment });
+    } else if (marker === 0xee && startsWith(data, ADOBE_ID) && data.length >= ADOBE_BYTES) {
+      // The 12 bytes the segment is defined to hold ("Adobe", a version, two flags, the transform), and no
+      // more: what a writer put after them is dropped, whatever length the segment declares.
+      const adobe = Buffer.from(segment.subarray(0, 4 + ADOBE_BYTES));
+      adobe.writeUInt16BE(2 + ADOBE_BYTES, 2);
+      parts.push({ jfif: false, bytes: adobe });
     } else if (marker === 0xe2 && policy.keepColour && startsWith(data, ICC_ID)) {
       parts.push({ jfif: false, bytes: segment });
     } else if (

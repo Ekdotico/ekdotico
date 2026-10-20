@@ -68,6 +68,7 @@ export default async function DocumentPage({ params }: Props) {
         canEdit={holds(document.permissionSet, role, 'document.content.edit')}
         // FR-ED-23: "30 seconds (an initial value)".
         errorAfterMs={settings().collabErrorAfterMs}
+        imageDays={settings().imageUnreferencedDays}
       />
     </Stack>
   );

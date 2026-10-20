@@ -1279,6 +1279,23 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       },
     );
 
+    // The review of pull request 52 (S7): a block that holds no content is given none.
+    it.each([
+      ['an image', () => element('image', [element('paragraph')])],
+      ['a divider', () => element('horizontalRule', [element('paragraph')])],
+      ['a table of contents', () => element('tableOfContents', [new Y.XmlText('x')])],
+    ] as const)(
+      'refuses an update that puts content inside %s',
+      { timeout: 60_000 },
+      async (_name, block) => {
+        await expectRefusedUpdate(
+          await opened(),
+          (document) => document.getXmlFragment('default').push([block()]),
+          REFUSAL.LEAF_CONTENT,
+        );
+      },
+    );
+
     // Register D184, D192, D193: the limits of a document, each with a reason of its own.
     const listOf = (items: number, inner: () => Y.XmlElement[] = () => []) =>
       element(

@@ -51,7 +51,7 @@ export type LimitName = keyof typeof LIMITS;
 
 /** The object store of the images (NFR-SE-18). The two secrets are read here and nowhere else (NFR-SE-19). */
 export interface ImageStorageSettings {
-  /** The origin of the store's API: `https://fra1.digitaloceanspaces.com`, or `http://localhost:9000` on a development machine. */
+  /** The origin of the store's API: `https://fra1.digitaloceanspaces.com`, or `http://localhost:8333` on a development machine. */
   endpoint: string;
   bucket: string;
   region: string;

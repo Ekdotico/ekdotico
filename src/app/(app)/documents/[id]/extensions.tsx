@@ -560,13 +560,13 @@ const TableCaption = Node.create({
  * option is the document the block stands in, which is where its link is asked
  * for; where there is none the block shows that its image is not available.
  */
-const ImageBlock = Node.create<{ documentId: string | null }>({
+const ImageBlock = Node.create<{ documentId: string | null; unreferencedDays: number }>({
   name: 'image',
   group: 'block',
   atom: true,
   draggable: false,
   addOptions() {
-    return { documentId: null };
+    return { documentId: null, unreferencedDays: 30 };
   },
   addNodeView() {
     return ReactNodeViewRenderer(ImageBlockView);
@@ -1572,6 +1572,7 @@ export function extensions(
   awareness: Awareness | null = null,
   images: {
     documentId: string;
+    unreferencedDays: number;
     report: (words: string | null) => void;
     announce: (words: string) => void;
   } | null = null,
@@ -1661,7 +1662,10 @@ export function extensions(
     TableCell,
     TableBlock,
     TableCaption,
-    ImageBlock.configure({ documentId: images?.documentId ?? null }),
+    ImageBlock.configure({
+      documentId: images?.documentId ?? null,
+      unreferencedDays: images?.unreferencedDays ?? 30,
+    }),
     // FR-ED-08: the file picker and the drop. A browser that cannot edit has neither.
     ...(reads || !images ? [] : [ImageUpload.configure(images)]),
     Placeholder.configure({

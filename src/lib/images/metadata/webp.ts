@@ -25,6 +25,32 @@ function chunk(type: string, data: Uint8Array): Buffer {
   return made;
 }
 
+/**
+ * The data of a frame of an animation, made again from its 16 bytes of header (where it is, how large it is, how
+ * long it is shown, how it is drawn) and the chunks of the picture it holds: its alpha, and its bitstream. Every
+ * other chunk of the frame, unknown or known, is left out. Null where the frame is cut, a chunk of it runs past
+ * it, or it holds no bitstream.
+ */
+function frameOf(data: Buffer): Buffer | null {
+  if (data.length < 16) return null;
+  const kept: Buffer[] = [data.subarray(0, 16)];
+  let bitstream = false;
+  let at = 16;
+  while (at < data.length) {
+    if (at + 8 > data.length) return null;
+    const type = data.toString('latin1', at, at + 4);
+    const length = data.readUInt32LE(at + 4);
+    const next = at + 8 + length + (length % 2);
+    if (next > data.length) return null;
+    if (type === 'ALPH' || type === 'VP8 ' || type === 'VP8L') {
+      if (type !== 'ALPH') bitstream = true;
+      kept.push(data.subarray(at, next));
+    }
+    at = next;
+  }
+  return bitstream ? Buffer.concat(kept) : null;
+}
+
 /** The file without its metadata, or null where it is not a WebP file that is whole. */
 export function removeWebpMetadata(bytes: Uint8Array, policy: RemovalPolicy): Buffer | null {
   const file = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -64,8 +90,19 @@ export function removeWebpMetadata(bytes: Uint8Array, policy: RemovalPolicy): Bu
           data.length >= 6 && data.subarray(0, 6).toString('latin1') === 'Exif\0\0' ? data.subarray(6) : data;
         orientation = orientationOf(tiff);
       }
+    } else if (type === 'ANMF') {
+      // A frame is rebuilt from what it is defined to hold (`frameOf`), and not copied: the container lets a frame
+      // end with a list of chunks that are unknown, and an Exif or XMP chunk among them would be kept.
+      const frame = frameOf(data);
+      if (!frame) return null;
+      pictures += 1;
+      body.push(chunk('ANMF', frame));
+    } else if (type === 'ANIM') {
+      // Six bytes: the background colour and the loop count.
+      if (length !== 6) return null;
+      body.push(file.subarray(at, next));
     } else if (PICTURE.has(type)) {
-      if (type === 'VP8 ' || type === 'VP8L' || type === 'ANMF') pictures += 1;
+      if (type === 'VP8 ' || type === 'VP8L') pictures += 1;
       body.push(file.subarray(at, next));
     }
     at = next;

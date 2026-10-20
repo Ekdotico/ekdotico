@@ -633,6 +633,7 @@ describe('the choice of /image (FR-ED-08, FR-ED-12)', () => {
       content: { type: 'doc', content: content.length ? content : [paragraph()] },
       extensions: extensions(new Y.Doc(), undefined, undefined, undefined, false, null, {
         documentId: 'd',
+        unreferencedDays: 30,
         report: () => {},
         announce: () => {},
       }),

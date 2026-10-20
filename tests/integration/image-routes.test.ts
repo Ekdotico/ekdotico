@@ -105,7 +105,7 @@ function pngOf(size = 0) {
 /** A PNG whose picture, which the removal keeps, is `size` bytes in all: what it costs a document. */
 function bigPng(size: number) {
   const base = png().length;
-  return png({ before: [pngChunk('PLTE', Buffer.alloc(size - base - 12))] });
+  return png({ before: [pngChunk('IDAT', Buffer.alloc(size - base - 12))] });
 }
 
 describe('the upload of an image', () => {
@@ -334,6 +334,202 @@ describe('the upload of an image', () => {
       for (let each = 0; each < 6; each += 1) {
         expect((await send(document, owner.cookie, pngOf())).status).toBe(201);
       }
+    });
+  });
+
+  // The review of pull request 52 (S2): a put that throws may have kept the bytes (the answer was lost, or
+  // the last attempt timed out). The object is removed, and the row with it; where the object cannot be
+  // removed the row stays, with the time that lets the timer find the object through it.
+  describe('a put that threw after the store kept the bytes', () => {
+    /** The store takes the object and then fails, as a store does whose answer is lost. */
+    const keepsThenFails = () =>
+      vi.spyOn(storage, 'put').mockImplementation(async (key, bytes, contentType) => {
+        storage.objects.set(key, { bytes, contentType });
+        throw Object.assign(new Error('the answer was lost'), { code: 'RequestTimeout' });
+      });
+
+    it('removes the object and the row, and leaves nothing that the timer would have to find', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      keepsThenFails();
+      expect((await send(document, owner.cookie, pngOf())).status).toBe(500);
+      expect(storage.objects.size).toBe(0);
+      expect(storage.removals).toHaveLength(1);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
+
+    it('keeps the row where the object cannot be removed, so that the timer removes both within 30 days', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+      keepsThenFails();
+      vi.spyOn(storage, 'remove').mockRejectedValue(
+        Object.assign(new Error('AccessDenied images/secret-detail'), { code: 'AccessDenied' }),
+      );
+      const response = await send(document, owner.cookie, pngOf());
+      expect(response.status).toBe(500);
+      expect(await response.text()).not.toContain('AccessDenied');
+      // The object is there, and a row names it: unreferenced from now, which is the clock of the timer.
+      expect(storage.objects.size).toBe(1);
+      const [row] = await db().documentImage.findMany({ where: { documentId: document } });
+      expect(row).toMatchObject({ documentId: document, unreferencedAt: expect.any(Date) });
+      expect(storage.objects.has(row!.objectKey)).toBe(true);
+      // The line says which image and the class of the fault, and nothing of the message or the key.
+      const lines = printed.mock.calls.map((call) => String(call[0]));
+      expect(lines.some((line) => line.includes(row!.id) && line.includes('AccessDenied'))).toBe(true);
+      expect(lines.every((line) => !line.includes('secret-detail') && !line.includes(row!.objectKey))).toBe(
+        true,
+      );
+      // It counts toward the 100 MB until it is deleted, as every stored object does (Q14).
+      // And the timer, 30 days on, removes the object and the row.
+      vi.restoreAllMocks();
+      const { deleteExpiredImages } = await import('../../src/lib/images/deletion.ts');
+      expect(
+        await deleteExpiredImages(storage, new Date(Date.now() + 31 * 24 * 60 * 60 * 1000)),
+      ).toBeGreaterThanOrEqual(1);
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
+  });
+
+  // The review of pull request 52 (S3): a client that resets its connection while it sends is not a fault of ours,
+  // and is not given its count back, or it could send nearly 20 MB again and again and never be counted.
+  describe('a body that does not arrive whole', () => {
+    /** A body that sends `sent` bytes and then fails, as a connection that is reset does. */
+    const aborted = (sent: number) =>
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            controller.enqueue(new Uint8Array(sent));
+            controller.error(new Error('connection reset'));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+    const sendStream = (documentId: string, cookie: string, body: ReadableStream<Uint8Array>) =>
+      upload.POST(
+        new Request(`${ORIGIN}/api/documents/${documentId}/images`, {
+          method: 'POST',
+          headers: { origin: ORIGIN, cookie, 'content-type': 'image/png' },
+          body,
+          duplex: 'half',
+        } as RequestInit),
+        at({ id: documentId }),
+      );
+
+    it('is a 400 that says so, stores nothing, and keeps its count: the seventh of six is refused', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      for (let each = 0; each < 6; each += 1) {
+        const response = await sendStream(document, owner.cookie, aborted(10_000));
+        expect(response.status).toBe(400);
+        const { error } = await bodyOf(response);
+        expect(error.message).toBe(
+          'The image did not arrive in full, so it was not added. Choose it again and try again.',
+        );
+      }
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+      const refused = await send(document, owner.cookie, pngOf());
+      expect(refused.status).toBe(429);
+    });
+  });
+
+  // The review of pull request 52 (S1): the request is authorised before its body is read, which can take
+  // minutes for 20 MB. What was decided then is decided again under the lock of the document's row.
+  describe('a document that changes while the body is read', () => {
+    /** A body that, when it is first read, does `change` and then sends the image: the moment the handler is past `authorise`. */
+    const changing = (change: () => Promise<unknown>) =>
+      new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            await change();
+            controller.enqueue(new Uint8Array(pngOf()));
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      );
+    const sendChanging = (documentId: string, cookie: string, change: () => Promise<unknown>) =>
+      upload.POST(
+        new Request(`${ORIGIN}/api/documents/${documentId}/images`, {
+          method: 'POST',
+          headers: { origin: ORIGIN, cookie, 'content-type': 'image/png' },
+          body: changing(change),
+          duplex: 'half',
+        } as RequestInit),
+        at({ id: documentId }),
+      );
+
+    it('takes no image from an Editor who was removed while it was sent: a 404, no row, no object', async () => {
+      const owner = await person();
+      const editor = await person();
+      const document = await documentOf(owner.id);
+      await share(document, editor.id, 'editor');
+      const response = await sendChanging(document, editor.cookie, () =>
+        db().documentCollaborator.deleteMany({ where: { documentId: document, userId: editor.id } }),
+      );
+      expect(response.status).toBe(404);
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
+
+    it('takes none from one whose role was lowered to Viewer: a 403 that is logged', async () => {
+      const owner = await person();
+      const editor = await person();
+      const document = await documentOf(owner.id);
+      await share(document, editor.id, 'editor');
+      const response = await sendChanging(document, editor.cookie, () =>
+        db().documentCollaborator.updateMany({
+          where: { documentId: document, userId: editor.id },
+          data: { role: 'VIEWER' },
+        }),
+      );
+      expect(response.status).toBe(403);
+      expect(
+        await db().securityLogEntry.count({
+          where: { kind: 'forbidden', userId: editor.id, documentId: document },
+        }),
+      ).toBe(1);
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
+
+    it('takes none for a document that was put in the trash while it was sent, from its Owner too', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      const response = await sendChanging(document, owner.cookie, () =>
+        db().document.update({
+          where: { id: document },
+          data: { deletedAt: new Date(), deletedById: owner.id },
+        }),
+      );
+      expect(response.status).toBe(404);
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
+
+    it('takes none from an Owner who passed the document on while it was sent', async () => {
+      const owner = await person();
+      const next = await person();
+      const document = await documentOf(owner.id);
+      const response = await sendChanging(document, owner.cookie, () =>
+        db().document.update({ where: { id: document }, data: { ownerId: next.id } }),
+      );
+      // The former Owner holds no role now: a 404.
+      expect(response.status).toBe(404);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
+
+    it('still takes the image of someone who holds the permission throughout', async () => {
+      const owner = await person();
+      const editor = await person();
+      const document = await documentOf(owner.id);
+      await share(document, editor.id, 'editor');
+      const response = await sendChanging(document, editor.cookie, async () => undefined);
+      expect(response.status).toBe(201);
+      expect(storage.objects.size).toBe(1);
     });
   });
 

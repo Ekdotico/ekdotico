@@ -25,6 +25,41 @@ function chunk(type: string, data: Uint8Array): Buffer {
   return made;
 }
 
+/**
+ * Whether a chunk of this type and length is of a length that the format gives it: `keep`; `drop`, for an
+ * optional part that is the wrong length or has no place in this kind of image; or `refuse`, for a part of the
+ * picture whose length makes the file no PNG file. `data` chunks (IDAT, fdAT) and the colour profile (iCCP) are
+ * the picture and the profile and are kept whole, as the owner decided (S19-2).
+ */
+function sizeOf(type: string, length: number, colourType: number | undefined): 'keep' | 'drop' | 'refuse' {
+  switch (type) {
+    case 'IEND':
+      // Of no data. One that holds some is read as the end all the same, and written again without them.
+      return 'keep';
+    case 'PLTE':
+      return length % 3 === 0 && length >= 3 && length <= 768 ? 'keep' : 'refuse';
+    case 'tRNS':
+      // One grey value, one colour, or an alpha for each entry of a palette; no other kind of image has one.
+      if (colourType === 0) return length === 2 ? 'keep' : 'drop';
+      if (colourType === 2) return length === 6 ? 'keep' : 'drop';
+      if (colourType === 3) return length >= 1 && length <= 256 ? 'keep' : 'drop';
+      return 'drop';
+    case 'acTL':
+      return length === 8 ? 'keep' : 'refuse';
+    case 'fcTL':
+      return length === 26 ? 'keep' : 'refuse';
+    case 'gAMA':
+    case 'cICP':
+      return length === 4 ? 'keep' : 'drop';
+    case 'cHRM':
+      return length === 32 ? 'keep' : 'drop';
+    case 'sRGB':
+      return length === 1 ? 'keep' : 'drop';
+    default:
+      return 'keep';
+  }
+}
+
 /** The file without its metadata, or null where it is not a PNG file that is whole. */
 export function removePngMetadata(bytes: Uint8Array, policy: RemovalPolicy): Buffer | null {
   const file = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -41,10 +76,15 @@ export function removePngMetadata(bytes: Uint8Array, policy: RemovalPolicy): Buf
     if (!/^[A-Za-z]{4}$/.test(type)) return null;
     const whole = file.subarray(at, at + 12 + length);
     const wanted = PICTURE.has(type) || (policy.keepColour && COLOUR.has(type));
-    if (wanted) {
+    // What the chunk may be as long as: a chunk of a fixed length that is longer holds something else, and
+    // is no part of the picture whatever its name (the review of pull request 52).
+    const size = sizeOf(type, length, kept[0]?.type === 'IHDR' ? kept[0].whole[8 + 9] : undefined);
+    if (wanted && size === 'refuse') return null;
+    if (wanted && size === 'keep') {
       // The check value of a chunk that is kept: a file that is cut or written over is refused.
       if (whole.readUInt32BE(8 + length) !== crc32(whole.subarray(4, 8 + length))) return null;
-      kept.push({ type, whole });
+      // The end of the file is a chunk of no data, written afresh: nothing that was in the one that came is kept.
+      kept.push({ type, whole: type === 'IEND' ? chunk('IEND', Buffer.alloc(0)) : whole });
     } else if (type === 'eXIf' && policy.keepOrientation && orientation === null) {
       orientation = orientationOf(file.subarray(at + 8, at + 8 + length));
     }

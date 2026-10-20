@@ -88,6 +88,9 @@ const HELD: Record<Held, string> = {
   // the words are for a client that does not. For the owner's approval.
   [REFUSAL.IMAGE_ATTRIBUTES]:
     'A change in this tab gives an image something it cannot hold, so it cannot be applied',
+  // The same for content put inside a block that holds none: an image, a divider, a table of contents, a page break.
+  [REFUSAL.LEAF_CONTENT]:
+    'A change in this tab puts content inside a block that holds none, so it cannot be applied',
   // The limits of a document (register D184, D192, D193), for the owner's approval.
   ...(Object.fromEntries(
     Object.entries(LIMIT_REFUSAL).map(([limit, reason]) => [reason, heldTitle(limit as Limit)]),
@@ -169,6 +172,7 @@ function blockControls(view: EditorView): HTMLElement | null {
 function Text({
   document,
   documentId,
+  imageDays,
   awareness,
   editable,
   reads,
@@ -179,6 +183,8 @@ function Text({
   document: Y.Doc;
   /** The document, where its images are asked for (FR-ED-08). */
   documentId: string;
+  /** How many days an image out of the document is kept: the words of a block whose image is gone say so (NFR-SE-18). */
+  imageDays: number;
   /** Where the cursors of the others are read from (FR-ED-17); a browser that reads draws none. */
   awareness: Awareness | null;
   editable: boolean;
@@ -212,8 +218,8 @@ function Text({
   // A refusal of an upload is said where the refusals of the document are (`refuse`).
   const [uploading, setUploading] = useState('');
   const images = useMemo(
-    () => ({ documentId, report: refuse, announce: setUploading }),
-    [documentId, refuse],
+    () => ({ documentId, unreferencedDays: imageDays, report: refuse, announce: setUploading }),
+    [documentId, imageDays, refuse],
   );
   const all = useMemo(
     () => extensions(document, onUnshown, refuse, onUnrepairable, reads, awareness, images),
@@ -462,10 +468,12 @@ function OpenDocument({
   connection,
   canEdit,
   documentId,
+  imageDays,
 }: {
   connection: DocumentConnection;
   canEdit: boolean;
   documentId: string;
+  imageDays: number;
 }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
   const [check, setCheck] = useState<'checking' | 'in-sync' | 'unconfirmed' | null>(null);
@@ -570,6 +578,7 @@ function OpenDocument({
           key={mayEdit ? 'w' : 'r'}
           document={connection.document}
           documentId={documentId}
+          imageDays={imageDays}
           awareness={connection.awareness}
           editable={mayEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
           reads={!mayEdit}
@@ -596,10 +605,12 @@ export default function Editor({
   documentId,
   canEdit,
   errorAfterMs,
+  imageDays,
 }: {
   documentId: string;
   canEdit: boolean;
   errorAfterMs: number;
+  imageDays: number;
 }) {
   // This module is loaded in the browser alone (./document-view.tsx), so the
   // page's own address is there to read.
@@ -624,5 +635,7 @@ export default function Editor({
     return () => connection.stop();
   }, [connection]);
 
-  return <OpenDocument connection={connection} canEdit={canEdit} documentId={documentId} />;
+  return (
+    <OpenDocument connection={connection} canEdit={canEdit} documentId={documentId} imageDays={imageDays} />
+  );
 }
