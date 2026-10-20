@@ -27,6 +27,8 @@ export async function InvitationPage({ invitation, path }: { invitation: Invitat
         <OpenInvitation
           path={path}
           inviterName={view.inviterName}
+          inviterEmail={view.inviterEmail}
+          titleShown={view.titleShown}
           role={ROLE_NAME[view.role]}
           expiresAt={view.expiresAt.toISOString()}
         />

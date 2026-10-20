@@ -26,9 +26,15 @@ import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
 import { faultOf } from '../fault.ts';
+import { takeLimitReturnable } from '../rate-limit.ts';
 import { securityLogIn } from '../security-log.ts';
 import { settings } from '../settings.ts';
-import { OFFER_NOTIFICATION } from './ownership-notifications.ts';
+import {
+  endOfferEndedNotifications,
+  notifyOfferEnded,
+  OFFER_NOTIFICATION,
+  type OfferEnd,
+} from './ownership-notifications.ts';
 import { lockDocument } from './sharing.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -79,10 +85,33 @@ export async function withdrawOffersFor(
   const ended = await tx.ownershipOffer.updateManyAndReturn({
     where: { documentId, toUserId: userId, ...open(now) },
     data: { state: 'WITHDRAWN', respondedAt: now },
-    select: { id: true },
+    select: { id: true, fromUserId: true, toUserId: true },
   });
-  if (ended.length > 0)
-    await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
+  if (ended.length === 0) return;
+  await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
+  // S17-5: the Owner is told that the offer ended, and that it was the system that ended it.
+  await tellOwnerOffersEnded(tx, documentId, ended, 'ended');
+}
+
+/**
+ * S17-5: the maker of an offer is told that it ended without the maker's own action, where the maker is the
+ * Owner of the document. The Owner is read from the document (inside the transaction that ended the offer),
+ * and where the maker is not the Owner, which should not be found, nothing is written. The timer does not
+ * hold the document's row; the maker is read against the Owner as the document stands when the offer ends.
+ */
+async function tellOwnerOffersEnded(
+  tx: Tx,
+  documentId: string,
+  offers: { fromUserId: string; toUserId: string }[],
+  end: OfferEnd,
+): Promise<void> {
+  if (offers.length === 0) return;
+  const document = await tx.document.findUnique({ where: { id: documentId }, select: { ownerId: true } });
+  if (!document) return;
+  for (const { fromUserId, toUserId } of offers) {
+    if (fromUserId !== document.ownerId) continue;
+    await notifyOfferEnded(tx, { ownerId: fromUserId, toUserId, documentId, end });
+  }
 }
 
 /** The deletion of a document ends its pending offer. Called in the transaction of the deletion. */
@@ -110,6 +139,7 @@ async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
     select: { id: true, fromUserId: true, toUserId: true, expiresAt: true },
   });
   if (pending.length === 0) return;
+  const tell = new Map<OfferEnd, { fromUserId: string; toUserId: string }[]>();
   const { ownerId } = await tx.document.findUniqueOrThrow({
     where: { id: documentId },
     select: { ownerId: true },
@@ -126,15 +156,22 @@ async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
   const withdrawn = pending.filter(
     (offer) => !expired.includes(offer) && (!editors.has(offer.toUserId) || offer.fromUserId !== ownerId),
   );
-  for (const [state, offers] of [
-    ['EXPIRED', expired],
-    ['WITHDRAWN', withdrawn],
+  for (const [state, end, offers] of [
+    ['EXPIRED', 'expired', expired],
+    ['WITHDRAWN', 'ended', withdrawn],
   ] as const) {
     if (offers.length === 0) continue;
+    // Only the offers this write ended are told: the timer may have expired one since they were read, and it told.
     const ids = offers.map(({ id }) => id);
-    await tx.ownershipOffer.updateMany({ where: { id: { in: ids } }, data: { state, respondedAt: now } });
+    const done = await tx.ownershipOffer.updateManyAndReturn({
+      where: { id: { in: ids }, state: 'PENDING' },
+      data: { state, respondedAt: now },
+      select: { id: true, fromUserId: true, toUserId: true },
+    });
     await tx.notification.deleteMany({ where: notificationsOf(ids) });
+    tell.set(end, done);
   }
+  for (const [end, offers] of tell) await tellOwnerOffersEnded(tx, documentId, offers, end);
 }
 
 /**
@@ -148,10 +185,14 @@ export async function expireOffers(now: Date = new Date()): Promise<number> {
     const ended = await tx.ownershipOffer.updateManyAndReturn({
       where: { state: 'PENDING', expiresAt: { lte: now } },
       data: { state: 'EXPIRED', respondedAt: now },
-      select: { id: true },
+      select: { id: true, documentId: true, fromUserId: true, toUserId: true },
     });
     if (ended.length === 0) return 0;
     await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
+    // S17-5: the Owner is told that the offer expired, in the transaction that expired it.
+    for (const { documentId, fromUserId, toUserId } of ended) {
+      await tellOwnerOffersEnded(tx, documentId, [{ fromUserId, toUserId }], 'expired');
+    }
     return ended.length;
   });
 }
@@ -171,7 +212,9 @@ export type OfferResult =
   /** FR-ED-47: "at most one offer is pending for a document": a 409. */
   | { outcome: 'pending' }
   /** A recorded document, or one in an institutional workspace: a 409. */
-  | { outcome: 'not_transferable' };
+  | { outcome: 'not_transferable' }
+  /** NFR-SE-07, S17-7: past the offers an Owner may make in an hour: a 429. */
+  | { outcome: 'rate_limited'; retryAfterSeconds: number };
 
 /**
  * The document, read under its row, when the caller is its Owner now. FR-ED-44:
@@ -208,6 +251,9 @@ export async function makeOffer(
   collaboratorId: unknown,
   now: Date = new Date(),
 ): Promise<OfferResult> {
+  // NFR-SE-07, S17-7: as the invitations of `createInvitations`, an offer is counted inside the transaction,
+  // after every refusal, and given back where the transaction then fails, so that only an offer made counts.
+  let giveBack: (() => Promise<void>) | undefined;
   try {
     return await db().$transaction(async (tx): Promise<OfferResult> => {
       const owned = await ownedUnderLock(tx, documentId, callerId);
@@ -231,6 +277,9 @@ export async function makeOffer(
       ) {
         return { outcome: 'pending' };
       }
+      const limit = await takeLimitReturnable('OFFERS_PER_USER', callerId);
+      if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
+      giveBack = limit.giveBack;
       const expiresAt = new Date(now.getTime() + settings().ownershipOfferDays * DAY_MS);
       const { id } = await tx.ownershipOffer.create({
         data: { documentId, fromUserId: callerId, toUserId: found.userId, createdAt: now, expiresAt },
@@ -247,6 +296,9 @@ export async function makeOffer(
       return { outcome: 'offered', offer: { id, expiresAt, name: displayNameOf(found.user) } };
     });
   } catch (error) {
+    await giveBack?.().catch((fault: unknown) =>
+      console.error(`ownership offers: count not given back (${faultOf(fault)})`),
+    );
     // The index of one pending offer for a document, were the lock ever not enough.
     if ((error as { code?: unknown } | null)?.code === 'P2002') return { outcome: 'pending' };
     throw error;
@@ -488,7 +540,16 @@ export async function answerOffer(
     if (count !== 1) return { outcome: 'no_longer_open' };
     // FR-ED-42: the notification of an offer stays until the offer is no longer pending.
     await tx.notification.deleteMany({ where: notificationsOf([offer.id]) });
-    if (answer === 'decline') return { outcome: 'declined' };
+    if (answer === 'decline') {
+      // S17-5: the Owner is told that the Editor declined, in the transaction of the decline.
+      await notifyOfferEnded(tx, {
+        ownerId: offer.fromUserId,
+        toUserId: userId,
+        documentId,
+        end: 'declined',
+      });
+      return { outcome: 'declined' };
+    }
 
     // FR-AU-13: "the document moves to the personal workspace of its new Owner", the one exception.
     // The workspace is created where it is missing (the backstop of FR-AU-09).
@@ -509,6 +570,8 @@ export async function answerOffer(
     await tx.documentCollaborator.create({
       data: { documentId, userId: offer.fromUserId, role: 'EDITOR', addedAt: now, roleSince: now },
     });
+    // S17-5: what the former Owner was told of earlier offers of this document was about an Owner's offer.
+    await endOfferEndedNotifications(tx, offer.fromUserId, documentId);
     await securityLogIn(tx, { kind: 'owner_changed', userId, documentId });
     return { outcome: 'accepted', documentId, from: offer.fromUserId };
   });

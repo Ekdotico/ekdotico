@@ -16,6 +16,8 @@ const LIMITS = {
   API_PER_USER: [120, 60],
   /** Invitations created, for each authenticated user. */
   INVITATIONS_PER_USER: [20, 3600],
+  /** Offers of ownership made, for each authenticated user (the owner's decision S17-7: 20 in an hour, as invitations). */
+  OFFERS_PER_USER: [20, 3600],
   /** Image uploads, for each authenticated user. */
   IMAGE_UPLOADS_PER_USER: [30, 600],
   /** Draft exports started, for each authenticated user. */

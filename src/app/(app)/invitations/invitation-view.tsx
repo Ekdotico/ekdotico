@@ -19,19 +19,74 @@ export function InvitationStatement({ statement }: { statement: string }) {
 }
 
 /**
- * FR-ED-21: the invitation, to the account that holds the invited address,
- * with the two answers. It names who invited and the role, as the email does,
- * and not the document (S13-2). `path` is where the answers are sent:
- * `/api/invitations/<token>` or `/api/invitations/received/<id>`.
+ * Who invited, to what, and in which role (D202): the sender by name and by email address, and the
+ * document by its title, or by the pseudonym that stands for it where the inviter hid the title. The
+ * words are the owner's to approve. Names, addresses, titles and pseudonyms are text, whatever they hold
+ * (NFR-SE-08); `<bdi>` keeps a name of the other direction from reordering the sentence around it.
+ */
+export function InvitedBy({
+  inviterName,
+  inviterEmail,
+  title,
+  pseudonym,
+  role,
+}: {
+  inviterName: string;
+  inviterEmail: string | null;
+  title: string | null;
+  pseudonym: string | null;
+  role: string;
+}) {
+  const sender = (
+    <>
+      <bdi>{inviterName}</bdi>
+      {inviterEmail === null ? null : (
+        <>
+          {' '}
+          (<bdi>{inviterEmail}</bdi>)
+        </>
+      )}
+    </>
+  );
+  if (title !== null) {
+    return (
+      <>
+        {sender} invited you to the document <bdi>{title}</bdi> as {role}.
+      </>
+    );
+  }
+  return (
+    <>
+      {sender} invited you to a document as {role}.
+      {pseudonym === null ? null : (
+        <>
+          {' '}
+          The title of the document is hidden until you accept. It is shown here as <bdi>{pseudonym}</bdi>.
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * FR-ED-21, D202: the invitation, to the account that holds the invited address,
+ * with the two answers. It names who invited, by name and by email address, the
+ * role, and the title of the document or the pseudonym that stands for it. `path`
+ * is where the answers are sent: `/api/invitations/<token>` or
+ * `/api/invitations/received/<id>`.
  */
 export function OpenInvitation({
   path,
   inviterName,
+  inviterEmail,
+  titleShown,
   role,
   expiresAt,
 }: {
   path: string;
   inviterName: string;
+  inviterEmail: string | null;
+  titleShown: { title: string | null; pseudonym: string | null };
   role: string;
   /** ISO 8601, UTC. */
   expiresAt: string;
@@ -61,8 +116,13 @@ export function OpenInvitation({
     <Stack gap={4}>
       <PageHeading>{INVITATION_TITLE}</PageHeading>
       <p className={styles.text}>
-        {/* The name is text, whatever it holds (NFR-SE-08). */}
-        <bdi>{inviterName}</bdi> invited you to a document as {role}.{' '}
+        <InvitedBy
+          inviterName={inviterName}
+          inviterEmail={inviterEmail}
+          title={titleShown.title}
+          pseudonym={titleShown.pseudonym}
+          role={role}
+        />{' '}
         <InBrowser>
           The invitation is open until <LocalTime at={expiresAt} />.
         </InBrowser>

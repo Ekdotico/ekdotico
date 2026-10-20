@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   Button,
+  Checkbox,
   Cluster,
   FormFault,
   PageHeading,
@@ -42,7 +43,14 @@ export interface SharingView {
   /** FR-ED-38: whether the caller may leave the document: every role but the Owner's. */
   mayLeave: boolean;
   /** Present for a caller who may invite (FR-ED-44). */
-  invitations?: { id: string; email: string; role: string; expiresAt: string }[];
+  invitations?: {
+    id: string;
+    email: string;
+    role: string;
+    expiresAt: string;
+    /** Q49: the pseudonym where the title is hidden from the invitee, and null where it is shown. */
+    titlePseudonym: string | null;
+  }[];
 }
 
 // The refusals that are about the addresses entered (src/lib/documents/invitation-answers.ts).
@@ -65,6 +73,8 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
   const ready = useReady();
   const [emails, setEmails] = useState('');
   const [role, setRole] = useState('editor');
+  // Q49 (3): off unless the person turns it on.
+  const [hideTitle, setHideTitle] = useState(false);
   const [sending, setSending] = useState(false);
   const [fault, setFault] = useState<Fault | null>(null);
   // What the last action answered: the confirmations of FR-ED-21, or a statement.
@@ -121,7 +131,11 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    if (await act(`/api/documents/${view.documentId}/invitations`, { emails: entered, role })) setEmails('');
+    if (await act(`/api/documents/${view.documentId}/invitations`, { emails: entered, role, hideTitle })) {
+      setEmails('');
+      // Q49 (3): off unless the person turns it on, for each batch of invitations.
+      setHideTitle(false);
+    }
   }
 
   const fieldFault = fault && FIELD_FAULTS.includes(fault.code) ? fault.message : undefined;
@@ -212,6 +226,14 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
                 error={fieldFault}
               />
               <RadioGroup legend="Role" name="role" value={role} onChange={setRole} options={ROLES} />
+              <Checkbox
+                id="invite-hide-title"
+                name="hideTitle"
+                label="Hide the title"
+                hint="Until the person accepts, they see a generated name in place of the title. After they accept, they see the title."
+                checked={hideTitle}
+                onChange={(event) => setHideTitle(event.target.checked)}
+              />
               <Cluster>
                 <Button type="submit" disabled={!ready || sending}>
                   Invite
@@ -231,6 +253,7 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
                     <TableHeaderCell>Address</TableHeaderCell>
                     <TableHeaderCell>Role</TableHeaderCell>
                     <TableHeaderCell>Expires</TableHeaderCell>
+                    <TableHeaderCell>Title</TableHeaderCell>
                     <TableHeaderCell>Actions</TableHeaderCell>
                   </TableRow>
                 </TableHead>
@@ -245,6 +268,15 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
                         <InBrowser>
                           <LocalTime at={invitation.expiresAt} />
                         </InBrowser>
+                      </TableCell>
+                      <TableCell>
+                        {invitation.titlePseudonym === null ? (
+                          'Shown'
+                        ) : (
+                          <>
+                            Hidden, shown as <bdi>{invitation.titlePseudonym}</bdi>
+                          </>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Cluster gap={2}>

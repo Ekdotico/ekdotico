@@ -25,8 +25,14 @@ import { settings } from '../settings.ts';
 import { hashToken, newToken } from '../token.ts';
 import type { DocumentRow } from './access.ts';
 import { listAccessNotifications, type AccessNotificationView } from './access-notifications.ts';
-import { listOfferNotifications, type OfferNotificationView } from './ownership-notifications.ts';
+import {
+  listOfferEndedNotifications,
+  listOfferNotifications,
+  type OfferEndedNotificationView,
+  type OfferNotificationView,
+} from './ownership-notifications.ts';
 import { COLLABORATOR_ROLE, holds, ROLE_NAME, type DocumentRole } from './permissions.ts';
+import { newPseudonymAvoiding } from './pseudonym.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -68,6 +74,8 @@ export interface NewInvitation {
   token: string;
   role: OfferedRole;
   expiresAt: Date;
+  /** D202, Q49: the words that stand for the title in the email where it was hidden, and null where it was not. */
+  pseudonym: string | null;
 }
 
 export type CreateResult =
@@ -90,6 +98,12 @@ export type CreateResult =
  * revoked. `emails` are accepted addresses, distinct. In one transaction that
  * holds the document's row, so that two requests at once cannot together pass
  * the limit of ten people.
+ *
+ * D202, Q49: with `hideTitle` each invitation is created with a pseudonym of
+ * its own, made with the display name of the inviter, and the invitee is not
+ * shown the title before accepting. Whoever may invite may hide the title
+ * (Q49 point 5): the permission is the one `document.collaborators.invite`
+ * that `documentRoute` asked for and `inviterUnderLock` asks again.
  */
 export async function createInvitations(
   document: Pick<DocumentRow, 'id' | 'ownerId'>,
@@ -97,6 +111,7 @@ export async function createInvitations(
   emails: readonly string[],
   role: OfferedRole,
   now: Date = new Date(),
+  hideTitle = false,
 ): Promise<CreateResult> {
   // NFR-SE-07, S13-5: the invitations are counted inside the transaction,
   // after every refusal, and given back where the transaction then fails, so
@@ -104,7 +119,7 @@ export async function createInvitations(
   let giveBack: (() => Promise<void>) | undefined;
   try {
     return await db().$transaction((tx) =>
-      creating(tx, document, inviterId, emails, role, now, (back) => (giveBack = back)),
+      creating(tx, document, inviterId, emails, role, now, hideTitle, (back) => (giveBack = back)),
     );
   } catch (error) {
     await giveBack?.().catch((fault: unknown) =>
@@ -161,6 +176,7 @@ async function creating(
   emails: readonly string[],
   role: OfferedRole,
   now: Date,
+  hideTitle: boolean,
   counted: (giveBack: () => Promise<void>) => void,
 ): Promise<CreateResult> {
   if (!(await lockDocument(tx, document.id))) return { outcome: 'not_found' };
@@ -171,7 +187,7 @@ async function creating(
   // The two refusals of FR-ED-37 rest on what the Owner knows. A holder of
   // the permission who is not the Owner may not know them, so only the
   // holder's own address is refused (FR-ED-44 (a)).
-  const inviter = await tx.user.findUnique({ where: { id: inviterId }, select: { email: true } });
+  const inviter = await tx.user.findUnique({ where: { id: inviterId }, select: { email: true, name: true } });
   const own = emails.find((email) => email === inviter?.email);
   if (own) return { outcome: 'own_address', email: own };
   const collaborators = await tx.documentCollaborator.findMany({
@@ -234,6 +250,22 @@ async function creating(
   const invitations: NewInvitation[] = [];
   for (const email of emails) {
     const token = newToken();
+    // D202, Q49 (1): made here, when the invitation is created, and kept in its row.
+    // Where the inviter's row is somehow not found the title is still hidden: the name is empty, never the rule.
+    // Not the words of an invitation of this sender to this address that is open, in any document.
+    const taken = hideTitle
+      ? new Set(
+          (
+            await tx.documentInvitation.findMany({
+              where: { invitedById: inviterId, email, titlePseudonym: { not: null }, ...open(now) },
+              select: { titlePseudonym: true },
+            })
+          ).flatMap(({ titlePseudonym }) => (titlePseudonym === null ? [] : [titlePseudonym])),
+        )
+      : new Set<string>();
+    const pseudonym = hideTitle
+      ? newPseudonymAvoiding(displayNameOf(inviter ?? { name: null, email: null }), taken)
+      : null;
     const { id } = await tx.documentInvitation.create({
       data: {
         documentId: document.id,
@@ -243,10 +275,11 @@ async function creating(
         tokenHash: hashToken(token),
         createdAt: now,
         expiresAt,
+        titlePseudonym: pseudonym,
       },
       select: { id: true },
     });
-    invitations.push({ id, email, token, role, expiresAt });
+    invitations.push({ id, email, token, role, expiresAt, pseudonym });
   }
   return { outcome: 'created', invitations };
 }
@@ -255,7 +288,9 @@ async function creating(
  * FR-ED-37: send again. A new invitation to the same address with the same
  * role, which revokes the earlier one where it is still pending. Null where
  * there is nothing to send again: an invitation of another document, one that
- * was accepted, or one whose address has been cleared.
+ * was accepted, or one whose address has been cleared. A title that was hidden
+ * stays hidden, with a new pseudonym (the invitation is a new one; register row
+ * built as the recommendation, for the owner to confirm: the spec says nothing of sending again).
  */
 export async function resendInvitation(
   document: Pick<DocumentRow, 'id' | 'ownerId'>,
@@ -265,11 +300,11 @@ export async function resendInvitation(
 ): Promise<CreateResult | null> {
   const earlier = await db().documentInvitation.findFirst({
     where: { id: invitationId, documentId: document.id, state: { not: 'ACCEPTED' }, email: { not: null } },
-    select: { email: true, role: true },
+    select: { email: true, role: true, titlePseudonym: true },
   });
   if (!earlier?.email || earlier.role === 'REVIEWER') return null;
   const role = COLLABORATOR_ROLE[earlier.role] as OfferedRole;
-  return createInvitations(document, inviterId, [earlier.email], role, now);
+  return createInvitations(document, inviterId, [earlier.email], role, now, earlier.titlePseudonym !== null);
 }
 
 /**
@@ -318,19 +353,30 @@ export async function endInvitationsOf(
 
 // ── Delivering, after the response ──────────────────────────────────────────
 
-/** FR-ED-21, verbatim: the subject and the fixed text of the email. */
+/**
+ * The email of an invitation (FR-ED-21, amended by D202; the subject and the text are owed the owner's final
+ * approval). It names the sender by name and by email address, and carries no title and no content of the
+ * document: no title reaches the email service. Where the title was hidden it carries the pseudonym, which
+ * is not the title (Q49 (1)). It is never given the title, so that it cannot send it.
+ */
 export function invitationEmail(
   to: string,
-  inviterName: string,
+  inviter: { name: string; email: string | null },
   role: OfferedRole,
   token: string,
   expiresAt: Date,
+  pseudonym: string | null = null,
 ): EmailMessage {
   const link = `${settings().appOrigin}/invitations/${token}`;
+  const sender = inviter.email ? `${inviter.name} (${inviter.email})` : inviter.name;
+  const hidden =
+    pseudonym === null
+      ? ''
+      : ` The title of the document is hidden. In Ekdotico it is shown as ${pseudonym}.`;
   return {
     to,
-    subject: 'An invitation to a document in Ekdotico',
-    text: `${inviterName} invited you to a document in Ekdotico as ${ROLE_NAME[role]}. To accept or decline, open this link: ${link}. The link works once, and the invitation is open until ${dateText(expiresAt, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
+    subject: 'You have been invited to a document! | Ekdotico',
+    text: `${sender} invited you to a document in Ekdotico as ${ROLE_NAME[role]}.${hidden} To accept or decline, open this link: ${link}. The link works once, and the invitation is open until ${dateText(expiresAt, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
   };
 }
 
@@ -402,10 +448,11 @@ async function deliver(
   await send(
     invitationEmail(
       invitation.email,
-      inviter ? displayNameOf(inviter) : '',
+      { name: inviter ? displayNameOf(inviter) : '', email: inviter?.email ?? null },
       invitation.role,
       invitation.token,
       invitation.expiresAt,
+      invitation.pseudonym,
     ),
   );
 }
@@ -415,9 +462,25 @@ async function deliver(
 /** How a page or a request names an invitation: by the token of its link, or by its identifier (plan Q2). */
 export type InvitationRef = { token: string } | { id: string };
 
+/**
+ * What an invitee is told of the document's title (D202, Q49): the title itself, or the pseudonym that stands
+ * for it where the inviter hid it, or neither where the account may no longer be told. Never both: a
+ * pseudonym is shown instead of the title, not beside it.
+ */
+export type TitleShown =
+  { title: string; pseudonym: null } | { title: null; pseudonym: string } | { title: null; pseudonym: null };
+
 export type InvitationView =
-  /** Pending, and this account may answer it. */
-  | { outcome: 'open'; inviterName: string; role: DocumentRole; expiresAt: Date }
+  /** Pending, and this account may answer it. Its title is shown, or its pseudonym, one of the two. */
+  | {
+      outcome: 'open';
+      inviterName: string;
+      /** D202: the sender is named by name and by email address. Null for a sender whose account is deleted. */
+      inviterEmail: string | null;
+      role: DocumentRole;
+      expiresAt: Date;
+      titleShown: Exclude<TitleShown, { title: null; pseudonym: null }>;
+    }
   /** Accepted by this account, which still holds its role: the document is where it leads. */
   | { outcome: 'accepted'; documentId: string }
   /** FR-ED-37's statement, to the account that holds the address alone (S13-3). */
@@ -438,6 +501,7 @@ async function judge(client: Client, userId: string, ref: InvitationRef, now: Da
       document: {
         select: {
           ownerId: true,
+          title: true,
           deletedAt: true,
           collaborators: { where: { userId }, select: { id: true } },
         },
@@ -466,12 +530,21 @@ async function judge(client: Client, userId: string, ref: InvitationRef, now: Da
   if (!isOpen) return { view: { outcome: 'no_longer_open' } as InvitationView };
   // FR-ED-44 (a): created for a user who holds a role already, and never accepted.
   if (holdsRole) return { view: { outcome: 'not_open_to_account' } as InvitationView };
+  // D202, FR-ED-21: the title is shown here, to the account that holds the invited address, behind the
+  // session, and nowhere above this line; where the inviter hid it, the view holds the pseudonym and the
+  // title is not in it.
+  const { titlePseudonym } = invitation;
   return {
     view: {
       outcome: 'open',
       inviterName: displayNameOf(invitation.invitedBy),
+      inviterEmail: invitation.invitedBy.email,
       role: COLLABORATOR_ROLE[invitation.role],
       expiresAt: invitation.expiresAt,
+      titleShown:
+        titlePseudonym === null
+          ? { title: invitation.document.title, pseudonym: null }
+          : { title: null, pseudonym: titlePseudonym },
     } as InvitationView,
     invitation,
   };
@@ -552,7 +625,14 @@ export interface Sharing {
   /** `self` is true for the caller's own entry alone: a page withdraws the controls on it and offers to leave (FR-ED-38). */
   collaborators: { id: string; name: string; role: DocumentRole; self: boolean }[];
   /** For a caller who holds `document.collaborators.invite` alone (API design). */
-  invitations?: { id: string; email: string; role: DocumentRole; expiresAt: Date }[];
+  invitations?: {
+    id: string;
+    email: string;
+    role: DocumentRole;
+    expiresAt: Date;
+    /** Q49: the pseudonym of an invitation whose title is hidden, so that the inviter can tell the invitee what to look for; null where it is shown. */
+    titlePseudonym: string | null;
+  }[];
 }
 
 /** The people of a document as the sharing settings show them to a caller with this role (FR-ED-37). */
@@ -571,7 +651,7 @@ export async function sharingOf(
     }),
     db().documentInvitation.findMany({
       where: { documentId: document.id, ...open(now) },
-      select: { id: true, email: true, role: true, expiresAt: true },
+      select: { id: true, email: true, role: true, expiresAt: true, titlePseudonym: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     }),
   ]);
@@ -588,8 +668,8 @@ export async function sharingOf(
     })),
   };
   if (holds(document.permissionSet, role, 'document.collaborators.invite')) {
-    sharing.invitations = pending.flatMap(({ id, email, role: offered, expiresAt }) =>
-      email ? [{ id, email, role: COLLABORATOR_ROLE[offered], expiresAt }] : [],
+    sharing.invitations = pending.flatMap(({ id, email, role: offered, expiresAt, titlePseudonym }) =>
+      email ? [{ id, email, role: COLLABORATOR_ROLE[offered], expiresAt, titlePseudonym }] : [],
     );
   }
   return sharing;
@@ -603,12 +683,23 @@ export interface NotificationView {
   createdAt: Date;
   read: boolean;
   inviterName: string;
+  /** D202: the sender is named by name and by email address. Null for a sender whose account is deleted. */
+  inviterEmail: string | null;
   role: DocumentRole;
   invitationId: string;
+  /** D202, Q49: the title, the pseudonym that stands for it, or neither (see `listNotifications`). */
+  title: string | null;
+  pseudonym: string | null;
 }
 
-/** FR-ED-42, FR-ED-48: the one reminder of an invitation, with the day it expires. It names no title. */
-export interface ReminderNotificationView extends Omit<NotificationView, 'kind'> {
+/**
+ * FR-ED-42, FR-ED-48: the one reminder of an invitation, with the day it expires. It names no title (S18-4) and
+ * is not changed by D202, which speaks of the invitation: its fixed text is FR-ED-48's.
+ */
+export interface ReminderNotificationView extends Omit<
+  NotificationView,
+  'kind' | 'title' | 'pseudonym' | 'inviterEmail'
+> {
   kind: typeof REMINDER_NOTIFICATION;
   /** Null once the invitation was accepted (S18-2). */
   expiresAt: Date | null;
@@ -616,7 +707,11 @@ export interface ReminderNotificationView extends Omit<NotificationView, 'kind'>
 
 /** Every kind the list holds: an invitation and its reminder, a change of role, a removal (./access-notifications.ts). Kinds are added here. */
 export type ListedNotification =
-  NotificationView | ReminderNotificationView | AccessNotificationView | OfferNotificationView;
+  | NotificationView
+  | ReminderNotificationView
+  | AccessNotificationView
+  | OfferNotificationView
+  | OfferEndedNotificationView;
 
 /**
  * The account's notifications whose subject still exists, newest first, with
@@ -648,13 +743,27 @@ export async function listNotifications(
         select: {
           id: true,
           role: true,
+          email: true,
           expiresAt: true,
           state: true,
+          titlePseudonym: true,
           invitedBy: { select: { name: true, email: true } },
+          document: {
+            select: {
+              title: true,
+              ownerId: true,
+              collaborators: { where: { userId }, select: { id: true } },
+            },
+          },
         },
       })
     ).map((invitation) => [invitation.id, invitation]),
   );
+  // D202: the account that reads is the one that holds the invited address, or it is not told the title.
+  const reader = await db().user.findUnique({
+    where: { id: userId },
+    select: { email: true, emailVerified: true },
+  });
   const invited = rows.flatMap((row): (NotificationView | ReminderNotificationView)[] => {
     const invitationId = (row.payload as { invitationId?: string }).invitationId ?? '';
     const invitation = invitations.get(invitationId);
@@ -667,15 +776,39 @@ export async function listNotifications(
       role: COLLABORATOR_ROLE[invitation.role],
       invitationId,
     };
+    if (row.kind === REMINDER_NOTIFICATION) {
+      return [
+        {
+          ...shown,
+          kind: REMINDER_NOTIFICATION,
+          // S18-2: once accepted the invitation no longer expires, so the reminder states no expiry.
+          expiresAt: invitation.state === 'ACCEPTED' ? null : invitation.expiresAt,
+        },
+      ];
+    }
+    // D202, Q49 (2): once the invitation is accepted and the account holds a role on the document, it is
+    // shown the real title. While it is pending, an account that holds the invited address is shown the
+    // title, or the pseudonym where the inviter hid it (as the page of the invitation judges it). In any
+    // other case, an address that has gone, or a role lost after accepting, neither is shown: the title
+    // is read live and the pseudonym's "until you accept" would be false.
+    const holdsRole =
+      invitation.state === 'ACCEPTED' &&
+      (invitation.document.ownerId === userId || invitation.document.collaborators.length > 0);
+    const holdsAddress = reader?.emailVerified === true && reader.email === invitation.email;
+    const titleShown: TitleShown = holdsRole
+      ? { title: invitation.document.title, pseudonym: null }
+      : holdsAddress && invitation.state === 'PENDING'
+        ? invitation.titlePseudonym === null
+          ? { title: invitation.document.title, pseudonym: null }
+          : { title: null, pseudonym: invitation.titlePseudonym }
+        : { title: null, pseudonym: null };
     return [
-      row.kind === REMINDER_NOTIFICATION
-        ? {
-            ...shown,
-            kind: REMINDER_NOTIFICATION,
-            // S18-2: once accepted the invitation no longer expires, so the reminder states no expiry.
-            expiresAt: invitation.state === 'ACCEPTED' ? null : invitation.expiresAt,
-          }
-        : { ...shown, kind: INVITATION_NOTIFICATION },
+      {
+        ...shown,
+        kind: INVITATION_NOTIFICATION,
+        inviterEmail: invitation.invitedBy.email,
+        ...titleShown,
+      },
     ];
   });
   // FR-ED-42, S15-2: one list, newest first, whatever the kind.
@@ -684,6 +817,8 @@ export async function listNotifications(
     ...(await listAccessNotifications(userId, now)),
     // FR-ED-47: the offer of ownership, beside the others.
     ...(await listOfferNotifications(userId, now)),
+    // S17-5: the Owner's notice that an offer ended without the Owner's own action.
+    ...(await listOfferEndedNotifications(userId)),
   ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   return { unread: notifications.filter(({ read }) => !read).length, notifications };
 }

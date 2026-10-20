@@ -56,7 +56,8 @@ const CONFIRMATION = (address: string) =>
   `Invitation created for ${address}. Ekdotico sends an invitation only to an address that belongs to an account. If this address does, the person receives an email and a notification.`;
 const LIMIT =
   'This document has reached its limit of ten people. Remove a collaborator or revoke an invitation to invite another.';
-const SUBJECT = 'An invitation to a document in Ekdotico';
+// D202: the owner's subject, owed final approval.
+const SUBJECT = 'You have been invited to a document! | Ekdotico';
 
 const request = (method: string, path: string, cookie: string, body?: unknown) =>
   new Request(`${ORIGIN}${path}`, {
@@ -164,7 +165,7 @@ describe('the uniform answer (FR-ED-21)', () => {
     expect(mail).toHaveLength(1);
     expect(mail[0]!.subject).toBe(SUBJECT);
     expect(mail[0]!.text).toMatch(
-      /^A Person invited you to a document in Ekdotico as Editor\. To accept or decline, open this link: https:\/\/app\.example\.test\/invitations\/[A-Za-z0-9_-]{43}\. The link works once, and the invitation is open until \d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} UTC\. If you did not expect this invitation, you can ignore this email\.\n?$/,
+      /^A Person \(sharer\d+@example\.com\) invited you to a document in Ekdotico as Editor\. To accept or decline, open this link: https:\/\/app\.example\.test\/invitations\/[A-Za-z0-9_-]{43}\. The link works once, and the invitation is open until \d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} UTC\. If you did not expect this invitation, you can ignore this email\.\n?$/,
     );
     expect(await mailTo(unverified.email)).toEqual([]);
     expect(await mailTo(nobody)).toEqual([]);
@@ -671,6 +672,7 @@ describe('the delivery', () => {
           token: 'T'.repeat(43),
           role: 'editor',
           expiresAt: row!.expiresAt,
+          pseudonym: null,
         },
       ],
       async () => {
