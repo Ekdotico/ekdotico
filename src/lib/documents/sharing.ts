@@ -14,6 +14,7 @@
 // NFR-SE-19: nothing here logs an address, a name, or a token. The token
 // leaves this module once, inside the email.
 import { Prisma, type DocumentRole as StoredRole } from '../../generated/prisma/client.ts';
+import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
@@ -24,6 +25,7 @@ import { settings } from '../settings.ts';
 import { hashToken, newToken } from '../token.ts';
 import type { DocumentRow } from './access.ts';
 import { listAccessNotifications, type AccessNotificationView } from './access-notifications.ts';
+import { listOfferNotifications, type OfferNotificationView } from './ownership-notifications.ts';
 import { COLLABORATOR_ROLE, holds, ROLE_NAME, type DocumentRole } from './permissions.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -68,7 +70,9 @@ export type CreateResult =
   /** NFR-SE-07: past the invitations an inviter may create in an hour. */
   | { outcome: 'rate_limited'; retryAfterSeconds: number }
   /** Deleted by a request beside this one, after the caller was authorised. */
-  | { outcome: 'not_found' };
+  | { outcome: 'not_found' }
+  /** The caller's role no longer holds the permission under the lock (a transfer of ownership in between): a 403. */
+  | { outcome: 'no_permission' };
 
 /**
  * FR-ED-21, FR-ED-37: one invitation for each address, pending, with a new
@@ -117,6 +121,29 @@ export async function lockDocument(tx: Prisma.TransactionClient, documentId: str
   return held.length > 0;
 }
 
+/**
+ * The Owner of the document and whether the caller holds `document.collaborators.invite` NOW, read under
+ * the row the caller holds: ownership may have passed since `documentRoute` authorised the request
+ * (FR-ED-47), so the permission and the Owner are read again, as slice 15 and 16 do.
+ */
+async function inviterUnderLock(tx: Prisma.TransactionClient, documentId: string, callerId: string) {
+  const document = await tx.document.findUnique({
+    where: { id: documentId },
+    select: {
+      ownerId: true,
+      permissionSet: true,
+      collaborators: { where: { userId: callerId }, select: { role: true } },
+    },
+  });
+  if (!document) return null;
+  const held = document.collaborators[0]?.role;
+  const role = document.ownerId === callerId ? 'owner' : held ? COLLABORATOR_ROLE[held] : null;
+  return {
+    ownerId: document.ownerId,
+    may: role !== null && holds(document.permissionSet, role, 'document.collaborators.invite'),
+  };
+}
+
 async function creating(
   tx: Prisma.TransactionClient,
   document: Pick<DocumentRow, 'id' | 'ownerId'>,
@@ -127,6 +154,9 @@ async function creating(
   counted: (giveBack: () => Promise<void>) => void,
 ): Promise<CreateResult> {
   if (!(await lockDocument(tx, document.id))) return { outcome: 'not_found' };
+  const under = await inviterUnderLock(tx, document.id, inviterId);
+  if (!under) return { outcome: 'not_found' };
+  if (!under.may) return { outcome: 'no_permission' };
 
   // The two refusals of FR-ED-37 rest on what the Owner knows. A holder of
   // the permission who is not the Owner may not know them, so only the
@@ -138,7 +168,7 @@ async function creating(
     where: { documentId: document.id },
     select: { userId: true },
   });
-  if (inviterId === document.ownerId) {
+  if (inviterId === under.ownerId) {
     const accepted = await tx.documentInvitation.findFirst({
       where: {
         documentId: document.id,
@@ -149,6 +179,18 @@ async function creating(
       select: { email: true },
     });
     if (accepted?.email) return { outcome: 'collaborator_address', email: accepted.email };
+    // FR-ED-47, register row S17-12: a former Owner holds a role through an accepted transfer, not through an
+    // invitation, and is as well known to the Owner as the people above.
+    const transferred = await tx.ownershipOffer.findMany({
+      where: {
+        documentId: document.id,
+        state: 'ACCEPTED',
+        fromUserId: { in: collaborators.map(({ userId }) => userId) },
+      },
+      select: { from: { select: { email: true } } },
+    });
+    const former = transferred.map(({ from }) => from.email).find((email) => email && emails.includes(email));
+    if (former) return { outcome: 'collaborator_address', email: former };
   }
 
   // A row still stored pending past its expiry is written as expired, so
@@ -220,13 +262,21 @@ export async function resendInvitation(
   return createInvitations(document, inviterId, [earlier.email], role, now);
 }
 
-/** FR-ED-37: revokes a pending invitation of this document. False where there is none. */
+/**
+ * FR-ED-37: revokes a pending invitation of this document. Null where there is none; `'forbidden'` where
+ * the caller's role does not hold the permission now, read under the document's row.
+ */
 export async function revokeInvitation(
   documentId: string,
   invitationId: string,
+  callerId: string,
   now: Date = new Date(),
-): Promise<{ email: string } | null> {
+): Promise<{ email: string } | null | 'forbidden'> {
   return db().$transaction(async (tx) => {
+    if (!(await lockDocument(tx, documentId))) return null;
+    const under = await inviterUnderLock(tx, documentId, callerId);
+    if (!under) return null;
+    if (!under.may) return 'forbidden';
     const [revoked] = await tx.documentInvitation.updateManyAndReturn({
       where: { id: invitationId, documentId, ...open(now) },
       data: { state: 'REVOKED', respondedAt: now },
@@ -500,10 +550,10 @@ export async function sharingOf(
   now: Date = new Date(),
 ): Promise<Sharing> {
   const [owner, collaborators, pending] = await Promise.all([
-    db().user.findUnique({ where: { id: document.ownerId }, select: { name: true } }),
+    db().user.findUnique({ where: { id: document.ownerId }, select: { name: true, email: true } }),
     db().documentCollaborator.findMany({
       where: { documentId: document.id },
-      select: { id: true, role: true, userId: true, user: { select: { name: true } } },
+      select: { id: true, role: true, userId: true, user: { select: { name: true, email: true } } },
       orderBy: [{ addedAt: 'asc' }, { id: 'asc' }],
     }),
     db().documentInvitation.findMany({
@@ -515,10 +565,10 @@ export async function sharingOf(
   const sharing: Sharing = {
     people: 1 + collaborators.length + pending.length,
     limit: PEOPLE_MOST,
-    owner: { name: owner?.name ?? '' },
+    owner: { name: owner ? displayNameOf(owner) : '' },
     collaborators: collaborators.map((row) => ({
       id: row.id,
-      name: row.user.name ?? '',
+      name: displayNameOf(row.user),
       role: COLLABORATOR_ROLE[row.role],
       // The account's identifier is read to say this, and goes no further.
       self: row.userId === callerId,
@@ -545,7 +595,7 @@ export interface NotificationView {
 }
 
 /** Every kind the list holds: an invitation, a change of role, a removal (./access-notifications.ts). Kinds are added here. */
-export type ListedNotification = NotificationView | AccessNotificationView;
+export type ListedNotification = NotificationView | AccessNotificationView | OfferNotificationView;
 
 /**
  * The account's notifications whose subject still exists, newest first, with
@@ -595,9 +645,12 @@ export async function listNotifications(
     ];
   });
   // FR-ED-42, S15-2: one list, newest first, whatever the kind.
-  const notifications = [...invited, ...(await listAccessNotifications(userId, now))].sort(
-    (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
-  );
+  const notifications = [
+    ...invited,
+    ...(await listAccessNotifications(userId, now)),
+    // FR-ED-47: the offer of ownership, beside the others.
+    ...(await listOfferNotifications(userId, now)),
+  ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   return { unread: notifications.filter(({ read }) => !read).length, notifications };
 }
 

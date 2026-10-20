@@ -2,6 +2,7 @@
 // job. Started once when a process starts.
 import { deleteExpiredRemovedNotifications } from './documents/access-notifications.ts';
 import { deleteExpiredDocuments } from './documents/deletion.ts';
+import { deliverUnsentOffers, expireOffers } from './documents/ownership.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
 import { faultOf } from './fault.ts';
@@ -25,6 +26,11 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // admission invitation 30 days on, is not built yet.
   'ended-session-removal': () => deleteEndedSessions(),
   'expired-token-removal': () => deleteExpiredTokens(),
+  // NFR-RE-15, "the expiry of the offer" (FR-ED-47): writes the offers past their time expired and
+  // deletes their notifications; it says how many offers it expired.
+  'ownership-offer-expiry': () => expireOffers(),
+  // NFR-RE-15, "the email of an offer of ownership": the backstop of the hand-over after the response (S17-6).
+  'ownership-offer-email': () => deliverUnsentOffers(),
   // FR-ED-42 (register row PR-8): the notification of a removal stays 30 days.
   'removed-notification-removal': () => deleteExpiredRemovedNotifications(),
 };

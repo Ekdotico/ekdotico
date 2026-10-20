@@ -4,7 +4,7 @@
 // src/lib/documents/access.ts, against the caller's role and the document's
 // permission set as they are now (FR-ED-39, NFR-SE-04), and hands over the one
 // document it allowed. The Yjs state joins the GET with the editor.
-import { refusal } from '../../../../lib/documents/access.ts';
+import { authorise, refusal } from '../../../../lib/documents/access.ts';
 import { deleteDocument } from '../../../../lib/documents/deletion.ts';
 import {
   readTitle,
@@ -85,7 +85,11 @@ export const PATCH = documentRoute('document.rename', async ({ request, document
  */
 export const DELETE = documentRoute('document.delete', async ({ document, session }) => {
   if (!(await deleteDocument(document, session.userId))) {
-    return refusal({ outcome: 'not_found' }, session.userId, document.id);
+    // Deleted beside this request, or the ownership passed to another after it was authorised
+    // (FR-ED-47): the caller is then an Editor, and is told so by a logged 403.
+    const now = await authorise(session.userId, document.id, 'document.delete');
+    if (now.outcome === 'allowed') return refusal({ outcome: 'not_found' }, session.userId, document.id);
+    return refusal(now, session.userId, document.id, 'document.delete');
   }
   return new Response(null, { status: 204, headers: NO_STORE });
 });

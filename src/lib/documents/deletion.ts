@@ -23,6 +23,7 @@ import { settings } from '../settings.ts';
 import type { DocumentRow } from './access.ts';
 import { deleteAccessNotificationsOf } from './access-notifications.ts';
 import { summary, type DocumentSummary } from './documents.ts';
+import { endOffersOf } from './ownership.ts';
 import { endInvitationsOf } from './sharing.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -91,13 +92,17 @@ export async function deleteDocument(
   now: Date = new Date(),
 ): Promise<boolean> {
   const deleted = await db().$transaction(async (transaction) => {
+    // The Owner is a condition of the write: a deletion authorised just before a transfer committed
+    // does not delete the document in the name of someone who is no longer its Owner (FR-ED-47).
     const { count } = await transaction.document.updateMany({
-      where: { id: document.id, deletedAt: null },
+      where: { id: document.id, deletedAt: null, ownerId: userId },
       data: { deletedAt: now, deletedById: userId },
     });
     if (count !== 1) return false;
     // FR-ED-37: "deleting the document revokes its pending invitations"; FR-ED-42: their notifications go.
     await endInvitationsOf(transaction, document.id, now);
+    // FR-ED-47: an offer is "withdrawn without anyone's action where … the document is deleted".
+    await endOffersOf(transaction, document.id, now);
     await securityLogIn(transaction, { kind: 'document_deleted', userId, documentId: document.id });
     return true;
   });

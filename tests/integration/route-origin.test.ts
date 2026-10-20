@@ -121,6 +121,15 @@ async function invitation(from: string, to: string, token = TOKEN) {
   });
   return { documentId, id };
 }
+// FR-ED-47: a document of `from`, with `to` as its Editor, and an open offer of its ownership to `to`.
+async function offered(from: string, to: string) {
+  const documentId = (await createDocument(from)).id;
+  await db().documentCollaborator.create({ data: { documentId, userId: to, role: 'EDITOR' } });
+  const { id } = await db().ownershipOffer.create({
+    data: { documentId, fromUserId: from, toUserId: to, expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+  });
+  return { documentId, id };
+}
 /** Two identifiers carried as one, for a case whose path has two. */
 const pair = (id: string) => id.split(' ') as [string, string];
 const invitationState = async (id: string) =>
@@ -280,6 +289,42 @@ const CASES: Case[] = [
     path: (id) => `/api/invitations/received/${pair(id)[1]}/decline`,
     params: (id) => ({ invitationId: pair(id)[1], answer: 'decline' }),
     state: (_, id) => invitationState(id),
+    status: 200,
+  },
+  {
+    // FR-ED-47: ownership offered to an Editor of the session's own document, named by the identifier of its row.
+    handler: 'src/app/api/documents/[id]/ownership-offer/route.ts POST',
+    body: { collaboratorId: 'editor-row-of-the-offer' },
+    arrange: async (owner) => {
+      const documentId = await live(owner);
+      await db().documentCollaborator.create({
+        data: { id: 'editor-row-of-the-offer', documentId, userId: (await person()).id, role: 'EDITOR' },
+      });
+      return documentId;
+    },
+    path: (id) => `/api/documents/${id}/ownership-offer`,
+    state: (_, id) => db().ownershipOffer.count({ where: { documentId: id } }),
+    status: 201,
+  },
+  {
+    // It reads no body.
+    handler: 'src/app/api/documents/[id]/ownership-offer/route.ts DELETE',
+    arrange: async (owner) => (await offered(owner.id, (await person()).id)).documentId,
+    path: (id) => `/api/documents/${id}/ownership-offer`,
+    state: async (_, id) => (await db().ownershipOffer.findFirstOrThrow({ where: { documentId: id } })).state,
+    status: 200,
+  },
+  {
+    // The session's account is the Editor the offer names, by another account's document. It reads no body.
+    handler: 'src/app/api/ownership-offers/[offerId]/[answer]/route.ts POST',
+    arrange: async (owner) => {
+      const made = await offered((await person()).id, owner.id);
+      return `${made.documentId} ${made.id}`;
+    },
+    path: (id) => `/api/ownership-offers/${pair(id)[1]}/decline`,
+    params: (id) => ({ offerId: pair(id)[1], answer: 'decline' }),
+    state: async (_, id) =>
+      (await db().ownershipOffer.findUniqueOrThrow({ where: { id: pair(id)[1] } })).state,
     status: 200,
   },
   {

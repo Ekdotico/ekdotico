@@ -310,6 +310,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'PASSWORD_MAX_LENGTH',
     'ADMISSION_INVITATION_DAYS',
     'DOCUMENT_INVITATION_DAYS',
+    'OWNERSHIP_OFFER_DAYS',
     'TWO_FACTOR_STEP_SECONDS',
     'TWO_FACTOR_WRONG_CODES',
   ])('refuses 0 as %s', (name) => {
@@ -335,6 +336,9 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(least.admissionInvitationDays).toBe(1);
     expect(loadSettings(env).admissionInvitationDays).toBe(30);
     expect(loadSettings(env).documentInvitationDays).toBe(14);
+    // FR-ED-47: 14 days, "an initial value".
+    expect(loadSettings(env).ownershipOfferDays).toBe(14);
+    expect(loadSettings({ ...env, OWNERSHIP_OFFER_DAYS: '3' }).ownershipOfferDays).toBe(3);
   });
 
   // FR-AU-81, NFR-SE-07: a lock that ended while its failures were still

@@ -17,8 +17,10 @@ export default async function Notifications() {
     <NotificationList
       notifications={notifications.map((notification): NotificationItem => {
         const createdAt = notification.createdAt.toISOString();
-        // A removal names no role; the others name the one in words.
-        if (notification.kind === 'removed') return { ...notification, createdAt };
+        // A removal and an offer name no role; the others name the one in words.
+        if (notification.kind === 'removed' || notification.kind === 'ownership_offer') {
+          return { ...notification, createdAt };
+        }
         return { ...notification, role: ROLE_NAME[notification.role], createdAt };
       })}
     />

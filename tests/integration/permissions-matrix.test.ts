@@ -15,8 +15,9 @@
 // The permissions with no route to call yet are named below, with what holds
 // them: edit content (the collaboration server decides it:
 // collab-permissions.test.ts), the two comment permissions (comments are not in
-// α 0.1.0), the draft export (slice 21), the transfer of ownership (slice 17),
-// and the sealed export (not in α). They are tested through `authorise` alone.
+// α 0.1.0), the draft export (slice 21),
+// and the sealed export (not in α). They are tested through `authorise` alone. The transfer of
+// ownership (slice 17) has its route and is tested through it.
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ALL_PERMISSIONS, changeable, heldByDefault, ROLE_AT, symbolOf } from '../permission-table.ts';
@@ -40,6 +41,7 @@ const one = await import('../../src/app/api/documents/[id]/collaborators/[collab
 const invitations = await import('../../src/app/api/documents/[id]/invitations/route.ts');
 const leaving = await import('../../src/app/api/documents/[id]/leave/route.ts');
 const permissions = await import('../../src/app/api/documents/[id]/permissions/route.ts');
+const ownership = await import('../../src/app/api/documents/[id]/ownership-offer/route.ts');
 type Permission = (typeof ALL_PERMISSIONS)[number];
 type Role = (typeof ROLE_AT)[number];
 
@@ -245,6 +247,20 @@ const ROUTES: {
     ask: (cookie, id) => document.DELETE(request('DELETE', `/api/documents/${id}`, cookie), at({ id })),
     succeeds: 204,
   },
+  {
+    // FR-ED-47: ownership offered to the Editor of the document. Fixed to the Owner, so only the Owner succeeds.
+    permission: 'document.ownership.transfer',
+    ask: async (cookie, id) => {
+      const editor = await db().documentCollaborator.findFirstOrThrow({
+        where: { documentId: id, userId: people4.editor.id },
+      });
+      return ownership.POST(
+        request('POST', `/api/documents/${id}/ownership-offer`, cookie, { collaboratorId: editor.id }),
+        at({ id }),
+      );
+    },
+    succeeds: 201,
+  },
 ];
 
 const NO_ROUTE_YET: Permission[] = [
@@ -252,12 +268,11 @@ const NO_ROUTE_YET: Permission[] = [
   'document.comments.write',
   'document.comments.resolve',
   'document.export.draft',
-  'document.ownership.transfer',
   'document.export.sealed',
 ];
 
 describe('every permission and every role, through the real routes (NFR-SE-04)', () => {
-  it('has a route for each permission but the six that have none yet, named', () => {
+  it('has a route for each permission but the five that have none yet, named', () => {
     expect([...ROUTES.map(({ permission }) => permission), ...NO_ROUTE_YET].sort()).toEqual(
       [...ALL_PERMISSIONS].sort(),
     );

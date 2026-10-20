@@ -58,6 +58,9 @@ const PERMISSION: Record<string, Permission> = {
   // FR-ED-45, FR-ED-46: the permission set. Any role may read what it holds; only the Owner changes the set.
   'src/app/api/documents/[id]/permissions/route.ts GET': 'document.view',
   'src/app/api/documents/[id]/permissions/route.ts PUT': 'document.permissions.edit',
+  // FR-ED-47: offering ownership and withdrawing the offer. The permission is fixed to the Owner.
+  'src/app/api/documents/[id]/ownership-offer/route.ts POST': 'document.ownership.transfer',
+  'src/app/api/documents/[id]/ownership-offer/route.ts DELETE': 'document.ownership.transfer',
 };
 
 // The handlers that act on a DELETED document: each is made by

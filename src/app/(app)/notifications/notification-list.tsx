@@ -22,7 +22,9 @@ export type NotificationItem =
   // FR-ED-42, S15-2: the person's role on a document was changed; they hold it still.
   | (Shown & { kind: 'role_changed'; documentId: string; title: string; role: string })
   // FR-ED-42, S15-2: the person was removed. It names no document and links to nothing (register row PR-5).
-  | (Shown & { kind: 'removed' });
+  | (Shown & { kind: 'removed' })
+  // FR-ED-42, FR-ED-47: ownership of a document is offered to the person; the title is shown, behind sign-in (S17-2, D202).
+  | (Shown & { kind: 'ownership_offer'; ownerName: string; title: string; offerId: string });
 
 /** What a notification says, in the words approved with docs/plan/presence-row.md, section 5. */
 function Statement({ notification }: { notification: NotificationItem }) {
@@ -41,6 +43,13 @@ function Statement({ notification }: { notification: NotificationItem }) {
       );
     case 'removed':
       return <>You no longer have access to a document.</>;
+    case 'ownership_offer':
+      return (
+        <>
+          {/* The name and the title are text, whatever they hold (NFR-SE-08). */}
+          <bdi>{notification.ownerName}</bdi> offered you ownership of <bdi>{notification.title}</bdi>.
+        </>
+      );
   }
 }
 
@@ -63,6 +72,15 @@ function Subject({ notification }: { notification: NotificationItem }) {
           href={`/documents/${encodeURIComponent(notification.documentId)}`}
         >
           Open the document
+        </Link>
+      );
+    case 'ownership_offer':
+      return (
+        <Link
+          id={`open-${notification.id}`}
+          href={`/ownership-offers/${encodeURIComponent(notification.offerId)}`}
+        >
+          Open the offer
         </Link>
       );
     case 'removed':

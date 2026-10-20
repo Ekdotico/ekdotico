@@ -56,6 +56,9 @@ model User {
   collaborations    DocumentCollaborator[]
   invitationsMade   DocumentInvitation[]   @relation("InvitedBy")
   notifications     Notification[]
+  // FR-ED-47: the offers of ownership the account made and received.
+  offersMade        OwnershipOffer[]       @relation("OfferedBy")
+  offersReceived    OwnershipOffer[]       @relation("OfferedTo")
 }
 
 model Session {
@@ -283,6 +286,7 @@ model Document {
 
   collaborators DocumentCollaborator[]
   invitations   DocumentInvitation[]
+  offers        OwnershipOffer[]
 
   @@index([ownerId, deletedAt])
 }
@@ -370,6 +374,45 @@ model Notification {
   recipient User @relation(fields: [recipientId], references: [id], onDelete: Restrict)
 
   @@index([recipientId, readAt])
+}
+
+// ─── Transfer of ownership (FR-ED-47; Data models, "Offers of ownership") ───
+
+// One row for each offer of ownership. Ownership changes only when the Editor
+// named in toUserId accepts. expiresAt is 14 days after createdAt (a setting);
+// "expired" is derived from it and written by the timer or the next write that
+// meets the row. emailClaimedAt keeps the email from being sent twice, as on
+// an invitation. By hand in the migration: at most one PENDING offer for a
+// document, and fromUserId is not toUserId.
+//
+// Departures from Data models (docs/plan/slice-17.md, S17-8): the relations
+// of fromUserId and toUserId to User, and onDelete: Cascade from the document
+// (its permanent deletion, FR-ED-36, deletes the row).
+model OwnershipOffer {
+  id             String              @id @default(cuid())
+  documentId     String              @db.Uuid
+  fromUserId     String
+  toUserId       String
+  state          OwnershipOfferState @default(PENDING)
+  createdAt      DateTime            @default(now())
+  expiresAt      DateTime
+  respondedAt    DateTime?
+  emailClaimedAt DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  from     User     @relation("OfferedBy", fields: [fromUserId], references: [id], onDelete: Restrict)
+  to       User     @relation("OfferedTo", fields: [toUserId], references: [id], onDelete: Restrict)
+
+  @@index([documentId, state])
+  @@index([toUserId, state])
+}
+
+enum OwnershipOfferState {
+  PENDING
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+  EXPIRED
 }
 
 enum RecordingState {
