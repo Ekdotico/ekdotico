@@ -6,7 +6,7 @@ import { Editor, type JSONContent } from '@tiptap/core';
 import { Slice } from '@tiptap/pm/model';
 import { TextSelection } from '@tiptap/pm/state';
 import { ySyncPluginKey } from '@tiptap/y-tiptap';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { optionListOptionId } from '@ekdotico/domico/components';
 import { extensions } from '../../src/app/(app)/documents/[id]/extensions.tsx';
@@ -625,8 +625,71 @@ describe('the keys of the palette, and what the text says of it (NFR-IC-19)', ()
   });
 });
 
+describe('the choice of /image (FR-ED-08, FR-ED-12)', () => {
+  /** An editor with the upload, as the page makes it for someone who can edit. */
+  function withUpload(...content: Json[]) {
+    const made = new Editor({
+      element: null,
+      content: { type: 'doc', content: content.length ? content : [paragraph()] },
+      extensions: extensions(new Y.Doc(), undefined, undefined, undefined, false, null, {
+        documentId: 'd',
+        report: () => {},
+        announce: () => {},
+      }),
+    });
+    made.view.updateState(made.state.reconfigure({ plugins: made.extensionManager.plugins }));
+    made.commands.setTextSelection(1);
+    return made;
+  }
+
+  it('takes its text away, leaves the empty block for the image, and opens the picker for the four types', () => {
+    // These tests run without a page: the input the picker makes is a stand-in that says what it was asked to be.
+    const opened: { type: string; accept: string; multiple: boolean }[] = [];
+    const input = {
+      type: '',
+      accept: '',
+      multiple: false,
+      files: null,
+      addEventListener() {},
+      click() {
+        opened.push({ type: this.type, accept: this.accept, multiple: this.multiple });
+      },
+    };
+    vi.stubGlobal('document', { createElement: () => input });
+    const click = { mockRestore: () => vi.unstubAllGlobals() };
+    try {
+      const editor = withUpload();
+      type(editor, '/image');
+      expect(slashPalette(editor.state).activeId).toBe('image');
+      expect(press(editor, 'Enter')).toBe(true);
+      expect(text(editor)).toBe('');
+      expect(editor.state.doc.children.map((node) => node.type.name)).toEqual(['paragraph']);
+      expect(slashPalette(editor.state).open).toBe(false);
+      expect(opened).toEqual([
+        { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple: true },
+      ]);
+    } finally {
+      click.mockRestore();
+    }
+  });
+
+  it('opens nothing where the editor was made without the upload, and still takes the text away', () => {
+    const made = vi.fn<(tag: string) => object>(() => ({}));
+    vi.stubGlobal('document', { createElement: made });
+    try {
+      const editor = editorOf();
+      type(editor, '/img');
+      expect(press(editor, 'Enter')).toBe(true);
+      expect(text(editor)).toBe('');
+      expect(made).not.toHaveBeenCalledWith('input');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('a choice (FR-ED-12)', () => {
-  it.each(SLASH_COMMANDS.map((command) => [command.name, command] as const))(
+  it.each(SLASH_COMMANDS.filter(({ action }) => !action).map((command) => [command.name, command] as const))(
     '/%s, chosen with Enter in an empty block, puts its block in place of what was typed',
     (name, { inserts }) => {
       const editor = editorOf();
@@ -1417,7 +1480,7 @@ describe('the limits of a document in the palette (D182, D192)', () => {
     const atEnd = editorOf(paragraph(), ...many(4998, () => paragraph()));
     atEnd.commands.setTextSelection(atEnd.state.doc.content.size - 1);
     type(atEnd, 'a /');
-    const followed = new Set(['horizontalRule', 'pageBreak', 'tableOfContents', 'tableBlock']);
+    const followed = new Set(['horizontalRule', 'pageBreak', 'tableOfContents', 'tableBlock', 'image']);
     expect(listed(atEnd)).toEqual(
       SLASH_COMMANDS.filter(({ inserts }) => !followed.has(inserts.type)).map(({ name }) => name),
     );

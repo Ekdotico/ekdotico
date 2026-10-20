@@ -24,6 +24,7 @@ import pageStyles from '../../../pages.module.css';
 import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
 import styles from './editor.module.css';
 import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
+import { IMAGE_TEXT } from './images.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
 import { PeopleRow } from './people-row.tsx';
 import { SelectionToolbar } from './selection-toolbar.tsx';
@@ -167,6 +168,7 @@ function blockControls(view: EditorView): HTMLElement | null {
 /** The text of the document: the editable region, and the toolbar on its selection. */
 function Text({
   document,
+  documentId,
   awareness,
   editable,
   reads,
@@ -175,6 +177,8 @@ function Text({
   onUnrepairable,
 }: {
   document: Y.Doc;
+  /** The document, where its images are asked for (FR-ED-08). */
+  documentId: string;
   /** Where the cursors of the others are read from (FR-ED-17); a browser that reads draws none. */
   awareness: Awareness | null;
   editable: boolean;
@@ -204,9 +208,16 @@ function Text({
       setRefusal((was) => (words === null ? null : { words, times: (was?.times ?? 0) + 1 })),
     [],
   );
+  // What an upload is doing (FR-ED-08), for the region that says so: "Uploading the image…", then "Image added".
+  // A refusal of an upload is said where the refusals of the document are (`refuse`).
+  const [uploading, setUploading] = useState('');
+  const images = useMemo(
+    () => ({ documentId, report: refuse, announce: setUploading }),
+    [documentId, refuse],
+  );
   const all = useMemo(
-    () => extensions(document, onUnshown, refuse, onUnrepairable, reads, awareness),
-    [document, onUnshown, refuse, onUnrepairable, reads, awareness],
+    () => extensions(document, onUnshown, refuse, onUnrepairable, reads, awareness, images),
+    [document, onUnshown, refuse, onUnrepairable, reads, awareness, images],
   );
   // What a screen reader is given of a refusal: one region that is in the page
   // throughout, emptied and then written at each refusal, so that a second
@@ -320,6 +331,15 @@ function Text({
         </FormFault>
       ) : null}
       <span ref={heard} role="status" className="sr-only" />
+      {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
+      {editable && !reads ? (
+        <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
+          {IMAGE_TEXT.choose}
+        </Button>
+      ) : null}
+      <p role="status" className={pageStyles.meta}>
+        {uploading}
+      </p>
       <div
         ref={surface}
         className={styles.surface}
@@ -438,7 +458,15 @@ function Unsaved({ text }: { text: string }) {
   );
 }
 
-function OpenDocument({ connection, canEdit }: { connection: DocumentConnection; canEdit: boolean }) {
+function OpenDocument({
+  connection,
+  canEdit,
+  documentId,
+}: {
+  connection: DocumentConnection;
+  canEdit: boolean;
+  documentId: string;
+}) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
   const [check, setCheck] = useState<'checking' | 'in-sync' | 'unconfirmed' | null>(null);
   // Which check the dialog is showing. An answer to a check whose dialog was
@@ -541,6 +569,7 @@ function OpenDocument({ connection, canEdit }: { connection: DocumentConnection;
           // The extensions are made once for a browser that can edit, or for one that cannot.
           key={mayEdit ? 'w' : 'r'}
           document={connection.document}
+          documentId={documentId}
           awareness={connection.awareness}
           editable={mayEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
           reads={!mayEdit}
@@ -595,5 +624,5 @@ export default function Editor({
     return () => connection.stop();
   }, [connection]);
 
-  return <OpenDocument connection={connection} canEdit={canEdit} />;
+  return <OpenDocument connection={connection} canEdit={canEdit} documentId={documentId} />;
 }

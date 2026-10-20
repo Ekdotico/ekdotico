@@ -66,6 +66,7 @@ export const SLASH_NAMES: Record<string, string> = {
   quote: 'Quote',
   table: 'Table',
   code: 'Code block',
+  image: 'Image',
   callout: 'Callout',
   toc: 'Table of contents',
   divider: 'Divider',
@@ -289,6 +290,17 @@ export function chooseSlashCommand(editor: Editor, name: string): void {
   const shown = slashPalette(state);
   const command = SLASH_COMMANDS.find((each) => each.name === name);
   if (!command || !shown.options.some(({ id }) => id === name)) return;
+  if (command.action === 'image') {
+    // FR-ED-08: the command's text goes, as a block's choice replaces it, and the picker opens; the
+    // block follows the upload, in place of the empty paragraph the cursor is left in (`insertImageBlock`).
+    (
+      yUndoPluginKey.getState(state) as { undoManager?: { stopCapturing(): void } } | undefined
+    )?.undoManager?.stopCapturing();
+    editor.view.dispatch(state.tr.delete(shown.range.from, shown.range.to).setMeta(CHOSEN, true));
+    // Absent where the editor was made without the upload (a reader's, a test's): nothing opens.
+    editor.commands.chooseImage?.();
+    return;
+  }
   const tr = putting(state, shown.range, state.schema.nodeFromJSON(command.inserts));
   // Undo joins what is typed within half a second into one step (FR-ED-16,
   // over Yjs). The choice begins a step of its own, so that undoing it leaves

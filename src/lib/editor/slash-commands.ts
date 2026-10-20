@@ -7,9 +7,9 @@
 // ../../app/(app)/documents/[id]/slash-palette.tsx.
 //
 // The rows are the block types of α 0.1.0 that the editor holds today, in the
-// order of the requirement. The image and the footnote join with the slices
-// that build those blocks; `/latex`, `/mermaid` and `/cite` are not in the
-// release (Build phases, "Slash palette and shortcuts").
+// order of the requirement. The footnote joins with the slice that builds that
+// block; `/latex`, `/mermaid` and `/cite` are not in the release (Build
+// phases, "Slash palette and shortcuts").
 //
 // Every attribute below is a value its node's own closed list holds: nothing
 // a person types in the palette reaches a node (NFR-SE-06, A03).
@@ -26,6 +26,12 @@ export interface SlashCommand {
   name: string;
   aliases: readonly string[];
   inserts: Block;
+  /**
+   * What a choice does instead of putting `inserts` in place: `image` opens the file picker, and
+   * the block is put where the cursor is when the upload is done (FR-ED-08). `inserts` is then the
+   * block as the document's limits and its place are asked of it.
+   */
+  action?: 'image';
 }
 
 const paragraph: Block = { type: 'paragraph' };
@@ -60,6 +66,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     },
   },
   { name: 'code', aliases: ['codeblock'], inserts: { type: 'codeBlock', attrs: { language: 'plaintext' } } },
+  // FR-ED-12: "Image block". The picker opens, and the block follows the upload (FR-ED-08).
+  { name: 'image', aliases: ['img'], inserts: { type: 'image' }, action: 'image' },
   {
     name: 'callout',
     aliases: ['note'],
