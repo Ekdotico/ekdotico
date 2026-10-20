@@ -18,6 +18,14 @@ vi.mock('../../src/lib/documents/ownership.ts', () => ({
   expireOffers: async () => 0,
   deliverUnsentOffers: async () => 0,
 }));
+// The reminder, the two clearings of addresses and the notifications of ended invitations
+// (tests/integration/invitation-clearing.test.ts runs them against a database).
+vi.mock('../../src/lib/documents/invitation-timers.ts', () => ({
+  remindInvitations: async () => 0,
+  clearInvitationAddresses: async () => 0,
+  deleteEndedInvitationNotifications: async () => 0,
+}));
+vi.mock('../../src/lib/admission/invitations.ts', () => ({ clearAdmissionAddresses: async () => 0 }));
 vi.mock('../../src/lib/documents/access-notifications.ts', () => ({
   deleteExpiredRemovedNotifications: async () => 0,
 }));

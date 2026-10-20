@@ -40,14 +40,24 @@ export type OfferedRole = keyof typeof OFFERED;
 /** The kind of the notification of a document invitation (FR-ED-42). */
 export const INVITATION_NOTIFICATION = 'document_invitation';
 
-/** The notifications of these invitations: their payload names the invitation and nothing else. */
+/**
+ * The kind of the notification of the one reminder of an invitation (FR-ED-42, FR-ED-48). Written by the timer of
+ * ./invitation-timers.ts; it ends as the invitation's own notification does.
+ */
+export const REMINDER_NOTIFICATION = 'document_invitation_reminder';
+
+/** Both kinds of notification an invitation has: their payload names the invitation and nothing else. */
+export const INVITATION_NOTIFICATIONS = [INVITATION_NOTIFICATION, REMINDER_NOTIFICATION];
+
+/** The notifications of these invitations, the invitation's own and its reminder. */
 const notificationsOf = (invitationIds: string[]): Prisma.NotificationWhereInput => ({
-  kind: INVITATION_NOTIFICATION,
+  kind: { in: INVITATION_NOTIFICATIONS },
   OR: invitationIds.map((id) => ({ payload: { path: ['invitationId'], equals: id } })),
 });
 
 /** An invitation is open while it is stored pending and its expiry is ahead ("expired" is derived). */
 const open = (now: Date) => ({ state: 'PENDING' as const, expiresAt: { gt: now } });
+export { open as openInvitation };
 
 // ── Inviting ────────────────────────────────────────────────────────────────
 
@@ -594,8 +604,15 @@ export interface NotificationView {
   invitationId: string;
 }
 
-/** Every kind the list holds: an invitation, a change of role, a removal (./access-notifications.ts). Kinds are added here. */
-export type ListedNotification = NotificationView | AccessNotificationView | OfferNotificationView;
+/** FR-ED-42, FR-ED-48: the one reminder of an invitation, with the day it expires. It names no title. */
+export interface ReminderNotificationView extends Omit<NotificationView, 'kind'> {
+  kind: typeof REMINDER_NOTIFICATION;
+  expiresAt: Date;
+}
+
+/** Every kind the list holds: an invitation and its reminder, a change of role, a removal (./access-notifications.ts). Kinds are added here. */
+export type ListedNotification =
+  NotificationView | ReminderNotificationView | AccessNotificationView | OfferNotificationView;
 
 /**
  * The account's notifications whose subject still exists, newest first, with
@@ -609,7 +626,7 @@ export async function listNotifications(
   now: Date = new Date(),
 ): Promise<{ unread: number; notifications: ListedNotification[] }> {
   const rows = await db().notification.findMany({
-    where: { recipientId: userId, kind: INVITATION_NOTIFICATION },
+    where: { recipientId: userId, kind: { in: INVITATION_NOTIFICATIONS } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
   const ids = rows.flatMap(({ payload }) => {
@@ -624,24 +641,26 @@ export async function listNotifications(
           document: { deletedAt: null },
           OR: [open(now), { state: 'ACCEPTED' }],
         },
-        select: { id: true, role: true, invitedBy: { select: { name: true } } },
+        select: { id: true, role: true, expiresAt: true, invitedBy: { select: { name: true } } },
       })
     ).map((invitation) => [invitation.id, invitation]),
   );
-  const invited = rows.flatMap((row): NotificationView[] => {
+  const invited = rows.flatMap((row): (NotificationView | ReminderNotificationView)[] => {
     const invitationId = (row.payload as { invitationId?: string }).invitationId ?? '';
     const invitation = invitations.get(invitationId);
     if (!invitation) return [];
+    const shown = {
+      id: row.id,
+      createdAt: row.createdAt,
+      read: row.readAt !== null,
+      inviterName: invitation.invitedBy.name ?? '',
+      role: COLLABORATOR_ROLE[invitation.role],
+      invitationId,
+    };
     return [
-      {
-        kind: INVITATION_NOTIFICATION,
-        id: row.id,
-        createdAt: row.createdAt,
-        read: row.readAt !== null,
-        inviterName: invitation.invitedBy.name ?? '',
-        role: COLLABORATOR_ROLE[invitation.role],
-        invitationId,
-      },
+      row.kind === REMINDER_NOTIFICATION
+        ? { ...shown, kind: REMINDER_NOTIFICATION, expiresAt: invitation.expiresAt }
+        : { ...shown, kind: INVITATION_NOTIFICATION },
     ];
   });
   // FR-ED-42, S15-2: one list, newest first, whatever the kind.

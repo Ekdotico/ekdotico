@@ -371,6 +371,11 @@ describe('the removal of ended sessions (NFR-RE-15, FR-AU-84)', () => {
       'security-log-deletion',
       'ended-session-removal',
       'expired-token-removal',
+      // FR-ED-48, FR-ED-37, FR-AU-89: run twice at once here with the others, and found nothing to do.
+      'admission-address-clearing',
+      'invitation-reminder',
+      'invitation-address-clearing',
+      'invitation-notification-removal',
       // FR-ED-47: run twice at once here with the others, and found nothing to do.
       'ownership-offer-expiry',
       'ownership-offer-email',

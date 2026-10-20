@@ -78,6 +78,24 @@ export function setRole(documentId: string, address: string, role: 'editor' | 'r
   expect(ran.status, ran.stderr).toBe(0);
 }
 
+/** Brings the expiry of the pending invitations to an address to 2 days ahead and runs the reminder timer once (tests/e2e/remind-invitation.ts). */
+export function remind(address: string) {
+  const ran = spawnSync('node', ['tests/e2e/remind-invitation.ts', address], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN,
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+      EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(ran.status, ran.stderr).toBe(0);
+}
+
 /** Gives the Editor role these permissions on a document, in the database of the run (tests/e2e/set-permissions.ts). */
 export function setPermissions(documentId: string, permissions: string[]) {
   const ran = spawnSync('node', ['tests/e2e/set-permissions.ts', documentId, permissions.join(',')], {

@@ -18,6 +18,7 @@ import {
   NOT_OPEN_TO_ACCOUNT,
   pendingRow,
   personRow,
+  remind,
   setPermissions,
   setRole,
   shareNew,
@@ -136,6 +137,45 @@ test('declined, revoked, sent again, and expired invitations', async ({ page, br
   await page.reload();
   await expect(page.getByText('2 of 10 people')).toBeVisible();
   for (const context of contexts) await context.close();
+});
+
+test('the one reminder 3 days before the expiry, by email and in the list, once', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  const owner = await enter(page);
+  await shareNew(page);
+  const invitee = newPerson();
+  const other = await browser.newContext();
+  const theirs = await other.newPage();
+  await enter(theirs, invitee);
+  await invite(page, [invitee.email]);
+  await expect(pendingRow(page, invitee.email)).toBeVisible();
+  await mailFor(invitee.email, INVITATION_LINK);
+
+  // The timer, run twice 12 days in: one email, one notification (FR-ED-48).
+  remind(invitee.email);
+  remind(invitee.email);
+  const reminder = await mailFor(
+    invitee.email,
+    /Subject: Your invitation to a document in Ekdotico expires soon/,
+  );
+  expect(reminder.text).toContain(
+    `${owner.name} invited you to a document in Ekdotico as Editor. The invitation expires on `,
+  );
+  expect(reminder.text).toMatch(/open your notifications in Ekdotico: https?:\/\/[^\s]+\/notifications\./);
+
+  await theirs.goto('/notifications');
+  await expect(
+    theirs.getByText(`Reminder: ${owner.name} invited you to a document as Editor.`),
+  ).toBeVisible();
+  await expect(theirs.getByText(/The invitation expires on .+\./)).toHaveCount(1);
+  await expect(theirs.getByRole('link', { name: 'Open the invitation' })).toHaveCount(2);
+  await screens(theirs, 'notifications-reminder');
+  await theirs.getByRole('link', { name: 'Open the invitation' }).first().click();
+  await expect(theirs.getByRole('heading', { level: 1, name: 'Invitation to a document' })).toBeVisible();
+  await other.close();
 });
 
 test('a document holds ten people, the Owner and pending invitations counted', async ({ page }) => {

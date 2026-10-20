@@ -1,7 +1,13 @@
 // The timers of the application (NFR-RE-15): scheduled work that is not a queue
 // job. Started once when a process starts.
+import { clearAdmissionAddresses } from './admission/invitations.ts';
 import { deleteExpiredRemovedNotifications } from './documents/access-notifications.ts';
 import { deleteExpiredDocuments } from './documents/deletion.ts';
+import {
+  clearInvitationAddresses,
+  deleteEndedInvitationNotifications,
+  remindInvitations,
+} from './documents/invitation-timers.ts';
 import { deliverUnsentOffers, expireOffers } from './documents/ownership.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
@@ -22,10 +28,20 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // NFR-RE-15, "deletion of log entries after their retention" (NFR-SE-19).
   'security-log-deletion': () => deleteExpiredSecurityLog(),
   // NFR-RE-15, "removal of ended sessions, of expired reset and confirmation
-  // tokens" (FR-AU-84, FR-AU-86). The third part of that row, the address of an
-  // admission invitation 30 days on, is not built yet.
+  // tokens" (FR-AU-84, FR-AU-86), and "the address of an admission invitation
+  // 30 days after it is revoked or expires" (FR-AU-89); says how many it cleared.
   'ended-session-removal': () => deleteEndedSessions(),
   'expired-token-removal': () => deleteExpiredTokens(),
+  'admission-address-clearing': () => clearAdmissionAddresses(),
+  // NFR-RE-15, "the reminder of a document invitation" (FR-ED-48): the one reminder, claimed on the
+  // invitation's row before its email is handed over; it deletes nothing and says 0 (S18-7).
+  'invitation-reminder': () => remindInvitations(),
+  // NFR-RE-15, "the clearing of the invited address 30 days after an invitation is declined,
+  // revoked, or expires" (FR-ED-37); says how many addresses it cleared.
+  'invitation-address-clearing': () => clearInvitationAddresses(),
+  // FR-ED-42 (S13-6): the notifications of invitations that are no longer open, which an expiry
+  // leaves behind, since it has no event to delete them on.
+  'invitation-notification-removal': () => deleteEndedInvitationNotifications(),
   // NFR-RE-15, "the expiry of the offer" (FR-ED-47): writes the offers past their time expired and
   // deletes their notifications; it says how many offers it expired.
   'ownership-offer-expiry': () => expireOffers(),

@@ -103,6 +103,10 @@ export interface Settings {
   admissionInvitationDays: number;
   /** FR-ED-37: how long a document invitation stays pending, "14 days … (an initial value)". */
   documentInvitationDays: number;
+  /** FR-ED-48: how long before its expiry an invitation is reminded, "3 days … (an initial value)". */
+  invitationReminderDays: number;
+  /** FR-ED-37: how long after it ended the address of a declined, revoked, or expired invitation is kept, "30 days (an initial value)". */
+  documentInvitationAddressDays: number;
   /** FR-ED-47: how long an offer of ownership stays pending, "14 days … (an initial value)". */
   ownershipOfferDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
@@ -361,6 +365,9 @@ export function loadSettings(env: Env = process.env): Settings {
     // At least 1: an invitation of 0 days has expired before its email is read.
     admissionInvitationDays: wholeNumber(env, 'ADMISSION_INVITATION_DAYS', 30, 1),
     documentInvitationDays: wholeNumber(env, 'DOCUMENT_INVITATION_DAYS', 14, 1),
+    // At least 1: a reminder of 0 days would come as the invitation expires, a clearing of 0 as it ends.
+    invitationReminderDays: wholeNumber(env, 'INVITATION_REMINDER_DAYS', 3, 1),
+    documentInvitationAddressDays: wholeNumber(env, 'DOCUMENT_INVITATION_ADDRESS_DAYS', 30, 1),
     ownershipOfferDays: wholeNumber(env, 'OWNERSHIP_OFFER_DAYS', 14, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     deletedDocumentRetentionDays,
