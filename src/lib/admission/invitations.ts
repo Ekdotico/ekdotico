@@ -175,6 +175,38 @@ export async function revokeInvitation(id: string, now: Date = new Date()): Prom
     : { outcome: 'not_pending' };
 }
 
+/** FR-AU-89, §2.7: "cleared 30 days after it is revoked or expires". Not marked an initial value there, so fixed. */
+const ADDRESS_DAYS = 30;
+
+/**
+ * FR-AU-89, §2.7, NFR-RE-15: the address of an admission invitation is
+ * cleared 30 days after it is revoked or expires; the row stays, without it.
+ * Counted from `revokedAt` and from `expiresAt`, at exactly the period and
+ * not before; a row still stored as pending that long after its expiry is
+ * written as expired. An accepted invitation is left alone: its address is
+ * the account's, and is cleared when that account is deleted (FR-AU-58, a
+ * later slice). Idempotent: it matches the rows that still hold an address,
+ * so two instances clear each row once. Answers with the number cleared.
+ */
+export async function clearAdmissionAddresses(now: Date = new Date()): Promise<number> {
+  const before = new Date(now.getTime() - ADDRESS_DAYS * DAY_MS);
+  const stale = await db().admissionInvitation.updateMany({
+    where: { email: { not: null }, state: 'PENDING', expiresAt: { lte: before } },
+    data: { email: null, state: 'EXPIRED' },
+  });
+  const ended = await db().admissionInvitation.updateMany({
+    where: {
+      email: { not: null },
+      OR: [
+        { state: 'REVOKED', revokedAt: { lte: before } },
+        { state: 'EXPIRED', expiresAt: { lte: before } },
+      ],
+    },
+    data: { email: null },
+  });
+  return stale.count + ended.count;
+}
+
 /**
  * The invited address of the pending invitation whose token this is, for the
  * sign-up page to show (FR-AU-90). Null for no token, and for the token of an

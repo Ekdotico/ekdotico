@@ -21,6 +21,14 @@ export default async function Notifications() {
         if (notification.kind === 'removed' || notification.kind === 'ownership_offer') {
           return { ...notification, createdAt };
         }
+        if (notification.kind === 'document_invitation_reminder') {
+          return {
+            ...notification,
+            role: ROLE_NAME[notification.role],
+            createdAt,
+            expiresAt: notification.expiresAt?.toISOString() ?? null,
+          };
+        }
         return { ...notification, role: ROLE_NAME[notification.role], createdAt };
       })}
     />

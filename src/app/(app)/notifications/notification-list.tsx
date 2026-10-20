@@ -19,6 +19,15 @@ interface Shown {
 /** One notification, by kind (src/lib/documents/sharing.ts, `ListedNotification`). */
 export type NotificationItem =
   | (Shown & { kind: 'document_invitation'; inviterName: string; role: string; invitationId: string })
+  // FR-ED-42, FR-ED-48: the one reminder, 3 days before the invitation expires; it names no title (S18-4).
+  | (Shown & {
+      kind: 'document_invitation_reminder';
+      inviterName: string;
+      role: string;
+      invitationId: string;
+      /** ISO 8601, UTC; null once the invitation was accepted (S18-2). */
+      expiresAt: string | null;
+    })
   // FR-ED-42, S15-2: the person's role on a document was changed; they hold it still.
   | (Shown & { kind: 'role_changed'; documentId: string; title: string; role: string })
   // FR-ED-42, S15-2: the person was removed. It names no document and links to nothing (register row PR-5).
@@ -33,6 +42,17 @@ function Statement({ notification }: { notification: NotificationItem }) {
       return (
         <>
           <bdi>{notification.inviterName}</bdi> invited you to a document as {notification.role}.
+        </>
+      );
+    case 'document_invitation_reminder':
+      return (
+        <>
+          Reminder: <bdi>{notification.inviterName}</bdi> invited you to a document as {notification.role}.{' '}
+          {notification.expiresAt === null ? null : (
+            <InBrowser>
+              The invitation expires on <LocalTime at={notification.expiresAt} />.
+            </InBrowser>
+          )}
         </>
       );
     case 'role_changed':
@@ -57,6 +77,7 @@ function Statement({ notification }: { notification: NotificationItem }) {
 function Subject({ notification }: { notification: NotificationItem }) {
   switch (notification.kind) {
     case 'document_invitation':
+    case 'document_invitation_reminder':
       return (
         <Link
           id={`open-${notification.id}`}
