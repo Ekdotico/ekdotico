@@ -49,8 +49,9 @@ Step (c) of an account deletion, which instructs the feedback intake, **is** bui
 
 ## Services and infrastructure
 
-- **User interface** is built from `@ekdotico/domico` 0.31.0, pinned exactly like every dependency (NFR-IC-08; GitHub Packages). Read the package's `AGENTS.md` and its docs in `node_modules` before any UI work. If a control or a token is missing, stop and report; do not improvise one here.
+- **User interface** is built from `@ekdotico/domico` 0.32.0, pinned exactly like every dependency (NFR-IC-08; GitHub Packages). Read the package's `AGENTS.md` and its docs in `node_modules` before any UI work. If a control or a token is missing, stop and report; do not improvise one here.
 - **Email** is sent through Scaleway Transactional Email, behind an interface with a local sink. Send no real email until the owner confirms the three checks of the service: the text of its agreement, its retention, and the standing of its API (register D70, which confirms the choice of service and keeps the checks; D92 for the email of the account. A52 and A72, which earlier versions of this file cited, are closed by those two rows).
+- **Images** (FR-ED-08, NFR-SE-18) are stored in DigitalOcean Spaces in production and in a local store of the S3 protocol in development (`compose.yaml`; README.md), behind `src/lib/images/storage.ts`, and are shown through a link of 5 minutes that a route issues from the session's row. The one origin of the store is named in `img-src` and nowhere else (owner's decisions of 20 October 2026; `docs/plan/slice-19.md`).
 - **Production** is DigitalOcean Frankfurt (PostgreSQL, Valkey, Spaces). Provisioning it and setting its secrets are the owner's tasks. Develop against local equivalents. Never deploy, and never commit a secret.
 - In α 0.1.0: no job queue, no call to an AI provider, no product analytics, and no personal data sent to an error-reporting service (Build phases: the exclusions, and the release's part of NFR-DP-05). Scheduled work runs on timers in the application and in the collaboration server (NFR-RE-15).
 
