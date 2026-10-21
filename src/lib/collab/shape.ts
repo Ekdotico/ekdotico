@@ -42,11 +42,17 @@
 //   blocks, counted outside the cells of tables, a table counted as one
 //   (`ONE_BLOCK` says what one block is).
 //
+// - FR-ED-05, NFR-SE-06: the marker and the entry of a footnote each hold an
+//   identifier of one form (src/lib/footnotes/node.ts) and no other attribute,
+//   in whatever Yjs content the value is carried (`attributeRefused`); a marker
+//   holds nothing (`LEAVES`); an entry is one block of the total (`ONE_BLOCK`).
+//
 // The bounds and the limits are named here, where the browser can import them
 // too (src/app/(app)/documents/[id]/table-bounds.ts and block-limits.ts), so
 // that the two hold the same.
 import { Schema, type NodeSpec } from '@tiptap/pm/model';
 import * as Y from 'yjs';
+import { FOOTNOTE_NODES, footnoteAttributeAllowed } from '../footnotes/node.ts';
 import { imageAttributeAllowed } from '../images/node.ts';
 import { FRAGMENT_NAME } from './protocol.ts';
 
@@ -67,7 +73,6 @@ export const NODES: Record<string, NodeSpec> = {
   paragraph: { content: 'inline*', group: 'block' },
   blockquote: { content: 'block+', group: 'block' },
   bulletList: { content: 'listItem+', group: 'block list' },
-  doc: { content: 'block+' },
   hardBreak: { group: 'inline', inline: true },
   heading: { content: 'inline*', group: 'block' },
   horizontalRule: { group: 'block' },
@@ -87,6 +92,14 @@ export const NODES: Record<string, NodeSpec> = {
   // FR-ED-08: an image, as the block that holds the identifier of an uploaded image and the words
   // that go with it (src/lib/images/node.ts). It holds no content.
   image: { group: 'block' },
+  // FR-ED-05: the document takes the list of footnotes after its blocks, once; the list is in none of
+  // the groups of the blocks, so no block can be put in it and it can be put in no block.
+  doc: { content: 'block+ footnotes?' },
+  // A footnote is a marker in the text and an entry in the list at the end of the document
+  // (src/lib/footnotes/node.ts). The marker holds no content; the entry holds text and line breaks.
+  footnoteReference: { group: 'inline', inline: true },
+  footnotes: { content: 'footnote+' },
+  footnote: { content: '(text | hardBreak)*' },
 };
 const SCHEMA = new Schema({ nodes: NODES, topNode: 'doc' });
 
@@ -144,6 +157,10 @@ export const ONE_BLOCK: ReadonlySet<string> = new Set([
   'tableBlock',
   // An image block is one block, as a paragraph is (register row S19-6, recommended).
   'image',
+  // An entry of a footnote is one block as a paragraph is (register row S20-2, recommended). The list
+  // that holds the entries is counted by what it holds, as a list of items is, and the marker, which
+  // is in a block already, counts none.
+  'footnote',
 ]);
 const LIST_PARTS = new Set([...LISTS, 'listItem']);
 
@@ -178,9 +195,10 @@ export const pastLimit = (limit: Limit, before: number, after: number) =>
 
 /**
  * Which rule an update would break: `incomplete` (D170, D180), `table` (D171, D172), `image` (an
- * image block given an attribute it may not hold: FR-ED-08, NFR-SE-06 A01), or a limit (D184, D192, D193).
+ * image block given an attribute it may not hold: FR-ED-08, NFR-SE-06 A01), `footnote` (a marker or
+ * an entry of a footnote given one: FR-ED-05, NFR-SE-06), or a limit (D184, D192, D193).
  */
-export type Shape = 'incomplete' | 'table' | 'image' | 'leaf' | Limit;
+export type Shape = 'incomplete' | 'table' | 'image' | 'footnote' | 'leaf' | Limit;
 
 /**
  * The blocks that hold nothing: no content in the schema, and no text (a line break, a divider, a
@@ -472,18 +490,26 @@ function was(document: Y.Doc, type: Shared): Shared | null {
 const TABLES = new Set(['table']);
 
 /**
- * FR-ED-08, NFR-SE-06 A01: whether an attribute that an update sets on an
- * element is one the element may not hold. Only an image block's attributes
- * are looked at: its `id`, `alt`, `caption` and `width` (src/lib/images/node.ts)
- * and nothing else, so that no address can be written into one, whatever the
- * name it is written under. The value is held to its form and its bounds; one
- * that is not a plain value (a shared type, binary data, a subdocument) is
- * refused. A deleted value is no value.
+ * FR-ED-08, NFR-SE-06 A01, FR-ED-05: whether an attribute that an update sets on an
+ * element is one the element may not hold, and which rule it breaks. Only the
+ * attributes of an image block (`id`, `alt`, `caption`, `width`:
+ * src/lib/images/node.ts) and of the marker and the entry of a footnote (`id`:
+ * src/lib/footnotes/node.ts) are looked at, and nothing else may be written into
+ * one, so that no address can be, whatever the name it is written under. The
+ * value is held to its form and its bounds; one that is not a plain value (JSON,
+ * an embed, a format, a shared type, binary data, a subdocument) is refused. A
+ * deleted value is no value.
  */
-function imageAttributeRefused(parentName: string | null, key: string | null, content: unknown): boolean {
-  if (parentName !== 'image' || key === null || content instanceof Y.ContentDeleted) return false;
-  if (!(content instanceof Y.ContentAny) || content.arr.length !== 1) return true;
-  return !imageAttributeAllowed(key, content.arr[0]);
+function attributeRefused(parentName: string | null, key: string | null, content: unknown): Shape | null {
+  if (parentName === null || key === null || content instanceof Y.ContentDeleted) return null;
+  const rule: Shape | null =
+    parentName === 'image' ? 'image' : FOOTNOTE_NODES.has(parentName) ? 'footnote' : null;
+  if (rule === null) return null;
+  if (!(content instanceof Y.ContentAny) || content.arr.length !== 1) return rule;
+  const value: unknown = content.arr[0];
+  return (rule === 'image' ? imageAttributeAllowed(key, value) : footnoteAttributeAllowed(key, value))
+    ? null
+    : rule;
 }
 
 /**
@@ -535,12 +561,11 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
       for (let at = Y.findIndexSS(structs, from); at < structs.length; at += 1) {
         const item = structs[at];
         if (!(item instanceof Y.Item) || item.deleted) continue;
-        // An attribute of an image block (`imageAttributeRefused`).
-        if (
-          item.parentSub !== null &&
-          imageAttributeRefused(nameOfType(item.parent as Shared), item.parentSub, item.content)
-        )
-          return 'image';
+        // An attribute of an image block, or of a footnote's marker or entry (`attributeRefused`).
+        if (item.parentSub !== null) {
+          const refused = attributeRefused(nameOfType(item.parent as Shared), item.parentSub, item.content);
+          if (refused) return refused;
+        }
         // An element or text inside a block that holds nothing (`LEAVES`).
         if (
           item.parentSub === null &&
@@ -733,10 +758,12 @@ export function withoutCopy(
     const stands = parent !== null && standsIn(parent) && !(item.content instanceof Y.ContentDeleted);
     if (stands) placed.add(item);
     alive.set(item, stands && !Y.isDeleted(ds, item.id));
-    // An attribute of an image block (`imageAttributeRefused`), where it stands after the update.
+    // An attribute of an image block, or of a footnote's marker or entry (`attributeRefused`), where it stands
+    // after the update.
     if (alive.get(item) && key !== null && parent !== null && typeof parent !== 'string') {
       const holder = parent instanceof Y.Item ? nameOf(parent) : nameOfType(parent);
-      if (imageAttributeRefused(holder, key, item.content)) return 'image';
+      const refused = attributeRefused(holder, key, item.content);
+      if (refused) return refused;
     }
     // An element or text inside a block that holds nothing (`LEAVES`), where it stands after the update.
     if (

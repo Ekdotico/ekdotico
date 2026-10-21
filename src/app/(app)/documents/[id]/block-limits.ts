@@ -186,15 +186,22 @@ export const deletesOnly = (transaction: Transaction) =>
     if (!(step instanceof ReplaceStep)) return false;
     if (step.slice.size === 0) return true;
     // One empty paragraph, and only where it is all that its parent is left
-    // with, or at the end of the document, where the editor keeps one after a
-    // last block that is not one (the trailing node of the starter kit). Not
-    // blank lines pasted over a selection (the review of pull request 41).
+    // with, or at the end of the body of the document, where the editor keeps
+    // one after a last block that is not one (the trailing node of the starter
+    // kit, which stands before the list of footnotes where there is one:
+    // ./footnotes.ts). Not blank lines pasted over a selection (the review of
+    // pull request 41).
     const { content, openStart, openEnd } = step.slice;
     const paragraph = content.firstChild;
     if (content.childCount !== 1 || openStart || openEnd || paragraph!.type.name !== 'paragraph')
       return false;
     if (paragraph!.content.size > 0) return false;
-    if (step.from === step.to) return step.from === transaction.docs[at]!.content.size;
+    if (step.from === step.to) {
+      const before = transaction.docs[at]!;
+      const list =
+        before.childCount > 1 && before.lastChild?.type.name === 'footnotes' ? before.lastChild : null;
+      return step.from === before.content.size - (list?.nodeSize ?? 0);
+    }
     return (transaction.docs[at + 1] ?? transaction.doc).resolve(step.from).parent.childCount === 1;
   });
 

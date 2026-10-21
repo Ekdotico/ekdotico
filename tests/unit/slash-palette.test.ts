@@ -157,11 +157,12 @@ describe('where the palette opens (FR-ED-10)', () => {
     // A callout holds paragraphs and nothing else.
     const callout = editorOf({ type: 'callout', attrs: { type: 'note' }, content: [paragraph()] });
     type(callout, '/');
-    expect(listed(callout)).toEqual(['text']);
+    // The footnote's marker is inline, and stands in the paragraph of a callout (FR-ED-05).
+    expect(listed(callout)).toEqual(['text', 'footnote']);
     // A list item begins with a paragraph, and takes any block after it.
     const item = editorOf({ type: 'bulletList', content: [{ type: 'listItem', content: [paragraph()] }] });
     type(item, '/');
-    expect(listed(item)).toEqual(['text']);
+    expect(listed(item)).toEqual(['text', 'footnote']);
     press(item, 'Escape');
     type(item, ' /');
     expect(listed(item)).toEqual(ALL);

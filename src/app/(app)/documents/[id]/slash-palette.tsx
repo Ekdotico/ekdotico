@@ -44,6 +44,7 @@ import {
   type SlashCommand,
 } from '../../../../lib/editor/slash-commands.ts';
 import { limitRefusal, passesLimits } from './block-limits.ts';
+import { insertingFootnote } from './footnotes.ts';
 import { tableRoom, tablesIn } from './table-bounds.ts';
 
 /** The id of the list, which the text names while the list shows a row. */
@@ -68,6 +69,7 @@ export const SLASH_NAMES: Record<string, string> = {
   code: 'Code block',
   image: 'Image',
   callout: 'Callout',
+  footnote: 'Footnote',
   toc: 'Table of contents',
   divider: 'Divider',
   'page-break': 'Page break',
@@ -205,8 +207,20 @@ function stands(state: EditorState, range: Range, block: Block): boolean {
   );
 }
 
+/**
+ * Whether a footnote can be put where the command stands (FR-ED-05): a marker can stand there (not in a
+ * code block, a caption or an entry), and the change, with the entry it makes, keeps the limits of the
+ * document: the entry is a block of the 5,000.
+ */
+function standsFootnote(state: EditorState, range: Range): boolean {
+  const tr = insertingFootnote(state, range);
+  return tr !== null && limitRefusal(tr, state.doc) === null;
+}
+
 const offered = (state: EditorState, range: Range, commands: readonly SlashCommand[]) =>
-  commands.filter(({ inserts }) => stands(state, range, inserts));
+  commands.filter(({ inserts, action }) =>
+    action === 'footnote' ? standsFootnote(state, range) : stands(state, range, inserts),
+  );
 
 /**
  * Whether a transaction is a request for the palette: this writer typed the
@@ -301,7 +315,12 @@ export function chooseSlashCommand(editor: Editor, name: string): void {
     editor.commands.chooseImage?.();
     return;
   }
-  const tr = putting(state, shown.range, state.schema.nodeFromJSON(command.inserts));
+  // FR-ED-05: the marker where the command stood, its entry, and the cursor in the entry: one change.
+  const tr =
+    command.action === 'footnote'
+      ? insertingFootnote(state, shown.range)
+      : putting(state, shown.range, state.schema.nodeFromJSON(command.inserts));
+  if (!tr) return;
   // Undo joins what is typed within half a second into one step (FR-ED-16,
   // over Yjs). The choice begins a step of its own, so that undoing it leaves
   // the `/` and the query as they were typed.

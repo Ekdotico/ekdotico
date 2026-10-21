@@ -7,9 +7,8 @@
 // ../../app/(app)/documents/[id]/slash-palette.tsx.
 //
 // The rows are the block types of α 0.1.0 that the editor holds today, in the
-// order of the requirement. The footnote joins with the slice that builds that
-// block; `/latex`, `/mermaid` and `/cite` are not in the release (Build
-// phases, "Slash palette and shortcuts").
+// order of the requirement; `/latex`, `/mermaid` and `/cite` are not in the
+// release (Build phases, "Slash palette and shortcuts").
 //
 // Every attribute below is a value its node's own closed list holds: nothing
 // a person types in the palette reaches a node (NFR-SE-06, A03).
@@ -29,9 +28,11 @@ export interface SlashCommand {
   /**
    * What a choice does instead of putting `inserts` in place: `image` opens the file picker, and
    * the block is put where the cursor is when the upload is done (FR-ED-08). `inserts` is then the
-   * block as the document's limits and its place are asked of it.
+   * block as the document's limits and its place are asked of it. `footnote` puts the marker, which
+   * is inline, where the command stood, makes its entry in the list at the end of the document, and
+   * puts the cursor in the entry (FR-ED-05; the owner's decision on Q16 (c)); `inserts` is the marker.
    */
-  action?: 'image';
+  action?: 'image' | 'footnote';
 }
 
 const paragraph: Block = { type: 'paragraph' };
@@ -74,6 +75,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     // "Callout block (note variant)".
     inserts: { type: 'callout', attrs: { type: 'note' }, content: [paragraph] },
   },
+  // FR-ED-12: "Footnote block", which the owner's decision on Q16 (c) reads as the marker with its entry.
+  { name: 'footnote', aliases: ['fn'], inserts: { type: 'footnoteReference' }, action: 'footnote' },
   { name: 'toc', aliases: ['contents'], inserts: { type: 'tableOfContents' } },
   { name: 'divider', aliases: ['hr', 'rule'], inserts: { type: 'horizontalRule' } },
   { name: 'page-break', aliases: ['pagebreak'], inserts: { type: 'pageBreak' } },
