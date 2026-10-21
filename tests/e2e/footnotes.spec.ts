@@ -222,7 +222,9 @@ test('a footnote put before the first renumbers both, the list follows the marke
   await page.keyboard.press('End');
   await page.keyboard.press('Backspace');
   await expect(marker(page)).toHaveCount(0);
-  await expect(doc.locator(`section[aria-label="${FOOTNOTES}"]`)).toHaveCount(0);
+  // The list stays, empty (no list is ever deleted), and is not drawn: no region named Footnotes is on the page.
+  await expect(doc.locator(`section[aria-label="${FOOTNOTES}"]`)).toBeHidden();
+  await expect(entries(page)).toHaveCount(0);
 
   // One step of undo brings the marker and the entry back together.
   await page.keyboard.press('ControlOrMeta+z');
