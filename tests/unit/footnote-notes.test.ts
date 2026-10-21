@@ -551,6 +551,22 @@ describe('a copied marker (S20-4)', () => {
     expect(ids(editor)).not.toContain('9'.repeat(24));
   });
 
+  it('hands back a paste that holds no marker as it is, the very slice', () => {
+    const editor = editorOf(p(text('Next')));
+    const slice = new Slice(editor.schema.nodeFromJSON(p(text('plain words'))).content, 0, 0);
+    expect(props(editor).transformPasted!.call(plugin(editor), slice, view(editor), false)).toBe(slice);
+  });
+
+  it('leaves a paste nested past what the stack takes to the editor’s own refusal, and is no fault of the paste', () => {
+    const editor = editorOf(p(text('Next')));
+    // Quotes ten thousand deep, which the schema holds and the stack of a recursive walk does not.
+    let node: PMNode = editor.schema.nodeFromJSON(p(marker('8'.repeat(24))));
+    for (let level = 0; level < 20_000; level += 1) node = editor.schema.nodes.blockquote!.create(null, node);
+    const slice = new Slice(node.content.size ? node.content : node.content, 0, 0);
+    const handed = props(editor).transformPasted!.call(plugin(editor), slice, view(editor), false);
+    expect(handed).toBeDefined();
+  });
+
   it('gives a marker that arrives in a paste an identifier of its own even when the page supplies one', () => {
     const editor = editorOf(p(text('Next')));
     const hostile = editor.schema.nodeFromJSON({

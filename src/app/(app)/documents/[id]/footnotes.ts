@@ -565,25 +565,36 @@ export const Footnotes = Extension.create({
           transformPasted(slice, view) {
             const marker = view.state.schema.nodes[MARKER];
             if (!marker) return slice;
-            let seen = false;
-            const swap = (fragment: Fragment): Fragment => {
-              const out: PMNode[] = [];
-              fragment.forEach((node) => {
-                if (node.type.name === MARKER) {
-                  seen = true;
-                  const old: unknown = node.attrs.id;
-                  const id = newFootnoteId();
-                  const words = isFootnoteId(old)
-                    ? (entryOf(view.state.doc, old)?.node.content ?? KEPT.get(old))
-                    : undefined;
-                  if (words) remember(PENDING, id, words, PENDING_MOST);
-                  out.push(marker.create({ id }));
-                } else out.push(node.isLeaf ? node : node.copy(swap(node.content)));
+            try {
+              // Most pastes hold no marker, and are handed back as they are, whatever their size.
+              let holds = false;
+              slice.content.descendants((node) => {
+                if (node.type.name === MARKER) holds = true;
+                return !holds;
               });
-              return Fragment.fromArray(out);
-            };
-            const content = swap(slice.content);
-            return seen ? new Slice(content, slice.openStart, slice.openEnd) : slice;
+              if (!holds) return slice;
+              const swap = (fragment: Fragment): Fragment => {
+                const out: PMNode[] = [];
+                fragment.forEach((node) => {
+                  if (node.type.name === MARKER) {
+                    const old: unknown = node.attrs.id;
+                    const id = newFootnoteId();
+                    const words = isFootnoteId(old)
+                      ? (entryOf(view.state.doc, old)?.node.content ?? KEPT.get(old))
+                      : undefined;
+                    if (words) remember(PENDING, id, words, PENDING_MOST);
+                    out.push(marker.create({ id }));
+                  } else out.push(node.isLeaf ? node : node.copy(swap(node.content)));
+                });
+                return Fragment.fromArray(out);
+              };
+              return new Slice(swap(slice.content), slice.openStart, slice.openEnd);
+            } catch {
+              // Content nested past what the stack takes is the editor's to refuse (`holdBinding`, the limits),
+              // and is not made a fault of the paste here: its markers stand as they were, and a marker whose
+              // identifier an earlier one holds is taken out at the next change.
+              return slice;
+            }
           },
         },
         // After a change this writer made: the list is what it must be, in the same step of undo. After a
