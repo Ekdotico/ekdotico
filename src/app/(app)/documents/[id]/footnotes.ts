@@ -39,14 +39,7 @@
 // `ENTRY_MARKUP` and the attributes of `numbersOf`, and nothing else changes.
 import { Extension, Node, type Editor } from '@tiptap/core';
 import { Fragment, Slice, type DOMOutputSpec, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
-import {
-  NodeSelection,
-  Plugin,
-  PluginKey,
-  TextSelection,
-  type EditorState,
-  type Transaction,
-} from '@tiptap/pm/state';
+import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import { ySyncPluginKey } from '@tiptap/y-tiptap';
 import { isFootnoteId, newFootnoteId } from '../../../../lib/footnotes/node.ts';
@@ -333,12 +326,30 @@ const MARKER_MARKUP = (id: unknown): DOMOutputSpec => [
   { 'data-footnote-id': isFootnoteId(id) ? id : '' },
 ];
 
-/** The marker's own view: a superscript link, named by its number (`numbering` hands the number in a decoration). */
-function markerView({ node, editor }: { node: PMNode; editor: Editor }) {
+/**
+ * The marker's own view: a superscript link, named by its number (`numbersOf` hands the number in a decoration).
+ *
+ * THE LINK IS A STOP OF TAB, in the text as well as where the document cannot be edited. An arrow key does not
+ * select an inline node (ProseMirror moves the cursor over it), so the way to a marker's entry from the keyboard
+ * is the link's own: Tab from the text reaches the next marker, Shift+Tab the one before, and Enter follows it.
+ * The keys pressed on the link are the link's and not the editor's, which would otherwise answer Enter by
+ * splitting the paragraph at the cursor (`stopEvent`).
+ */
+export function markerView({
+  node,
+  editor,
+  decorations = [],
+}: {
+  node: PMNode;
+  editor: Editor;
+  decorations?: readonly Decoration[];
+}) {
   let id: unknown = node.attrs.id;
   const dom = document.createElement('sup');
   const link = document.createElement('a');
   link.setAttribute('role', 'doc-noteref');
+  // Said, and not left to the element: a link inside an editable region is not always a stop of Tab.
+  link.tabIndex = 0;
   dom.append(link);
   link.addEventListener('click', (event) => {
     event.preventDefault();
@@ -346,7 +357,7 @@ function markerView({ node, editor }: { node: PMNode; editor: Editor }) {
   });
   const draw = (given: PMNode, decorations: readonly Decoration[]) => {
     id = given.attrs.id;
-    const spec = decorations.map((each) => each.spec as { footnoteNumber?: number; editable?: boolean });
+    const spec = decorations.map((each) => each.spec as { footnoteNumber?: number });
     const number = spec.find((each) => typeof each.footnoteNumber === 'number')?.footnoteNumber;
     // A marker with no valid identifier, which nothing links to, is not shown: it is taken out at the next change.
     dom.hidden = number === undefined || !isFootnoteId(id);
@@ -354,12 +365,8 @@ function markerView({ node, editor }: { node: PMNode; editor: Editor }) {
     link.href = `#${anchor(id as string)}`;
     link.textContent = String(number);
     link.setAttribute('aria-label', markerName(number!));
-    // In the text a marker is reached by the arrow keys, which select it, and Enter follows it: it is no
-    // stop of Tab between the text and what follows. Where the document cannot be edited it is a link.
-    if (spec.some((each) => each.editable)) link.tabIndex = -1;
-    else link.removeAttribute('tabindex');
   };
-  draw(node, []);
+  draw(node, decorations);
   return {
     dom,
     update(updated: PMNode, decorations: readonly Decoration[]) {
@@ -367,6 +374,9 @@ function markerView({ node, editor }: { node: PMNode; editor: Editor }) {
       draw(updated, decorations);
       return true;
     },
+    // The keys of a link that has the focus are the browser's.
+    stopEvent: (event: Event) =>
+      event.type === 'keydown' || event.type === 'keyup' || event.type === 'keypress',
     ignoreMutation: () => true,
   };
 }
@@ -465,7 +475,7 @@ function numbersOf(doc: PMNode, editable: boolean): DecorationSet {
     const numbers = numbering(doc);
     const found: Decoration[] = [];
     for (const { pos, id } of markersIn(doc)) {
-      if (id) found.push(Decoration.node(pos, pos + 1, {}, { footnoteNumber: numbers.get(id), editable }));
+      if (id) found.push(Decoration.node(pos, pos + 1, {}, { footnoteNumber: numbers.get(id) }));
     }
     if (list) {
       const start = doc.content.size - list.nodeSize + 1;
@@ -508,6 +518,19 @@ const own = (transactions: readonly Transaction[]) =>
       each.docChanged && !each.getMeta(ySyncPluginKey) && each.getMeta('appendedTransaction') === undefined,
   );
 
+/**
+ * A line break where the cursor is in an entry, in place of what is selected, and never a second entry,
+ * which would hold the same identifier. False where the cursor is not in an entry: the key is then
+ * another's.
+ */
+export function lineBreakInEntry(editor: Editor): boolean {
+  const { state } = editor;
+  const lineBreak = state.schema.nodes.hardBreak;
+  if (!lineBreak || state.selection.$from.parent.type.name !== ENTRY) return false;
+  editor.view.dispatch(state.tr.replaceSelectionWith(lineBreak.create()).scrollIntoView());
+  return true;
+}
+
 /** Whether a transaction is a change that arrives from the binding: another client's, or an undo. */
 const arrived = (transactions: readonly Transaction[]) =>
   transactions.some((each) => each.docChanged && each.getMeta(ySyncPluginKey));
@@ -520,16 +543,11 @@ export const Footnotes = Extension.create({
   },
   addKeyboardShortcuts() {
     return {
-      // A marker that the arrow keys selected: Enter follows it. In an entry: a line break, and never a second
-      // entry, which would hold the same identifier.
-      Enter: () => {
-        const { selection } = this.editor.state;
-        if (selection instanceof NodeSelection && selection.node.type.name === MARKER)
-          return followMarker(this.editor, selection.node.attrs.id);
-        if (selection.$from.parent.type.name === ENTRY && this.editor.isEditable)
-          return this.editor.commands.setHardBreak();
-        return false;
-      },
+      // In an entry: a line break, and never a second entry, which would hold the same identifier.
+      Enter: () => this.editor.isEditable && lineBreakInEntry(this.editor),
+      // The library's own key for a line break does nothing in an entry, which is isolating (its command
+      // refuses an isolating block), and the entry takes a line break all the same.
+      'Shift-Enter': () => this.editor.isEditable && lineBreakInEntry(this.editor),
     };
   },
   addProseMirrorPlugins() {

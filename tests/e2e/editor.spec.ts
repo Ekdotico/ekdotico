@@ -723,16 +723,22 @@ const SLASH_ROWS: [command: string, row: string, made: string, words?: string][]
   ['page-break', 'Page break', '.ekd-page-break'],
 ];
 
-// What the palette lists: those rows, and `/image` (FR-ED-12) after the code block. Its choice opens the
-// picker and puts no block of its own, so it is not among the rows above, which are chosen one after
-// another; tests/e2e/images.spec.ts chooses it.
+// What the palette lists: those rows, `/image` (FR-ED-12) after the code block, and `/footnote` after the
+// callout. The choice of the first opens the picker, and of the second puts a marker in the text and
+// makes its entry at the end of the document, so neither is among the rows above, which are chosen one
+// after another; tests/e2e/images.spec.ts and tests/e2e/footnotes.spec.ts choose them.
 const LISTED: [command: string, row: string][] = SLASH_ROWS.flatMap(([command, row]): [string, string][] =>
   command === 'code'
     ? [
         [command, row],
         ['image', 'Image'],
       ]
-    : [[command, row]],
+    : command === 'callout'
+      ? [
+          [command, row],
+          ['footnote', 'Footnote'],
+        ]
+      : [[command, row]],
 );
 
 /** Every block of the rows above, once, as it was inserted. */

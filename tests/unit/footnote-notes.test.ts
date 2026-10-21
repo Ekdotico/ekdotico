@@ -20,6 +20,7 @@ import {
   entryOf,
   insertingFootnote,
   numbering,
+  lineBreakInEntry,
 } from '../../src/app/(app)/documents/[id]/footnotes.ts';
 import { chooseSlashCommand, slashPalette } from '../../src/app/(app)/documents/[id]/slash-palette.tsx';
 import { LIMITS } from '../../src/lib/collab/shape.ts';
@@ -57,6 +58,7 @@ function editorOf(...content: Json[]) {
 /** The document as plain data: a marker is `[id]`, an entry `<id: words>`, the list `{…}`. */
 function shape(node: PMNode): string {
   if (node.isText) return node.text!;
+  if (node.type.name === 'hardBreak') return '⏎';
   if (node.type.name === MARKER) return `[${String(node.attrs.id).slice(0, 1)}]`;
   const inside = node.children.map(shape).join(node.type.name === LIST ? ' ' : '');
   if (node.type.name === ENTRY) return `<${String(node.attrs.id).slice(0, 1)}: ${inside}>`;
@@ -594,6 +596,40 @@ describe('the limits of a document count footnotes (D184, D192; S20-2)', () => {
   });
 });
 
+describe('Enter in an entry (S20-5)', () => {
+  const inEntry = () => {
+    const editor = editorOf(p(marker(A), text(' w')), list(entry(A, text('note'))));
+    editor.commands.setTextSelection(entryOf(editor.state.doc, A)!.pos + 3);
+    return editor;
+  };
+
+  it('is a line break, and never a second entry: the library’s own command refuses an isolating block', () => {
+    const editor = inEntry();
+    // What the library offers does nothing here, which is why the entry has a key of its own.
+    expect(editor.commands.setHardBreak()).toBe(false);
+    expect(lineBreakInEntry(editor)).toBe(true);
+    expect(now(editor)).toBe('[a] w | {<a: no⏎te>}');
+    expect(editor.state.doc.lastChild!.childCount).toBe(1);
+    editor.state.doc.check();
+  });
+
+  it('replaces what is selected', () => {
+    const editor = inEntry();
+    const held = entryOf(editor.state.doc, A)!;
+    editor.commands.setTextSelection({ from: held.pos + 2, to: held.pos + 4 });
+    expect(lineBreakInEntry(editor)).toBe(true);
+    expect(entryOf(editor.state.doc, A)!.node.textContent).toBe('ne');
+    expect(entryOf(editor.state.doc, A)!.node.child(1).type.name).toBe('hardBreak');
+  });
+
+  it('is not the key where the cursor is not in an entry', () => {
+    const editor = editorOf(p(text('words')));
+    editor.commands.setTextSelection(3);
+    expect(lineBreakInEntry(editor)).toBe(false);
+    expect(now(editor)).toBe('words');
+  });
+});
+
 describe('the row of the palette (FR-ED-10, FR-ED-12)', () => {
   const type = (editor: Editor, words: string) => {
     for (const character of words) editor.view.dispatch(editor.state.tr.insertText(character));
@@ -697,8 +733,22 @@ describe('applyNotes', () => {
       spent.push(performance.now() - began);
     }
     spent.sort((a, b) => a - b);
-    // A generous bound: the median key of a document this size. It fails where every key reads every node.
-    expect(spent[10]!).toBeLessThan(150);
+    // A generous bound, fifty times what the median key took (a millisecond). It fails where every key reads every node.
+    expect(spent[10]!).toBeLessThan(50);
     expect(editor.state.doc.lastChild!.childCount).toBe(500);
+
+    // What follows a change that arrives, which deletes and makes nothing, reads as little.
+    const arriving: number[] = [];
+    for (let key = 0; key < 20; key += 1) {
+      const began = performance.now();
+      const next = editor.state.tr.insertText('y', 5);
+      applyNotes(next, true);
+      editor.view.dispatch(
+        next.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: false }),
+      );
+      arriving.push(performance.now() - began);
+    }
+    arriving.sort((a, b) => a - b);
+    expect(arriving[10]!).toBeLessThan(50);
   });
 });
