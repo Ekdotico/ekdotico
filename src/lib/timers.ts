@@ -47,7 +47,9 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   'ownership-offer-expiry': () => expireOffers(),
   // NFR-RE-15, "the email of an offer of ownership": the backstop of the hand-over after the response (S17-6).
   'ownership-offer-email': () => deliverUnsentOffers(),
-  // FR-ED-42 (register row PR-8): the notification of a removal stays 30 days.
+  // FR-ED-42 (register row PR-8): the notification of a removal stays 30 days, and so does the Owner's
+  // notice of an ended offer (D217), which the same run deletes. The name
+  // is kept: a claim row and the logs know it.
   'removed-notification-removal': () => deleteExpiredRemovedNotifications(),
 };
 

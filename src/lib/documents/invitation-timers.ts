@@ -29,8 +29,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * FR-ED-48, verbatim: the subject and the fixed text of the email. It states
  * who sent the invitation, by name and by email address as the invitation's
- * own email does (the owner's answer of 21 October 2026 to the row on the
- * reminder), the role, and the day it expires, and "carries neither the title
+ * own email does (D218, which amends the fixed text of FR-ED-48), the
+ * role, and the day it expires, and "carries neither the title
  * nor any content of the document": the function is handed none. The link of
  * an invitation is stored only as a hash and cannot be sent again, so the
  * email links to the notification list.

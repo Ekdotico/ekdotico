@@ -74,9 +74,8 @@ export async function endRoleChanges(
 
 /**
  * The notifications of removals that are older than they stay (register row
- * PR-8), and the Owner's notices of ended offers, which stay as long (the
- * owner's answer of 21 October 2026), by the timer of src/lib/timers.ts
- * (NFR-RE-15). The list does not show them from that moment either, so the
+ * PR-8), and the Owner's notices of ended offers, which stay as long (D217),
+ * by the timer of src/lib/timers.ts (NFR-RE-15). The list does not show them from that moment either, so the
  * timer only keeps the table from growing. Idempotent; answers with the
  * number of rows it deleted.
  */

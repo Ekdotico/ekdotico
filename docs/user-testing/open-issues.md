@@ -129,7 +129,7 @@ Add an entry whenever the owner decides something provisionally. When a point ha
 
 **What happens.** (1) "Send again" on an invitation whose title was hidden creates a new invitation that hides the title too, with a new pseudonym. The choice "Hide the title" can be made only when an invitation is created. (2) When the Owner removes an Editor, or changes the Editor's role, while an offer of ownership to that Editor is open, the offer ends and the Owner is told that it ended, although the Owner caused it.
 
-**Decided as built** on 21 October 2026: the owner confirmed both (a hidden title stays hidden on "Send again", with a new name; the Owner is told whenever the Editor stops holding the Editor role, whoever caused it, and also when the document is deleted).
+**Decided** on 21 October 2026 (D216, D217): the owner confirmed both (a hidden title stays hidden on "Send again", with a new name; the Owner is told whenever the Editor stops holding the Editor role, whoever caused it, and also when the document is deleted).
 
 **Alternatives considered:**
 
@@ -141,4 +141,4 @@ Add an entry whenever the owner decides something provisionally. When a point ha
 - An Owner who sends again and is surprised that the title stays hidden, or that it cannot be changed.
 - An Owner who finds the notice of an offer that ended after their own removal of the Editor redundant.
 
-**What would change the decision.** The owner's answer to the register rows that the pull request proposes.
+**What would change the decision.** The owner's answer to Q55 to Q58.

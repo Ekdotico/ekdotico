@@ -135,7 +135,7 @@ function OfferEnded({
         </>
       );
     case 'deleted':
-      // The owner's answer of 21 October 2026: the deletion of the document ends the offer, and the Owner is told.
+      // D217: the deletion of the document ends the offer, and the Owner is told.
       return (
         <>
           Your offer of ownership of <bdi>{title}</bdi> to {named ?? 'the Editor'} ended, because you deleted

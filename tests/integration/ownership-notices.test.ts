@@ -26,7 +26,7 @@ const database = prepare('ownershipnotices', {
 });
 const { auth, db, valkey } = await load();
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
-const { deleteDocument } = await import('../../src/lib/documents/deletion.ts');
+const { deleteDocument, restoreDocument } = await import('../../src/lib/documents/deletion.ts');
 const { deleteAccessNotificationsOf, deleteExpiredRemovedNotifications } =
   await import('../../src/lib/documents/access-notifications.ts');
 const { expireOffers } = await import('../../src/lib/documents/ownership.ts');
@@ -412,6 +412,11 @@ describe('the Owner is told when an offer ends without the Owner’s own action 
       end: 'deleted',
     });
     expect(await storedFor(editor.id)).toEqual([]);
+    // Restored, the document stands and the link is to the document (the list reads the trash at each read).
+    expect(await restoreDocument({ id })).not.toBeNull();
+    expect(await endedOf(owner.cookie)).toEqual([
+      expect.objectContaining({ end: 'deleted', inTrash: false }),
+    ]);
 
     // No offer, no notice.
     const other = await pair();

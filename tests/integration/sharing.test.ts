@@ -508,7 +508,7 @@ describe('the permission to invite (FR-ED-39, FR-ED-44)', () => {
     const collaboratorId = (await db().documentCollaborator.findFirstOrThrow({ where: { documentId: id } }))
       .id;
     // The Editor becomes the Owner by a transfer, and the former Owner holds a role: refused.
-    const offered = await db().ownershipOffer.create({
+    await db().ownershipOffer.create({
       data: {
         documentId: id,
         fromUserId: owner.id,
@@ -525,8 +525,49 @@ describe('the permission to invite (FR-ED-39, FR-ED-44)', () => {
     await db().documentCollaborator.deleteMany({ where: { documentId: id, userId: owner.id } });
     const { token } = await sent(editor, id, owner, 'editor');
     expect((await answerByLink(owner.cookie, token, 'accept')).status).toBe(200);
-    expect(offered.state).toBe('ACCEPTED');
     expect(await db().documentCollaborator.count({ where: { documentId: id, userId: owner.id } })).toBe(1);
+  });
+
+  it('does not refuse the address of a collaborator that is not verified, which no account holds (weakening: no check of the verified address)', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const holder = await person();
+    await db().documentCollaborator.create({ data: { documentId: id, userId: holder.id, role: 'VIEWER' } });
+    await db().user.update({ where: { id: holder.id }, data: { emailVerified: false } });
+    const answer = await invite(owner.cookie, id, [holder.email]);
+    expect(answer.status).toBe(201);
+    await runLater();
+    expect(await mailTo(holder.email)).toEqual([]);
+  });
+
+  it('counts the requests it refuses against the invitations of an hour, so that addresses cannot be probed without limit, and gives the count back for the other refusals (weakening: the refusal before the count)', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const viewer = await person();
+    await db().documentCollaborator.create({ data: { documentId: id, userId: viewer.id, role: 'VIEWER' } });
+    // Twelve in the hour in this file: twelve refused requests of one address each use it up.
+    for (let n = 0; n < 12; n += 1) expect((await invite(owner.cookie, id, [viewer.email])).status).toBe(409);
+    const over = await invite(owner.cookie, id, [viewer.email]);
+    expect(over.status).toBe(429);
+    expect(Number(over.headers.get('retry-after'))).toBeGreaterThan(0);
+    // Nor can an address that holds no role be invited in the hour that was used up.
+    expect((await invite(owner.cookie, id, ['not-a-holder@example.com'])).status).toBe(429);
+    expect(await invitationsOf(id)).toEqual([]);
+
+    // The refusals that the count is given back for: past the ten people, and the inviter's own address.
+    const second = await person();
+    const full = await documentOf(second.cookie);
+    for (let n = 0; n < 9; n += 1) {
+      await db().documentCollaborator.create({
+        data: { documentId: full, userId: (await person()).id, role: 'VIEWER' },
+      });
+    }
+    for (let n = 0; n < 14; n += 1) {
+      const refused = await invite(second.cookie, full, ['nobody-at-all@example.com']);
+      expect(refused.status).toBe(409);
+      expect((await refused.json()).error.code).toBe('people_limit');
+      expect((await invite(second.cookie, full, [second.email])).status).toBe(409);
+    }
   });
 
   it('given to the Editor, who is shown no people, refuses only the Editor’s own address; the Owner’s gets an invitation that sends nothing and cannot be accepted (the answer stays uniform)', async () => {

@@ -5,9 +5,14 @@
 // invitation is decided here, by the address it holds.
 //
 // THE UNIFORM ANSWER (FR-ED-21). `createInvitations` writes the same rows for
-// every address and reads nothing of who holds one, apart from the two
-// refusals FR-ED-37 allows, which rest on what the Owner knows already.
-// Whether an address belongs to an account is asked only after the response
+// every address. For an inviter who holds `document.collaborators.view` alone
+// it reads the account table before the response, and only to refuse an
+// address whose account holds a role on the document now (the Owner's and the
+// collaborators'); the query is made whatever the addresses are, so that its
+// time shows nothing, and the refusal counts against the hourly limit of
+// invitations first, so that it cannot be asked without limit. For any other
+// inviter it reads nothing of who holds an address. Whether an address
+// belongs to an account, for the delivery, is asked only after the response
 // has gone, by `deliverInvitations`, so that neither the body nor the time of
 // the response shows it (NFR-RE-15).
 //
@@ -167,7 +172,7 @@ async function inviterUnderLock(tx: Prisma.TransactionClient, documentId: string
   return {
     ownerId: document.ownerId,
     may: role !== null && holds(document.permissionSet, role, 'document.collaborators.invite'),
-    // Q-row of the owner's answer of 21 October 2026: the people list is what an inviter may already see.
+    // D220, Q55: the people list is what an inviter may already see.
     mayView: role !== null && holds(document.permissionSet, role, 'document.collaborators.view'),
   };
 }
@@ -195,7 +200,7 @@ async function creating(
     where: { documentId: document.id },
     select: { userId: true },
   });
-  // The owner's answer of 21 October 2026 (register S17-12 and FR-ED-37): one rule for every address whose
+  // D220 (closing Q51; Q57, Q58 for what it leaves): one rule for every address whose
   // account holds a role on the document now, the Owner's and a former Owner's among them (who holds a role
   // through an accepted transfer): "already has access". It follows the account that holds the address, not
   // the invitation it once accepted: an address a collaborator has left is invited as any other.
@@ -203,7 +208,14 @@ async function creating(
   // the people list shows names and never addresses, so the refusal tells the inviter which address is a
   // collaborator's, and not to an inviter who is shown no collaborators at all. For that inviter the
   // answer stays the uniform one of FR-ED-21 (the invitation is created, and nothing is sent).
+  // The request is counted against the hourly limit of invitations before the refusal, and the count is kept
+  // where it refuses (D220; Q55): a refusal that tells which address is a collaborator's must not
+  // be askable without limit. The other refusals below give the count back, as they did.
+  let counting: Awaited<ReturnType<typeof takeLimitReturnable>> | null = null;
   if (under.mayView) {
+    counting = await takeLimitReturnable('INVITATIONS_PER_USER', inviterId, emails.length);
+    if (!counting.ok) return { outcome: 'rate_limited', retryAfterSeconds: counting.retryAfterSeconds };
+    counted(counting.giveBack);
     const accounts = await tx.user.findMany({
       where: { email: { in: [...emails] }, emailVerified: true },
       select: { id: true, email: true },
@@ -225,12 +237,18 @@ async function creating(
   });
   const replaced = pending.filter(({ email }) => email !== null && emails.includes(email));
   const people = 1 + collaborators.length + pending.length - replaced.length + emails.length;
-  if (people > PEOPLE_MOST) return { outcome: 'limit' };
+  if (people > PEOPLE_MOST) {
+    await counting?.giveBack();
+    return { outcome: 'limit' };
+  }
 
-  // NFR-SE-07: each invitation created counts; all of them, or none (S13-5).
-  const limit = await takeLimitReturnable('INVITATIONS_PER_USER', inviterId, emails.length);
-  if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
-  counted(limit.giveBack);
+  // NFR-SE-07: each invitation created counts; all of them, or none (S13-5). Already counted, above, for an
+  // inviter who may see the people.
+  if (!counting) {
+    const limit = await takeLimitReturnable('INVITATIONS_PER_USER', inviterId, emails.length);
+    if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
+    counted(limit.giveBack);
+  }
 
   if (replaced.length > 0) {
     const ids = replaced.map(({ id }) => id);
@@ -688,7 +706,7 @@ export interface NotificationView {
 
 /**
  * FR-ED-42, FR-ED-48: the one reminder of an invitation, with the day it expires. It names the sender by name and by
- * email address (the owner's answer of 21 October 2026) and no title (S18-4), and no pseudonym.
+ * email address (D218) and no title (S18-4), and no pseudonym.
  */
 export interface ReminderNotificationView extends Omit<NotificationView, 'kind' | 'title' | 'pseudonym'> {
   kind: typeof REMINDER_NOTIFICATION;

@@ -91,11 +91,11 @@ export const OFFER_ENDED_STAYS_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The account's notifications of ended offers, newest first. A notice stays 30 days, as a removal's does (the
- * owner's answer of 21 October 2026), read or unread, whether or not its document stands; the timer of
+ * The account's notifications of ended offers, newest first. A notice stays 30 days, as a removal's does
+ * (D217), read or unread, whether or not its document stands; the timer of
  * ./access-notifications.ts deletes what is older, and a permanent deletion of the document takes the rest. It
  * is shown only to the account that is the Owner of the document still, since its words say "You are still its
- * Owner" and name the title as it stands (a transfer deletes the former Owner's, ./ownership.ts).
+ * Owner" and name the title as it stands (a transfer deletes the former Owner's, ./ownership.ts; Q56).
  */
 export async function listOfferEndedNotifications(
   userId: string,
