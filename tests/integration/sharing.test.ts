@@ -57,7 +57,7 @@ const CONFIRMATION = (address: string) =>
 const LIMIT =
   'This document has reached its limit of ten people. Remove a collaborator or revoke an invitation to invite another.';
 // D202: the owner's subject, owed final approval.
-const SUBJECT = 'You have been invited to a document! | Ekdotico';
+const SUBJECT = 'You have been invited to a document | Ekdotico';
 
 const request = (method: string, path: string, cookie: string, body?: unknown) =>
   new Request(`${ORIGIN}${path}`, {
@@ -462,7 +462,115 @@ describe('the permission to invite (FR-ED-39, FR-ED-44)', () => {
     }
   });
 
-  it('given to the Editor, refuses only the Editor’s own address; the Owner’s gets an invitation that sends nothing and cannot be accepted', async () => {
+  it('refuses, with one rule, the address of any account that holds a role now, for an inviter who may see the people (the owner’s answer of 21 October 2026; weakening: refuse only an address that accepted an invitation, or only for the Owner)', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const editor = await person();
+    const viewer = await person();
+    const outsider = await person();
+    await sent(owner, id, editor).then(({ token }) => answerByLink(editor.cookie, token, 'accept'));
+    await sent(owner, id, viewer, 'viewer').then(({ token }) => answerByLink(viewer.cookie, token, 'accept'));
+    // A collaborator through no invitation at all: the rule follows the account, not the invitation.
+    const carried = await person();
+    await db().documentCollaborator.create({ data: { documentId: id, userId: carried.id, role: 'VIEWER' } });
+    const set = defaultPermissionSet();
+    set['document.collaborators.invite'].editor = true;
+    await db().document.update({ where: { id }, data: { permissionSet: set } });
+    const before = await invitationsOf(id);
+
+    const refusal = `No invitation was created: the person at X already has access to this document.`;
+    // The Owner's invitation of a collaborator, and the Editor's of the Owner and of another collaborator.
+    for (const [who, address] of [
+      [owner, viewer.email],
+      [owner, carried.email],
+      [editor, owner.email],
+      [editor, viewer.email],
+      [editor, carried.email],
+    ] as const) {
+      const refused = await invite(who.cookie, id, [address]);
+      expect(refused.status).toBe(409);
+      const { error } = await refused.json();
+      expect(error.code).toBe('collaborator_address');
+      expect(error.message.replace(address, 'X')).toBe(refusal);
+    }
+    // Whole: a request that names one such address among others creates none.
+    expect((await invite(owner.cookie, id, ['fresh@example.com', viewer.email])).status).toBe(409);
+    expect(await invitationsOf(id)).toHaveLength(before.length);
+    // An address of no account, and of an account that holds no role, is invited as before.
+    expect((await invite(owner.cookie, id, ['fresh@example.com', outsider.email])).status).toBe(201);
+  });
+
+  it('invites a person who has left the document, and a former Owner who has left, and refuses them while they hold a role (S17-12)', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const editor = await person();
+    await sent(owner, id, editor).then(({ token }) => answerByLink(editor.cookie, token, 'accept'));
+    const collaboratorId = (await db().documentCollaborator.findFirstOrThrow({ where: { documentId: id } }))
+      .id;
+    // The Editor becomes the Owner by a transfer, and the former Owner holds a role: refused.
+    await db().ownershipOffer.create({
+      data: {
+        documentId: id,
+        fromUserId: owner.id,
+        toUserId: editor.id,
+        state: 'ACCEPTED',
+        expiresAt: new Date(),
+      },
+    });
+    await db().document.update({ where: { id }, data: { ownerId: editor.id } });
+    await db().documentCollaborator.delete({ where: { id: collaboratorId } });
+    await db().documentCollaborator.create({ data: { documentId: id, userId: owner.id, role: 'EDITOR' } });
+    expect((await invite(editor.cookie, id, [owner.email])).status).toBe(409);
+    // The former Owner leaves: the address is invited, delivered, and accepted.
+    await db().documentCollaborator.deleteMany({ where: { documentId: id, userId: owner.id } });
+    const { token } = await sent(editor, id, owner, 'editor');
+    expect((await answerByLink(owner.cookie, token, 'accept')).status).toBe(200);
+    expect(await db().documentCollaborator.count({ where: { documentId: id, userId: owner.id } })).toBe(1);
+  });
+
+  it('does not refuse the address of a collaborator that is not verified, which no account holds (weakening: no check of the verified address)', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const holder = await person();
+    await db().documentCollaborator.create({ data: { documentId: id, userId: holder.id, role: 'VIEWER' } });
+    await db().user.update({ where: { id: holder.id }, data: { emailVerified: false } });
+    const answer = await invite(owner.cookie, id, [holder.email]);
+    expect(answer.status).toBe(201);
+    await runLater();
+    expect(await mailTo(holder.email)).toEqual([]);
+  });
+
+  it('counts the requests it refuses against the invitations of an hour, so that addresses cannot be probed without limit, and gives the count back for the other refusals (weakening: the refusal before the count)', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.cookie);
+    const viewer = await person();
+    await db().documentCollaborator.create({ data: { documentId: id, userId: viewer.id, role: 'VIEWER' } });
+    // Twelve in the hour in this file: twelve refused requests of one address each use it up.
+    for (let n = 0; n < 12; n += 1) expect((await invite(owner.cookie, id, [viewer.email])).status).toBe(409);
+    const over = await invite(owner.cookie, id, [viewer.email]);
+    expect(over.status).toBe(429);
+    expect(Number(over.headers.get('retry-after'))).toBeGreaterThan(0);
+    // Nor can an address that holds no role be invited in the hour that was used up.
+    expect((await invite(owner.cookie, id, ['not-a-holder@example.com'])).status).toBe(429);
+    expect(await invitationsOf(id)).toEqual([]);
+
+    // The refusals that the count is given back for: past the ten people, and the inviter's own address.
+    const second = await person();
+    const full = await documentOf(second.cookie);
+    for (let n = 0; n < 9; n += 1) {
+      await db().documentCollaborator.create({
+        data: { documentId: full, userId: (await person()).id, role: 'VIEWER' },
+      });
+    }
+    for (let n = 0; n < 14; n += 1) {
+      const refused = await invite(second.cookie, full, ['nobody-at-all@example.com']);
+      expect(refused.status).toBe(409);
+      expect((await refused.json()).error.code).toBe('people_limit');
+      expect((await invite(second.cookie, full, [second.email])).status).toBe(409);
+    }
+  });
+
+  it('given to the Editor, who is shown no people, refuses only the Editor’s own address; the Owner’s gets an invitation that sends nothing and cannot be accepted (the answer stays uniform)', async () => {
     const owner = await person();
     const id = await documentOf(owner.cookie);
     const editor = await person();
@@ -470,6 +578,7 @@ describe('the permission to invite (FR-ED-39, FR-ED-44)', () => {
     await answerByLink(editor.cookie, token, 'accept');
     const set = defaultPermissionSet();
     set['document.collaborators.invite'].editor = true;
+    set['document.collaborators.view'].editor = false;
     await db().document.update({ where: { id }, data: { permissionSet: set } });
 
     const own = await invite(editor.cookie, id, [editor.email]);

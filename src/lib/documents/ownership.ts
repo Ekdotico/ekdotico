@@ -114,16 +114,21 @@ async function tellOwnerOffersEnded(
   }
 }
 
-/** The deletion of a document ends its pending offer. Called in the transaction of the deletion. */
+/**
+ * The deletion of a document (its move to the trash) ends its pending offer, and the Owner is told that it
+ * ended, as for the other case FR-ED-47 calls "without anyone's action": the owner's answer of 21 October
+ * 2026 is one rule. Called in the transaction of the deletion.
+ */
 export async function endOffersOf(tx: Tx, documentId: string, now: Date): Promise<void> {
   // An offer past its time is left to the timer, which writes it expired, and not withdrawn.
   const ended = await tx.ownershipOffer.updateManyAndReturn({
     where: { documentId, ...open(now) },
     data: { state: 'WITHDRAWN', respondedAt: now },
-    select: { id: true },
+    select: { id: true, fromUserId: true, toUserId: true },
   });
-  if (ended.length > 0)
-    await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
+  if (ended.length === 0) return;
+  await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
+  await tellOwnerOffersEnded(tx, documentId, ended, 'deleted');
 }
 
 /**
@@ -570,7 +575,7 @@ export async function answerOffer(
     await tx.documentCollaborator.create({
       data: { documentId, userId: offer.fromUserId, role: 'EDITOR', addedAt: now, roleSince: now },
     });
-    // S17-5: what the former Owner was told of earlier offers of this document was about an Owner's offer.
+    // S17-5: the notices of ended offers say "You are still its Owner"; the former Owner is not, from here.
     await endOfferEndedNotifications(tx, offer.fromUserId, documentId);
     await securityLogIn(tx, { kind: 'owner_changed', userId, documentId });
     return { outcome: 'accepted', documentId, from: offer.fromUserId };

@@ -22,12 +22,14 @@ export const OFFER_NOTIFICATION = 'ownership_offer';
 export const OFFER_ENDED_NOTIFICATION = 'ownership_offer_ended';
 
 /**
- * How an offer ended without the Owner's own action: the Editor declined it; its 14 days passed; or the
- * system ended it, since the Editor it names stopped holding the Editor role (removed, left, or given another role).
- * The Owner's own withdrawal, and the deletion of the document by the Owner, are the Owner's acts and write none.
+ * How an offer ended other than by an acceptance or by the Owner's own withdrawal (the owner's answer of 21
+ * October 2026: one rule for the two cases FR-ED-47 calls "without anyone's action", and the Editor's decline
+ * and the expiry): the Editor declined it; its 14 days passed; the Editor it names stopped holding the Editor
+ * role (removed, left, or given another role), whoever caused it; or the document was deleted (moved to the trash).
+ * Only the Owner's withdrawal writes none.
  */
-export type OfferEnd = 'declined' | 'expired' | 'ended';
-const ENDS: readonly string[] = ['declined', 'expired', 'ended'];
+export type OfferEnd = 'declined' | 'expired' | 'ended' | 'deleted';
+const ENDS: readonly string[] = ['declined', 'expired', 'ended', 'deleted'];
 
 /**
  * The Owner is told, in the transaction that ended the offer, so that an offer never ends without it and the
@@ -80,16 +82,31 @@ export interface OfferEndedNotificationView {
   title: string;
   /** The Editor the offer was made to; empty where that account is deleted. */
   editorName: string;
+  /** The document is in the trash now (a deleted document the Owner may restore): the link leads to the deleted documents. */
+  inTrash: boolean;
 }
 
+/** How long the notice of an ended offer stays in the list: as the notice of a removal does (register row PR-8). */
+export const OFFER_ENDED_STAYS_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
- * The account's notifications of ended offers whose subject still stands, newest first: the account is the
- * Owner of a document that is not deleted. They stay until the account is no longer its Owner or the document
- * is deleted, and are read or unread meanwhile (FR-ED-42).
+ * The account's notifications of ended offers, newest first. A notice stays 30 days, as a removal's does
+ * (D217), read or unread, whether or not its document stands; the timer of
+ * ./access-notifications.ts deletes what is older, and a permanent deletion of the document takes the rest. It
+ * is shown only to the account that is the Owner of the document still, since its words say "You are still its
+ * Owner" and name the title as it stands (a transfer deletes the former Owner's, ./ownership.ts; Q56).
  */
-export async function listOfferEndedNotifications(userId: string): Promise<OfferEndedNotificationView[]> {
+export async function listOfferEndedNotifications(
+  userId: string,
+  now: Date = new Date(),
+): Promise<OfferEndedNotificationView[]> {
   const rows = await db().notification.findMany({
-    where: { recipientId: userId, kind: OFFER_ENDED_NOTIFICATION },
+    where: {
+      recipientId: userId,
+      kind: OFFER_ENDED_NOTIFICATION,
+      createdAt: { gt: new Date(now.getTime() - OFFER_ENDED_STAYS_DAYS * DAY_MS) },
+    },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
   const payloads = rows.map((row) => ({
@@ -103,10 +120,10 @@ export async function listOfferEndedNotifications(userId: string): Promise<Offer
   const documents = new Map(
     (
       await db().document.findMany({
-        where: { id: { in: documentIds }, ownerId: userId, deletedAt: null },
-        select: { id: true, title: true },
+        where: { id: { in: documentIds }, ownerId: userId },
+        select: { id: true, title: true, deletedAt: true },
       })
-    ).map((document) => [document.id, document.title]),
+    ).map((document) => [document.id, document]),
   );
   const editors = new Map(
     (
@@ -117,8 +134,8 @@ export async function listOfferEndedNotifications(userId: string): Promise<Offer
     ).map((user) => [user.id, displayNameOf(user)]),
   );
   return payloads.flatMap(({ row, documentId, toUserId, end }): OfferEndedNotificationView[] => {
-    const title = typeof documentId === 'string' ? documents.get(documentId) : undefined;
-    if (title === undefined || typeof end !== 'string' || !ENDS.includes(end)) return [];
+    const document = typeof documentId === 'string' ? documents.get(documentId) : undefined;
+    if (document === undefined || typeof end !== 'string' || !ENDS.includes(end)) return [];
     return [
       {
         kind: OFFER_ENDED_NOTIFICATION,
@@ -127,8 +144,9 @@ export async function listOfferEndedNotifications(userId: string): Promise<Offer
         read: row.readAt !== null,
         end: end as OfferEnd,
         documentId: documentId as string,
-        title,
+        title: document.title,
         editorName: typeof toUserId === 'string' ? (editors.get(toUserId) ?? '') : '',
+        inTrash: document.deletedAt !== null,
       },
     ];
   });

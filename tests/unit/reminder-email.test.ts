@@ -9,11 +9,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const ORIGIN = 'https://app.example.test';
 
-async function email(inviterName: string, role: string, expiresAt: Date) {
+async function email(
+  inviterName: string,
+  role: string,
+  expiresAt: Date,
+  inviterEmail: string | null = 'ada@example.com',
+) {
   vi.resetModules();
   vi.doMock('../../src/lib/settings.ts', () => ({ settings: () => ({ appOrigin: ORIGIN }) }));
   const { reminderEmail } = await import('../../src/lib/documents/invitation-timers.ts');
-  return reminderEmail('invitee@example.com', inviterName, role, expiresAt);
+  return reminderEmail('invitee@example.com', { name: inviterName, email: inviterEmail }, role, expiresAt);
 }
 afterEach(() => vi.doUnmock('../../src/lib/settings.ts'));
 
@@ -27,8 +32,13 @@ describe('the email of the reminder of an invitation', () => {
     expect(to).toBe('invitee@example.com');
     expect(subject).toBe('Your invitation to a document in Ekdotico expires soon');
     expect(text).toBe(
-      `Ada Owner invited you to a document in Ekdotico as Editor. The invitation expires on 2 Oct 2026, 14:05 UTC. To accept or decline it, open your notifications in Ekdotico: ${ORIGIN}/notifications.`,
+      `Ada Owner (ada@example.com) invited you to a document in Ekdotico as Editor. The invitation expires on 2 Oct 2026, 14:05 UTC. To accept or decline it, open your notifications in Ekdotico: ${ORIGIN}/notifications.`,
     );
+  });
+
+  it('names the sender by name alone where the sender has no address left (a deleted account)', async () => {
+    const { text } = await email('Ada Owner', 'Editor', new Date(Date.UTC(2026, 9, 2)), null);
+    expect(text.startsWith('Ada Owner invited you to a document in Ekdotico as Editor.')).toBe(true);
   });
 
   it('holds no link to a document or an invitation, and no line break in the subject', async () => {

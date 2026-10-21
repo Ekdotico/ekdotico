@@ -15,7 +15,7 @@
 // read when the list is read.
 import type { Prisma } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
-import { OFFER_ENDED_NOTIFICATION } from './ownership-notifications.ts';
+import { OFFER_ENDED_NOTIFICATION, OFFER_ENDED_STAYS_DAYS } from './ownership-notifications.ts';
 import { COLLABORATOR_ROLE, type DocumentRole } from './permissions.ts';
 
 export const ROLE_CHANGED_NOTIFICATION = 'role_changed';
@@ -74,15 +74,24 @@ export async function endRoleChanges(
 
 /**
  * The notifications of removals that are older than they stay (register row
- * PR-8), by the timer of src/lib/timers.ts (NFR-RE-15). The list does not show
- * them from that moment either, so the timer only keeps the table from
- * growing. Idempotent; answers with the number of rows it deleted.
+ * PR-8), and the Owner's notices of ended offers, which stay as long (D217),
+ * by the timer of src/lib/timers.ts (NFR-RE-15). The list does not show them from that moment either, so the
+ * timer only keeps the table from growing. Idempotent; answers with the
+ * number of rows it deleted.
  */
 export async function deleteExpiredRemovedNotifications(now: Date = new Date()): Promise<number> {
   const { count } = await db().notification.deleteMany({
     where: {
-      kind: REMOVED_NOTIFICATION,
-      createdAt: { lte: new Date(now.getTime() - REMOVED_STAYS_DAYS * DAY_MS) },
+      OR: [
+        {
+          kind: REMOVED_NOTIFICATION,
+          createdAt: { lte: new Date(now.getTime() - REMOVED_STAYS_DAYS * DAY_MS) },
+        },
+        {
+          kind: OFFER_ENDED_NOTIFICATION,
+          createdAt: { lte: new Date(now.getTime() - OFFER_ENDED_STAYS_DAYS * DAY_MS) },
+        },
+      ],
     },
   });
   return count;

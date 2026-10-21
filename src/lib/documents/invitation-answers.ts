@@ -23,7 +23,7 @@ export const LIMIT_STATEMENT =
 export const INVITATION_MESSAGES = {
   own: (address: string) => `No invitation was created: ${address} is an address of this account.`,
   collaborator: (address: string) =>
-    `No invitation was created: the person at ${address} already has a role on this document.`,
+    `No invitation was created: the person at ${address} already has access to this document.`,
   reviewer:
     'No invitation was created. The Reviewer role is not offered in this release. Choose Editor or Viewer.',
   invalid: 'No invitation was created. Enter 1 to 10 email addresses, one on each line, and choose a role.',
