@@ -1337,6 +1337,26 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       },
     );
 
+    // The review of pull request 55 (B1): a value that is no element and no text among the children of an
+    // element, which no editor writes and which no browser can build a document from.
+    it.each([
+      ['a string inside a marker', () => ['hidden'] as never[]],
+      ['an object inside a marker', () => [{ href: 'javascript:alert(1)' }] as never[]],
+      ['bytes inside a marker', () => [new Uint8Array([1, 2, 3])] as never[]],
+    ] as const)('refuses an update that puts %s', { timeout: 60_000 }, async (_name, children) => {
+      await expectRefusedUpdate(
+        await opened(),
+        (document) =>
+          // In one transaction, so that the paragraph and the value are one update.
+          document.transact(() => {
+            const paragraph = markerIn({ id: GOOD });
+            document.getXmlFragment('default').push([paragraph]);
+            (paragraph.get(0) as Y.XmlElement).insert(0, children());
+          }),
+        REFUSAL.RAW_CONTENT,
+      );
+    });
+
     it(
       'takes a footnote, its marker and its entry, stores it, and gives it back',
       { timeout: 60_000 },

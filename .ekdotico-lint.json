@@ -16,7 +16,7 @@
     {
       "files": "src/app/*/documents/*/footnotes.ts",
       "rules": ["vocabulary/document"],
-      "reason": "The matches are values that are not words of the interface: doc-noteref, doc-endnotes and doc-endnote are the roles of the digital publishing ARIA module that a screen reader reads a footnote by, and doc is the name of the root node of the editor's schema, which the library requires. None is shown to a person."
+      "reason": "The matches are values that are not words of the interface: doc-noteref and doc-endnotes are the roles of the digital publishing ARIA module that a screen reader reads a footnote by, and doc is the name of the root node of the editor's schema, which the library requires. None is shown to a person."
     },
     {
       "files": "src/app/layout.tsx",

@@ -248,7 +248,7 @@ describe('the markup that is not drawn by the view (a clipboard)', () => {
       `["section",{"role":"doc-endnotes","aria-label":"${FOOTNOTES_NAME}"},["ol",0]]`,
     );
     expect(JSON.stringify(spec.nodes.footnote!(editor.state.doc.lastChild!.firstChild!))).toBe(
-      `["li",{"id":"footnote-${ID}","role":"doc-endnote"},0]`,
+      `["li",{"id":"footnote-${ID}"},0]`,
     );
     expect(FOOTNOTES_NAME).toBe('Footnotes');
     expect(ENTRY_PROMPT).toBe('Footnote text');
@@ -260,6 +260,6 @@ describe('the markup that is not drawn by the view (a clipboard)', () => {
     const hostile = editor.schema.nodes.footnoteReference!.create({ id: '"><script>alert(1)</script>' });
     expect(JSON.stringify(spec.nodes.footnoteReference!(hostile))).toBe('["sup",{"data-footnote-id":""}]');
     const entry = editor.schema.nodes.footnote!.create({ id: 'javascript:alert(1)' });
-    expect(JSON.stringify(spec.nodes.footnote!(entry))).toBe('["li",{"role":"doc-endnote"},0]');
+    expect(JSON.stringify(spec.nodes.footnote!(entry))).toBe('["li",{},0]');
   });
 });

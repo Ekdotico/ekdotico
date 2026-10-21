@@ -112,6 +112,7 @@ function drawn(editor: Editor) {
       number: each.spec.footnoteNumber,
       value: each.type.attrs.value,
       tabindex: each.type.attrs.tabindex,
+      hidden: each.type.attrs.hidden,
     }));
 }
 
@@ -257,13 +258,24 @@ describe('the list is what the markers say it is (FR-ED-05: inserted, deleted, r
       list(entry(A, text('Aa')), entry(B, text('Bb'))),
     );
 
-  it('takes an entry out with its marker, and the list with the last of them', () => {
+  it('takes an entry out with its marker, and leaves the list, empty, where it was', () => {
     const editor = base();
     dispatch(editor, (tr) => tr.delete(at(editor, MARKER), at(editor, MARKER) + 1));
     expect(now(editor)).toBe(' one  | [b] two | {<b: Bb>}');
     dispatch(editor, (tr) => tr.delete(at(editor, MARKER), at(editor, MARKER) + 1));
-    expect(now(editor)).toBe(' one  |  two');
+    expect(now(editor)).toBe(' one  |  two | {}');
     editor.state.doc.check();
+    // The empty list is there and is not drawn: no empty region named "Footnotes" is read or stands in the page.
+    expect(
+      drawn(editor)
+        .filter((each) => each.at === LIST)
+        .map((each) => each.hidden),
+    ).toEqual(['hidden']);
+  });
+
+  it('draws a list that holds an entry, and hides none', () => {
+    const editor = base();
+    expect(drawn(editor).some((each) => each.hidden !== undefined)).toBe(false);
   });
 
   it('takes an entry out where the text that holds its marker is deleted', () => {
@@ -357,7 +369,7 @@ describe('the list is what the markers say it is (FR-ED-05: inserted, deleted, r
     const editor = editorOf(p(text('words')), list(entry(A, text('orphan'))));
     expect(now(editor)).toBe('words | {<a: orphan>}');
     dispatch(editor, (tr) => tr.insertText('!', 6));
-    expect(now(editor)).toBe('words!');
+    expect(now(editor)).toBe('words! | {}');
   });
 
   it('makes the entry of a marker that has none, empty, at the next change', () => {
@@ -378,15 +390,20 @@ describe('the list is what the markers say it is (FR-ED-05: inserted, deleted, r
     expect(now(editor)).toBe('.[a] x  y  | {<a: Aa>}');
   });
 
-  it('has the list at the end only, once, after the blocks: no other order is a document', () => {
+  it('takes a list among the blocks and after them, a second list, and an empty one, and a document of no block before a list is none', () => {
     const { schema } = editorOf(p());
     const para = schema.nodes.paragraph!.create();
     const notes = schema.nodes[LIST]!.create(null, [schema.nodes[ENTRY]!.create({ id: A })]);
+    const empty = schema.nodes[LIST]!.create();
+    // What two writers leave: a block after the list, a second list, a list that stands empty. None is taken out.
     schema.topNodeType.createChecked(null, [para, notes]);
+    schema.topNodeType.createChecked(null, [para, notes, para]);
+    schema.topNodeType.createChecked(null, [para, notes, notes]);
+    schema.topNodeType.createChecked(null, [para, empty, notes, para, empty]);
+    // A document begins with a block.
     expect(() => schema.topNodeType.createChecked(null, [notes])).toThrow();
     expect(() => schema.topNodeType.createChecked(null, [notes, para])).toThrow();
-    expect(() => schema.topNodeType.createChecked(null, [para, notes, notes])).toThrow();
-    expect(() => schema.nodes[LIST]!.createChecked(null, [])).toThrow();
+    expect(() => schema.nodes[LIST]!.createChecked(null, [])).not.toThrow();
     // No block in the list, and no list in a block.
     expect(() => schema.nodes[LIST]!.createChecked(null, [para])).toThrow();
     expect(schema.nodes.blockquote!.contentMatch.matchType(schema.nodes[LIST]!)).toBeNull();
@@ -416,16 +433,16 @@ describe('what arrives from another client: taken out alike by every client, nev
     expect(now(editor)).toBe('x[a]y | {<a: kept>}');
   });
 
-  it('takes out the list whole where every entry of it is wanted by no marker', () => {
+  it('takes out every entry that no marker wants, and leaves the list empty', () => {
     const editor = editorOf(p(text('x')));
     peer(editor, [p(text('x')), list(entry(A, text('left')))]);
-    expect(now(editor)).toBe('x');
+    expect(now(editor)).toBe('x | {}');
   });
 
   it('puts in what is missing at this writer’s next change, and not before', () => {
     const editor = editorOf(p(text('x')));
     peer(editor, [p(text('x'), marker(A)), list(entry(B, text('left')))]);
-    expect(now(editor)).toBe('x[a]');
+    expect(now(editor)).toBe('x[a] | {}');
     dispatch(editor, (tr) => tr.insertText('!', 2));
     expect(now(editor)).toBe('x![a] | {<a: >}');
   });
@@ -539,7 +556,7 @@ describe('a copied marker (S20-4)', () => {
     const editor = editorOf(p(text('Word'), marker(A)), p(text('Next')), list(entry(A, text('Kept words'))));
     const slice = copy(editor);
     dispatch(editor, (tr) => tr.delete(1, 1 + editor.state.doc.child(0).content.size));
-    expect(now(editor)).toBe(' | Next');
+    expect(now(editor)).toBe(' | Next | {}');
     editor.commands.setTextSelection(editor.state.doc.child(0).nodeSize + 5);
     paste(editor, slice);
     expect(editor.state.doc.lastChild!.type.name).toBe(LIST);
@@ -587,6 +604,55 @@ describe('a copied marker (S20-4)', () => {
     expect(ids(editor)[0]).not.toBe('0123456789abcdef01234567');
     expect(editor.state.doc.lastChild!.childCount).toBe(1);
   });
+
+  it('keeps the words of a cut for the document that was open, and for no other: a marker pasted in a later document has an empty entry', () => {
+    const first = editorOf(p(text('Word'), marker(A)), p(text('Next')), list(entry(A, text('Kept words'))));
+    const slice = copy(first);
+    dispatch(first, (tr) => tr.delete(1, 1 + first.state.doc.child(0).content.size));
+    // The page leaves the document: its editor is destroyed, and what this tab kept of its cut goes with it.
+    first.destroy();
+    const second = editorOf(p(text('Other')));
+    second.commands.setTextSelection(3);
+    paste(second, slice);
+    expect(ids(second)).toHaveLength(1);
+    expect(second.state.doc.lastChild!.type.name).toBe(LIST);
+    expect(second.state.doc.lastChild!.textContent).toBe('');
+  });
+
+  it('pastes into an entry as its words and line breaks and nothing else: no block, no marker, nothing that the entry cannot hold', () => {
+    const editor = editorOf(p(text('Word'), marker(A)), p(text('Next')), list(entry(A, text('Note'))));
+    const into = entryOf(editor.state.doc, A)!;
+    editor.commands.setTextSelection(into.pos + 1 + 4);
+    const slice = new Slice(
+      editor.schema.nodeFromJSON({
+        type: 'doc',
+        content: [
+          p(text(' one'), marker(B)),
+          p(text('two')),
+          { type: 'blockquote', content: [p(text('three'))] },
+        ],
+      }).content,
+      0,
+      0,
+    );
+    paste(editor, slice);
+    expect(now(editor)).toBe('Word[a] | Next | {<a: Note one⏎two⏎three>}');
+    // The list is still the last block, there is one list, and no marker came in with the words.
+    expect(editor.state.doc.childCount).toBe(3);
+    expect(ids(editor)).toEqual([A]);
+    editor.state.doc.check();
+  });
+
+  it('takes a mark off a marker that a command put on it: bold over a sentence reaches the marker, and a marker holds none', () => {
+    const editor = editorOf(p(text('one '), marker(A), text(' two')), list(entry(A, text('Note'))));
+    editor.commands.setTextSelection({ from: 1, to: editor.state.doc.child(0).content.size + 1 });
+    editor.commands.setBold();
+    const markerNode = editor.state.doc.nodeAt(at(editor, MARKER))!;
+    expect(markerNode.marks).toHaveLength(0);
+    // The words around it are bold, which is what was asked, and the footnote is as it was.
+    expect(editor.state.doc.firstChild!.firstChild!.marks.map((mark) => mark.type.name)).toEqual(['bold']);
+    expect(now(editor)).toBe('one [a] two | {<a: Note>}');
+  });
 });
 
 describe('the limits of a document count footnotes (D184, D192; S20-2)', () => {
@@ -617,6 +683,32 @@ describe('the limits of a document count footnotes (D184, D192; S20-2)', () => {
     expect(limitRefusal(over, full.state.doc)).toBe(
       `We cannot add this block. Our current limit per document is 5,000 blocks.`,
     );
+  });
+
+  // S3 of the review of pull request 55: the entry that a pasted or dropped marker is given is a block, made
+  // by the change that follows the paste, so the limit is asked of the document with its entries made.
+  it('refuses a paste or a drop that holds a marker and would make 5,001 blocks with its entry, in the words of a paste', () => {
+    const full = editorOf(p(text('x')), ...Array.from({ length: LIMITS.blocks - 1 }, () => p()));
+    expect(countOf(full).blocks).toBe(LIMITS.blocks);
+    full.commands.setTextSelection(2);
+    const marked = new Slice(full.schema.nodeFromJSON(p(marker(A))).content, 0, 0);
+    for (const meta of ['paste', 'uiEvent'] as const) {
+      const tr = full.state.tr.replaceSelection(marked).setMeta(meta, meta === 'paste' ? true : 'drop');
+      // The marker is no block, and the document with it is as full as before: the entry is the block.
+      expect(countsOf(tr.doc).blocks).toBe(LIMITS.blocks);
+      expect(limitRefusal(tr, full.state.doc)).toBe(
+        'We cannot paste this. It holds 1 block, and our current limit per document is 5,000.',
+      );
+    }
+    // The same through the editor: the paste does not apply, and no marker or entry is made.
+    const before = full.state.doc;
+    full.view.dispatch(full.state.tr.replaceSelection(marked).setMeta('paste', true));
+    expect(full.state.doc).toBe(before);
+    // A paste of the same words with no marker has no entry to make, and is no more than it was.
+    const plain = new Slice(full.schema.nodeFromJSON(p(text('words'))).content, 0, 0);
+    expect(
+      limitRefusal(full.state.tr.replaceSelection(plain).setMeta('paste', true), full.state.doc),
+    ).toBeNull();
   });
 });
 

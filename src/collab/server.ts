@@ -1267,6 +1267,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
             image: REFUSAL.IMAGE_ATTRIBUTES,
             footnote: REFUSAL.FOOTNOTE_ATTRIBUTES,
             leaf: REFUSAL.LEAF_CONTENT,
+            raw: REFUSAL.RAW_CONTENT,
             ...LIMIT_REFUSAL,
           }[past],
         );

@@ -28,6 +28,7 @@ import type { Transaction } from '@tiptap/pm/state';
 import { ReplaceStep } from '@tiptap/pm/transform';
 import { ySyncPluginKey } from '@tiptap/y-tiptap';
 import { COUNTED, LIMITS, LISTS, ONE_BLOCK, textBytes, type Limit } from '../../../../lib/collab/shape.ts';
+import { bodyEnd, withNotes } from './footnotes.ts';
 import { TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST, tablesIn } from './table-bounds.ts';
 
 type Counts = Record<Limit, number>;
@@ -197,10 +198,7 @@ export const deletesOnly = (transaction: Transaction) =>
       return false;
     if (paragraph!.content.size > 0) return false;
     if (step.from === step.to) {
-      const before = transaction.docs[at]!;
-      const list =
-        before.childCount > 1 && before.lastChild?.type.name === 'footnotes' ? before.lastChild : null;
-      return step.from === before.content.size - (list?.nodeSize ?? 0);
+      return step.from === bodyEnd(transaction.docs[at]!);
     }
     return (transaction.docs[at + 1] ?? transaction.doc).resolve(step.from).parent.childCount === 1;
   });
@@ -219,7 +217,9 @@ export function limitRefusal(transaction: Transaction, before: PMNode): string |
   if (tablesIn(transaction.doc).past && !tablesIn(before).past)
     return pasted ? TABLE_PASTE_NO_ROOM : TABLE_NO_ROOM;
   const was = countsOf(before);
-  const now = countsOf(transaction.doc);
+  // As the document will be once the entries of the markers it holds are made (./footnotes.ts): a marker that is
+  // pasted or dropped at the limit would otherwise stand, and its entry be refused after it, with nothing said.
+  const now = countsOf(withNotes(transaction.doc));
   const limit = ALL.find((each) => now[each] > LIMITS[each] && now[each] > was[each]);
   if (limit) return refusalWords(limit, was, now, pasted);
   const over = overLimits(before);

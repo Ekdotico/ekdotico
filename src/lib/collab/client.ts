@@ -51,6 +51,7 @@ export type Held =
   | typeof REFUSAL.IMAGE_ATTRIBUTES
   | typeof REFUSAL.FOOTNOTE_ATTRIBUTES
   | typeof REFUSAL.LEAF_CONTENT
+  | typeof REFUSAL.RAW_CONTENT
   | (typeof LIMIT_REFUSAL)[keyof typeof LIMIT_REFUSAL];
 
 const HELD: readonly string[] = [
@@ -62,6 +63,7 @@ const HELD: readonly string[] = [
   REFUSAL.IMAGE_ATTRIBUTES,
   REFUSAL.FOOTNOTE_ATTRIBUTES,
   REFUSAL.LEAF_CONTENT,
+  REFUSAL.RAW_CONTENT,
   ...Object.values(LIMIT_REFUSAL),
 ];
 // The code a socket is closed with for a message longer than it takes (RFC

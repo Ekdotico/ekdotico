@@ -82,7 +82,7 @@ const entryWithCursor = (page: Page) =>
   page.evaluate(() => {
     const at = document.getSelection()?.anchorNode;
     const element = at instanceof Element ? at : at?.parentElement;
-    return element?.closest('li[role="doc-endnote"]')?.textContent ?? null;
+    return element?.closest('section[aria-label="Footnotes"] li')?.textContent ?? null;
   });
 
 test('the palette puts a footnote in: the marker where the command stood, and the cursor in its entry, which takes marks', async ({
@@ -106,7 +106,9 @@ test('the palette puts a footnote in: the marker where the command stood, and th
   // The entry is a list item of a list in a region that is named, read with its number.
   await expect(entries(page)).toHaveCount(1);
   await expect(entries(page).first()).toHaveAttribute('value', '1');
-  await expect(entries(page).first()).toHaveAttribute('role', 'doc-endnote');
+  // The role of an entry is the list item's own: doc-endnote is deprecated in the module, and a list item in a
+  // region named Footnotes is read as one entry of a list.
+  await expect(entries(page).first()).not.toHaveAttribute('role', /.+/);
   await expect(doc.locator(`section[aria-label="${FOOTNOTES}"]`)).toHaveAttribute('role', 'doc-endnotes');
   // The marker leads to the entry by its address.
   const target = await entries(page).first().getAttribute('id');
@@ -266,6 +268,102 @@ test('a marker leads to its entry: by a click, and by Tab and Enter from the tex
   // Nothing was added to the document by Enter: no second entry, no new paragraph.
   await expect(entries(page)).toHaveCount(1);
   await expect(doc.locator('p')).toHaveCount(LINES + 1);
+});
+
+/** What holds the focus of the page: its name where it has one, else its role or its tag. */
+const focused = (page: Page) =>
+  page.evaluate(() => {
+    const element = document.activeElement;
+    return element?.getAttribute('aria-label') ?? element?.getAttribute('role') ?? element?.tagName ?? null;
+  });
+
+// S20-12 (register row; the review of pull request 55). Tab from the text starts at the first focusable element
+// in the editor in the order of the document, whatever the place of the caret: what is asked here is that every
+// marker is reached by Tab alone, in the order of the document, and the behaviour the owner is to decide on is
+// recorded by the second test and not claimed to be "the next marker".
+test('Tab reaches every marker in the order of the document, wherever it stands: a paragraph, a list item, a table cell, and Enter follows each', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  await doc.focus();
+  await page.keyboard.type('Lead');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/bullet');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('item');
+  // Two Enters leave the list.
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('cell');
+  await expect(doc.locator('td')).toHaveCount(9);
+
+  // One marker in each: they are numbered in the order of the document, which is the order they are made here.
+  await toEndOfFirstParagraph(page);
+  await page.keyboard.type(' ');
+  await addFootnote(page);
+  await doc.locator('li', { hasText: 'item' }).first().locator('p').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' ');
+  await addFootnote(page);
+  await doc.locator('td').first().locator('p').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' ');
+  await addFootnote(page);
+  await expect(marker(page)).toHaveCount(3);
+  await expect(entries(page)).toHaveCount(3);
+  await expect(doc.locator('td').first().locator('sup a')).toHaveText('3');
+  await expect(doc.locator('li', { hasText: 'item' }).first().locator('sup a')).toHaveText('2');
+
+  // From the first paragraph: every press of Tab moves on, and the three markers are met in order.
+  await toEndOfFirstParagraph(page, 'Home');
+  const met: string[] = [];
+  for (let press = 0; press < 12 && !met.includes('Footnote 3'); press += 1) {
+    await page.keyboard.press('Tab');
+    const now = await focused(page);
+    if (now?.startsWith('Footnote ')) met.push(now);
+  }
+  expect(met).toEqual(['Footnote 1', 'Footnote 2', 'Footnote 3']);
+
+  // Enter on the last, which is in a cell, follows it: the cursor is in its entry, and nothing was added.
+  await expect(marker(page, 3)).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => entryWithCursor(page)).toBe('');
+  await page.keyboard.type('x');
+  await expect(entries(page).nth(2)).toHaveText('x');
+  await expect(entries(page)).toHaveCount(3);
+  await expect(doc.locator('td').first().locator('p')).toHaveCount(1);
+});
+
+test('Tab from a caret after the first of two markers reaches the first, not the next (S20-12, recorded and to be decided)', async ({
+  page,
+}) => {
+  test.slow();
+  await enter(page);
+  await openNew(page);
+  const doc = text(page);
+  await doc.focus();
+  await page.keyboard.type('First ');
+  await addFootnote(page);
+  await page.keyboard.type('Note one');
+  await toEndOfFirstParagraph(page);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Second ');
+  await addFootnote(page);
+  await page.keyboard.type('Note two');
+  await expect(marker(page)).toHaveCount(2);
+  // The caret is in the second paragraph, after the first marker and before the second.
+  await toParagraph(page, 1, 'Home');
+  await page.keyboard.press('Tab');
+  // What the browser does and the page does not change: the first focusable element of the editor. A key of
+  // the editor's own that follows the marker after the caret is the owner's to choose (S20-12).
+  await expect(marker(page, 1)).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(marker(page, 2)).toBeFocused();
 });
 
 test('a second browser sees the same numbers and entries, in the order of the markers; two writers add footnotes at once', async ({

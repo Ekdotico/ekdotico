@@ -133,6 +133,12 @@ export const REFUSAL = {
    */
   LEAF_CONTENT: 'leaf-content',
   /**
+   * `raw-content`: it puts a value (a string, binary data, an object, an embed) among the children of an element
+   * or of the root, where an element or a run of text is what stands, which no browser can build a document from
+   * (src/lib/collab/shape.ts, `rawRefused`). The editor never sends one. The name is provisional, for the owner's approval.
+   */
+  RAW_CONTENT: 'raw-content',
+  /**
    * A limit of the document (`LIMITS` of src/lib/collab/shape.ts; register
    * D184, D192, D193), refused in the same way: the change would leave the
    * document with more of a block than its limit and more than it had, a list

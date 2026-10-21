@@ -411,12 +411,17 @@ describe('an update that sends again what the server holds in part (the review o
     made: () => Y.XmlElement,
   ) {
     const member = peerOf(server);
-    const before = Y.encodeStateVector(member);
     const list = into(member.getXmlFragment('default')) as Y.XmlElement;
-    list.insert(list.length, ['first piece'] as never);
+    // The struct that is merged is a run of text: a raw value among the children of an element is refused
+    // (`rawRefused`, the review of pull request 55), and was only ever the filler of this test.
+    const run = new Y.XmlText();
+    list.insert(list.length, [run]);
+    Y.applyUpdate(server, sentBy(member, server));
+    const before = Y.encodeStateVector(member);
+    run.insert(0, 'first piece');
     Y.applyUpdate(server, sentBy(member, server));
     member.transact(() => {
-      list.insert(list.length, ['second piece'] as never);
+      run.insert(run.length, 'second piece');
       list.insert(list.length, [made()]);
     });
     const update = Y.encodeStateAsUpdate(member, before);

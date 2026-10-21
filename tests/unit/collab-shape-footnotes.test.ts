@@ -337,10 +337,49 @@ describe('a marker holds nothing, and an entry holds text (FR-ED-05)', () => {
     expect(answer(server, whole)).toBeNull();
   });
 
-  it('refuses a list made with no entry: an element without the content the schema requires of it', () => {
+  it('takes a list with no entry in it, which the schema allows: no list is ever deleted once it is made (B2)', () => {
     const server = opened(doc(p(text('x'))));
     const update = sent(server, (fragment) => fragment.insert(fragment.length, [made('footnotes', {})]));
-    expect(answer(server, update)).toBe('incomplete');
+    expect(answer(server, update)).toBeNull();
+  });
+
+  it('refuses any attribute on the list, whatever its value (the list has none)', () => {
+    const server = opened(doc(p(text('x'), marker()), list(entry(ID, text('note')))));
+    for (const value of ['x', '', 'https://evil.example/x.png', 1]) {
+      const update = sent(server, (fragment) =>
+        (fragment.get(1) as Y.XmlElement).setAttribute('class', value as string),
+      );
+      expect(answer(server, update)).toBe('footnote');
+      expect(withoutCopy(server, Y.decodeUpdate(update))).toBe('footnote');
+    }
+    // A list made with the attribute, in one change.
+    const whole = sent(server, (fragment) =>
+      fragment.insert(fragment.length, [made('footnotes', { id: OTHER })]),
+    );
+    expect(answer(server, whole)).toBe('footnote');
+    expect(withoutCopy(server, Y.decodeUpdate(whole))).toBe('footnote');
+  });
+
+  it('refuses a value of two on an attribute of a marker, and an attribute that holds a subdocument (S5)', () => {
+    const server = opened(doc(p(text('x'), marker(), text('y')), list(entry(ID, text('note')))));
+    const existing = (fragment: Y.XmlFragment) => (fragment.get(0) as Y.XmlElement).get(1) as Y.XmlElement;
+    const carried = (make: () => Y.Item['content']) => {
+      const peer = peerOf(server);
+      peer.transact(() => existing(peer.getXmlFragment('default')).setAttribute('id', OTHER));
+      (existing(peer.getXmlFragment('default'))._map.get('id') as Y.Item).content = make();
+      return sentBy(peer, server);
+    };
+    // Two values in one item: the identifier that is good first, a second behind it.
+    const two = carried(() => new Y.ContentAny([OTHER, '../../x']));
+    expect(answer(server, two)).toBe('footnote');
+    expect(withoutCopy(server, Y.decodeUpdate(two))).toBe('footnote');
+    // Made as a client makes it: a document as the value.
+    const sub = sent(server, (fragment) =>
+      existing(fragment).setAttribute('id', new Y.Doc() as unknown as string),
+    );
+    expect(Y.decodeUpdate(sub).structs.some((s) => (s as Y.Item).content instanceof Y.ContentDoc)).toBe(true);
+    expect(answer(server, sub)).toBe('footnote');
+    expect(withoutCopy(server, Y.decodeUpdate(sub))).toBe('footnote');
   });
 
   it('takes what the editor writes for a footnote', () => {
@@ -355,6 +394,100 @@ describe('a marker holds nothing, and an entry holds text (FR-ED-05)', () => {
       doc(p(text('x'), marker(), marker(OTHER)), p(text('y')), list(entry(ID), entry(OTHER))),
     );
     expect(answer(next, more)).toBeNull();
+  });
+});
+
+// B1 of the review of pull request 55: a value that is no element and no text, put among the children of an
+// element or of the root. The editor never writes one, the binding reads such a child as nothing it knows and
+// writes the document again without it, but the server held the value in the shared document, where a reader
+// of the export or the record would find it. The rule looks at the Yjs item whatever stands in it.
+describe('a raw value among the children is refused wherever the children stand (B1)', () => {
+  const server = () => opened(doc(p(text('x'), marker(), text('y')), list(entry(ID, text('note')))));
+  /** Where a child may be put: the root, a paragraph, the list, an entry. */
+  const PLACES = [
+    ['the root', (fragment: Y.XmlFragment) => fragment],
+    ['a paragraph', (fragment: Y.XmlFragment) => fragment.get(0) as Y.XmlElement],
+    ['the list of footnotes', (fragment: Y.XmlFragment) => fragment.get(1) as Y.XmlElement],
+    ['an entry', (fragment: Y.XmlFragment) => (fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement],
+  ] as const;
+  const RAW = [
+    ['a string', () => 'raw'],
+    ['a number', () => 7],
+    ['a boolean', () => true],
+    ['an object', () => ({ a: 1 })],
+    ['an array', () => [1, 2]],
+    ['bytes', () => new Uint8Array([1, 2, 3])],
+    ['a subdocument', () => new Y.Doc()],
+  ] as const;
+
+  describe.each(PLACES)('among the children of %s', (_where, parent) => {
+    it.each(RAW)('refuses %s, put in at the end and at the start', (_what, value) => {
+      for (const at of ['start', 'end'] as const) {
+        const base = server();
+        const update = sent(base, (fragment) => {
+          const holder = parent(fragment);
+          holder.insert(at === 'start' ? 0 : holder.length, [value() as never]);
+        });
+        expect(answer(base, update)).toBe('raw');
+        expect(withoutCopy(base, Y.decodeUpdate(update))).toBe('raw');
+      }
+    });
+
+    it.each([
+      ['JSON', () => new Y.ContentJSON(['raw'])],
+      ['an embed', () => new Y.ContentEmbed({ a: 1 })],
+      ['a format', () => new Y.ContentFormat('bold', true)],
+    ] as const)('refuses %s that is put in as the child by a client of its own', (_what, make) => {
+      const base = server();
+      const peer = peerOf(base);
+      peer.transact(() => parent(peer.getXmlFragment('default')).insert(0, ['raw'] as never));
+      const holder = parent(peer.getXmlFragment('default'));
+      (holder._start as Y.Item).content = make();
+      const update = sentBy(peer, base);
+      expect(answer(base, update)).toBe('raw');
+      expect(withoutCopy(base, Y.decodeUpdate(update))).toBe('raw');
+    });
+  });
+
+  it('refuses an embed in a run of text, where only characters and formats stand', () => {
+    const base = server();
+    const update = sent(base, (fragment) => {
+      const run = ((fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement).get(0) as Y.XmlText;
+      run.insertEmbed(2, { a: 1 });
+    });
+    expect(answer(base, update)).toBe('raw');
+    expect(withoutCopy(base, Y.decodeUpdate(update))).toBe('raw');
+  });
+
+  it('refuses text put among the children of a list that holds no text, where it is no value and no element', () => {
+    // A run of text is an element of the Yjs type, and the rule of the shape (a list holds entries) and of the
+    // leaves is theirs: what this rule adds is the value that is neither.
+    const base = server();
+    const update = sent(base, (fragment) => (fragment.get(0) as Y.XmlElement).insert(0, ['raw'] as never));
+    expect(answer(base, update)).toBe('raw');
+  });
+
+  it('takes what the editor writes: elements, runs of text with their formats, hard breaks, a deletion', () => {
+    const base = server();
+    expect(
+      answer(base, edited(base, doc(p(text('x'), marker(OTHER), text('y')), list(entry(OTHER, text('n')))))),
+    ).toBeNull();
+    expect(
+      answer(
+        base,
+        sent(base, (fragment) => fragment.delete(0, 1)),
+      ),
+    ).toBeNull();
+  });
+
+  it('does not refuse an update that deletes a raw value which is already there', () => {
+    // A document that was written before the rule: its raw value must be removable, or the document is stuck.
+    const base = server();
+    const peer = peerOf(base);
+    peer.transact(() => (peer.getXmlFragment('default').get(0) as Y.XmlElement).insert(0, ['raw'] as never));
+    Y.applyUpdate(base, sentBy(peer, base));
+    const update = sent(base, (fragment) => (fragment.get(0) as Y.XmlElement).delete(0, 1));
+    expect(answer(base, update)).toBeNull();
   });
 });
 

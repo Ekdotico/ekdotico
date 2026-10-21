@@ -46,6 +46,15 @@
 //   identifier of one form (src/lib/footnotes/node.ts) and no other attribute,
 //   in whatever Yjs content the value is carried (`attributeRefused`); a marker
 //   holds nothing (`LEAVES`); an entry is one block of the total (`ONE_BLOCK`).
+//   The list holds no attribute at all, and may be empty (`footnotes: footnote*`).
+//
+// - The review of pull request 55: an element or the root holds elements and
+//   runs of text and nothing else among its children, and a run of text holds
+//   characters and formats (`rawRefused`). A string, a number, an object, bytes,
+//   a subdocument, JSON or an embed put among them is stored by Yjs as a value,
+//   and the binding that builds the document from the shared one throws on it,
+//   in every browser, so that nobody can open the document again. Refused as
+//   `raw`, in the copy and without it, and never of an update that deletes.
 //
 // The bounds and the limits are named here, where the browser can import them
 // too (src/app/(app)/documents/[id]/table-bounds.ts and block-limits.ts), so
@@ -92,13 +101,17 @@ export const NODES: Record<string, NodeSpec> = {
   // FR-ED-08: an image, as the block that holds the identifier of an uploaded image and the words
   // that go with it (src/lib/images/node.ts). It holds no content.
   image: { group: 'block' },
-  // FR-ED-05: the document takes the list of footnotes after its blocks, once; the list is in none of
-  // the groups of the blocks, so no block can be put in it and it can be put in no block.
-  doc: { content: 'block+ footnotes?' },
-  // A footnote is a marker in the text and an entry in the list at the end of the document
-  // (src/lib/footnotes/node.ts). The marker holds no content; the entry holds text and line breaks.
+  // FR-ED-05: the document takes lists of footnotes among its blocks, which are at its end where an editor
+  // made them. A structural repair never deletes what a writer wrote, and two writers who each make the
+  // first list, or a writer who adds a block at the end while another makes it, leave a list with a block
+  // after it or a second list: the schema TOLERATES both, and nothing is taken out for them. The list is in
+  // none of the groups of the blocks, so no block can be put in it and it can be put in no block, and it
+  // may stand empty (it is never deleted once made, and is not drawn while it is empty).
+  doc: { content: 'block+ (footnotes | block)*' },
+  // A footnote is a marker in the text and an entry in a list (src/lib/footnotes/node.ts). The marker holds no
+  // content; the entry holds text and line breaks.
   footnoteReference: { group: 'inline', inline: true },
-  footnotes: { content: 'footnote+' },
+  footnotes: { content: 'footnote*' },
   footnote: { content: '(text | hardBreak)*' },
 };
 const SCHEMA = new Schema({ nodes: NODES, topNode: 'doc' });
@@ -196,9 +209,10 @@ export const pastLimit = (limit: Limit, before: number, after: number) =>
 /**
  * Which rule an update would break: `incomplete` (D170, D180), `table` (D171, D172), `image` (an
  * image block given an attribute it may not hold: FR-ED-08, NFR-SE-06 A01), `footnote` (a marker or
- * an entry of a footnote given one: FR-ED-05, NFR-SE-06), or a limit (D184, D192, D193).
+ * an entry of a footnote given one: FR-ED-05, NFR-SE-06), `raw` (a value that is no element or text
+ * where an element or text is what an element holds), or a limit (D184, D192, D193).
  */
-export type Shape = 'incomplete' | 'table' | 'image' | 'footnote' | 'leaf' | Limit;
+export type Shape = 'incomplete' | 'table' | 'image' | 'footnote' | 'raw' | 'leaf' | Limit;
 
 /**
  * The blocks that hold nothing: no content in the schema, and no text (a line break, a divider, a
@@ -502,6 +516,8 @@ const TABLES = new Set(['table']);
  */
 function attributeRefused(parentName: string | null, key: string | null, content: unknown): Shape | null {
   if (parentName === null || key === null || content instanceof Y.ContentDeleted) return null;
+  // The list of footnotes holds no attribute at all.
+  if (parentName === 'footnotes') return 'footnote';
   const rule: Shape | null =
     parentName === 'image' ? 'image' : FOOTNOTE_NODES.has(parentName) ? 'footnote' : null;
   if (rule === null) return null;
@@ -510,6 +526,29 @@ function attributeRefused(parentName: string | null, key: string | null, content
   return (rule === 'image' ? imageAttributeAllowed(key, value) : footnoteAttributeAllowed(key, value))
     ? null
     : rule;
+}
+
+/**
+ * What a shared type holds as its children: other shared types (an element, the root fragment), or text
+ * (a run of text), or nothing the editor builds from (any other type, a root that is not the fragment).
+ */
+type Holds = 'types' | 'text' | null;
+const holdsOfType = (type: unknown): Holds =>
+  type instanceof Y.XmlText ? 'text' : type instanceof Y.XmlFragment ? 'types' : null;
+
+/**
+ * Whether content that is a child of an element, of the root fragment or of a run of text is one the editor
+ * cannot build a document from. An element holds elements and runs of text and nothing else: a raw string,
+ * binary data, an object, JSON or an embed put among its children is stored by Yjs as a value, and the
+ * binding that builds the document from the shared one throws on it, in every browser and in the reader's
+ * view, so that the document cannot be opened. A run of text holds text and its formats. A deleted item
+ * holds nothing and is no child. (The review of pull request 55; the rule before it asked only of
+ * the shared types that stood in a block that holds none.)
+ */
+function rawRefused(holds: Holds, content: unknown): boolean {
+  if (holds === null || content instanceof Y.ContentDeleted) return false;
+  if (holds === 'types') return !(content instanceof Y.ContentType);
+  return !(content instanceof Y.ContentString || content instanceof Y.ContentFormat);
 }
 
 /**
@@ -566,6 +605,10 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
           const refused = attributeRefused(nameOfType(item.parent as Shared), item.parentSub, item.content);
           if (refused) return refused;
         }
+        // A value among the children of an element or of a run of text (`rawRefused`).
+        // The root of the copy is a type of no kind until something asks for one, so it is named by its place.
+        const holds = item.parent === after.share.get(FRAGMENT_NAME) ? 'types' : holdsOfType(item.parent);
+        if (item.parentSub === null && rawRefused(holds, item.content)) return 'raw';
         // An element or text inside a block that holds nothing (`LEAVES`).
         if (
           item.parentSub === null &&
@@ -764,6 +807,20 @@ export function withoutCopy(
       const holder = parent instanceof Y.Item ? nameOf(parent) : nameOfType(parent);
       const refused = attributeRefused(holder, key, item.content);
       if (refused) return refused;
+    }
+    // A value among the children of an element or of a run of text (`rawRefused`), where it stands after the update.
+    if (alive.get(item) && key === null && parent !== null) {
+      const holds =
+        typeof parent === 'string'
+          ? parent === FRAGMENT_NAME
+            ? 'types'
+            : null
+          : parent instanceof Y.Item
+            ? parent.content instanceof Y.ContentType
+              ? holdsOfType(parent.content.type)
+              : null
+            : holdsOfType(parent);
+      if (rawRefused(holds, item.content)) return 'raw';
     }
     // An element or text inside a block that holds nothing (`LEAVES`), where it stands after the update.
     if (

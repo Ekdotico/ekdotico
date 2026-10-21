@@ -92,7 +92,7 @@ const undoManagerOf = (made: Client) =>
   (yUndoPluginKey.getState(made.editor.state) as { undoManager: Y.UndoManager }).undoManager;
 
 /** The document with some content, as a first client made it, and the clients that open it. */
-function opened(content: Json[], count = 2): Client[] {
+function opened(content: Json[], count = 2, ids: readonly number[] = []): Client[] {
   const first = new Y.Doc();
   const writer = client(first);
   writer.write((tr) =>
@@ -108,6 +108,11 @@ function opened(content: Json[], count = 2): Client[] {
     Y.applyUpdate(document, Y.encodeStateAsUpdate(first));
     clients.push(client(document));
   }
+  // Yjs orders two changes made at one place by the identifiers of the clients that made them, so a test that
+  // asks about a race asks it in both orders by choosing them. The setup above is no change of any writer's.
+  clients.forEach((each, at) => {
+    if (ids[at] !== undefined) each.document.clientID = ids[at]!;
+  });
   // What was written to set the document up is no step of any writer's undo.
   for (const each of clients) undoManagerOf(each).clear();
   return clients;
@@ -152,13 +157,30 @@ function whole(client: Client) {
   client.doc.descendants((node) => {
     if (node.type.name === MARKER) markers.push(node.attrs.id as string);
   });
+  // Entries are found wherever they stand, in any list: two writers who each made the first list leave two.
   const entries: string[] = [];
-  if (client.doc.lastChild?.type.name === LIST)
-    client.doc.lastChild.forEach((each) => entries.push(each.attrs.id as string));
+  client.doc.forEach((child) => {
+    if (child.type.name === LIST) child.forEach((each) => entries.push(each.attrs.id as string));
+  });
   expect([...entries].sort()).toEqual([...markers].sort());
   expect(new Set(markers).size).toBe(markers.length);
   client.doc.check();
 }
+
+/** The two orders in which Yjs can put two writers' changes made at one place, and three for three writers. */
+const ORDERS = [
+  [1, 2],
+  [2, 1],
+] as const;
+const ORDERS_OF_THREE = [
+  [1, 2, 3],
+  [3, 2, 1],
+  [2, 3, 1],
+] as const;
+const lists = (client: Client) => client.doc.children.filter((each) => each.type.name === LIST).length;
+/** The body: the text of each block that is no list, in order. */
+const bodyOf = (client: Client) =>
+  client.doc.children.filter((each) => each.type.name !== LIST).map((each) => each.textContent);
 
 /** A marker at a place in the first paragraph, as the palette puts it. */
 function footnote(client: Client, id: string, at: number) {
@@ -189,38 +211,46 @@ describe('two writers add footnotes at once (FR-ED-05, FR-ED-16)', () => {
     expect([...numbering(a!.doc).keys()]).toEqual([A, B, D]);
   });
 
-  it('at one place: both markers stand, in the order Yjs gives them, and the list is put in that order', () => {
-    const [a, b] = opened([...body(), p(marker(D)), list(entry(D, text('Dd')))]);
-    footnote(a!, A, 5);
-    footnote(b!, B, 5);
-    exchange(a!, b!);
-    converged(a!, b!);
-    // What the entries stand in may differ from the markers' order for now: the next change by anyone puts it right.
-    key(a!, 2);
-    exchange(a!, b!);
-    converged(a!, b!);
-    whole(a!);
-    whole(b!);
-    expect(numbering(a!.doc).size).toBe(3);
-  });
+  it.each(ORDERS)(
+    'at one place (clients %j): both markers stand, in the order Yjs gives them, each with its own entry',
+    (...ids) => {
+      const [a, b] = opened([...body(), p(marker(D)), list(entry(D, text('Dd')))], 2, ids);
+      footnote(a!, A, 5);
+      footnote(b!, B, 5);
+      exchange(a!, b!);
+      converged(a!, b!);
+      // The entries may stand in the other order than their markers (S20-11): nothing reorders them, which would
+      // write one in the place of another, and each is drawn with the number of its own marker.
+      key(a!, 2);
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      whole(b!);
+      expect(numbering(a!.doc).size).toBe(3);
+    },
+  );
 
-  it('as the first footnote of the document, both at once: the second list goes, the markers stay, the entry is made again', () => {
-    const [a, b] = opened(body());
-    footnote(a!, A, 5);
-    footnote(b!, B, 15);
-    exchange(a!, b!);
-    converged(a!, b!);
-    // Both made a list: the schema keeps one, and a marker is left without its entry.
-    expect(a!.doc.childCount).toBeLessThanOrEqual(3);
-    expect(a!.doc.lastChild!.type.name).toBe(LIST);
-    expect(numbering(a!.doc).size).toBe(2);
-    key(a!, 2);
-    key(b!, 2);
-    exchange(a!, b!);
-    converged(a!, b!);
-    whole(a!);
-    whole(b!);
-  });
+  it.each(ORDERS)(
+    'as the first footnote of the document, both at once (clients %j): two lists stand, no entry goes, and no list is deleted',
+    (...ids) => {
+      const [a, b] = opened(body(), 2, ids);
+      footnote(a!, A, 5);
+      footnote(b!, B, 15);
+      exchange(a!, b!);
+      converged(a!, b!);
+      // Both made a list: the schema takes two, each with its entry, and nothing was written to mend it.
+      expect(lists(a!)).toBe(2);
+      whole(a!);
+      expect(numbering(a!.doc).size).toBe(2);
+      key(a!, 2);
+      key(b!, 2);
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      whole(b!);
+      expect(lists(a!)).toBe(2);
+    },
+  );
 
   it('with the words of the first typed in the entry of the other: they are kept where the entry stays', () => {
     const [a, b] = opened([...body(), p(marker(D)), list(entry(D, text('Dd')))]);
@@ -301,23 +331,220 @@ describe('two writers remove footnotes at once', () => {
     expect(a!.shown).toBe('[a] one  two [c] | {<a: Aa> <c: Cc>}');
   });
 
-  it('the last marker, while the other adds one: the list stays for the new footnote', () => {
-    const [a, b] = opened([p(text('words '), marker(A)), list(entry(A, text('Aa')))]);
+  // S1 of the review of pull request 55: the writer who takes out the last marker leaves its list, empty, in
+  // the document (no list is deleted), so the footnote that another writer adds and types in meanwhile has a
+  // list to stand in whichever change Yjs orders first, and what was typed there is kept.
+  it.each(ORDERS)(
+    'the last marker, while the other adds one and types in its entry (clients %j): the new footnote keeps its words',
+    (...ids) => {
+      const [a, b] = opened([p(text('words '), marker(A)), list(entry(A, text('Aa')))], 2, ids);
+      let at = -1;
+      a!.doc.descendants((node, pos) => {
+        if (at < 0 && node.type.name === MARKER) at = pos;
+      });
+      a!.write((tr) => tr.delete(at, at + 1));
+      expect(a!.shown).toBe('words  | {}');
+      footnote(b!, B, 2);
+      b!.write((tr) => tr.insertText('typed', entryOf(b!.doc, B)!.pos + 1));
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      whole(b!);
+      expect(numbering(a!.doc).size).toBe(1);
+      expect(entryOf(a!.doc, B)!.node.textContent).toBe('typed');
+      expect(entryOf(a!.doc, A)).toBeNull();
+      // And a change of either afterwards takes nothing out.
+      key(a!, 1);
+      key(b!, 1);
+      exchange(a!, b!);
+      converged(a!, b!);
+      expect(entryOf(a!.doc, B)!.node.textContent).toBe('typed');
+    },
+  );
+});
+
+// B2 of the review of pull request 55: a writer who makes the first list, at the end of the document, and a
+// writer who adds a block after the last one, both at once. The schema takes the block after the list, the
+// writers add no repair that deletes it, and so no block of anyone's and no saved entry is ever taken out.
+describe('the first footnote and a block added at the end, at once (B2)', () => {
+  const body = () => [p(text('one two three four')), p(text('five six seven eight'))];
+  // A paragraph after the last block of the document, as a writer who has no list yet adds one.
+  const added = (client: Client, words: string) =>
+    client.write((tr) =>
+      tr.insert(
+        tr.doc.content.size,
+        client.editor.schema.nodes.paragraph!.create(null, client.editor.schema.text(words)),
+      ),
+    );
+
+  it.each(ORDERS)(
+    'one writer adds a footnote, the other a paragraph (clients %j): both stay, in either order',
+    (...ids) => {
+      const [a, b] = opened(body(), 2, ids);
+      footnote(a!, A, 5);
+      added(b!, 'added at the end');
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      expect(bodyOf(a!)).toEqual(
+        expect.arrayContaining(['one two three four', 'five six seven eight', 'added at the end']),
+      );
+      expect(entryOf(a!.doc, A)).not.toBeNull();
+      // A change of either afterwards, which is what repairs anything, takes nothing of anyone's out.
+      key(a!, 1);
+      key(b!, 1);
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      expect(bodyOf(a!).join('|')).toContain('added at the end');
+      expect(entryOf(a!.doc, A)).not.toBeNull();
+      // Where the paragraph stands, before or after the list, is the order of the identifiers: both are documents.
+      expect(a!.shown).toBe(
+        ids[0] === 1
+          ? '..one [a]two three four | five six seven eight | {<a: >} | added at the end'
+          : '..one [a]two three four | five six seven eight | added at the end | {<a: >}',
+      );
+    },
+  );
+
+  it.each(ORDERS)(
+    'one writer adds a footnote and types in its entry, the other adds a paragraph and types in it (clients %j)',
+    (...ids) => {
+      const [a, b] = opened(body(), 2, ids);
+      footnote(a!, A, 5);
+      a!.write((tr) => tr.insertText('note words', entryOf(a!.doc, A)!.pos + 1));
+      added(b!, 'new');
+      b!.write((tr) => tr.insertText(' and more', b!.doc.content.size - 1));
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      expect(entryOf(a!.doc, A)!.node.textContent).toBe('note words');
+      expect(bodyOf(a!).some((each) => each.startsWith('new'))).toBe(true);
+      expect(bodyOf(a!).join('|')).toContain('and more');
+    },
+  );
+
+  it.each(ORDERS_OF_THREE)(
+    'a tab that was offline writes at the end and comes back after the footnote was saved (clients %j)',
+    (...ids) => {
+      const [a, b, late] = opened(body(), 3, ids);
+      // The late tab makes its changes while it cannot reach the others.
+      added(late!, 'written offline');
+      late!.write((tr) => tr.insertText('!', late!.doc.content.size - 1));
+      footnote(a!, A, 5);
+      a!.write((tr) => tr.insertText('saved words', entryOf(a!.doc, A)!.pos + 1));
+      exchange(a!, b!);
+      key(b!, 1);
+      exchange(a!, b!);
+      // It comes back: every update of its is a change of an old state that holds no list.
+      exchange(a!, b!, late!);
+      converged(a!, b!, late!);
+      whole(late!);
+      expect(bodyOf(late!).join('|')).toContain('written offline!');
+      expect(entryOf(late!.doc, A)!.node.textContent).toBe('saved words');
+      // The change of any writer afterwards takes nothing out.
+      key(late!, 1);
+      key(a!, 1);
+      exchange(a!, b!, late!);
+      converged(a!, b!, late!);
+      whole(a!);
+      expect(bodyOf(a!).join('|')).toContain('written offline!');
+      expect(entryOf(a!.doc, A)!.node.textContent).toBe('saved words');
+    },
+  );
+
+  it.each(ORDERS)(
+    'both make the first footnote and type in it, and one adds a paragraph (clients %j): every word stays',
+    (...ids) => {
+      const [a, b] = opened(body(), 2, ids);
+      footnote(a!, A, 5);
+      a!.write((tr) => tr.insertText('alpha', entryOf(a!.doc, A)!.pos + 1));
+      footnote(b!, B, 15);
+      b!.write((tr) => tr.insertText('beta', entryOf(b!.doc, B)!.pos + 1));
+      added(b!, 'tail');
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      expect(entryOf(a!.doc, A)!.node.textContent).toBe('alpha');
+      expect(entryOf(a!.doc, B)!.node.textContent).toBe('beta');
+      expect(bodyOf(a!).some((each) => each.startsWith('tail'))).toBe(true);
+      key(a!, 1);
+      key(b!, 1);
+      exchange(a!, b!);
+      converged(a!, b!);
+      expect(entryOf(a!.doc, A)!.node.textContent).toBe('alpha');
+      expect(entryOf(a!.doc, B)!.node.textContent).toBe('beta');
+    },
+  );
+});
+
+// S2 of the review of pull request 55: a marker deleted by one writer while another types in its entry, and
+// what undo does with it (register row S20-12).
+describe('a marker deleted while a collaborator types in its entry, and undo (S2)', () => {
+  const three = () => [
+    p(marker(A), text(' one '), marker(B), text(' two '), marker(C)),
+    list(entry(A, text('Aa')), entry(B, text('Bb')), entry(C, text('Cc'))),
+  ];
+  const markerAt = (client: Client, id: string) => {
     let at = -1;
-    a!.doc.descendants((node, pos) => {
-      if (at < 0 && node.type.name === MARKER) at = pos;
+    client.doc.descendants((node, pos) => {
+      if (at < 0 && node.type.name === MARKER && node.attrs.id === id) at = pos;
     });
-    a!.write((tr) => tr.delete(at, at + 1));
-    footnote(b!, B, 2);
+    return at;
+  };
+
+  it.each(ORDERS)(
+    'the deletion arrives, then the undo (clients %j): the marker returns with an entry, whole and the same for both',
+    (...ids) => {
+      const [a, b] = opened(three(), 2, ids);
+      const at = markerAt(a!, B);
+      a!.write((tr) => tr.delete(at, at + 1));
+      b!.write((tr) => tr.insertText('typing', entryOf(b!.doc, B)!.pos + 1));
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      expect(entryOf(a!.doc, B)).toBeNull();
+      a!.undo();
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      whole(b!);
+      expect(markerAt(a!, B)).toBeGreaterThan(-1);
+      // The marker is back with an entry; the words typed meanwhile went with the entry that was deleted.
+      expect(entryOf(a!.doc, B)!.node.textContent).toBe('Bb');
+    },
+  );
+
+  it.each(ORDERS)(
+    'the undo is made before the typing arrives (clients %j): the same for both, and whole',
+    (...ids) => {
+      const [a, b] = opened(three(), 2, ids);
+      const at = markerAt(a!, B);
+      a!.write((tr) => tr.delete(at, at + 1));
+      a!.undo();
+      b!.write((tr) => tr.insertText('typing', entryOf(b!.doc, B)!.pos + 1));
+      exchange(a!, b!);
+      converged(a!, b!);
+      whole(a!);
+      whole(b!);
+      expect(markerAt(a!, B)).toBeGreaterThan(-1);
+      expect(entryOf(a!.doc, B)).not.toBeNull();
+    },
+  );
+
+  it('a repair after a change that arrived joins the next step of the writer’s undo, and undoing it leaves a whole document', () => {
+    const [a, b] = opened(three(), 2, [1, 2]);
+    const at = markerAt(b!, C);
+    b!.write((tr) => tr.delete(at, at + 1));
     exchange(a!, b!);
-    converged(a!, b!);
+    // `a` made no change of its own: what it deleted for the arrival is no step of its undo.
+    expect(undoManagerOf(a!).undoStack.length).toBe(0);
     key(a!, 1);
-    key(b!, 1);
+    expect(undoManagerOf(a!).undoStack.length).toBe(1);
+    a!.undo();
     exchange(a!, b!);
     converged(a!, b!);
     whole(a!);
-    whole(b!);
-    expect(numbering(a!.doc).size).toBe(1);
   });
 });
 
@@ -372,13 +599,20 @@ describe('a list that two writers left wrong is put right by the next change, by
     clients.forEach((writer, at) => key(writer, 1 + at));
     exchange(...clients);
     converged(...clients);
-    // One more round, which writes nothing where the list is right.
-    const states = clients.map((writer) => Y.encodeStateVector(writer.document));
+    // One more round: where the list is right, a change of anyone's adds no entry and takes none out.
+    const entries = clients[0]!.doc.children.flatMap((each) =>
+      each.type.name === LIST ? each.children.map((entry_) => entry_.attrs.id as string) : [],
+    );
+    expect(entries).toHaveLength(3);
     clients.forEach((writer) => key(writer, 1));
     exchange(...clients);
     converged(...clients);
     whole(clients[0]!);
-    expect(states.length).toBe(5);
+    expect(
+      clients[0]!.doc.children.flatMap((each) =>
+        each.type.name === LIST ? each.children.map((entry_) => entry_.attrs.id as string) : [],
+      ),
+    ).toEqual(entries);
   });
 });
 
