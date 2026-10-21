@@ -126,7 +126,7 @@ const rowOf = (id: string) => db().documentInvitation.findUniqueOrThrow({ where:
 
 describe('the one reminder (FR-ED-48)', () => {
   it('goes at exactly 3 days before the expiry and not a millisecond before, by email and by notification', async () => {
-    const { invitee, row } = await sent();
+    const { owner, invitee, row } = await sent();
     const due = row.expiresAt.getTime() - 3 * DAY;
 
     await remindInvitations(undefined, new Date(due - 1));
@@ -137,7 +137,7 @@ describe('the one reminder (FR-ED-48)', () => {
     const mails = await remindersTo(invitee.email);
     expect(mails).toHaveLength(1);
     expect(mails[0]!.text).toBe(
-      `A Person invited you to a document in Ekdotico as Editor. The invitation expires on ${dateText(row.expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico: ${ORIGIN}/notifications.`,
+      `A Person (${owner.email}) invited you to a document in Ekdotico as Editor. The invitation expires on ${dateText(row.expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico: ${ORIGIN}/notifications.`,
     );
     const rows = await reminderNotifications(invitee.id);
     expect(rows).toHaveLength(1);
@@ -221,9 +221,10 @@ describe('the one reminder (FR-ED-48)', () => {
     const owner = await person();
     const holder = await person();
     const documentId = await documentOf(owner.cookie);
-    await db().documentCollaborator.create({ data: { documentId, userId: holder.id, role: 'VIEWER' } });
     const nobody = 'nobody-at-all-clearing@example.com';
     expect((await invite(owner.cookie, documentId, [nobody, holder.email])).status).toBe(201);
+    // The person comes to hold a role between the invitation and its delivery: nothing is sent to them.
+    await db().documentCollaborator.create({ data: { documentId, userId: holder.id, role: 'VIEWER' } });
     await runLater();
     const rows = await db().documentInvitation.findMany({ where: { documentId } });
     expect(rows).toHaveLength(2);
@@ -341,10 +342,11 @@ describe('the reminder in the one list (FR-ED-42)', () => {
     expect(reminder).toMatchObject({
       invitationId: row.id,
       inviterName: 'A Person',
+      inviterEmail: owner.email,
       role: 'viewer',
       expiresAt: row.expiresAt.toISOString(),
     });
-    // The reminder names no title (S18-4; D202 changes the invitation's notification, not the reminder).
+    // The reminder names the sender by name and address, and no title (S18-4) and no pseudonym.
     expect(JSON.stringify(reminder)).not.toContain(TITLE);
 
     const marked = await notification.PATCH(

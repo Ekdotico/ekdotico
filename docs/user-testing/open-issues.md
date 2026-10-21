@@ -129,7 +129,7 @@ Add an entry whenever the owner decides something provisionally. When a point ha
 
 **What happens.** (1) "Send again" on an invitation whose title was hidden creates a new invitation that hides the title too, with a new pseudonym. The choice "Hide the title" can be made only when an invitation is created. (2) When the Owner removes an Editor, or changes the Editor's role, while an offer of ownership to that Editor is open, the offer ends and the Owner is told that it ended, although the Owner caused it.
 
-**Decided as built** on 21 October 2026, for the owner's confirmation (D207, D208 do not say).
+**Decided as built** on 21 October 2026: the owner confirmed both (a hidden title stays hidden on "Send again", with a new name; the Owner is told whenever the Editor stops holding the Editor role, whoever caused it, and also when the document is deleted).
 
 **Alternatives considered:**
 

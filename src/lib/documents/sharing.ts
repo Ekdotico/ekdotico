@@ -80,8 +80,9 @@ export interface NewInvitation {
 
 export type CreateResult =
   | { outcome: 'created'; invitations: NewInvitation[] }
-  /** FR-ED-37: an address of the inviter's own (and, for the Owner, an accepted collaborator's): nothing created. */
+  /** FR-ED-37: an address of the inviter's own: nothing created. */
   | { outcome: 'own_address'; email: string }
+  /** An address whose account holds a role on the document now, for an inviter who may see its people: nothing created. */
   | { outcome: 'collaborator_address'; email: string }
   /** FR-ED-37: the Owner, the collaborators and the pending invitations would be more than ten. */
   | { outcome: 'limit' }
@@ -166,6 +167,8 @@ async function inviterUnderLock(tx: Prisma.TransactionClient, documentId: string
   return {
     ownerId: document.ownerId,
     may: role !== null && holds(document.permissionSet, role, 'document.collaborators.invite'),
+    // Q-row of the owner's answer of 21 October 2026: the people list is what an inviter may already see.
+    mayView: role !== null && holds(document.permissionSet, role, 'document.collaborators.view'),
   };
 }
 
@@ -184,9 +187,7 @@ async function creating(
   if (!under) return { outcome: 'not_found' };
   if (!under.may) return { outcome: 'no_permission' };
 
-  // The two refusals of FR-ED-37 rest on what the Owner knows. A holder of
-  // the permission who is not the Owner may not know them, so only the
-  // holder's own address is refused (FR-ED-44 (a)).
+  // The inviter's own address is refused whoever the inviter is: they know it.
   const inviter = await tx.user.findUnique({ where: { id: inviterId }, select: { email: true, name: true } });
   const own = emails.find((email) => email === inviter?.email);
   if (own) return { outcome: 'own_address', email: own };
@@ -194,29 +195,22 @@ async function creating(
     where: { documentId: document.id },
     select: { userId: true },
   });
-  if (inviterId === under.ownerId) {
-    const accepted = await tx.documentInvitation.findFirst({
-      where: {
-        documentId: document.id,
-        state: 'ACCEPTED',
-        email: { in: [...emails] },
-        acceptedById: { in: collaborators.map(({ userId }) => userId) },
-      },
-      select: { email: true },
+  // The owner's answer of 21 October 2026 (register S17-12 and FR-ED-37): one rule for every address whose
+  // account holds a role on the document now, the Owner's and a former Owner's among them (who holds a role
+  // through an accepted transfer): "already has access". It follows the account that holds the address, not
+  // the invitation it once accepted: an address a collaborator has left is invited as any other.
+  // It is made only for an inviter who may see the people of the document (`document.collaborators.view`):
+  // the people list shows names and never addresses, so the refusal tells the inviter which address is a
+  // collaborator's, and not to an inviter who is shown no collaborators at all. For that inviter the
+  // answer stays the uniform one of FR-ED-21 (the invitation is created, and nothing is sent).
+  if (under.mayView) {
+    const accounts = await tx.user.findMany({
+      where: { email: { in: [...emails] }, emailVerified: true },
+      select: { id: true, email: true },
     });
-    if (accepted?.email) return { outcome: 'collaborator_address', email: accepted.email };
-    // FR-ED-47, register row S17-12: a former Owner holds a role through an accepted transfer, not through an
-    // invitation, and is as well known to the Owner as the people above.
-    const transferred = await tx.ownershipOffer.findMany({
-      where: {
-        documentId: document.id,
-        state: 'ACCEPTED',
-        fromUserId: { in: collaborators.map(({ userId }) => userId) },
-      },
-      select: { from: { select: { email: true } } },
-    });
-    const former = transferred.map(({ from }) => from.email).find((email) => email && emails.includes(email));
-    if (former) return { outcome: 'collaborator_address', email: former };
+    const holding = new Set([under.ownerId, ...collaborators.map(({ userId }) => userId)]);
+    const present = emails.find((email) => accounts.some((a) => a.email === email && holding.has(a.id)));
+    if (present) return { outcome: 'collaborator_address', email: present };
   }
 
   // A row still stored pending past its expiry is written as expired, so
@@ -375,7 +369,7 @@ export function invitationEmail(
       : ` The title of the document is hidden. In Ekdotico it is shown as ${pseudonym}.`;
   return {
     to,
-    subject: 'You have been invited to a document! | Ekdotico',
+    subject: 'You have been invited to a document | Ekdotico',
     text: `${sender} invited you to a document in Ekdotico as ${ROLE_NAME[role]}.${hidden} To accept or decline, open this link: ${link}. The link works once, and the invitation is open until ${dateText(expiresAt, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
   };
 }
@@ -693,13 +687,10 @@ export interface NotificationView {
 }
 
 /**
- * FR-ED-42, FR-ED-48: the one reminder of an invitation, with the day it expires. It names no title (S18-4) and
- * is not changed by D202, which speaks of the invitation: its fixed text is FR-ED-48's.
+ * FR-ED-42, FR-ED-48: the one reminder of an invitation, with the day it expires. It names the sender by name and by
+ * email address (the owner's answer of 21 October 2026) and no title (S18-4), and no pseudonym.
  */
-export interface ReminderNotificationView extends Omit<
-  NotificationView,
-  'kind' | 'title' | 'pseudonym' | 'inviterEmail'
-> {
+export interface ReminderNotificationView extends Omit<NotificationView, 'kind' | 'title' | 'pseudonym'> {
   kind: typeof REMINDER_NOTIFICATION;
   /** Null once the invitation was accepted (S18-2). */
   expiresAt: Date | null;
@@ -781,6 +772,7 @@ export async function listNotifications(
         {
           ...shown,
           kind: REMINDER_NOTIFICATION,
+          inviterEmail: invitation.invitedBy.email,
           // S18-2: once accepted the invitation no longer expires, so the reminder states no expiry.
           expiresAt: invitation.state === 'ACCEPTED' ? null : invitation.expiresAt,
         },
@@ -818,7 +810,7 @@ export async function listNotifications(
     // FR-ED-47: the offer of ownership, beside the others.
     ...(await listOfferNotifications(userId, now)),
     // S17-5: the Owner's notice that an offer ended without the Owner's own action.
-    ...(await listOfferEndedNotifications(userId)),
+    ...(await listOfferEndedNotifications(userId, now)),
   ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   return { unread: notifications.filter(({ read }) => !read).length, notifications };
 }

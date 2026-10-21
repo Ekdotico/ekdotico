@@ -27,7 +27,8 @@ const database = prepare('ownershipnotices', {
 const { auth, db, valkey } = await load();
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { deleteDocument } = await import('../../src/lib/documents/deletion.ts');
-const { deleteAccessNotificationsOf } = await import('../../src/lib/documents/access-notifications.ts');
+const { deleteAccessNotificationsOf, deleteExpiredRemovedNotifications } =
+  await import('../../src/lib/documents/access-notifications.ts');
 const { expireOffers } = await import('../../src/lib/documents/ownership.ts');
 const { notifyOfferEnded } = await import('../../src/lib/documents/ownership-notifications.ts');
 const offering = await import('../../src/app/api/documents/[id]/ownership-offer/route.ts');
@@ -93,6 +94,7 @@ interface Listed {
   title?: string;
   editorName?: string;
   documentId?: string;
+  inTrash?: boolean;
 }
 const listOf = async (cookie: string) =>
   (await notifications.GET(request('GET', '/api/notifications', cookie))).json() as Promise<{
@@ -388,15 +390,49 @@ describe('the Owner is told when an offer ends without the Owner’s own action 
     }
   });
 
-  it('is told nothing where the Owner withdraws the offer, or deletes the document (weakening: tell the Owner of every ending)', async () => {
+  it('is told nothing where the Owner withdraws the offer (weakening: tell the Owner of every ending)', async () => {
     const { owner, id, row } = await pair();
     expect((await offer(owner.cookie, id, row)).status).toBe(201);
     expect((await withdraw(owner.cookie, id)).status).toBe(200);
     expect(await storedFor(owner.id)).toEqual([]);
+  });
 
+  it('is told that the offer ended where the document is deleted, and a deletion with no offer open tells nothing (the owner’s answer of 21 October 2026; weakening: no notice at a deletion)', async () => {
+    const { owner, editor, id, row } = await pair();
     expect((await offer(owner.cookie, id, row)).status).toBe(201);
-    await deleteDocument({ id }, owner.id);
-    expect(await db().ownershipOffer.count({ where: { documentId: id, state: 'WITHDRAWN' } })).toBe(2);
+    expect(await deleteDocument({ id }, owner.id)).toBe(true);
+    expect(await db().ownershipOffer.count({ where: { documentId: id, state: 'WITHDRAWN' } })).toBe(1);
+    // The document is in the trash, and the notice is still the Owner's to read, with a way to the deleted documents.
+    expect(await endedOf(owner.cookie)).toEqual([
+      expect.objectContaining({ end: 'deleted', title: TITLE, editorName: 'Ben Editor', inTrash: true }),
+    ]);
+    expect((await storedFor(owner.id))[0]!.payload).toEqual({
+      documentId: id,
+      toUserId: editor.id,
+      end: 'deleted',
+    });
+    expect(await storedFor(editor.id)).toEqual([]);
+
+    // No offer, no notice.
+    const other = await pair();
+    expect(await deleteDocument({ id: other.id }, other.owner.id)).toBe(true);
+    expect(await storedFor(other.owner.id)).toEqual([]);
+  });
+
+  it('stays 30 days, as a removal does, and not a day longer, whether or not the document stands (the owner’s answer of 21 October 2026; weakening: no time limit)', async () => {
+    const { owner, editor, id, row } = await pair();
+    expect((await offer(owner.cookie, id, row)).status).toBe(201);
+    expect((await answer(editor.cookie, (await pendingOf(id)).id, 'decline')).status).toBe(200);
+    const [stored] = await storedFor(owner.id);
+    const days = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+
+    await db().notification.update({ where: { id: stored!.id }, data: { createdAt: days(29) } });
+    expect(await endedOf(owner.cookie)).toHaveLength(1);
+    // Past the 30 days the list does not show it, and the timer deletes it.
+    await db().notification.update({ where: { id: stored!.id }, data: { createdAt: days(31) } });
+    expect(await endedOf(owner.cookie)).toEqual([]);
+    expect(await storedFor(owner.id)).toHaveLength(1);
+    expect(await deleteExpiredRemovedNotifications(new Date())).toBeGreaterThanOrEqual(1);
     expect(await storedFor(owner.id)).toEqual([]);
   });
 
@@ -414,7 +450,7 @@ describe('the Owner is told when an offer ends without the Owner’s own action 
     expect(await endedOf(editor.cookie)).toEqual([]);
   });
 
-  it('stays in the list, read or unread, while the account is the Owner of a document that stands, and is its recipient’s alone', async () => {
+  it('stays in the list, read or unread, and is its recipient’s alone', async () => {
     const { owner, editor, id, row } = await pair();
     const stranger = await person('Sam Stranger');
     expect((await offer(owner.cookie, id, row)).status).toBe(201);
@@ -446,9 +482,9 @@ describe('the Owner is told when an offer ends without the Owner’s own action 
     ]);
     expect(JSON.stringify(await listOf(stranger.cookie))).not.toContain(TITLE);
 
-    // A document that is deleted is shown in no notification (FR-ED-42), and a permanent deletion takes its rows.
+    // A document in the trash keeps the notice (it stays 30 days); a permanent deletion takes its rows.
     await deleteDocument({ id }, owner.id);
-    expect(await endedOf(owner.cookie)).toEqual([]);
+    expect(await endedOf(owner.cookie)).toEqual([expect.objectContaining({ inTrash: true })]);
     expect(await storedFor(owner.id)).toHaveLength(1);
     await db().$transaction((tx) => deleteAccessNotificationsOf(tx, id));
     expect(await storedFor(owner.id)).toEqual([]);

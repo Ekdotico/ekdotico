@@ -170,13 +170,13 @@ test('the one reminder 3 days before the expiry, by email and in the list, once'
     /Subject: Your invitation to a document in Ekdotico expires soon/,
   );
   expect(reminder.text).toContain(
-    `${owner.name} invited you to a document in Ekdotico as Editor. The invitation expires on `,
+    `${owner.name} (${owner.email}) invited you to a document in Ekdotico as Editor. The invitation expires on `,
   );
   expect(reminder.text).toMatch(/open your notifications in Ekdotico: https?:\/\/[^\s]+\/notifications\./);
 
   await theirs.goto('/notifications');
   await expect(
-    theirs.getByText(`Reminder: ${owner.name} invited you to a document as Editor.`),
+    theirs.getByText(`Reminder: ${owner.name} (${owner.email}) invited you to a document as Editor.`),
   ).toBeVisible();
   await expect(theirs.getByText(/The invitation expires on .+\./)).toHaveCount(1);
   await expect(theirs.getByRole('link', { name: 'Open the invitation' })).toHaveCount(2);

@@ -18,6 +18,21 @@ export function InvitationStatement({ statement }: { statement: string }) {
   );
 }
 
+/** The sender by name and by email address, "Ada Owner (ada@example.com)"; by name alone where the account has no address left. */
+export function Sender({ name, email }: { name: string; email: string | null }) {
+  return (
+    <>
+      <bdi>{name}</bdi>
+      {email === null ? null : (
+        <>
+          {' '}
+          (<bdi>{email}</bdi>)
+        </>
+      )}
+    </>
+  );
+}
+
 /**
  * Who invited, to what, and in which role (D202): the sender by name and by email address, and the
  * document by its title, or by the pseudonym that stands for it where the inviter hid the title. The
@@ -37,17 +52,7 @@ export function InvitedBy({
   pseudonym: string | null;
   role: string;
 }) {
-  const sender = (
-    <>
-      <bdi>{inviterName}</bdi>
-      {inviterEmail === null ? null : (
-        <>
-          {' '}
-          (<bdi>{inviterEmail}</bdi>)
-        </>
-      )}
-    </>
-  );
+  const sender = <Sender name={inviterName} email={inviterEmail} />;
   if (title !== null) {
     return (
       <>

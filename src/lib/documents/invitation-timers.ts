@@ -28,17 +28,25 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * FR-ED-48, verbatim: the subject and the fixed text of the email. It states
- * who sent the invitation, the role, and the day it expires, and "carries
- * neither the title nor any content of the document": the function is handed
- * none. The link of an invitation is stored only as a hash and cannot be sent
- * again, so the email links to the notification list.
+ * who sent the invitation, by name and by email address as the invitation's
+ * own email does (the owner's answer of 21 October 2026 to the row on the
+ * reminder), the role, and the day it expires, and "carries neither the title
+ * nor any content of the document": the function is handed none. The link of
+ * an invitation is stored only as a hash and cannot be sent again, so the
+ * email links to the notification list.
  */
-export function reminderEmail(to: string, inviterName: string, role: string, expiresAt: Date): EmailMessage {
+export function reminderEmail(
+  to: string,
+  inviter: { name: string; email: string | null },
+  role: string,
+  expiresAt: Date,
+): EmailMessage {
   const link = `${settings().appOrigin}/notifications`;
+  const sender = inviter.email ? `${inviter.name} (${inviter.email})` : inviter.name;
   return {
     to,
     subject: 'Your invitation to a document in Ekdotico expires soon',
-    text: `${inviterName} invited you to a document in Ekdotico as ${role}. The invitation expires on ${dateText(expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico: ${link}.`,
+    text: `${sender} invited you to a document in Ekdotico as ${role}. The invitation expires on ${dateText(expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico: ${link}.`,
   };
 }
 
@@ -129,7 +137,7 @@ async function remind(
     });
     return reminderEmail(
       invitation.email,
-      displayNameOf(invitation.invitedBy),
+      { name: displayNameOf(invitation.invitedBy), email: invitation.invitedBy.email },
       ROLE_NAME[COLLABORATOR_ROLE[invitation.role]],
       invitation.expiresAt,
     );

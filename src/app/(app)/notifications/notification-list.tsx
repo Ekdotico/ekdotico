@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Badge, Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
 import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
-import { InvitedBy } from '../invitations/invitation-view.tsx';
+import { InvitedBy, Sender } from '../invitations/invitation-view.tsx';
 import { InBrowser, LocalTime } from '../local-time.tsx';
 import { NOTIFICATIONS_CHANGED } from './changed.ts';
 
@@ -29,10 +29,11 @@ export type NotificationItem =
       title: string | null;
       pseudonym: string | null;
     })
-  // FR-ED-42, FR-ED-48: the one reminder, 3 days before the invitation expires; it names no title (S18-4).
+  // FR-ED-42, FR-ED-48: the one reminder, 3 days before the invitation expires; it names the sender by name and address and no title (S18-4).
   | (Shown & {
       kind: 'document_invitation_reminder';
       inviterName: string;
+      inviterEmail: string | null;
       role: string;
       invitationId: string;
       /** ISO 8601, UTC; null once the invitation was accepted (S18-2). */
@@ -47,10 +48,12 @@ export type NotificationItem =
   // FR-ED-42, S17-5: the Owner's offer ended without the Owner's own action; the Owner holds the document still.
   | (Shown & {
       kind: 'ownership_offer_ended';
-      end: 'declined' | 'expired' | 'ended';
+      end: 'declined' | 'expired' | 'ended' | 'deleted';
       documentId: string;
       title: string;
       editorName: string;
+      /** The document is in the trash: the link leads to the deleted documents, from which it can be restored. */
+      inTrash: boolean;
     });
 
 /** What a notification says, in the words approved with docs/plan/presence-row.md, section 5. */
@@ -69,7 +72,8 @@ function Statement({ notification }: { notification: NotificationItem }) {
     case 'document_invitation_reminder':
       return (
         <>
-          Reminder: <bdi>{notification.inviterName}</bdi> invited you to a document as {notification.role}.{' '}
+          Reminder: <Sender name={notification.inviterName} email={notification.inviterEmail} /> invited you
+          to a document as {notification.role}.{' '}
           {notification.expiresAt === null ? null : (
             <InBrowser>
               The invitation expires on <LocalTime at={notification.expiresAt} />.
@@ -130,6 +134,14 @@ function OfferEnded({
           {named ?? 'the Editor'} no longer holds the Editor role on it. You are still its Owner.
         </>
       );
+    case 'deleted':
+      // The owner's answer of 21 October 2026: the deletion of the document ends the offer, and the Owner is told.
+      return (
+        <>
+          Your offer of ownership of <bdi>{title}</bdi> to {named ?? 'the Editor'} ended, because you deleted
+          the document.
+        </>
+      );
   }
 }
 
@@ -146,8 +158,16 @@ function Subject({ notification }: { notification: NotificationItem }) {
           Open the invitation
         </Link>
       );
-    case 'role_changed':
     case 'ownership_offer_ended':
+      if (notification.inTrash) {
+        return (
+          <Link id={`open-${notification.id}`} href="/deleted">
+            Open the deleted documents
+          </Link>
+        );
+      }
+    // falls through: a document that stands is opened as for a change of role
+    case 'role_changed':
       return (
         <Link
           id={`open-${notification.id}`}

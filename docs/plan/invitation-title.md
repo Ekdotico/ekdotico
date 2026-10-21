@@ -16,9 +16,10 @@ Written on 21 October 2026 against the draft register at `docs-decisions@75a5343
 - NFR-SE-07: the row "Offers of ownership made, for each authenticated user: 20 in any hour" (D208 says the row is not yet there). The setting is `RATE_LIMIT_OFFERS_PER_USER`.
 - FR-ED-21, FR-ED-42 and FR-ED-47: the amendments for the texts that the owner approves.
 
-## Choices for the owner to confirm (built as recommended)
+## Decided by the owner on 21 October 2026
 
-- Sending again keeps a hidden title hidden, with a new pseudonym.
-- The choice "Hide the title" is made when an invitation is created and cannot be changed afterwards.
-- The Owner is told when an offer ends because the Editor stopped holding the Editor role, whoever caused it. FR-ED-47 classes both that and the deletion of the document as ending "without anyone's action"; the build tells the Owner of the first and not of the second, since the Owner deletes the document. The owner picks one rule.
-- How long the Owner's notice stays: while the account is the Owner of a document that stands.
+- Sending again keeps a hidden title hidden, with a new pseudonym. The choice "Hide the title" is made when an invitation is created and cannot be changed afterwards.
+- The Owner is told when an offer ends other than by an acceptance or the Owner's own withdrawal: a decline, an expiry, the Editor ceasing to hold the role (whoever caused it), and the deletion of the document (a move to the trash), one rule for the two cases FR-ED-47 calls "without anyone's action". A permanent deletion takes the notices.
+- The Owner's notice stays 30 days, as the notice of a removal does, read or unread, whether the document stands or is in the trash. It is shown to the account only while it is the Owner of the document (its words say "You are still its Owner"), so an acceptance deletes the former Owner's.
+- The reminder of an invitation, in the email and in the notification, names the sender by name and by address.
+- An address whose account holds a role on the document is refused (409, `collaborator_address`, "already has access to this document"), the Owner's and a former Owner's included. It is made only for an inviter who may see the people of the document; for an inviter shown no people the answer stays the uniform one of FR-ED-21. A person who has left the document, a former Owner among them, may be invited again.

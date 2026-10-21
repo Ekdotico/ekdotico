@@ -48,7 +48,7 @@ afterAll(async () => {
 beforeEach(() => void later.tasks.splice(0));
 
 const TITLE = 'Quartz-zebra-title-never-in-an-email';
-const SUBJECT = 'You have been invited to a document! | Ekdotico';
+const SUBJECT = 'You have been invited to a document | Ekdotico';
 const PSEUDONYM = new RegExp(
   `^(${PSEUDONYM_ADJECTIVES.join('|')}) (${PSEUDONYM_ANIMALS.join('|')}) — (Ada Owner|Eddie Editor)$`,
 );
