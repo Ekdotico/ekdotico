@@ -69,7 +69,7 @@ import { isFootnoteId } from '../../../../lib/footnotes/node.ts';
 import { IMAGE_WIDTH_MOST, imageAttributeAllowed } from '../../../../lib/images/node.ts';
 import { BLOCK_CONTROLS, BlockControls, Editable } from './block-controls.tsx';
 import styles from './editor.module.css';
-import { ENTRY, ENTRY_PROMPT, Footnotes, MARKER } from './footnotes.ts';
+import { ENTRY, ENTRY_PROMPT, Footnotes, MARKER, TrailingParagraph } from './footnotes.ts';
 import { ImageBlockView, ImageUpload } from './images.tsx';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
@@ -1596,6 +1596,8 @@ export function extensions(
       // Replaced by the link below.
       link: false,
     }),
+    // Where the kit's own stood, which is before the table's repair in the order of the plugins.
+    TrailingParagraph,
     Link.extend({
       // The address and nothing else. The library's mark also stores `target`,
       // `rel`, `class` and `title`, each of which another client could set to

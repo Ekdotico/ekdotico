@@ -610,8 +610,23 @@ export const Footnotes = Extension.create({
           return tr;
         },
       }),
-      // The paragraph that the starter kit keeps at the end of a document that does not end in one, so that
-      // the cursor has a place after a table, goes before the list of footnotes where there is one.
+    ];
+  },
+});
+
+/**
+ * The paragraph that the starter kit keeps at the end of a document that does not end in one, so that the
+ * cursor has a place after a table, goes before the list of footnotes where there is one: the kit's own is
+ * turned off (./extensions.tsx) and this takes its place, **in the same place of the order of the editor's
+ * extensions**, which is before the table's. The order is the order in which the plugins answer a change, and
+ * a table that stands last in a document past a limit is mended differently if this answers after the table's
+ * own repair: the repair was refused, and its refusal said aloud (tests/e2e/editor.spec.ts, "a table block
+ * emptied by a client at 100 tables").
+ */
+export const TrailingParagraph = Extension.create({
+  name: 'trailingParagraph',
+  addProseMirrorPlugins() {
+    return [
       new Plugin({
         appendTransaction: (transactions, _before, state) => {
           if (!transactions.some((each) => each.docChanged)) return null;

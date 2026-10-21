@@ -465,6 +465,14 @@ describe('the paragraph kept at the end of the document goes before the list', (
     editor.state.doc.check();
   });
 
+  it('answers a change before the table’s repair does, where the kit’s own did: a table last in a document past a limit', () => {
+    const names = extensions(new Y.Doc()).map((each) => each.name);
+    expect(names).toContain('trailingParagraph');
+    expect(names.indexOf('trailingParagraph')).toBeLessThan(names.indexOf('table'));
+    // The kit's own is off, or the end of a document would be answered twice.
+    expect(names).not.toContain('trailingNode');
+  });
+
   it('keeps the library’s own behaviour where there is no list: a paragraph at the end', () => {
     const editor = editorOf(p(text('x')), table());
     dispatch(editor, (tr) => tr.insertText('y', 2));

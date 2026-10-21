@@ -830,7 +830,9 @@ test('the slash palette opens where the requirement says, filters by name and al
   await expect(list).toHaveAttribute('id', LIST_ID);
   await expect(doc).not.toHaveAttribute('aria-activedescendant');
   // What a screen reader is told once the count has settled: the count, and the row Enter chooses.
-  await expect(page.getByRole('status').filter({ hasText: '14 blocks. Text first.' })).toBeAttached();
+  await expect(
+    page.getByRole('status').filter({ hasText: `${LISTED.length} blocks. Text first.` }),
+  ).toBeAttached();
 
   // FR-ED-11: "a maximum of eight results at a time and shall be scrollable".
   const whole = () =>
@@ -843,7 +845,7 @@ test('the slash palette opens where the requirement says, filters by name and al
     });
   expect(await whole()).toBe(8);
   expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await expect(rows(page).nth(13)).not.toBeInViewport();
+  await expect(rows(page).nth(LISTED.length - 1)).not.toBeInViewport();
 
   // The arrow keys move in the list, and the text then names the row; the cursor does not move.
   await page.keyboard.press('ArrowDown');
@@ -853,10 +855,15 @@ test('the slash palette opens where the requirement says, filters by name and al
   await page.keyboard.press('ArrowUp');
   await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(0).getAttribute('id'))!);
   // To the last row, which is scrolled into view; Down stops there.
-  for (let press = 0; press < 15; press += 1) await page.keyboard.press('ArrowDown');
-  await expect(rows(page).nth(13)).toHaveAttribute('aria-selected', 'true');
-  await expect(rows(page).nth(13)).toBeInViewport();
-  await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(13).getAttribute('id'))!);
+  for (let press = 0; press < LISTED.length + 1; press += 1) await page.keyboard.press('ArrowDown');
+  await expect(rows(page).nth(LISTED.length - 1)).toHaveAttribute('aria-selected', 'true');
+  await expect(rows(page).nth(LISTED.length - 1)).toBeInViewport();
+  await expect(doc).toHaveAttribute(
+    'aria-activedescendant',
+    (await rows(page)
+      .nth(LISTED.length - 1)
+      .getAttribute('id'))!,
+  );
   await expect(doc).toBeFocused();
   await expect(doc).toHaveText('/');
 
