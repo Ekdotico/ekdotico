@@ -27,7 +27,7 @@
 // surface"). Nothing of Novel is here: docs/decisions/0005-editor-and-novel.md.
 'use client';
 
-import { createContext, useContext, useId, useState } from 'react';
+import { useContext, useId, useState } from 'react';
 import { Extension, mergeAttributes, Node } from '@tiptap/core';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Collaboration from '@tiptap/extension-collaboration';
@@ -65,7 +65,10 @@ import type { Awareness } from 'y-protocols/awareness';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
 import { shapeOf } from '../../../../lib/collab/shape.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
+import { IMAGE_WIDTH_MOST, imageAttributeAllowed } from '../../../../lib/images/node.ts';
+import { BLOCK_CONTROLS, BlockControls, Editable } from './block-controls.tsx';
 import styles from './editor.module.css';
+import { ImageBlockView, ImageUpload } from './images.tsx';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
 import { SlashPalette } from './slash-palette.tsx';
@@ -82,39 +85,8 @@ import {
   tablesIn,
 } from './table-bounds.ts';
 
-/** Whether the document can be edited now: the role, and the connection (FR-ED-18). Node views read it. */
-export const Editable = createContext(false);
-
-/** The mark on the element that holds a block's controls: Alt+F10 looks for it (./editor.tsx). */
-export const BLOCK_CONTROLS = 'data-block-controls';
-
-/**
- * A block's own controls, inside the block and outside its text. Escape
- * returns to the text, unless a control used the key itself (a menu closing
- * its list).
- */
-function BlockControls({
-  editor,
-  className,
-  children,
-}: {
-  editor: Editor;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      {...{ [BLOCK_CONTROLS]: '' }}
-      className={className}
-      contentEditable={false}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape' && !event.defaultPrevented) editor.commands.focus();
-      }}
-    >
-      {children}
-    </div>
-  );
-}
+// Shared with ./images.tsx, and named here as before for the page (./editor.tsx).
+export { BLOCK_CONTROLS, Editable };
 
 /**
  * Writes text to the clipboard. False where the browser refused it, or offers
@@ -567,6 +539,70 @@ const TableCaption = Node.create({
   },
 });
 
+// ── Image (FR-ED-08) ────────────────────────────────────────────────────────
+
+/**
+ * The image block, as the schema has it and no more: the identifier of an
+ * uploaded image, the alt text, the caption, and the width. THERE IS NO
+ * ADDRESS in it, under any name (NFR-SE-06 A01): the one thing an image block
+ * can name is the row of an image uploaded to this application, and the
+ * server answers a link only for an image of the document the block stands
+ * in (src/lib/images/node.ts; docs/plan/slice-19.md).
+ *
+ * What is HTML here is the clipboard's. An `img` that a page supplies is no
+ * node of this schema, so pasted content that refers to an image at another
+ * address is inserted without it (FR-ED-08). The block's own `figure` is read
+ * back, with the four attributes under the rules below: a page that writes
+ * one by hand can name an identifier, which opens nothing the server does not
+ * check.
+ *
+ * The view, the controls and the upload are ./images.tsx's. The `documentId`
+ * option is the document the block stands in, which is where its link is asked
+ * for; where there is none the block shows that its image is not available.
+ */
+const ImageBlock = Node.create<{ documentId: string | null; unreferencedDays: number }>({
+  name: 'image',
+  group: 'block',
+  atom: true,
+  draggable: false,
+  addOptions() {
+    return { documentId: null, unreferencedDays: 30 };
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ImageBlockView);
+  },
+  addAttributes() {
+    return {
+      id: { default: null, parseHTML: (element) => element.getAttribute('data-image-id') },
+      alt: { default: '', parseHTML: (element) => element.getAttribute('data-alt') },
+      caption: { default: '', parseHTML: (element) => element.getAttribute('data-caption') },
+      width: {
+        default: IMAGE_WIDTH_MOST,
+        parseHTML: (element) => {
+          const given = element.getAttribute('data-width');
+          return given !== null && /^[0-9]{1,3}$/.test(given) ? Number(given) : null;
+        },
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'figure.ekd-image' }];
+  },
+  renderHTML({ node }) {
+    // The identifier and the words, and no address: nothing here is loaded by a browser.
+    return [
+      'figure',
+      {
+        class: 'ekd-image',
+        'data-image-id': String(node.attrs.id ?? ''),
+        'data-alt': String(node.attrs.alt ?? ''),
+        'data-caption': String(node.attrs.caption ?? ''),
+        'data-width': String(node.attrs.width ?? ''),
+      },
+    ];
+  },
+});
+
 // ── What an attribute may hold ──────────────────────────────────────────────
 
 // The bounds are this file's: the Docs give none (reported for the register).
@@ -618,6 +654,14 @@ export const ATTRIBUTE_RULES: Record<string, Record<string, Rule>> = {
   tableCell: CELL,
   tableHeader: CELL,
   link: { href: linkAddress },
+  // FR-ED-08: each held to the rule the server keeps (src/lib/images/node.ts), and to its default otherwise.
+  image: {
+    id: (given) => (typeof given === 'string' && imageAttributeAllowed('id', given) ? given : null),
+    alt: (given) => (typeof given === 'string' && imageAttributeAllowed('alt', given) ? given : ''),
+    caption: (given) => (typeof given === 'string' && imageAttributeAllowed('caption', given) ? given : ''),
+    width: (given) =>
+      typeof given === 'number' && imageAttributeAllowed('width', given) ? given : IMAGE_WIDTH_MOST,
+  },
 };
 
 const count = (given: unknown): number => (typeof given === 'number' ? given : 1);
@@ -1526,6 +1570,12 @@ export function extensions(
   unrepairable: () => void = () => {},
   reads = false,
   awareness: Awareness | null = null,
+  images: {
+    documentId: string;
+    unreferencedDays: number;
+    report: (words: string | null) => void;
+    announce: (words: string) => void;
+  } | null = null,
 ) {
   return [
     StarterKit.configure({
@@ -1612,6 +1662,12 @@ export function extensions(
     TableCell,
     TableBlock,
     TableCaption,
+    ImageBlock.configure({
+      documentId: images?.documentId ?? null,
+      unreferencedDays: images?.unreferencedDays ?? 30,
+    }),
+    // FR-ED-08: the file picker and the drop. A browser that cannot edit has neither.
+    ...(reads || !images ? [] : [ImageUpload.configure(images)]),
     Placeholder.configure({
       showOnlyCurrent: false,
       placeholder: ({ node }) => (node.type.name === 'tableCaption' ? 'Caption' : ''),

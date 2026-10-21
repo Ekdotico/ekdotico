@@ -10,7 +10,13 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/lib/documents/permissions.ts';
-import { deletedDocumentRoute, documentRoute, permissionOf, stateOf } from '../../src/lib/documents/route.ts';
+import {
+  deletedDocumentRoute,
+  documentRoute,
+  permissionOf,
+  readsSessionRow,
+  stateOf,
+} from '../../src/lib/documents/route.ts';
 import { routes, SESSIONLESS, withSession } from '../routes.ts';
 
 // NFR-SE-04, FR-ED-39: every access control decision for a document is made
@@ -61,7 +67,16 @@ const PERMISSION: Record<string, Permission> = {
   // FR-ED-47: offering ownership and withdrawing the offer. The permission is fixed to the Owner.
   'src/app/api/documents/[id]/ownership-offer/route.ts POST': 'document.ownership.transfer',
   'src/app/api/documents/[id]/ownership-offer/route.ts DELETE': 'document.ownership.transfer',
+  // FR-ED-08, NFR-SE-18 (API design, "Images"): the upload asks to edit the document, the link to see it.
+  'src/app/api/documents/[id]/images/route.ts POST': 'document.content.edit',
+  'src/app/api/documents/[id]/images/[imageId]/route.ts GET': 'document.view',
 };
+
+// NFR-SE-02, NFR-SE-17 (c): the handlers that are a GET and read the session's row all the same, since
+// "the issue of a link to an image" is one of the requests that never use the signed copy. Every other
+// GET may; a handler of this table that does not read the row fails, and so does a GET that is in no
+// table and reads it by chance of a rule that was not meant to bind it.
+const READS_THE_SESSION_ROW = ['src/app/api/documents/[id]/images/[imageId]/route.ts GET'];
 
 // The handlers that act on a DELETED document: each is made by
 // `deletedDocumentRoute`, which asks `authoriseDeleted`. Every other is made by
@@ -133,6 +148,10 @@ describe('the route handlers of a document', () => {
         expect(permissionOf(handler)).toBe(permission);
         expect(stateOf(handler), `${route} ${method}`).toBe(
           ON_A_DELETED_DOCUMENT.includes(`${route} ${method}`) ? 'deleted' : 'live',
+        );
+        // A handler that changes state reads the row whatever it says; of a GET it is a decision.
+        expect(readsSessionRow(handler), `${route} ${method}`).toBe(
+          READS_THE_SESSION_ROW.includes(`${route} ${method}`),
         );
       }
     },

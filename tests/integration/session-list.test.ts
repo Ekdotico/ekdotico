@@ -380,6 +380,8 @@ describe('the removal of ended sessions (NFR-RE-15, FR-AU-84)', () => {
       'ownership-offer-expiry',
       'ownership-offer-email',
       'removed-notification-removal',
+      // NFR-RE-15, NFR-SE-18: the images out of their documents for 30 days; run twice at once here, and found nothing to do.
+      'image-deletion',
     ]);
     const { email, sessionId } = await person();
     const idle = await browser(email);

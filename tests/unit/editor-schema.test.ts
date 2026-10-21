@@ -108,6 +108,13 @@ const ALLOWED: Record<string, Record<string, (value: unknown) => boolean>> = {
     align: (value) => [null, 'left', 'center', 'right'].includes(value as string),
   },
   link: { href: (value) => value === null || (typeof value === 'string' && /^https:\/\/\S+$/.test(value)) },
+  // FR-ED-08: written out here and not taken from src/lib/images/node.ts, so that a change to it is seen.
+  image: {
+    id: (value) => value === null || (typeof value === 'string' && /^c[a-z0-9]{24}$/.test(value)),
+    alt: (value) => typeof value === 'string' && value.length <= 1000,
+    caption: (value) => typeof value === 'string' && value.length <= 500,
+    width: (value) => Number.isInteger(value) && (value as number) >= 10 && (value as number) <= 100,
+  },
 };
 ALLOWED.tableHeader = ALLOWED.tableCell!;
 

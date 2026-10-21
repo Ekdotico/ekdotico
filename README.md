@@ -44,10 +44,16 @@ NODE_AUTH_TOKEN="$(gh auth token)" pnpm install
 
 Development runs against local equivalents of the production services. Production is DigitalOcean Frankfurt and is provisioned by the owner.
 
-Start PostgreSQL 17 and Valkey:
+Start PostgreSQL 17, Valkey, and the local object store of the images (SeaweedFS, a store of the S3 protocol; production is DigitalOcean Spaces, which the owner provisions):
 
 ```bash
 docker compose up -d
+```
+
+The images need a bucket on that store, and the settings that name it (`.env.example`; the keys are the ones in `docker/object-store-s3.json`, which open that store and nothing else). Without the settings the application stores no image and says so. Make the bucket once, with the settings in the environment of the shell:
+
+```bash
+IMAGE_STORAGE_ENDPOINT=http://localhost:8333 IMAGE_STORAGE_BUCKET=ekdotico-images IMAGE_STORAGE_ACCESS_KEY_ID=ekdotico-dev-access IMAGE_STORAGE_SECRET_ACCESS_KEY=ekdotico-dev-secret-key-0000000000 node scripts/create-bucket.ts
 ```
 
 A PostgreSQL 17 server that is already running on the machine serves as well. Create the database on it, UTF8 with the `en_US.UTF-8` locale, which the provisioning script requires (NFR-I18-03), and use that server's superuser connection in place of the one below:
@@ -99,16 +105,18 @@ The collaboration server accepts a WebSocket at `/collab` only from a request wh
 
 ## Checks
 
-| Command                 | What it checks                                                                                                                                                                                                                                                                   |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm check:deps`       | Every dependency pinned exactly, every licence admitted (NFR-IC-08, NFR-IC-12)                                                                                                                                                                                                   |
-| `pnpm format`           | Formatting                                                                                                                                                                                                                                                                       |
-| `pnpm lint`             | Lint                                                                                                                                                                                                                                                                             |
-| `pnpm typecheck`        | Types                                                                                                                                                                                                                                                                            |
-| `pnpm test`             | Unit tests                                                                                                                                                                                                                                                                       |
-| `pnpm test:integration` | Provisioning, migrations, identity, sessions, the proxy, the limits, the security log, documents, and the collaboration server as a process of its own, against a real PostgreSQL server and a real Valkey. Needs `ADMIN_DATABASE_URL`, a superuser connection, and `VALKEY_URL` |
-| `pnpm build`            | The production build                                                                                                                                                                                                                                                             |
-| `pnpm test:e2e`         | The end-to-end tests, on a production build that the run makes itself. The tests of the editor start a collaboration server of their own, on the port after the application's. Needs PostgreSQL and Valkey as the integration tests do                                           |
+| Command                 | What it checks                                                                                                                                                                                                                                                                                              |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm check:deps`       | Every dependency pinned exactly, every licence admitted (NFR-IC-08, NFR-IC-12)                                                                                                                                                                                                                              |
+| `pnpm format`           | Formatting                                                                                                                                                                                                                                                                                                  |
+| `pnpm lint`             | Lint                                                                                                                                                                                                                                                                                                        |
+| `pnpm typecheck`        | Types                                                                                                                                                                                                                                                                                                       |
+| `pnpm test`             | Unit tests                                                                                                                                                                                                                                                                                                  |
+| `pnpm test:integration` | Provisioning, migrations, identity, sessions, the proxy, the limits, the security log, documents, and the collaboration server as a process of its own, against a real PostgreSQL server and a real Valkey. Needs `ADMIN_DATABASE_URL`, a superuser connection, and `VALKEY_URL`                            |
+| `pnpm build`            | The production build                                                                                                                                                                                                                                                                                        |
+| `pnpm test:e2e`         | The end-to-end tests, on a production build that the run makes itself. The tests of the editor and of the images start a collaboration server of their own, on the port after the application's, one file after the other (`playwright.config.ts`). Needs PostgreSQL and Valkey as the integration tests do |
+
+The tests of the adapter of the object store (`tests/integration/image-store.test.ts`) and of the images in the browser (`tests/e2e/images.spec.ts`) run where the four settings of the object store are in the environment, and are skipped, with a line that says so, where they are not. Each run of the first makes a bucket of its own and deletes it.
 
 The integration test runs only against a local server. It creates databases of its own and drops them. The three roles belong to the server, so they stay, with the development passwords above.
 

@@ -10,6 +10,7 @@
 // nothing else does.
 import * as Y from 'yjs';
 import { db } from '../db.ts';
+import { imageIdsIn, trackReferences } from '../images/references.ts';
 
 export function encodeState(document: Y.Doc): Uint8Array<ArrayBuffer> {
   return Y.encodeStateAsUpdate(document) as Uint8Array<ArrayBuffer>;
@@ -427,6 +428,8 @@ export function storeFinalState(documentId: string, document: Y.Doc): Promise<bo
 // document as it was when the store was called.
 async function store(where: { id: string; deletedAt?: null }, document: Y.Doc): Promise<boolean> {
   const state = encodeState(document);
+  // The images of the same moment as the state (NFR-SE-18; src/lib/images/references.ts).
+  const referenced = imageIdsIn(document);
   try {
     applyState(new Y.Doc(), state);
   } catch {
@@ -438,5 +441,8 @@ async function store(where: { id: string; deletedAt?: null }, document: Y.Doc): 
     // `updatedAt`, which the model no longer moves by itself (prisma/schema.prisma).
     data: { yjsState: state, updatedAt: new Date() },
   });
+  // NFR-SE-18: the images the stored document holds, and the clock of those it no longer does
+  // (src/lib/images/references.ts). After the state is written, and never a reason for the store to fail.
+  if (count === 1) await trackReferences(where.id, referenced);
   return count === 1;
 }

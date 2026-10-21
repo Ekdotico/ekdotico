@@ -131,6 +131,7 @@ function onward(request: NextRequest): NextResponse {
   const policy = pagePolicy(nonce, {
     development: process.env.NODE_ENV === 'development',
     local: ['localhost', '127.0.0.1'].includes(new URL(settings().appOrigin).hostname),
+    imageOrigin: settings().imageStorage?.origin,
   });
   // In place of whatever the client sent under these names: never a nonce of its choosing.
   const headers = new Headers(request.headers);

@@ -137,6 +137,8 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
     REFUSAL.TOO_DANGLING,
     REFUSAL.INCOMPLETE,
     REFUSAL.TABLE_BOUNDS,
+    REFUSAL.IMAGE_ATTRIBUTES,
+    REFUSAL.LEAF_CONTENT,
     // Register D184, D192, D193: a limit of the document.
     ...Object.values(LIMIT_REFUSAL),
   ])('never tries again after %s', (reason) => {
@@ -148,6 +150,16 @@ describe('what the client does about a refusal (FR-ED-18, FR-ED-41)', () => {
     const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
     expect(page).toContain(`would make the document larger than ${MAX_STATE_BYTES / 1024 / 1024} MB'`);
     expect(page).toContain(`would nest the content more than ${MAX_ELEMENT_DEPTH} levels deep'`);
+  });
+
+  it('says of a change refused for an image, in the owner\'s plain words of 21 October 2026, and without "hold"', () => {
+    const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
+    expect(page).toContain(
+      "'This tab tried to change an image in a way that is not allowed, so the change was not saved.'",
+    );
+    expect(page).toContain(
+      "'This tab tried to put content inside a block that cannot contain any, so the change was not saved.'",
+    );
   });
 
   it('says of a change refused for the shape of the document which rule, in words that name no internal term', () => {

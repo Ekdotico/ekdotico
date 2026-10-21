@@ -52,6 +52,9 @@ const ELSEWHERE: Record<string, string> = {
     'tests/integration/content-type.test.ts: every endpoint of the identity handler, "the origin is looked at first"',
   'src/app/api/sign-up/route.ts POST':
     'tests/integration/sign-up.test.ts: "a request from another origin (NFR-SE-17 (c))"',
+  // Its body is the bytes of an image and not JSON, which the cases here send.
+  'src/app/api/documents/[id]/images/route.ts POST':
+    'tests/integration/image-routes.test.ts: "checks the origin before anything is read or counted"',
 };
 
 // The proxy's answer, byte for byte (src/lib/auth/route-answers.ts).

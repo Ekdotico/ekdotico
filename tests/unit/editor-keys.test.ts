@@ -386,24 +386,14 @@ describe('the rows of the slash palette (FR-ED-11, FR-ED-12)', () => {
     ['quote', ['blockquote'], 'blockquote'],
     ['table', [], 'tableBlock'],
     ['code', ['codeblock'], 'codeBlock'],
+    ['image', ['img'], 'image'],
     ['callout', ['note'], 'callout'],
     ['toc', ['contents'], 'tableOfContents'],
     ['divider', ['hr', 'rule'], 'horizontalRule'],
     ['page-break', ['pagebreak'], 'pageBreak'],
   ];
   // The rows of the requirement that are another slice's, or not in α 0.1.0.
-  const NOT_HERE = [
-    'image',
-    'img',
-    'footnote',
-    'fn',
-    'latex',
-    'math',
-    'equation',
-    'mermaid',
-    'diagram',
-    'cite',
-  ];
+  const NOT_HERE = ['footnote', 'fn', 'latex', 'math', 'equation', 'mermaid', 'diagram', 'cite'];
 
   it('are the rows of the requirement for the blocks of the cut, with their aliases', () => {
     expect(SLASH_COMMANDS.map(({ name, aliases, inserts }) => [name, [...aliases], inserts.type])).toEqual(
@@ -423,7 +413,7 @@ describe('the rows of the slash palette (FR-ED-11, FR-ED-12)', () => {
       block.content?.forEach(walk);
     };
     SLASH_COMMANDS.forEach(({ inserts }) => walk(inserts));
-    for (const type of ['image', 'footnote', 'footnoteReference', 'latex', 'mermaid', 'citation']) {
+    for (const type of ['footnote', 'footnoteReference', 'latex', 'mermaid', 'citation']) {
       expect(types).not.toContain(type);
     }
   });

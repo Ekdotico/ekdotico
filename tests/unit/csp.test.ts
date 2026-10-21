@@ -30,6 +30,79 @@ const production = pagePolicy(NONCE, { development: false, local: false });
 const local = pagePolicy(NONCE, { development: false, local: true });
 const development = pagePolicy(NONCE, { development: true, local: true });
 
+// The owner's decision of 20 October 2026 (S19-4): the policy of a page names the one origin of the
+// object store in `img-src` where the application has one, configured for each environment, and
+// nothing broader; and the rest of the policy is the same with it as without.
+describe('the policy of a page where the application stores images (S19-4)', () => {
+  const SPACES = 'https://ekdotico-images.fra1.digitaloceanspaces.com';
+  const MINIO = 'http://localhost:9000';
+
+  it.each([SPACES, MINIO])(
+    'names %s in img-src, after its own origin, and in no other directive',
+    (origin) => {
+      const policy = pagePolicy(NONCE, { development: false, local: false, imageOrigin: origin });
+      const all = directives(policy);
+      expect(all['img-src']).toEqual(["'self'", origin]);
+      for (const [name, sources] of Object.entries(all)) {
+        if (name !== 'img-src') expect(sources, name).not.toContain(origin);
+      }
+      expect(policy).toContain(` img-src 'self' ${origin};`);
+    },
+  );
+
+  it('is the policy without it, word for word, in every other directive', () => {
+    for (const options of [
+      { development: false, local: false },
+      { development: false, local: true },
+      { development: true, local: true },
+    ]) {
+      const without = directives(pagePolicy(NONCE, options));
+      const withOrigin = directives(pagePolicy(NONCE, { ...options, imageOrigin: SPACES }));
+      expect({ ...withOrigin, 'img-src': 0 }).toEqual({ ...without, 'img-src': 0 });
+      expect(without['img-src']).toEqual(["'self'"]);
+    }
+  });
+
+  it('holds that origin and nothing broader: no wildcard, scheme, path, list or host that is not the store’s', () => {
+    const sources = directives(pagePolicy(NONCE, { development: false, local: false, imageOrigin: SPACES }))[
+      'img-src'
+    ]!;
+    expect(sources).toHaveLength(2);
+    for (const source of sources) {
+      expect(source).not.toMatch(/\*/);
+      expect(['https:', 'http:', 'data:', 'blob:', 'filesystem:']).not.toContain(source);
+    }
+    expect(
+      directives(pagePolicy(NONCE, { development: false, local: false, imageOrigin: MINIO }))['connect-src'],
+    ).toEqual(["'self'"]);
+  });
+
+  it.each([
+    '*',
+    'https:',
+    'data:',
+    'blob:',
+    '*.digitaloceanspaces.com',
+    'https://*.digitaloceanspaces.com',
+    `${SPACES}/images`,
+    `${SPACES}/`,
+    `${SPACES} https://evil.example`,
+    `${SPACES}; script-src *`,
+    `${SPACES}\n`,
+    "'unsafe-inline'",
+    'https://user@host.example',
+    'ftp://host.example',
+    '',
+  ])(
+    'refuses %j as the origin of the store, so that a value that is not an origin cannot widen it',
+    (given) => {
+      expect(() => pagePolicy(NONCE, { development: false, local: false, imageOrigin: given })).toThrow(
+        'The origin of the image store is not an origin',
+      );
+    },
+  );
+});
+
 describe('the policy of a page', () => {
   it('is this, word for word, in production', () => {
     expect(production).toBe(
@@ -137,7 +210,7 @@ describe('the headers of every response (next.config.ts)', () => {
 });
 
 describe('the proxy, on a request it passes on', () => {
-  const settings = {
+  const settings: { appOrigin: string; limits: object; imageStorage?: { origin: string } } = {
     appOrigin: 'https://app.example.test',
     limits: {},
   };
@@ -167,6 +240,28 @@ describe('the proxy, on a request it passes on', () => {
     expect(toThePage(first, 'Content-Security-Policy')).toBe(policy);
     expect(toThePage(second, NONCE_HEADER)).not.toBe(nonce);
     expect(second.headers.get('Content-Security-Policy')).not.toBe(policy);
+  });
+
+  // S19-4: the origin comes from the settings of the environment, and from nothing else.
+  it('names the origin of the object store the settings give, in img-src, and none where they give none', async () => {
+    try {
+      settings.imageStorage = { origin: 'https://ekdotico-images.fra1.digitaloceanspaces.com' };
+      const withStore = (await passed('/sign-in')).headers.get('Content-Security-Policy')!;
+      expect(directives(withStore)['img-src']).toEqual([
+        "'self'",
+        'https://ekdotico-images.fra1.digitaloceanspaces.com',
+      ]);
+      // Nothing a request carries changes it.
+      const asked = (
+        await passed('/sign-in', { 'x-forwarded-host': 'evil.example', origin: 'https://evil.example' })
+      ).headers.get('Content-Security-Policy')!;
+      expect(directives(asked)['img-src']).toEqual(directives(withStore)['img-src']);
+      delete settings.imageStorage;
+      const without = (await passed('/sign-in')).headers.get('Content-Security-Policy')!;
+      expect(directives(without)['img-src']).toEqual(["'self'"]);
+    } finally {
+      delete settings.imageStorage;
+    }
   });
 
   it('never takes a nonce or a policy from the client', async () => {

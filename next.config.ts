@@ -56,6 +56,13 @@ const config: NextConfig = {
   rewrites: async () => collabRewrites(),
   // The development server would write an AGENTS.md of its own into the repository.
   agentRules: false,
+  experimental: {
+    // The request of an upload passes the proxy (src/proxy.ts) before its route, and Next.js keeps only the first 10 MB
+    // of a body for the route unless told more: an image of 12 MB would arrive cut and be refused as no image. An image is
+    // 20 MB at most (FR-ED-08, NFR-SE-18); 21 MB leaves the route to see that a body is past it, which it refuses
+    // (src/lib/images/upload.ts), and a body past 21 MB is cut there and is past 20 MB still.
+    proxyClientMaxBodySize: '21mb',
+  },
   headers: async () => [
     // Every response, the proxy's own answers and those it never saw among
     // them (docs/operations/deployment.md): the headers of src/lib/csp.ts,

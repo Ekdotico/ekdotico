@@ -17,6 +17,12 @@ const Editor = dynamic(() => import('./editor.tsx'), {
   ),
 });
 
-export function DocumentView(props: { documentId: string; canEdit: boolean; errorAfterMs: number }) {
+export function DocumentView(props: {
+  documentId: string;
+  canEdit: boolean;
+  errorAfterMs: number;
+  /** NFR-SE-18: how many days an image out of the document is kept, for the words of a block whose image is gone. */
+  imageDays: number;
+}) {
   return <Editor {...props} />;
 }

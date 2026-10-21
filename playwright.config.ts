@@ -42,7 +42,22 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
   use: { baseURL: APP_ORIGIN },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Two files start the collaboration server of their own, on the one port the application's rewrite names
+  // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor.
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      testIgnore: ['**/editor.spec.ts', '**/images.spec.ts'],
+    },
+    { name: 'editor', use: { ...devices['Desktop Chrome'] }, testMatch: '**/editor.spec.ts' },
+    {
+      name: 'images',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: '**/images.spec.ts',
+      dependencies: ['editor'],
+    },
+  ],
   webServer: {
     // Built here, in CI too, and not in a step before: the build holds the
     // rewrite that serves `/collab` (COLLAB_PROXY_TARGET below), which a build
@@ -68,6 +83,18 @@ export default defineConfig({
       ADMISSION_SECRET: process.env.E2E_ADMISSION_SECRET,
       COLLAB_EVENTS_CHANNEL: process.env.E2E_EVENTS_CHANNEL,
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
+      // The object store of the images (FR-ED-08, NFR-SE-18), where the run is given one: the local store of
+      // compose.yaml, or the one CI starts. Without it the application stores no image and the tests of
+      // images say so and are skipped (tests/e2e/images.spec.ts).
+      ...Object.fromEntries(
+        [
+          'IMAGE_STORAGE_ENDPOINT',
+          'IMAGE_STORAGE_BUCKET',
+          'IMAGE_STORAGE_ACCESS_KEY_ID',
+          'IMAGE_STORAGE_SECRET_ACCESS_KEY',
+          'IMAGE_STORAGE_REGION',
+        ].flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])),
+      ),
       // With no trusted proxy every request without a session shares one count
       // of 20 a minute (docs/operations/deployment.md), which one run of the
       // tests would use up.

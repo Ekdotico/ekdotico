@@ -27,7 +27,9 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@ekdotico/domico": "0.31.0",
+    "@aws-sdk/client-s3": "3.1153.0",
+    "@aws-sdk/s3-request-presigner": "3.1153.0",
+    "@ekdotico/domico": "0.32.0",
     "@hocuspocus/provider": "4.7.0",
     "@hocuspocus/server": "4.7.0",
     "@prisma/adapter-pg": "7.10.0",
