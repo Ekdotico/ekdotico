@@ -259,7 +259,7 @@ test('a marker leads to its entry: by a click, and by Tab and Enter from the tex
   await page.keyboard.type('!');
   await expect(entries(page).first()).toHaveText('The source!');
 
-  // By keyboard alone: Tab from the text reaches the next marker, and Enter follows it.
+  // By keyboard alone: Tab from the text reaches a marker (the first of the document; S20-12), and Enter follows it.
   await toEndOfFirstParagraph(page, 'Home');
   await expect(entries(page).first()).not.toBeInViewport({ ratio: 1 });
   await page.keyboard.press('Tab');

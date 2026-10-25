@@ -403,10 +403,12 @@ describe('a marker holds nothing, and an entry holds text (FR-ED-05)', () => {
 // of the export or the record would find it. The rule looks at the Yjs item whatever stands in it.
 describe('a raw value among the children is refused wherever the children stand (B1)', () => {
   const server = () => opened(doc(p(text('x'), marker(), text('y')), list(entry(ID, text('note')))));
-  /** Where a child may be put: the root, a paragraph, the list, an entry. */
+  /** Where a child may be put: the root, a paragraph, a marker, the list, an entry. */
   const PLACES = [
     ['the root', (fragment: Y.XmlFragment) => fragment],
     ['a paragraph', (fragment: Y.XmlFragment) => fragment.get(0) as Y.XmlElement],
+    // The marker is the leaf the review named: a value inside it is refused as a value, whatever its kind.
+    ['a marker', (fragment: Y.XmlFragment) => (fragment.get(0) as Y.XmlElement).get(1) as Y.XmlElement],
     ['the list of footnotes', (fragment: Y.XmlFragment) => fragment.get(1) as Y.XmlElement],
     ['an entry', (fragment: Y.XmlFragment) => (fragment.get(1) as Y.XmlElement).get(0) as Y.XmlElement],
   ] as const;
@@ -434,6 +436,8 @@ describe('a raw value among the children is refused wherever the children stand 
     });
 
     it.each([
+      // A string that is the child itself: only a client of its own writes one (`insert` makes a value of it).
+      ['a string', () => new Y.ContentString('r')],
       ['JSON', () => new Y.ContentJSON(['raw'])],
       ['an embed', () => new Y.ContentEmbed({ a: 1 })],
       ['a format', () => new Y.ContentFormat('bold', true)],

@@ -433,6 +433,32 @@ describe('what arrives from another client: taken out alike by every client, nev
     expect(now(editor)).toBe('x[a]y | {<a: kept>}');
   });
 
+  // B2 of the review of pull request 55: what two writers leave (a paragraph after a list, a second list, a list
+  // with nothing in it) is mended by no deletion of a block, of a list, or of an entry that a marker wants.
+  it('deletes no block, no list and no wanted entry to mend a layout, whether the change is the writer’s own or arrives', () => {
+    const layout = [
+      p(text('x'), marker(A), marker(B)),
+      list(entry(A, text('one'))),
+      p(text('tail')),
+      list(entry(B, text('two'))),
+      list(),
+      p(text('last')),
+    ];
+    const whole = 'x[a][b] | {<a: one>} | tail | {<b: two>} | {} | last';
+    const editor = editorOf(p(text('x')));
+    peer(editor, layout);
+    expect(now(editor)).toBe(whole);
+    dispatch(editor, (tr) => tr.insertText('!', 2));
+    expect(now(editor)).toBe(whole.replace('x[a]', 'x![a]'));
+    peer(editor, layout);
+    expect(now(editor)).toBe(whole);
+    // The same with the paragraph the kit keeps at the end, which stands before the last run of lists.
+    const ends = [p(text('x'), marker(A)), list(entry(A, text('one'))), list()];
+    peer(editor, ends);
+    dispatch(editor, (tr) => tr.insertText('!', 2));
+    expect(now(editor)).toBe('x![a] | {<a: one>} | {}');
+  });
+
   it('takes out every entry that no marker wants, and leaves the list empty', () => {
     const editor = editorOf(p(text('x')));
     peer(editor, [p(text('x')), list(entry(A, text('left')))]);

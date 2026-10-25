@@ -29,7 +29,10 @@
 //   client makes is the same deletion, so any number of them converge (an entry
 //   twice: each deletes the later and keeps the same first). An entry that every
 //   client made would be one for each, so a marker that arrives without its
-//   entry waits for the next change of this writer, which makes it.
+//   entry waits for the next change of this writer, which makes it. The deletions that follow an arriving
+//   change are applied in the editor at once and written to the shared document with this writer's next
+//   change (the binding applies an arriving change under its own lock), so they join that step of undo, and
+//   what is stored, read, or exported by another meanwhile still holds the entry (register row S20-13).
 //
 // THE MARKUP IS BARE ELEMENTS, which the editor's stylesheet of
 // `@ekdotico/domico` draws as a superscript link and a numbered list: the
@@ -55,7 +58,7 @@ export const ENTRY = 'footnote';
 export const FOOTNOTES_NAME = 'Footnotes';
 /** The name of a marker, a link: the number is the derived one, and is in the name as it is on the screen (WCAG 2.5.3). */
 export const markerName = (number: number) => `Footnote ${number}`;
-/** The prompt of an empty entry: drawn, and not read, since an entry is read with its number. */
+/** The prompt of an empty entry: generated content, which a screen reader may read (the plan says so, section 7). */
 export const ENTRY_PROMPT = 'Footnote text';
 
 /** The anchor of an entry, which a marker links to. */
@@ -375,7 +378,8 @@ const MARKER_MARKUP = (id: unknown): DOMOutputSpec => [
  *
  * THE LINK IS A STOP OF TAB, in the text as well as where the document cannot be edited. An arrow key does not
  * select an inline node (ProseMirror moves the cursor over it), so the way to a marker's entry from the keyboard
- * is the link's own: Tab from the text reaches the next marker, Shift+Tab the one before, and Enter follows it.
+ * is the link's own: Tab from the text reaches the markers in the order of the document, from the first and not
+ * from the caret (register row S20-12), and Enter follows the one that has the focus.
  * The keys pressed on the link are the link's and not the editor's, which would otherwise answer Enter by
  * splitting the paragraph at the cursor (`stopEvent`).
  */
