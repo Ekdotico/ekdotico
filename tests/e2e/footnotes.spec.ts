@@ -110,12 +110,6 @@ test('the palette puts a footnote in: the marker where the command stood, and th
   // region named Footnotes is read as one entry of a list.
   await expect(entries(page).first()).not.toHaveAttribute('role', /.+/);
   await expect(doc.locator(`section[aria-label="${FOOTNOTES}"]`)).toHaveAttribute('role', 'doc-endnotes');
-  // The package's classes (domico 0.38.0, "The document surface"): sup > a.ekd-footnote-ref, section.ekd-footnotes > ol, li.ekd-footnote.
-  await expect(marker(page)).toHaveClass('ekd-footnote-ref');
-  await expect(
-    doc.locator(`section.ekd-footnotes[aria-label="${FOOTNOTES}"] > ol > li.ekd-footnote`),
-  ).toHaveCount(1);
-  await expect(entries(page).first()).not.toHaveAttribute('data-footnote-target');
   // The marker leads to the entry by its address.
   const target = await entries(page).first().getAttribute('id');
   expect(target).toMatch(/^footnote-[0-9a-f]{24}$/);
@@ -260,9 +254,6 @@ test('a marker leads to its entry: by a click, and by Tab and Enter from the tex
   await text(page).locator('p').first().scrollIntoViewIfNeeded();
   await expect(entries(page).first()).not.toBeInViewport({ ratio: 1 });
   await marker(page, 1).click();
-  // The entry reached carries the package's mark for a moment, and the mark is taken off after it.
-  await expect(entries(page).first()).toHaveAttribute('data-footnote-target', '');
-  await expect(entries(page).first()).not.toHaveAttribute('data-footnote-target');
   await expect(entries(page).first()).toBeInViewport({ ratio: 1 });
   await expect.poll(() => entryWithCursor(page)).toBe('The source');
   await page.keyboard.type('!');

@@ -31,11 +31,12 @@
 //   client made would be one for each, so a marker that arrives without its
 //   entry waits for the next change of this writer, which makes it.
 //
-// THE MARKUP IS THE PACKAGE'S (`@ekdotico/domico` 0.38.0, "The document surface";
-// register row S20-1): `sup > a.ekd-footnote-ref` for the marker, `section.ekd-footnotes > ol`
-// for the list, `li.ekd-footnote` for an entry, and `data-footnote-target` on the entry a reader has just
-// jumped to. The package owes nothing else: the identifiers and addresses, the names, moving the reader
-// and removing the attribute a moment later are made here (`markerView`, `followMarker`, `NUMBERS`).
+// THE MARKUP IS BARE ELEMENTS, which the editor's stylesheet of
+// `@ekdotico/domico` draws as a superscript link and a numbered list: the
+// package has no class for a footnote (`@ekdotico/domico` 0.32.0; register row
+// S20-1), and nothing is improvised here in its place. When it has, the places
+// that make the markup are `MARKER_MARKUP`, `markerView`, `LIST_MARKUP`,
+// `ENTRY_MARKUP` and the attributes of `numbersOf`, and nothing else changes.
 import { Extension, Node, type Editor } from '@tiptap/core';
 import { Fragment, Slice, type DOMOutputSpec, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
 import { Transform } from '@tiptap/pm/transform';
@@ -358,30 +359,7 @@ export function followMarker(editor: Editor, id: unknown): boolean {
     dom.scrollIntoView({ block: 'center' });
     if (!editor.isEditable) dom.focus({ preventScroll: true });
   }
-  markTarget(editor, id);
   return true;
-}
-
-/** How long the entry a reader has jumped to keeps `data-footnote-target`, the package's wash that fades. */
-const TARGET_MS = 1500;
-const TARGET_TIMERS = new WeakMap<Editor, ReturnType<typeof setTimeout>>();
-
-/**
- * Marks the entry just jumped to with `data-footnote-target`, and takes the mark off a moment later: the package
- * draws it and owes nothing else. It is a decoration of the plugin's state, never an attribute set on the
- * element, which the view would take off at its next update; and the transaction changes no document.
- */
-function markTarget(editor: Editor, id: string) {
-  clearTimeout(TARGET_TIMERS.get(editor));
-  const set = (target: string | null) =>
-    editor.view.dispatch(editor.state.tr.setMeta(NUMBERS, { target }).setMeta('addToHistory', false));
-  set(id);
-  TARGET_TIMERS.set(
-    editor,
-    setTimeout(() => {
-      set(null);
-    }, TARGET_MS),
-  );
 }
 
 // ── The nodes ───────────────────────────────────────────────────────────────
@@ -413,7 +391,6 @@ export function markerView({
   let id: unknown = node.attrs.id;
   const dom = document.createElement('sup');
   const link = document.createElement('a');
-  link.className = 'ekd-footnote-ref';
   link.setAttribute('role', 'doc-noteref');
   // Said, and not left to the element: a link inside an editable region is not always a stop of Tab.
   link.tabIndex = 0;
@@ -480,7 +457,7 @@ const FootnoteReference = Node.create({
 /** The markup of the list of entries: a region that is named, round the list the entries stand in. */
 const LIST_MARKUP: DOMOutputSpec = [
   'section',
-  { class: 'ekd-footnotes', role: 'doc-endnotes', 'aria-label': FOOTNOTES_NAME },
+  { role: 'doc-endnotes', 'aria-label': FOOTNOTES_NAME },
   ['ol', 0],
 ];
 
@@ -498,11 +475,7 @@ const FootnoteList = Node.create({
 });
 
 /** The markup of an entry: a list item that its marker links to. */
-const ENTRY_MARKUP = (id: unknown): DOMOutputSpec => [
-  'li',
-  { class: 'ekd-footnote', ...(isFootnoteId(id) ? { id: anchor(id) } : {}) },
-  0,
-];
+const ENTRY_MARKUP = (id: unknown): DOMOutputSpec => ['li', isFootnoteId(id) ? { id: anchor(id) } : {}, 0];
 
 const FootnoteEntry = Node.create({
   name: ENTRY,
@@ -637,7 +610,6 @@ export const Footnotes = Extension.create({
   // The words kept from a copy or a cut, and those waiting for an entry, are of this document and of this
   // editor's schema: a page that opens another document in the same tab starts with none (S20-4).
   onDestroy() {
-    clearTimeout(TARGET_TIMERS.get(this.editor));
     KEPT.clear();
     PENDING.clear();
   },
@@ -655,25 +627,8 @@ export const Footnotes = Extension.create({
     return [
       new Plugin({
         key: NUMBERS,
-        // The entry a reader has just jumped to (`markTarget`), or null.
-        state: {
-          init: (): string | null => null,
-          apply: (tr, value: string | null) => {
-            const meta = tr.getMeta(NUMBERS) as { target: string | null } | undefined;
-            return meta ? meta.target : value;
-          },
-        },
         props: {
-          decorations: (state) => {
-            const set = numbersOf(state.doc, editor.isEditable);
-            const target = NUMBERS.getState(state) as string | null;
-            const entry = target ? entryOf(state.doc, target) : null;
-            return entry
-              ? set.add(state.doc, [
-                  Decoration.node(entry.pos, entry.pos + entry.node.nodeSize, { 'data-footnote-target': '' }),
-                ])
-              : set;
-          },
+          decorations: (state) => numbersOf(state.doc, editor.isEditable),
           // A copied marker pastes as a new footnote with a new identifier and the words of its entry.
           transformCopied(slice, view) {
             wordsFor(slice, view, KEPT);
