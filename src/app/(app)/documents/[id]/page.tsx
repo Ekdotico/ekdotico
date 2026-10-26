@@ -59,14 +59,14 @@ export default async function DocumentPage({ params }: Props) {
         ) : null}
         {/* FR-ED-21, FR-ED-37: the sharing settings, for every role. */}
         <Link href={`/documents/${document.id}/sharing`}>Sharing</Link>
+        {/* FR-EX-36, FR-ED-44: the draft export, for a role that holds the permission. The editor has this page read
+            again when its role or its permissions change (FR-ED-40 (g)), so the control follows them. */}
+        {holds(document.permissionSet, role, 'document.export.draft') ? (
+          <ExportDraft documentId={document.id} />
+        ) : null}
         {/* FR-ED-17: the people who have the document open, which the editor draws here once it is connected. */}
         <span id={PEOPLE_SLOT} className={styles.peopleSlot} />
       </Cluster>
-      {/* FR-EX-36, FR-ED-44: the draft export, for a role that holds the permission. The editor has this page read
-          again when its role or its permissions change (FR-ED-40 (g)), so the control follows them. */}
-      {holds(document.permissionSet, role, 'document.export.draft') ? (
-        <ExportDraft documentId={document.id} />
-      ) : null}
       <DocumentView
         documentId={document.id}
         // FR-ED-44: fixed by role. The server discards what a role that cannot

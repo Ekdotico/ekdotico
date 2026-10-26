@@ -13,7 +13,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Button, FormFault, Stack } from '@ekdotico/domico/components';
+import { Button, FormFault } from '@ekdotico/domico/components';
 import { useReady } from '../../../../components/ready.ts';
 import pageStyles from '../../../pages.module.css';
 
@@ -97,17 +97,16 @@ export function ExportDraft({ documentId }: { documentId: string }) {
   }
 
   return (
-    <Stack gap={3}>
-      <div>
-        <Button disabled={!ready} pending={working} pendingLabel={WORKING} onClick={() => void run()}>
-          {LABEL}
-        </Button>
-      </div>
+    // Beside the title and the link to the sharing settings, in the header's row, which wraps where a statement is long.
+    <>
+      <Button disabled={!ready} pending={working} pendingLabel={WORKING} onClick={() => void run()}>
+        {LABEL}
+      </Button>
       {fault ? <FormFault title={fault} focusKey={attempt} /> : null}
       {/* Present before it has anything to say, so that what it says is announced. */}
       <p role="status" className={saved > 0 && !fault && !working ? pageStyles.text : 'sr-only'}>
         {saved > 0 && !fault && !working ? READY : ''}
       </p>
-    </Stack>
+    </>
   );
 }
