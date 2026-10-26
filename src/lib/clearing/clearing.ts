@@ -36,7 +36,12 @@ type Tx = Prisma.TransactionClient;
 function sameDocuments(a: readonly string[], b: readonly string[]): boolean {
   const left = new Set(a);
   const right = new Set(b);
-  return left.size === a.length && right.size === b.length && left.size === right.size && [...left].every((id) => right.has(id));
+  return (
+    left.size === a.length &&
+    right.size === b.length &&
+    left.size === right.size &&
+    [...left].every((id) => right.has(id))
+  );
 }
 
 /** What the confirmation names (FR-AU-91): the number of documents, how many are shared, and with how many people in all. */
@@ -54,7 +59,11 @@ export interface Counted {
  */
 export async function countScope(userId: string, scope: Scope): Promise<Counted> {
   const owned = await db().document.findMany({
-    where: { ownerId: userId, clearingAt: null, ...(scope === 'deleted' ? { deletedAt: { not: null } } : {}) },
+    where: {
+      ownerId: userId,
+      clearingAt: null,
+      ...(scope === 'deleted' ? { deletedAt: { not: null } } : {}),
+    },
     select: { id: true, collaborators: { select: { userId: true } } },
     orderBy: { id: 'asc' },
   });
@@ -180,7 +189,13 @@ export async function confirmClearing(
     }
 
     await tellClearing(tx, { clearingId, documentIds: shared, now });
-    return { outcome: 'confirmed', clearingId, documentIds: ids, sharedIds: shared, deleteOn: deleteSharedAt };
+    return {
+      outcome: 'confirmed',
+      clearingId,
+      documentIds: ids,
+      sharedIds: shared,
+      deleteOn: deleteSharedAt,
+    };
   });
   if (result.outcome === 'confirmed') await announce(result.documentIds);
   return result;
@@ -188,7 +203,9 @@ export async function confirmClearing(
 
 /** FR-ED-40 (i): the collaboration servers look at each document's connections (within 5 seconds of the commit). */
 export async function announce(documentIds: readonly string[]): Promise<void> {
-  await Promise.all(documentIds.map((documentId) => publishCollabEvent({ kind: 'clearing-changed', documentId })));
+  await Promise.all(
+    documentIds.map((documentId) => publishCollabEvent({ kind: 'clearing-changed', documentId })),
+  );
 }
 
 /**
@@ -213,7 +230,8 @@ export async function takeOutOfClearing(
       where: { userId: ownerId, completedAt: null, documentIds: { has: documentId } },
       select: { id: true, cancelledDocumentIds: true },
     })
-  ).filter(({ cancelledDocumentIds }) => !cancelledDocumentIds.includes(documentId));  for (const { id } of holding) {
+  ).filter(({ cancelledDocumentIds }) => !cancelledDocumentIds.includes(documentId));
+  for (const { id } of holding) {
     await tx.documentClearing.update({ where: { id }, data: { cancelledDocumentIds: { push: documentId } } });
   }
   await replaceWithCancelled(tx, { documentId, now });
@@ -239,6 +257,8 @@ export async function cancelClearing(
   documentId: string | null,
   now: Date = new Date(),
 ): Promise<CancelResult> {
+  // An identifier that is not a document's names nothing, and is never handed to the database as one.
+  if (documentId !== null && !DOCUMENT_ID.test(documentId)) return { outcome: 'none' };
   const result = await db().$transaction(async (tx): Promise<CancelResult> => {
     const rows =
       documentId === null
@@ -251,7 +271,8 @@ export async function cancelClearing(
             WHERE "id" = ${documentId}::uuid AND "ownerId" = ${userId} AND "clearingAt" IS NOT NULL
             FOR UPDATE`;
     const open = rows.filter((row) => row.clearingAt > now && row.deletionClaimedAt === null);
-    if (open.length === 0) return rows.length > 0 && documentId !== null ? { outcome: 'too_late' } : { outcome: 'none' };
+    if (open.length === 0)
+      return rows.length > 0 && documentId !== null ? { outcome: 'too_late' } : { outcome: 'none' };
     const out: string[] = [];
     for (const { id } of open) {
       if (await takeOutOfClearing(tx, { documentId: id, ownerId: userId, now })) out.push(id);

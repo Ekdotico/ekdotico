@@ -16,6 +16,8 @@ export interface DeletedDocumentItem {
   deletedAt: string;
   /** ISO 8601, UTC: when the retention ends. */
   permanentDeletionAt: string;
+  /** FR-AU-91: ISO 8601, UTC: the day a clearing deletes it, or null. Not restorable while it is set. */
+  deleteOn: string | null;
 }
 
 /**
@@ -89,21 +91,33 @@ export function DeletedDocuments({
                     {document.title}
                   </bdi>
                   <InBrowser>
-                    <p className={styles.meta}>
-                      Deleted <LocalTime at={document.deletedAt} />. Permanent deletion after{' '}
-                      <LocalTime at={document.permanentDeletionAt} />.
-                    </p>
+                    {document.deleteOn ? (
+                      // FR-AU-91: it "cannot be restored under FR-ED-36 during the period" until the clearing is cancelled for it.
+                      <p className={styles.meta}>
+                        Will be deleted on <LocalTime at={document.deleteOn} />. It cannot be restored unless
+                        its deletion is cancelled first.
+                      </p>
+                    ) : (
+                      <p className={styles.meta}>
+                        Deleted <LocalTime at={document.deletedAt} />. Permanent deletion after{' '}
+                        <LocalTime at={document.permanentDeletionAt} />.
+                      </p>
+                    )}
                   </InBrowser>
                 </Stack>
-                <Button
-                  disabled={!ready}
-                  aria-describedby={`title-${document.id}`}
-                  pending={restoring === document.id}
-                  pendingLabel="Restoring document…"
-                  onClick={() => restore(document.id)}
-                >
-                  Restore
-                </Button>
+                {document.deleteOn ? (
+                  <Link href="/settings/delete-account">Open the page for deleting the account</Link>
+                ) : (
+                  <Button
+                    disabled={!ready}
+                    aria-describedby={`title-${document.id}`}
+                    pending={restoring === document.id}
+                    pendingLabel="Restoring document…"
+                    onClick={() => restore(document.id)}
+                  >
+                    Restore
+                  </Button>
+                )}
               </Cluster>
             </li>
           ))}

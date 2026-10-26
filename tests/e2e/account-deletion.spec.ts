@@ -37,7 +37,7 @@ const STATEMENT =
 const DONE =
   'The account is being deleted. Ekdotico has ended your access and completes the deletion without you. You can close this page.';
 const OWNS_ONE =
-  'This account owns 1 document. An account that owns a document cannot be deleted, because every document needs an Owner. Delete the document, or transfer its ownership to an Editor who accepts it, and then return to this page.';
+  'This account owns 1 document. An account that owns a document cannot be deleted, because every document needs an Owner. Delete the document, transfer its ownership to an Editor who accepts it, or clear it, and then return to this page.';
 
 async function enter(page: Page) {
   const person = newPerson();
@@ -70,7 +70,9 @@ test('an account that owns a document is told how many, and is offered no deleti
   await expect(page.getByRole('listitem')).toHaveCount(1);
 
   await openTheScreen(page);
-  await expect(page.getByRole('main').getByRole('paragraph')).toHaveText([OWNS_ONE]);
+  // The page also offers what FR-AU-91 names: its own paragraphs are in clearing.spec.ts.
+  await expect(page.getByRole('main').getByRole('paragraph').first()).toHaveText(OWNS_ONE);
+  await expect(page.getByRole('main').getByRole('button', { name: 'Clear all documents' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Delete account' })).toHaveCount(0);
   await expectNoSidewaysScroll(page);
   await screens(page, 'delete-account-owns');

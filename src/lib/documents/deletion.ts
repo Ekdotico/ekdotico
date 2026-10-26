@@ -8,10 +8,10 @@
 //   `deleteDocument`, with sharing. The collaborators need nothing: their rows
 //   and roles stay as they are, a deleted document is `not_found` to everyone
 //   in `authorise`, and so a restore returns them "as they were at deletion".
-// - The refusals of FR-ED-36: an export-locked document (no route applies a
-//   lock in α 0.1.0, and the column arrives with export), and the 409 of a
-//   document in the notice period of a clearing, and of a restore of one a
-//   clearing treats as shared (FR-AU-91: with the clearing).
+// - The refusal of FR-ED-36 for an export-locked document (no route applies a
+//   lock in α 0.1.0, and the column arrives with export). The 409 of a document
+//   in the notice period of a clearing, and of a restore of one a clearing treats
+//   as shared, is here (FR-AU-91; slice 23): `clearingAt: null` in the writes.
 // - The images of a document, deleted from storage with it (NFR-SE-18): one
 //   call, marked in `deletePermanently`.
 import type { Prisma } from '../../generated/prisma/client.ts';

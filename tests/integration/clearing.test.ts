@@ -501,7 +501,9 @@ describe('the notices (FR-ED-42, FR-AU-91)', () => {
     expect(toViewer.text).toContain(
       'The Owner of 2 documents that you have access to in Ekdotico will delete them on ',
     );
-    expect(toLonely.text).toContain('The Owner of 1 documents');
+    expect(toLonely.text).toContain(
+      'The Owner of 1 document that you have access to in Ekdotico will delete it on ',
+    );
     expect(toViewer.text).toContain(
       'Until then you can open each one and take a draft export of it. Your notifications in Ekdotico name them: https://app.example.test/notifications.',
     );
@@ -510,6 +512,26 @@ describe('the notices (FR-ED-42, FR-AU-91)', () => {
     expect(toViewer.text).toMatch(
       new RegExp(`${when.getUTCDate()} \\w{3} ${when.getUTCFullYear()}, \\d\\d:\\d\\d UTC`),
     );
+  });
+
+  // Mutation C16: the list shows the notice of a document to a person who no longer holds a role on it.
+  it('stops showing the notice to a person who is removed during the period, and keeps the day for the others', async () => {
+    const owner = await person();
+    const kept = await person('kept');
+    const removed = await person('removed');
+    const documentId = await documentOf(owner.id, 'Still waiting');
+    await share(documentId, kept.id);
+    const row2 = await share(documentId, removed.id);
+    await clear(owner.cookie, await everything(owner.id));
+    const day = (await row(documentId))!.clearingAt!;
+    const noticesOf = async (userId: string) =>
+      (await listNotifications(userId)).notifications.filter(({ kind }) => kind === 'clearing_notice');
+    expect(await noticesOf(removed.id)).toHaveLength(1);
+    await db().documentCollaborator.delete({ where: { id: row2.id } });
+    expect(await noticesOf(removed.id)).toEqual([]);
+    expect(await noticesOf(kept.id)).toHaveLength(1);
+    // "Removing a collaborator during the period does not bring the deletion forward: the day stays the day".
+    expect((await row(documentId))?.clearingAt?.getTime()).toBe(day.getTime());
   });
 
   it('hands over no email for a clearing with no shared document, and none to an account in deletion', async () => {

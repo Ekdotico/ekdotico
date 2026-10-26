@@ -31,6 +31,8 @@ export interface DocumentItem {
   /** Whether the account's role holds the permission (FR-ED-44); a document shared with it may hold neither. */
   canRename: boolean;
   canDelete: boolean;
+  /** FR-AU-91: ISO 8601, UTC: the day a clearing of its Owner's documents deletes it; null for a document in none. */
+  deleteOn: string | null;
 }
 
 /** Where the list of deleted documents is (FR-ED-36): the application's choice, the Docs name no page. */
@@ -266,6 +268,12 @@ export function Documents({
                     <p className={styles.meta}>
                       Created <LocalTime at={document.createdAt} />
                     </p>
+                    {/* FR-AU-91: a document in a clearing says so, and is read-only. */}
+                    {document.deleteOn ? (
+                      <p className={styles.meta}>
+                        Will be deleted on <LocalTime at={document.deleteOn} />. It cannot be edited.
+                      </p>
+                    ) : null}
                   </InBrowser>
                 </Stack>
                 <Cluster gap={2}>

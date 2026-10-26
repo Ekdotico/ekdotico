@@ -122,6 +122,14 @@ export interface ConnectionState {
    */
   unsaved?: { text: string };
   /**
+   * FR-AU-91, FR-ED-40 (i): the day on which a clearing deletes the document (ISO 8601, UTC), as the server last
+   * said it, or null for none. Absent until the server has said: then it is the day the page was opened with
+   * (`ConnectionOptions.deletedOn`).
+   */
+  deletedOn?: string | null;
+  /** The server told this client that the document, which was to be deleted, will not be: the clearing was cancelled or the ownership passed. */
+  clearingEnded?: boolean;
+  /**
    * FR-ED-17: who has the document open, as the server last said (the people
    * present, Viewers included), in the order of their colours. Absent until the
    * first list arrives.
@@ -186,6 +194,8 @@ export interface ConnectionOptions {
   documentId: string;
   /** FR-ED-23: how long a lost connection is tried before the error state (`COLLAB_ERROR_AFTER_MS`). */
   errorAfterMs: number;
+  /** FR-AU-91: the day on which a clearing deletes the document, as the page that opened it knew it, or null. */
+  deletedOn?: string | null;
   /**
    * Asks the application about the document, and resolves with the status of
    * its answer, or 0 where none arrived. A handshake that is refused as a
@@ -428,10 +438,15 @@ export class DocumentConnection {
     // what is unacknowledged now is what it did not take: the words in it are kept to be copied.
     const unsaved =
       differs && !notice.canEdit && this.unacknowledged ? { text: this.unsavedWords() } : undefined;
+    // FR-AU-91, FR-ED-40 (i): the day, told with every notice while the document is in a clearing. A notice
+    // without one, to a tab that knew a day, says that the document will not be deleted.
+    const day = notice.deletedOn ?? null;
+    const knew = this.state.deletedOn !== undefined ? this.state.deletedOn : (this.options.deletedOn ?? null);
+    const clearing = { deletedOn: day, clearingEnded: day === null && knew !== null };
     this.set(
       differs
-        ? { notice, canEdit: notice.canEdit, permissions: undefined, unsaved }
-        : { canEdit: notice.canEdit },
+        ? { notice, canEdit: notice.canEdit, permissions: undefined, unsaved, ...clearing }
+        : { canEdit: notice.canEdit, ...clearing },
     );
     // Where the connection may edit again, what it holds that the server dropped
     // while it could not (a change not yet acknowledged when the role was taken)

@@ -17,12 +17,14 @@ export default async function Home() {
   const documents = await reading(() => listDocuments(userId));
   return (
     <Documents
-      documents={documents.map(({ id, title, recording, createdAt, canRename, canDelete }) => ({
+      documents={documents.map(({ id, title, recording, createdAt, canRename, canDelete, clearingAt }) => ({
         id,
         title,
         recording,
         canRename,
         canDelete,
+        // FR-AU-91: the day a clearing deletes it, in UTC; the browser shows it in its own zone.
+        deleteOn: clearingAt?.toISOString() ?? null,
         // NFR-I18-06: stored and sent in UTC; the browser shows it in its own zone.
         createdAt: createdAt.toISOString(),
       }))}

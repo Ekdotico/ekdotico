@@ -18,7 +18,13 @@ import { afterResponse, collecting } from '../../../../../lib/after-response.ts'
 import { fault, notAdmitted, refusedOrigin, unauthenticated } from '../../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../../lib/auth/session.ts';
 import { standing } from '../../../../../lib/auth/two-factor.ts';
-import { cancelClearing, CLEAR_MOST_DOCUMENTS, confirmClearing, DOCUMENT_ID, type Scope } from '../../../../../lib/clearing/clearing.ts';
+import {
+  cancelClearing,
+  CLEAR_MOST_DOCUMENTS,
+  confirmClearing,
+  DOCUMENT_ID,
+  type Scope,
+} from '../../../../../lib/clearing/clearing.ts';
 import { carryOutClearings } from '../../../../../lib/clearing/deletion.ts';
 import { deliverClearingEmails } from '../../../../../lib/clearing/email.ts';
 import { CLEARING_MESSAGES } from '../../../../../lib/clearing/texts.ts';
@@ -56,7 +62,9 @@ function readRequest(
   | { ok: false; why: 'shape' | 'too_many' } {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return { ok: false, why: 'shape' };
   const given = body as Record<string, unknown>;
-  const names = secondFactor ? ['scope', 'documentIds', 'password', 'code'] : ['scope', 'documentIds', 'password'];
+  const names = secondFactor
+    ? ['scope', 'documentIds', 'password', 'code']
+    : ['scope', 'documentIds', 'password'];
   if (Object.keys(given).length !== names.length || !names.every((name) => Object.hasOwn(given, name))) {
     return { ok: false, why: 'shape' };
   }
@@ -67,7 +75,8 @@ function readRequest(
   if (!documentIds.every((id): id is string => typeof id === 'string' && DOCUMENT_ID.test(id))) {
     return { ok: false, why: 'shape' };
   }
-  if (typeof password !== 'string' || (secondFactor && typeof code !== 'string')) return { ok: false, why: 'shape' };
+  if (typeof password !== 'string' || (secondFactor && typeof code !== 'string'))
+    return { ok: false, why: 'shape' };
   return {
     ok: true,
     scope,

@@ -25,7 +25,10 @@ async function refusal(request: Request): Promise<Response | null> {
   return null;
 }
 
-async function cancel(context: { params: Promise<{ documentId: string }> }, request: Request): Promise<Response> {
+async function cancel(
+  context: { params: Promise<{ documentId: string }> },
+  request: Request,
+): Promise<Response> {
   try {
     const validation = await validateSessionRow(request.headers);
     const { session } = validation;

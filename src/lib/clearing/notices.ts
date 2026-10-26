@@ -55,7 +55,10 @@ export async function tellClearing(
 }
 
 /** Takes away the notices of a document that are about its period (the notice and the cancellation). */
-export async function deleteClearingNoticesOf(tx: Prisma.TransactionClient, documentId: string): Promise<void> {
+export async function deleteClearingNoticesOf(
+  tx: Prisma.TransactionClient,
+  documentId: string,
+): Promise<void> {
   await tx.notification.deleteMany({
     where: {
       kind: { in: [CLEARING_NOTICE, CLEARING_CANCELLED] },
@@ -171,7 +174,15 @@ export async function listClearingNotifications(
     if (!documentId || !document) return [];
     if (row.kind === CLEARING_NOTICE) {
       return document.clearingAt
-        ? [{ ...shown, kind: CLEARING_NOTICE, documentId, title: document.title, deleteOn: document.clearingAt }]
+        ? [
+            {
+              ...shown,
+              kind: CLEARING_NOTICE,
+              documentId,
+              title: document.title,
+              deleteOn: document.clearingAt,
+            },
+          ]
         : [];
     }
     return document.deletedAt === null && document.clearingAt === null

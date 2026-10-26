@@ -21,10 +21,15 @@ import { CLEARING_NOTICE } from './notices.ts';
  */
 export function clearingEmail(to: string, documents: number, day: Date): EmailMessage {
   const link = `${settings().appOrigin}/notifications`;
+  const when = dateText(day, 'utc');
   return {
     to,
     subject: 'Documents you have access to in Ekdotico will be deleted',
-    text: `The Owner of ${documents} documents that you have access to in Ekdotico will delete them on ${dateText(day, 'utc')}. Until then you can open each one and take a draft export of it. Your notifications in Ekdotico name them: ${link}.`,
+    // The requirement's text has no singular. For one document the same sentences are written for one (S23-9).
+    text:
+      documents === 1
+        ? `The Owner of 1 document that you have access to in Ekdotico will delete it on ${when}. Until then you can open it and take a draft export of it. Your notifications in Ekdotico name it: ${link}.`
+        : `The Owner of ${documents} documents that you have access to in Ekdotico will delete them on ${when}. Until then you can open each one and take a draft export of it. Your notifications in Ekdotico name them: ${link}.`,
   };
 }
 
