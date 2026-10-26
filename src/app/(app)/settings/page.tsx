@@ -1,8 +1,9 @@
 // The account settings (FR-AU-03, FR-AU-83, FR-AU-85, FR-AU-88, FR-AU-90): the
 // name, the address, the change of the password, two-factor authentication,
-// and the list of the account's sessions with the means to end them. The
-// deletion joins it with the slice that builds it. The path is this application's choice: no page of the
+// and the list of the account's sessions with the means to end them, and the way to the
+// deletion of the account (FR-AU-58). The path is this application's choice: no page of the
 // specification names one.
+import Link from 'next/link';
 import { PageHeading, Stack } from '@ekdotico/domico/components';
 import { listSessions } from '../../../lib/auth/session-list.ts';
 import { ofFoundingTeam } from '../../../lib/auth/two-factor.ts';
@@ -95,6 +96,22 @@ export default async function AccountSettings() {
             out.
           </p>
           <SessionList sessions={sessions} />
+        </Stack>
+      </section>
+      {/* FR-AU-58: the deletion is made "from the account settings of the application"; its screen is a
+          page of its own, which states what is replaced and what is kept before it asks for anything. */}
+      <section aria-labelledby="delete-heading" className={styles.narrow}>
+        <Stack gap={5}>
+          <h2 id="delete-heading" className={styles.heading}>
+            Delete account
+          </h2>
+          <p className={styles.text}>
+            Deleting the account cannot be undone. The page for deleting it says what is replaced and what is
+            kept.
+          </p>
+          <p className={styles.text}>
+            <Link href="/settings/delete-account">Open the page for deleting the account</Link>
+          </p>
         </Stack>
       </section>
     </Stack>

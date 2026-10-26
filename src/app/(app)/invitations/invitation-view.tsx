@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
 import { sendFor, type Fault } from '../../../components/send.ts';
+import { DELETED_ACCOUNT } from '../../../lib/account/deleted-account.ts';
 import { INVITATION_TITLE } from '../../../lib/documents/invitation-texts.ts';
 import styles from '../../pages.module.css';
 import { InBrowser, LocalTime } from '../local-time.tsx';
@@ -18,11 +19,14 @@ export function InvitationStatement({ statement }: { statement: string }) {
   );
 }
 
-/** The sender by name and by email address, "Ada Owner (ada@example.com)"; by name alone where the account has no address left. */
+/**
+ * The sender by name and by email address, "Ada Owner (ada@example.com)"; by name alone where the account has no
+ * address left. A sender whose account was deleted has neither, and is the fixed text (FR-AU-58 (e)).
+ */
 export function Sender({ name, email }: { name: string; email: string | null }) {
   return (
     <>
-      <bdi>{name}</bdi>
+      <bdi>{name === '' ? DELETED_ACCOUNT : name}</bdi>
       {email === null ? null : (
         <>
           {' '}

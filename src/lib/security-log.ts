@@ -47,6 +47,9 @@ const KINDS = [
   'account_deletion_connections_closed',
   'account_deletion_istorico_pseudonymised',
   'account_deletion_feedback_pseudonymised',
+  // Step (c) with the switch off: it "is recorded as skipped" (FR-AU-58 (c)), and NFR-SE-19 logs
+  // "each step". Written with the record of the skip, in its transaction (docs/plan/slice-22.md, S22-8).
+  'account_deletion_feedback_skipped',
   'account_deletion_credentials_deleted',
   'account_deletion_user_pseudonymised',
   'account_deletion_roles_ended',
@@ -65,8 +68,8 @@ export type SecurityLogKind = (typeof KINDS)[number];
  *
  * Each kind is named, and none by a pattern: a kind added later is a refusal
  * until it is written here. The six of an account deletion are the steps (a)
- * to (f) of FR-AU-58; NFR-SE-19 says "each step" and gives them no names, so
- * the names are this file's own (`KINDS`).
+ * to (f) of FR-AU-58, and a seventh is step (c) skipped; NFR-SE-19 says "each
+ * step" and gives them no names, so the names are this file's own (`KINDS`).
  */
 export type ChangeKind = Extract<
   SecurityLogKind,
@@ -81,6 +84,7 @@ export type ChangeKind = Extract<
   | 'account_deletion_connections_closed'
   | 'account_deletion_istorico_pseudonymised'
   | 'account_deletion_feedback_pseudonymised'
+  | 'account_deletion_feedback_skipped'
   | 'account_deletion_credentials_deleted'
   | 'account_deletion_user_pseudonymised'
   | 'account_deletion_roles_ended'

@@ -6,7 +6,7 @@
 // no error made here holds an address or a token. The token leaves this
 // module once, inside the email of FR-AU-87 (a).
 import { randomUUID } from 'node:crypto';
-import type { AdmissionInvitation } from '../../generated/prisma/client.ts';
+import type { AdmissionInvitation, Prisma } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
 import type { EmailMessage } from '../email/index.ts';
 import { acceptedAddress } from '../field-text.ts';
@@ -184,8 +184,8 @@ const ADDRESS_DAYS = 30;
  * Counted from `revokedAt` and from `expiresAt`, at exactly the period and
  * not before; a row still stored as pending that long after its expiry is
  * written as expired. An accepted invitation is left alone: its address is
- * the account's, and is cleared when that account is deleted (FR-AU-58, a
- * later slice). Idempotent: it matches the rows that still hold an address,
+ * the account's, and is cleared when that account is deleted
+ * (`clearAdmissionAddressOf`). Idempotent: it matches the rows that still hold an address,
  * so two instances clear each row once. Answers with the number cleared.
  */
 export async function clearAdmissionAddresses(now: Date = new Date()): Promise<number> {
@@ -205,6 +205,27 @@ export async function clearAdmissionAddresses(now: Date = new Date()): Promise<n
     data: { email: null },
   });
   return stale.count + ended.count;
+}
+
+/**
+ * FR-AU-58 (e): "The address is cleared wherever the application holds it for the account. It is
+ * cleared from the admission invitation from which the account was created (FR-AU-89): the row
+ * stays, without the address, and is listed to Praktico from then on without one." Found by the
+ * account that accepted it, and, for an invitation that was revoked or has expired and has not yet
+ * had its address cleared (30 days), by the address itself: the account was admitted under an
+ * address that an earlier invitation also named. In the transaction of the step; idempotent.
+ */
+export async function clearAdmissionAddressOf(
+  tx: Pick<Prisma.TransactionClient, 'admissionInvitation'>,
+  account: { id: string; email: string | null },
+): Promise<void> {
+  await tx.admissionInvitation.updateMany({
+    where: {
+      email: { not: null },
+      OR: [{ acceptedById: account.id }, ...(account.email ? [{ email: account.email }] : [])],
+    },
+    data: { email: null },
+  });
 }
 
 /**

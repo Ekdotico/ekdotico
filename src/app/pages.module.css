@@ -95,6 +95,18 @@
   overflow-wrap: anywhere;
 }
 
+/* A short list of statements, one under another, with the marks of a list. */
+.statements {
+  margin: var(--sp-0);
+  padding-inline-start: var(--sp-6);
+  max-inline-size: var(--measure);
+  overflow-wrap: anywhere;
+}
+
+.statements > li + li {
+  margin-block-start: var(--sp-2);
+}
+
 /* The list of documents: one row for each, separated by a hairline. */
 .list {
   margin: var(--sp-0);

@@ -21,6 +21,7 @@ import type { AuthContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, expireCookie, setSessionCookie } from 'better-auth/cookies';
 import { afterResponse, assertCollecting } from '../after-response.ts';
+import { inDeletion } from '../account/in-deletion.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
@@ -245,7 +246,12 @@ export async function checkCodeAtPrompt(
  * answered as every other refusal is.
  */
 export async function checkCredentials(
-  context: Pick<AuthContext, 'internalAdapter' | 'password'>,
+  // The two things it asks of the library's context, and of the hasher only the two functions it calls:
+  // a route of the application holds `await auth().$context`, whose type is that of this configuration
+  // and not the generic one, and the hasher's `checkPassword` takes a context of its own type.
+  context: Pick<AuthContext, 'internalAdapter'> & {
+    password: Pick<AuthContext['password'], 'hash' | 'verify'>;
+  },
   headers: Headers | undefined,
   enteredEmail: string,
   enteredPassword: string,
@@ -275,7 +281,15 @@ export async function checkCredentials(
     // one more cause for which the attempt is not open. The library answers a
     // user without the column, so the row is read for it.
     const locked = lockInForce(await lockedUntilOf(user?.id));
-    const open = byPair.ok && byEmail.ok && !locked;
+    // FR-AU-58 (a): "From the confirmation, a sign-in to the account is
+    // refused with the statement of FR-AU-81": as a lock refuses one, with the
+    // same work and the same statement, counted toward nothing. Asked for every
+    // address, as the lock is, so that the time shows nothing (FR-AU-81). It is
+    // the one place a password is checked at a prompt, so a prompt of an
+    // account in deletion (the confirmation itself, once repeated) is refused too.
+    const deleting = await inDeletion(user?.id);
+    const refusedAnyway = locked || deleting;
+    const open = byPair.ok && byEmail.ok && !refusedAnyway;
     const hash = credential?.password;
     // Verified only where the attempt could succeed: no limit is reached (a
     // refused attempt is not verified; the owner's answer to Q10), the address
@@ -297,7 +311,7 @@ export async function checkCredentials(
     // the count of a failure makes are made here as checks that count nothing,
     // so that Valkey is asked as often as for a wrong password, or for an
     // address without an account (FR-AU-81).
-    else if (locked && byPair.ok && byEmail.ok) {
+    else if (refusedAnyway && byPair.ok && byEmail.ok) {
       await checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
       await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
       await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
@@ -525,6 +539,8 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
   // now, read after the link, and once more by the claim below.
   const user = await internalAdapter.findUserById(link.userId);
   if (!user) return notValid();
+  // FR-AU-58 (a): no sign-in to an account whose deletion is confirmed, by its lock link either.
+  if (await inDeletion(user.id)) return notValid();
   if ((user as { twoFactorEnabled?: unknown }).twoFactorEnabled === true) return toSecondStep(link.until);
 
   // The password of the account as it is before the session is made, to be

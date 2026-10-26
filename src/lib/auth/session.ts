@@ -5,6 +5,7 @@
 //
 // Nothing here is of Next.js: the collaboration server validates through
 // `validateSessionRow` (NFR-SE-17 (f)).
+import { inDeletion } from '../account/in-deletion.ts';
 import { db } from '../db.ts';
 import { onlyReads } from '../http.ts';
 import { settings } from '../settings.ts';
@@ -96,6 +97,16 @@ async function validate(headers: Headers, readRow: boolean): Promise<Validation>
     typeof emailVerified !== 'boolean' ||
     typeof twoFactorEnabled !== 'boolean' ||
     stoppedByFoundingGate({ email, emailVerified, twoFactorEnabled });
+  // FR-AU-58 (a): from the confirmation of its deletion "the account can make
+  // no further request other than those of this deletion", and there is no
+  // other: the confirmation is the one request, and the steps are the timer's.
+  // So the account has no session here, for the proxy, for each route, for each
+  // page and for the collaboration server (401, the owner's answer to Q8). Read
+  // from the table on every request, the signed copy included: it is up to a
+  // minute old, and the confirmation must hold from its commit. A session of
+  // the account is not ended here: step (d) ends them all.
+  // No cookie is handed on: the library's renewal would keep a copy alive for an account that has none.
+  if (await inDeletion(userId)) return { session: null, stopped: null, setCookie: [] };
   return stops ? { session: null, stopped: own, setCookie } : { session: own, stopped: null, setCookie };
 }
 

@@ -37,7 +37,7 @@ import {
   type OfferNotificationView,
 } from './ownership-notifications.ts';
 import { COLLABORATOR_ROLE, holds, ROLE_NAME, type DocumentRole } from './permissions.ts';
-import { newPseudonymAvoiding } from './pseudonym.ts';
+import { newPseudonymAvoiding, withoutSenderName } from './pseudonym.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -361,6 +361,52 @@ export async function endInvitationsOf(
   });
   const all = await tx.documentInvitation.findMany({ where: { documentId }, select: { id: true } });
   if (all.length > 0) await tx.notification.deleteMany({ where: notificationsOf(all.map(({ id }) => id)) });
+}
+
+/**
+ * FR-AU-58 (f): what the deletion of an account does to the invitations it sent and was sent, in the
+ * transaction of the step that ends its roles. Found by the account's identifier and by its address,
+ * which is why this runs before the address is cleared from the row of the account.
+ *
+ * - "every pending invitation the user sent or was sent is revoked (FR-ED-37)", and, as a revocation
+ *   does, the notifications of those invitations go (FR-ED-42);
+ * - "the invited address is cleared from every document invitation that was addressed to the user",
+ *   an accepted one included, which keeps its address otherwise (FR-ED-37): those addressed to the
+ *   account's address, and those the account accepted;
+ * - the pseudonym of every invitation the account sent that holds one: it carries a copy of the
+ *   sender's display name, which nothing else clears (docs/plan/invitation-title.md).
+ *
+ * The rows themselves stay, and refer to the tombstone (FR-AU-58). An invitation that was pending
+ * and past its time is revoked too: it was never anything but pending in the row.
+ */
+export async function endInvitationsOfAccount(
+  tx: Prisma.TransactionClient,
+  account: { id: string; email: string | null },
+  now: Date,
+): Promise<void> {
+  const addressed = account.email ? [{ email: account.email }] : [];
+  const revoked = await tx.documentInvitation.updateManyAndReturn({
+    where: { state: 'PENDING', OR: [{ invitedById: account.id }, ...addressed] },
+    data: { state: 'REVOKED', respondedAt: now },
+    select: { id: true },
+  });
+  if (revoked.length > 0) {
+    await tx.notification.deleteMany({ where: notificationsOf(revoked.map(({ id }) => id)) });
+  }
+  await tx.documentInvitation.updateMany({
+    where: { email: { not: null }, OR: [{ acceptedById: account.id }, ...addressed] },
+    data: { email: null },
+  });
+  const hidden = await tx.documentInvitation.findMany({
+    where: { invitedById: account.id, titlePseudonym: { not: null } },
+    select: { id: true, titlePseudonym: true },
+  });
+  for (const { id, titlePseudonym } of hidden) {
+    await tx.documentInvitation.update({
+      where: { id },
+      data: { titlePseudonym: withoutSenderName(titlePseudonym!) },
+    });
+  }
 }
 
 // ── Delivering, after the response ──────────────────────────────────────────

@@ -12,6 +12,7 @@
 // platform's cryptographic random source (`randomInt`), never `Math.random`
 // (a test reads this file for it).
 import { randomInt } from 'node:crypto';
+import { DELETED_ACCOUNT } from '../account/deleted-account.ts';
 
 export const PSEUDONYM_ADJECTIVES = [
   'Amber',
@@ -83,6 +84,9 @@ export const PSEUDONYM_ANIMALS = [
   'Wombats',
 ] as const;
 
+/** Between the two words and the sender's name. Neither word holds it, so the first one is the end of the words. */
+const SEPARATOR = ' — ';
+
 /**
  * "Flying Hippos — Ada Owner": an adjective and an animal chosen at random,
  * then the sender's display name (FR-ED-17). `pick(n)` answers a whole number
@@ -91,7 +95,19 @@ export const PSEUDONYM_ANIMALS = [
 export function newPseudonym(senderName: string, pick: (n: number) => number = randomInt): string {
   const adjective = PSEUDONYM_ADJECTIVES[pick(PSEUDONYM_ADJECTIVES.length)];
   const animal = PSEUDONYM_ANIMALS[pick(PSEUDONYM_ANIMALS.length)];
-  return `${adjective} ${animal} — ${senderName}`;
+  return `${adjective} ${animal}${SEPARATOR}${senderName}`;
+}
+
+/**
+ * FR-AU-58 (f), docs/plan/invitation-title.md: the pseudonym of an invitation holds a copy of its
+ * sender's display name, and when the sender's account is deleted the copy goes. The two words stay,
+ * so that the invitee can still tell the invitations apart, and the name becomes the fixed text of
+ * a deleted account. A pseudonym of no other form (none is made) becomes the fixed text alone, so
+ * that no name survives in it whatever it held.
+ */
+export function withoutSenderName(pseudonym: string): string {
+  const at = pseudonym.indexOf(SEPARATOR);
+  return at < 0 ? DELETED_ACCOUNT : `${pseudonym.slice(0, at)}${SEPARATOR}${DELETED_ACCOUNT}`;
 }
 
 /** How many times a pseudonym that is already in use is drawn again before one is kept (1,024 pairs, a handful in use). */

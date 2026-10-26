@@ -2,6 +2,7 @@
 // title. Whether a caller may do any of it is not decided here: the routes ask
 // ./access.ts first. Nothing here is of Next.js.
 import type { Document } from '../../generated/prisma/client.ts';
+import { AccountInDeletion, holdOwnableAccount } from '../account/in-deletion.ts';
 import { db } from '../db.ts';
 import { fieldText } from '../field-text.ts';
 import { istorico } from '../istorico/index.ts';
@@ -67,6 +68,9 @@ export function readTitle(
  * there is in α 0.1.0, "used without a selection step". It is looked up here
  * and taken from no caller, so a document cannot be put into a workspace that
  * is not its Owner's.
+ *
+ * It throws `AccountInDeletion` for an account whose deletion is confirmed
+ * (FR-AU-58); a route answers that as it answers a request without a session.
  */
 export async function createDocument(userId: string): Promise<DocumentSummary> {
   const personal = await ensurePersonalWorkspace(userId);
@@ -78,16 +82,23 @@ export async function createDocument(userId: string): Promise<DocumentSummary> {
   const port = istorico();
   const recording = port.capabilities().recording;
 
-  const document = await db().document.create({
-    data: {
-      workspaceId: personal,
-      ownerId: userId,
-      title: DEFAULT_TITLE,
-      permissionSet: defaultPermissionSet(),
-      recording: recording ? 'RECORDED' : 'UNRECORDED',
-      // An edit, the first: see `renameDocument`.
-      updatedAt: new Date(),
-    },
+  const document = await db().$transaction(async (tx) => {
+    // FR-AU-58: "no deleted account is ever the Owner of a document". The account's row is held
+    // against the confirmation of its deletion, which counts the documents under the same row
+    // (src/lib/account/in-deletion.ts): of a creation and a confirmation at once, one waits for the
+    // other and reads what it left.
+    if (!(await holdOwnableAccount(tx, userId))) throw new AccountInDeletion();
+    return tx.document.create({
+      data: {
+        workspaceId: personal,
+        ownerId: userId,
+        title: DEFAULT_TITLE,
+        permissionSet: defaultPermissionSet(),
+        recording: recording ? 'RECORDED' : 'UNRECORDED',
+        // An edit, the first: see `renameDocument`.
+        updatedAt: new Date(),
+      },
+    });
   });
 
   // Contract IC-50, the extension point "Document creation": after the commit,

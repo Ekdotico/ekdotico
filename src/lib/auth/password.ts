@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
+import { inDeletion } from '../account/in-deletion.ts';
 import { afterResponse, assertCollecting } from '../after-response.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
@@ -97,6 +98,9 @@ async function sendResetLink(email: string, now: Date = new Date()): Promise<voi
     select: { id: true, emailVerified: true, updatedAt: true },
   });
   if (!user?.emailVerified) return;
+  // FR-AU-58 (a): an account whose deletion is confirmed is sent no link and no email: its
+  // credentials are deleted (step (d)), so a link would lead to a password that cannot be set.
+  if (await inDeletion(user.id)) return;
   const token = newToken();
   // FR-AU-03: a link is bound to the user, not to the address it is mailed
   // to, and the old address "no longer signs in to it". So the row of the

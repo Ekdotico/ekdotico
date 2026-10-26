@@ -23,7 +23,10 @@ export interface SessionRow {
   userId: string;
   createdAt: Date;
   expiresAt: Date;
-  /** False for the tombstone of a deleted account, which has no address (FR-AU-58 (e)). */
+  /**
+   * False for an account whose deletion is confirmed (FR-AU-58 (a): from the confirmation every connection
+   * it holds is closed), and for the tombstone of one that is complete, which has no address (FR-AU-58 (e)).
+   */
   accountStands: boolean;
 }
 

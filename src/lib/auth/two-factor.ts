@@ -27,11 +27,12 @@
 // enrolment, and each set of recovery codes once, in the answer to the request
 // that made it.
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import type { GenericEndpointContext } from 'better-auth';
+import type { AuthContext, GenericEndpointContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { expireCookie, setCookieCache, setSessionCookie } from 'better-auth/cookies';
 import { generateRandomString, symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 import type { Prisma } from '../../generated/prisma/client.ts';
+import { inDeletion } from '../account/in-deletion.ts';
 import { afterResponse, assertCollecting } from '../after-response.ts';
 import { db } from '../db.ts';
 import { handOver } from '../email/hand-over.ts';
@@ -164,8 +165,10 @@ function base32(text: string): string {
 // ── What is stored (NFR-SE-17 (a)) ──────────────────────────────────────────
 const seal = (ctx: GenericEndpointContext, data: string) =>
   symmetricEncrypt({ key: ctx.context.secretConfig, data });
-const unseal = (ctx: GenericEndpointContext, data: string) =>
-  symmetricDecrypt({ key: ctx.context.secretConfig, data });
+// What the reading of a stored secret asks of a request: the library's key, which an endpoint of the
+// library has as its context and a route of the application has as `await auth().$context`.
+type Keyed = { context: Pick<AuthContext, 'secretConfig'> };
+const unseal = (ctx: Keyed, data: string) => symmetricDecrypt({ key: ctx.context.secretConfig, data });
 
 /**
  * FR-AU-83: "ten single-use recovery codes". Each is ten letters and digits
@@ -180,7 +183,7 @@ function newRecoveryCodes(): string[] {
 }
 
 /** The recovery codes of a row that have not been used. */
-async function recoveryCodes(ctx: GenericEndpointContext, sealed: string): Promise<string[]> {
+async function recoveryCodes(ctx: Keyed, sealed: string): Promise<string[]> {
   const codes: unknown = JSON.parse(await unseal(ctx, sealed));
   return Array.isArray(codes) ? codes.filter((code): code is string => typeof code === 'string') : [];
 }
@@ -249,7 +252,7 @@ type Verified = NonNullable<Awaited<ReturnType<typeof checkCredentials>>['verifi
  * waits for another in a circle; and that write holds the account's row, so
  * two changes of one account run one after the other.
  */
-async function standing(
+export async function standing(
   tx: Prisma.TransactionClient,
   verified: Verified,
   own: ValidSession,
@@ -507,6 +510,13 @@ async function secondStep(ctx: GenericEndpointContext, kind: 'totp' | 'recovery'
     await end();
     return refused('sign_in_again', MESSAGES.again);
   }
+  // FR-AU-58 (a): "From the confirmation, a sign-in to the account is refused": a step that a
+  // password began before the confirmation does not complete into a session. Step (d) deletes
+  // the steps too; this is the refusal in the time between the two.
+  if (await inDeletion(user.id)) {
+    await end();
+    return refused('sign_in_again', MESSAGES.again);
+  }
 
   // NFR-SE-07: "no more than 100 codes can be tried for one account in any
   // hour". Where the failed sign-ins of the address have reached their number,
@@ -710,6 +720,30 @@ export const verifyBackupCode = createAuthEndpoint(
 // ── Turning it off, and replacing the recovery codes ────────────────────────
 
 /**
+ * The check of the second factor at a prompt under a session: six digits are a code of the
+ * authenticator application, and anything else is looked for among the recovery codes. A wrong one
+ * counts as a failed sign-in, as a wrong password at a prompt does, and where a limit is reached the
+ * code is refused as a wrong one is (the owner's answer G2 of the pull request; Q10). A recovery
+ * code is only looked for here, and spent by the caller's transaction, if its action spends it.
+ * The one place for it: turning two-factor authentication off, and the confirmation of the
+ * deletion of an account (FR-AU-58: "and for a code where two-factor authentication is on").
+ * `ctx` holds the library's key, `await auth().$context` for a route of the application.
+ */
+export function checkSecondFactorAtPrompt(
+  ctx: Keyed,
+  headers: Headers | undefined,
+  email: string,
+  factor: { secret: string; backupCodes: string },
+  entered: string,
+): Promise<boolean> {
+  return checkCodeAtPrompt(headers, email, async () =>
+    isCode(entered)
+      ? acceptCode(await unseal(ctx, factor.secret), entered)
+      : without(await recoveryCodes(ctx, factor.backupCodes), entered) !== null,
+  );
+}
+
+/**
  * FR-AU-83: `POST /api/auth/two-factor/disable`, with `{ "password", "code" }`.
  * "Turning two-factor authentication off requires the password and either a
  * current code or a recovery code." An account of the founding team "cannot
@@ -747,11 +781,7 @@ export const disableTwoFactor = createAuthEndpoint(
     // failed sign-in, as a wrong password at this prompt does, and where a
     // limit is reached the code is refused as a wrong one is (the owner's
     // answer G2 of the pull request; Q10). NFR-SE-19: a 403.
-    const right = await checkCodeAtPrompt(ctx.headers, account.email, async () =>
-      isCode(entered.code)
-        ? acceptCode(await unseal(ctx, factor.secret), entered.code)
-        : without(await recoveryCodes(ctx, factor.backupCodes), entered.code) !== null,
-    );
+    const right = await checkSecondFactorAtPrompt(ctx, ctx.headers, account.email, factor, entered.code);
     if (!right) {
       await securityLog({ kind: 'forbidden', userId: own.userId });
       return errorResponse(403, 'code_refused', MESSAGES.eitherCode);
