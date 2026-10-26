@@ -98,6 +98,7 @@ describe('the view of a marker', () => {
     expect(link!.attributes['aria-label']).toBe('Footnote 3');
     expect(link!.attributes['aria-label']).toContain(link!.textContent);
     expect(link!.attributes.role).toBe('doc-noteref');
+    expect((link as unknown as { className: string }).className).toBe('ekd-footnote-ref');
     expect(link!.href).toBe(`#footnote-${ID}`);
     expect(drawn.dom.hidden).toBe(false);
     expect(markerName(7)).toBe('Footnote 7');
@@ -182,7 +183,7 @@ describe('the way from a marker to its entry (FR-ED-05)', () => {
       state: editor.state,
       isEditable: true,
       chain: () => chain,
-      view: { nodeDOM: () => entry },
+      view: { nodeDOM: () => entry, dispatch: () => undefined },
     } as unknown as Editor;
     expect(followMarker(stand, ID)).toBe(true);
     // The entry stands after the paragraph, one step in; its text ends one step before its close.
@@ -201,7 +202,7 @@ describe('the way from a marker to its entry (FR-ED-05)', () => {
       chain: () => {
         throw new Error('nothing is selected in a document that cannot be edited');
       },
-      view: { nodeDOM: () => entry },
+      view: { nodeDOM: () => entry, dispatch: () => undefined },
     } as unknown as Editor;
     expect(followMarker(stand, ID)).toBe(true);
     expect(entry.scrolled).toEqual([{ block: 'center' }]);
@@ -214,7 +215,7 @@ describe('the way from a marker to its entry (FR-ED-05)', () => {
     const stand = {
       state: editor.state,
       isEditable: false,
-      view: { nodeDOM: () => entry },
+      view: { nodeDOM: () => entry, dispatch: () => undefined },
     } as unknown as Editor;
     const drawn = view(stand);
     let prevented = false;
@@ -228,11 +229,83 @@ describe('the way from a marker to its entry (FR-ED-05)', () => {
     const stand = {
       state: editor.state,
       isEditable: false,
-      view: { nodeDOM: () => null },
+      view: { nodeDOM: () => null, dispatch: () => undefined },
     } as unknown as Editor;
     expect(followMarker(stand, 'not an identifier')).toBe(false);
     expect(followMarker(stand, null)).toBe(false);
     expect(followMarker(stand, 'f'.repeat(24))).toBe(false);
+  });
+});
+
+describe('the entry just jumped to (data-footnote-target of the package, S20-1)', () => {
+  const plugin = (editor: Editor) =>
+    editor.state.plugins.find((each) =>
+      (each as unknown as { key: string }).key.startsWith('footnoteNumbers$'),
+    )!;
+  /** A headless editor has no page: its view answers what the way to an entry asks of it, and dispatches for real. */
+  const standing = (editor: Editor) => {
+    const real = editor.view;
+    editor.setEditable(false);
+    Object.defineProperty(editor, 'view', {
+      value: new Proxy(real, {
+        get: (target, key) => {
+          if (key === 'nodeDOM') return () => null;
+          const value = Reflect.get(target, key) as unknown;
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }),
+    });
+  };
+  /** The attributes of every decoration that is the target's mark, on the entry that holds it. */
+  const marked = (editor: Editor) => {
+    const set = plugin(editor).props.decorations!.call(plugin(editor), editor.state) as unknown as {
+      find(): { from: number; type: { attrs: Record<string, string> } }[];
+    };
+    return set
+      .find()
+      .filter((each) => 'data-footnote-target' in each.type.attrs)
+      .map((each) => editor.state.doc.nodeAt(each.from)!.type.name);
+  };
+
+  it('is marked when a marker is followed and unmarked a moment later, in the plugin state and never by hand on the element', () => {
+    vi.useFakeTimers();
+    try {
+      const editor = editorOf();
+      standing(editor);
+      const stand = editor;
+      expect(marked(editor)).toEqual([]);
+      expect(followMarker(stand, ID)).toBe(true);
+      expect(marked(editor)).toEqual(['footnote']);
+      vi.advanceTimersByTime(1499);
+      expect(marked(editor)).toEqual(['footnote']);
+      vi.advanceTimersByTime(1);
+      expect(marked(editor)).toEqual([]);
+      // The document was not touched by either change.
+      expect(editor.state.doc.childCount).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is kept a full moment from the last jump, and is not left behind when the editor is destroyed', () => {
+    vi.useFakeTimers();
+    try {
+      const editor = editorOf();
+      standing(editor);
+      const stand = editor;
+      followMarker(stand, ID);
+      vi.advanceTimersByTime(1000);
+      followMarker(stand, ID);
+      vi.advanceTimersByTime(1000);
+      expect(marked(editor)).toEqual(['footnote']);
+      vi.advanceTimersByTime(500);
+      expect(marked(editor)).toEqual([]);
+      followMarker(stand, ID);
+      editor.destroy();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -245,10 +318,10 @@ describe('the markup that is not drawn by the view (a clipboard)', () => {
       `["sup",{"data-footnote-id":"${ID}"}]`,
     );
     expect(JSON.stringify(spec.nodes.footnotes!(editor.state.doc.lastChild!))).toBe(
-      `["section",{"role":"doc-endnotes","aria-label":"${FOOTNOTES_NAME}"},["ol",0]]`,
+      `["section",{"class":"ekd-footnotes","role":"doc-endnotes","aria-label":"${FOOTNOTES_NAME}"},["ol",0]]`,
     );
     expect(JSON.stringify(spec.nodes.footnote!(editor.state.doc.lastChild!.firstChild!))).toBe(
-      `["li",{"id":"footnote-${ID}"},0]`,
+      `["li",{"class":"ekd-footnote","id":"footnote-${ID}"},0]`,
     );
     expect(FOOTNOTES_NAME).toBe('Footnotes');
     expect(ENTRY_PROMPT).toBe('Footnote text');
@@ -260,6 +333,6 @@ describe('the markup that is not drawn by the view (a clipboard)', () => {
     const hostile = editor.schema.nodes.footnoteReference!.create({ id: '"><script>alert(1)</script>' });
     expect(JSON.stringify(spec.nodes.footnoteReference!(hostile))).toBe('["sup",{"data-footnote-id":""}]');
     const entry = editor.schema.nodes.footnote!.create({ id: 'javascript:alert(1)' });
-    expect(JSON.stringify(spec.nodes.footnote!(entry))).toBe('["li",{},0]');
+    expect(JSON.stringify(spec.nodes.footnote!(entry))).toBe('["li",{"class":"ekd-footnote"},0]');
   });
 });
