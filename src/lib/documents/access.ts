@@ -66,7 +66,8 @@ async function documentAndRole(
  * identifier of a document the user holds a role on is `not_found`. A deleted
  * document is `not_found` to everyone here (FR-ED-36: deletion "ends every
  * collaborator's access"; the Owner meets it only in the list of deleted
- * documents, which is another route's).
+ * documents, which is another route's), but for the two exceptions of the notice
+ * period of a clearing below.
  *
  * The caller has validated the session and passes the session's user, never
  * an identifier taken from the request.
@@ -84,11 +85,20 @@ export async function authorise(
   // FR-ED-44 (d), FR-AU-91: "While a document is in the notice period of a clearing, every user who holds a
   // role on it may take a draft export of it, whatever the permission set of the document says", and
   // that includes a document deleted before the clearing and treated by it as shared: "each of them may
-  // take a draft export of it until the day of the deletion". This is the one exception, to this one
-  // permission and to the period alone; reading such a document is not granted (docs/plan/slice-23.md, S23-1).
+  // take a draft export of it until the day of the deletion". This is the exception for the export.
   const exportInPeriod =
     permission === 'document.export.draft' && document !== null && noticeRuns(document, now);
-  const role = document && (document.deletedAt === null || exportInPeriod) ? held : null;
+  // FR-AU-91, FR-ED-36 (owner's answer to S23-1, 26 Oct 2026): the people who held a role on such a document may
+  // also OPEN it, read-only (`recordConnection` drops the right to edit while `clearingAt` is set), under the same
+  // period: not after the day, not once claimed. The Owner's view is unchanged: the Owner meets a deleted
+  // document in the list of deleted documents alone.
+  const viewInPeriod =
+    permission === 'document.view' &&
+    document !== null &&
+    document.deletedAt !== null &&
+    held !== 'owner' &&
+    noticeRuns(document, now);
+  const role = document && (document.deletedAt === null || exportInPeriod || viewInPeriod) ? held : null;
   if (!document || !role) return { outcome: 'not_found' };
   if (!exportInPeriod && !holds(document.permissionSet, role, permission)) return { outcome: 'forbidden' };
   return { outcome: 'allowed', role, document };

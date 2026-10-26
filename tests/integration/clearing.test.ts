@@ -938,8 +938,9 @@ describe('the period: read-only for everyone, and what it leaves open (FR-AU-91,
     expect(late.status).toBe(404);
   });
 
-  // Mutation P05: the exception reaches `document.view` of a deleted document (S23-1), or a deleted document that is not in a clearing.
-  it('gives a document deleted before the clearing its draft export for its collaborators, and its reading to no one', async () => {
+  // Mutation P05: the exception for the export reaches a deleted document that is not in a clearing. Reading it
+  // (S23-1, answered "view" on 26 October 2026) is tests/integration/clearing-view.test.ts's.
+  it('gives a document deleted before the clearing its draft export for its collaborators and the Owner', async () => {
     const owner = await person();
     const reader = await person('reader');
     const documentId = await documentOf(owner.id);
@@ -950,9 +951,6 @@ describe('the period: read-only for everyone, and what it leaves open (FR-AU-91,
     await clear(owner.cookie, await everything(owner.id));
     expect((await authorise(reader.id, documentId, 'document.export.draft')).outcome).toBe('allowed');
     expect((await authorise(owner.id, documentId, 'document.export.draft')).outcome).toBe('allowed');
-    // S23-1: reading is not granted.
-    expect((await authorise(reader.id, documentId, 'document.view')).outcome).toBe('not_found');
-    expect((await authorise(owner.id, documentId, 'document.view')).outcome).toBe('not_found');
   });
 
   // Mutation P06: the restore is not refused for a document in a clearing.

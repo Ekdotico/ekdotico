@@ -35,6 +35,9 @@ export default async function Sharing({ params }: { params: Promise<{ id: string
   // `document.view` is held by every role (FR-ED-44), so there is no 403 here.
   if (access.outcome !== 'allowed') notFound();
   const { document, role } = access;
+  // FR-AU-91 (owner's answer to S23-1): a deleted document in its notice period is opened to be read, and nothing here
+  // can be done to it: this page of settings is not one of its pages.
+  if (document.deletedAt !== null) notFound();
   // FR-ED-38: the Owner cannot leave; every other role may, whatever the permission set shows of the people.
   const mayLeave = holds(document.permissionSet, role, 'document.leave');
   // FR-ED-46: the Owner sees the table of the set; any other role is told in words what it holds and
