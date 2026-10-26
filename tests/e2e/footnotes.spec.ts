@@ -281,6 +281,69 @@ test('a marker leads to its entry: by a click, and by Tab and Enter from the tex
   await expect(doc.locator('p')).toHaveCount(LINES + 1);
 });
 
+// The package gives the marker a target of 24 by 24 CSS pixels, drawn as an out-of-flow ::after centred on the
+// number (WCAG 2.5.8). In a document that can be edited that square lies over the words on either side, so what
+// is asked is that a click aimed at those words, a few pixels from the number, still puts the caret in the text
+// and follows nothing. The measurements are kept in the report of the run.
+test('the target of a marker does not take a click aimed at the words beside it, in a document that can be edited', async ({
+  page,
+}, testInfo) => {
+  test.slow();
+  // KNOWN GAP OF THE PACKAGE, measured on 0.40.1: the square covers about 9.5px on each side of a 4.9px number, so
+  // all four clicks (4px and 8px, left and right) land on the marker and follow it. Expected to fail until the
+  // package narrows the target in an editable surface; when it does, this line is the one to remove.
+  test.fail(
+    true,
+    'domico 0.40.1: the 24 by 24 target of .ekd-footnote-ref takes clicks aimed at the words beside it',
+  );
+  await enter(page);
+  await openNew(page);
+  await text(page).focus();
+  await page.keyboard.type('The claim goes ');
+  await addFootnote(page);
+  await page.keyboard.type('The source');
+  await toEndOfFirstParagraph(page);
+  await page.keyboard.type(' on after the marker, and then some more words');
+  await expect(marker(page, 1)).toBeVisible();
+
+  const box = (await marker(page, 1).boundingBox())!;
+  const y = box.y + box.height / 2;
+  const measured: string[] = [];
+  const stolen: string[] = [];
+  for (const [side, edge, sign] of [
+    ['left', box.x, -1],
+    ['right', box.x + box.width, 1],
+  ] as const) {
+    for (const distance of [4, 8]) {
+      const x = edge + sign * distance;
+      // Wait for the mark of an earlier follow to go, so that one click is not read as the one before it.
+      await expect(entries(page).first()).not.toHaveAttribute('data-footnote-target');
+      const hit = await page.evaluate(
+        ([px, py]) => {
+          const element = document.elementFromPoint(px!, py!);
+          return element
+            ? `${element.tagName.toLowerCase()}${element.className ? `.${element.className}` : ''}`
+            : 'none';
+        },
+        [x, y],
+      );
+      await page.mouse.click(x, y);
+      const where = await blockWithCursor(page);
+      const marked = await entries(page)
+        .first()
+        .evaluate((entry) => entry.hasAttribute('data-footnote-target'));
+      measured.push(
+        `${distance}px ${side} of the number (marker box x ${box.x.toFixed(1)}, width ${box.width.toFixed(1)}): ` +
+          `element under the pointer ${hit}; caret in ${where}; entry marked ${marked}`,
+      );
+      testInfo.annotations.push({ type: `${side} ${distance}px`, description: measured.at(-1)! });
+      if (where !== 'paragraph' || marked) stolen.push(measured.at(-1)!);
+    }
+  }
+  // Every point is asked before the test fails, so that the report holds all four measurements.
+  expect(stolen, measured.join('\n')).toEqual([]);
+});
+
 /** What holds the focus of the page: its name where it has one, else its role or its tag. */
 const focused = (page: Page) =>
   page.evaluate(() => {
@@ -479,6 +542,11 @@ test('a Viewer reads the footnotes, follows a marker to its entry, and changes n
   await expect(entries(theirs).first()).not.toBeInViewport({ ratio: 1 });
   await marker(theirs, 1).click();
   await expect(entries(theirs).first()).toBeInViewport({ ratio: 1 });
+  await expect(entries(theirs).first()).toBeFocused();
+  // The entry carries the package's mark for a moment in a document that cannot be edited too, and the
+  // focus is still on it once the mark has gone.
+  await expect(entries(theirs).first()).toHaveAttribute('data-footnote-target', '');
+  await expect(entries(theirs).first()).not.toHaveAttribute('data-footnote-target');
   await expect(entries(theirs).first()).toBeFocused();
   // What the Viewer types goes nowhere, in the entry or in the text.
   await theirs.keyboard.type('written by the Viewer');

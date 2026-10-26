@@ -273,6 +273,9 @@ describe('the entry just jumped to (data-footnote-target of the package, S20-1)'
       const editor = editorOf();
       standing(editor);
       const stand = editor;
+      const before = editor.state.doc;
+      const changed: boolean[] = [];
+      editor.on('transaction', ({ transaction }) => changed.push(transaction.docChanged));
       expect(marked(editor)).toEqual([]);
       expect(followMarker(stand, ID)).toBe(true);
       expect(marked(editor)).toEqual(['footnote']);
@@ -280,8 +283,11 @@ describe('the entry just jumped to (data-footnote-target of the package, S20-1)'
       expect(marked(editor)).toEqual(['footnote']);
       vi.advanceTimersByTime(1);
       expect(marked(editor)).toEqual([]);
-      // The document was not touched by either change.
-      expect(editor.state.doc.childCount).toBe(2);
+      // Neither change touched the document: the very same object, and no transaction with a step in it
+      // (so none reaches the undo of the collaboration extension, which takes its steps from the document).
+      expect(editor.state.doc).toBe(before);
+      expect(changed.length).toBeGreaterThanOrEqual(2);
+      expect(changed.every((each) => !each)).toBe(true);
     } finally {
       vi.useRealTimers();
     }

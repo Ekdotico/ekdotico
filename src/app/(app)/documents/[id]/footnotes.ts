@@ -376,8 +376,7 @@ const TARGET_TIMERS = new WeakMap<Editor, ReturnType<typeof setTimeout>>();
  */
 function markTarget(editor: Editor, id: string) {
   clearTimeout(TARGET_TIMERS.get(editor));
-  const set = (target: string | null) =>
-    editor.view.dispatch(editor.state.tr.setMeta(NUMBERS, { target }).setMeta('addToHistory', false));
+  const set = (target: string | null) => editor.view.dispatch(editor.state.tr.setMeta(NUMBERS, { target }));
   set(id);
   TARGET_TIMERS.set(
     editor,
