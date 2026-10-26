@@ -150,7 +150,7 @@ export async function draftExport({ document, session }: DocumentCall): Promise<
     // statement now, and not a connection that is reset after a 200 (the review of pull request 59).
     checkEntryName(`${stem}.md`);
     for (const image of images) checkEntryName(image.path);
-    const markdown = Buffer.from(
+    let markdown: Buffer | null = Buffer.from(
       renderMarkdown({
         title: current.title,
         id: document.id,
@@ -160,10 +160,20 @@ export async function draftExport({ document, session }: DocumentCall): Promise<
       }),
       'utf8',
     );
+    /**
+     * The entry of the Markdown, taken once: this function's own reference is dropped as it is handed on, so that the
+     * buffer (up to 32 MiB) is held by the archive writer while its entry is written and by nothing once the images
+     * begin, which may take as long as the client takes to read 100 MB (the review of pull request 59, S6).
+     */
+    const takeMarkdown = (): ZipEntry => {
+      const body = markdown!;
+      markdown = null;
+      return { name: `${stem}.md`, body, size: body.byteLength };
+    };
 
     const abort = new AbortController();
     async function* entries(): AsyncGenerator<ZipEntry> {
-      yield { name: `${stem}.md`, body: markdown, size: markdown.byteLength };
+      yield takeMarkdown();
       for (const image of images) {
         // The size the row holds is the size the object must have: a store that sends more or less ends the export.
         yield {

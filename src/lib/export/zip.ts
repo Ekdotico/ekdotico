@@ -36,8 +36,13 @@ export interface ZipEntry {
   size?: number;
 }
 
-/** The longest chunk handed on: a longer one is passed in pieces, so that what is waiting for the reader is bounded. */
-export const CHUNK_BYTES = 64 * 1024;
+/**
+ * The longest chunk handed on: a longer one is passed in pieces, so that what is waiting for the reader is bounded.
+ * It is also the unit the idle time-out counts in (./stream.ts): a reader that takes one chunk in the idle period
+ * keeps the export alive, so the slowest reader it serves is CHUNK_BYTES per period, 16 KiB in 30 seconds (about
+ * 0.55 KiB a second) and not the 2.2 KiB a second that 64 KiB would have asked of it (the review of pull request 59, N1).
+ */
+export const CHUNK_BYTES = 16 * 1024;
 /** The most bytes of a name (the field is 16 bits; common tools stop well short of it). */
 const NAME_MOST_BYTES = 255;
 /** The most any field that would need ZIP64 may hold: past it the archive is refused. */
@@ -84,12 +89,34 @@ function dosTime(now: Date): { time: number; date: number } {
   };
 }
 
-/** A record of `fixed` bytes written by `write`, then the name where the record has one. */
-function record(fixed: number, write: (view: DataView) => void, name?: Uint8Array): Uint8Array {
-  const bytes = new Uint8Array(fixed + (name?.byteLength ?? 0));
+/** A record of `fixed` bytes written by `write`, then the name and the extra field where the record has them. */
+function record(
+  fixed: number,
+  write: (view: DataView) => void,
+  name?: Uint8Array,
+  extra?: Uint8Array,
+): Uint8Array {
+  const bytes = new Uint8Array(fixed + (name?.byteLength ?? 0) + (extra?.byteLength ?? 0));
   write(new DataView(bytes.buffer));
   if (name) bytes.set(name, fixed);
+  if (extra) bytes.set(extra, fixed + (name?.byteLength ?? 0));
   return bytes;
+}
+
+/**
+ * The extended timestamp field (Info-ZIP, id 0x5455): the modification time in seconds since 1970, in UTC. The DOS
+ * time of a header has two seconds' resolution and no time zone, so a tool that reads local time shows the file as
+ * made hours away from when it was (N3 of the review of pull request 59); this field says it exactly, and `unzip`
+ * and the file managers of the three systems read it first. It is the same in the local and the central header.
+ */
+function extendedTime(now: Date): Uint8Array {
+  const field = new Uint8Array(9);
+  const view = new DataView(field.buffer);
+  view.setUint16(0, 0x5455, true);
+  view.setUint16(2, 5, true);
+  field[4] = 1;
+  view.setUint32(5, Math.min(0xffffffff, Math.max(0, Math.floor(now.getTime() / 1000))), true);
+  return field;
 }
 
 function* pieces(chunk: Uint8Array): Generator<Uint8Array> {
@@ -105,6 +132,7 @@ export async function* zip(
   now: Date = new Date(),
 ): AsyncGenerator<Uint8Array> {
   const { time, date } = dosTime(now);
+  const stamp = extendedTime(now);
   const seen = new Set<string>();
   const directory: { name: Uint8Array; crc: number; size: number; offset: number }[] = [];
   let offset = 0;
@@ -136,9 +164,10 @@ export async function* zip(
           view.setUint16(12, date, true);
           // The checksum and the two sizes (14 to 25) are 0 here: the descriptor has them.
           view.setUint16(26, name.byteLength, true);
-          view.setUint16(28, 0, true);
+          view.setUint16(28, stamp.byteLength, true);
         },
         name,
+        stamp,
       ),
     );
 
@@ -182,10 +211,12 @@ export async function* zip(
           view.setUint32(20, size, true);
           view.setUint32(24, size, true);
           view.setUint16(28, name.byteLength, true);
+          view.setUint16(30, stamp.byteLength, true);
           view.setUint32(38, MODE_0644, true);
           view.setUint32(42, at, true);
         },
         name,
+        stamp,
       ),
     );
   }

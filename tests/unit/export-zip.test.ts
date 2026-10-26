@@ -40,6 +40,21 @@ describe('the form of the archive', () => {
     for (const each of read) expect([each.flags, each.method, each.mode]).toEqual([0x0808, 0, 0o100644]);
   });
 
+  it('says the modification time exactly, in both headers, as the extended timestamp field (N3)', async () => {
+    const read = readZip(
+      await archive([
+        { name: 'a.md', body: bytes('a') },
+        { name: 'images/001.png', body: bytes('b') },
+      ]),
+    );
+    // The reader refuses an archive whose two headers differ in it; here it is the time of the export, in UTC.
+    for (const each of read) expect(each.mtime).toBe(Math.floor(NOW.getTime() / 1000));
+  });
+
+  it('asks a reader no faster than 16 KiB in the idle period (N1)', () => {
+    expect(CHUNK_BYTES).toBe(16 * 1024);
+  });
+
   it('is an archive of no entry where there is none', async () => {
     const data = await archive([]);
     expect(data).toHaveLength(22);
@@ -104,6 +119,13 @@ describe('the form of the archive', () => {
       const extract = spawnSync('unzip', ['-q', file, '-d', out], { encoding: 'utf8' });
       expect(extract.status, extract.stderr).toBe(0);
       expect(readFileSync(join(out, 'images', '001.png')).equals(Buffer.from(image))).toBe(true);
+      // The extended timestamp (N3): in a time zone 13 hours east of UTC the listing says 02:45 on the 27th, where the
+      // DOS time alone would have said 13:45 on the 26th, whatever zone it was made in.
+      const listing = spawnSync('unzip', ['-l', file], {
+        encoding: 'utf8',
+        env: { ...process.env, TZ: 'Pacific/Auckland' },
+      });
+      expect(listing.stdout).toMatch(/(2026-10-27|10-27-2026) +02:45/u);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

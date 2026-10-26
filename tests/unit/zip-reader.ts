@@ -11,10 +11,37 @@ export interface ReadEntry {
   method: number;
   /** The mode in the upper half of the external attributes. */
   mode: number;
+  /** The modification time of the extended timestamp field (0x5455), in seconds since 1970, or null where there is none. */
+  mtime: number | null;
 }
 
 const U = (buffer: Buffer, at: number) => buffer.readUInt32LE(at);
 const S = (buffer: Buffer, at: number) => buffer.readUInt16LE(at);
+
+/** The extra fields of a header, by id, each checked to lie inside the field that holds them. */
+function extraFields(archive: Buffer, from: number, length: number): Map<number, Buffer> {
+  const fields = new Map<number, Buffer>();
+  let at = from;
+  while (at < from + length) {
+    if (at + 4 > from + length) throw new Error('an extra field without its header');
+    const id = S(archive, at);
+    const size = S(archive, at + 2);
+    if (at + 4 + size > from + length) throw new Error('an extra field longer than the extra data');
+    if (fields.has(id)) throw new Error('an extra field twice');
+    fields.set(id, archive.subarray(at + 4, at + 4 + size));
+    at += 4 + size;
+  }
+  return fields;
+}
+
+/** The modification time of an extended timestamp field (flags, then the time if the first bit is set). */
+function mtimeOf(fields: Map<number, Buffer>): number | null {
+  const field = fields.get(0x5455);
+  if (!field) return null;
+  if (field.length !== 5 || field[0] !== 1)
+    throw new Error('an extended timestamp that is not flags and a time');
+  return field.readUInt32LE(1);
+}
 
 /** Collects a stream or any async iterable of chunks into one buffer. */
 export async function collect(
@@ -63,6 +90,7 @@ export function readZip(archive: Buffer): ReadEntry[] {
     const mode = U(archive, at + 38) >>> 16;
     const local = U(archive, at + 42);
     const name = archive.subarray(at + 46, at + 46 + nameLength).toString('utf8');
+    const centralMtime = mtimeOf(extraFields(archive, at + 46 + nameLength, extraLength));
     at += 46 + nameLength + extraLength + commentLength;
 
     if (method !== 0 || compressed !== length) throw new Error(`${name}: not stored`);
@@ -73,7 +101,11 @@ export function readZip(archive: Buffer): ReadEntry[] {
     if (S(archive, local + 26) !== nameLength) throw new Error(`${name}: the two headers differ in the name`);
     const localName = archive.subarray(local + 30, local + 30 + nameLength).toString('utf8');
     if (localName !== name) throw new Error(`${name}: the two headers name different files`);
-    const data = local + 30 + nameLength + S(archive, local + 28);
+    const localExtra = S(archive, local + 28);
+    const localMtime = mtimeOf(extraFields(archive, local + 30 + nameLength, localExtra));
+    if (localMtime !== centralMtime)
+      throw new Error(`${name}: the two headers differ in the modification time`);
+    const data = local + 30 + nameLength + localExtra;
     const bytes = archive.subarray(data, data + length);
     // The descriptor with its signature, behind the data.
     if ((flags & 0x0008) === 0) throw new Error(`${name}: no descriptor`);
@@ -88,7 +120,7 @@ export function readZip(archive: Buffer): ReadEntry[] {
     }
     if (crc32(bytes) !== crc) throw new Error(`${name}: the checksum is wrong`);
     expectedLocal = descriptor + 16;
-    entries.push({ name, bytes: Buffer.from(bytes), flags, method, mode });
+    entries.push({ name, bytes: Buffer.from(bytes), flags, method, mode, mtime: centralMtime });
   }
   if (at !== end) throw new Error('bytes between the directory and the end record');
   if (expectedLocal !== start) throw new Error('bytes between the last entry and the directory');

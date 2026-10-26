@@ -6,6 +6,8 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
@@ -723,6 +725,45 @@ describe('one export at a time for a user (FR-EX-36)', () => {
     expect(await lockExists(owner.id)).toBe(false);
   });
 
+  it('renews the lock as the response moves: a reader that goes on past twice the idle period still holds it, and a second request is still refused (S4)', async () => {
+    // The lock lives 2 seconds without a renewal (twice the idle period of 1); the reader below takes more than 5.
+    const owner = await person();
+    const id = await documentFor(owner);
+    const image3 = await stored(owner, id, png(3 * 1024 * 1024, 6));
+    await db().document.update({
+      where: { id },
+      data: { yjsState: Buffer.from(stateOf(image({ id: image3.id, alt: 'a' }))) },
+    });
+    const response = await post(id, owner.cookie);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const started = Date.now();
+    let checked = 0;
+    let finished = false;
+    while (!finished) {
+      const { done } = await reader.read();
+      finished = done;
+      if (done) break;
+      // Each pause is far under the idle period: progress, and not idleness.
+      await sleep(25);
+      // Asked at the second, third and fourth seconds: past the 2 seconds that the lock lives without a renewal.
+      if (Date.now() - started > 2200 + checked * 1000 && checked < 3) {
+        checked += 1;
+        const second = await post(id, owner.cookie);
+        const status = second.status;
+        // A refused request has a statement; an admitted one (the fault) has a body that must not be left open.
+        if (status !== 429) await second.body?.cancel();
+        expect(status, `the request made ${Date.now() - started} ms in`).toBe(429);
+        expect((await errorOf(second)).code).toBe('export_in_progress');
+        expect(await lockExists(owner.id)).toBe(true);
+      }
+    }
+    expect(Date.now() - started, 'the reader took longer than the lock lives').toBeGreaterThan(4000);
+    expect(checked).toBe(3);
+    await sleep(20);
+    expect(await lockExists(owner.id)).toBe(false);
+  });
+
   it('holds a key that expires, so that a holder that dies does not hold it for ever, and that no other holder can release', async () => {
     const user = (await person()).id;
     const first = await takeExportLock(user, 400);
@@ -915,6 +956,47 @@ describe('bounded memory (FR-EX-36: "the application keeps no copy")', () => {
     await reader.cancel();
     await sleep(50);
     expect(storage.open).toBe(0);
+  });
+
+  it('lets go of the Markdown once its entry is written: the images that follow are streamed without it in memory (S6)', async () => {
+    // The Markdown is up to 32 MiB; the images after it take as long as the client takes to read 100 MB.
+    v8.setFlagsFromString('--expose-gc');
+    const gc = vm.runInNewContext('gc') as () => void;
+    const owner = await person();
+    const id = await documentFor(owner);
+    const big = await stored(owner, id, png(2 * 1024 * 1024, 5));
+    await db().document.update({
+      where: { id },
+      data: {
+        yjsState: Buffer.from(stateOf(p('word '.repeat(60_000)), image({ id: big.id, alt: 'big' }))),
+      },
+    });
+    const response = await post(id, owner.cookie);
+    const reader = response.body!.getReader();
+    // The buffer of the Markdown is the one memory (an ArrayBuffer of its own, over 4 KiB) that its chunks are slices
+    // of. It is watched from a function of its own, so that no register of this test's frame keeps a chunk.
+    const watch = async (): Promise<WeakRef<ArrayBuffer> | undefined> => {
+      let seen: WeakRef<ArrayBuffer> | undefined;
+      let taken = 0;
+      while (taken < 600_000) {
+        const { value } = await reader.read();
+        taken += value!.byteLength;
+        if (!seen && value!.buffer.byteLength > 100_000) seen = new WeakRef(value!.buffer as ArrayBuffer);
+      }
+      return seen;
+    };
+    const markdown = await watch();
+    expect(markdown, 'the Markdown was seen').toBeDefined();
+    // 600 KB are taken: the Markdown (300 KB) is behind, the image is half-way in, and the response is not over.
+    expect(storage.open, 'the image is being read').toBe(1);
+    // `deref` keeps its target alive until the end of the job that called it: the collection comes in a job after it.
+    for (let n = 0; n < 5; n += 1) {
+      await sleep(10);
+      gc();
+      await sleep(10);
+    }
+    expect(markdown!.deref(), 'the buffer of the Markdown is still held').toBeUndefined();
+    await reader.cancel();
   });
 
   it('keeps no file: the code of the export writes to no file and puts nothing in the store', () => {
