@@ -11,6 +11,18 @@ export const CLEARING_NOW = (day: string) =>
   `This document will be deleted on ${day}. You can read it and take a draft export. It cannot be edited.`;
 
 /**
+ * The statement for a document that its Owner had deleted before the clearing, opened in the period by those who held
+ * a role on it (D252, the owner's answer to S23-1, 26 Oct 2026: "says so in a statement in the pattern of the one of
+ * FR-AU-91"). PROPOSED WORDS, owed to the owner's approval; same form of `day` as `CLEARING_NOW`.
+ */
+export const CLEARING_DELETED_NOW = (day: string) =>
+  `This document was deleted by its Owner and will be deleted permanently on ${day}. You can read it and take a draft export. It cannot be edited.`;
+
+/** The statement of the editor for a document in a period: the one for a document already deleted, or `CLEARING_NOW`. */
+export const clearingStatement = (alreadyDeleted: boolean, day: string) =>
+  alreadyDeleted ? CLEARING_DELETED_NOW(day) : CLEARING_NOW(day);
+
+/**
  * The editor of a tab that was told the document will be deleted, and then that it will not: the clearing was
  * cancelled for it, or its ownership passed (FR-ED-40 (i): each connection "returns in place to what its role
  * allows"). FR-AU-91 gives no words for it.

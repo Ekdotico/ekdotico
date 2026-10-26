@@ -55,7 +55,7 @@ export interface DeletedDocumentSummary extends DocumentSummary {
  * (docs/operations/deployment.md). The comparison is not moved to the
  * database's clock, which would need SQL written by hand (NFR-SE-06, A05).
  */
-function retainedSince(now: Date): Date {
+export function retainedSince(now: Date): Date {
   return new Date(now.getTime() - settings().deletedDocumentRetentionDays * DAY_MS);
 }
 

@@ -433,7 +433,8 @@ describe('when a step cannot be done, the document is kept and the next run does
     expect(storage.objects.has(key)).toBe(true);
     // Access ended at the claim, and stays ended; the document cannot be restored (it is in a clearing).
     expect((await row(documentId))?.deletedAt).not.toBeNull();
-    expect((await authorise(readers[0]!.id, documentId, 'document.view')).outcome).toBe('not_found');
+    // At the day the run was made for (the period is over from then on, S23-1; the test's clock is not the real one).
+    expect((await authorise(readers[0]!.id, documentId, 'document.view', day)).outcome).toBe('not_found');
     expect((await row(documentId))?.deletionClaimedAt).toBeNull();
     // NFR-SE-19: the line names the clearing and the document and no title.
     expect(errors.join('\n')).toContain(documentId);

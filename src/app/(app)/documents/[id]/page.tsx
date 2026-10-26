@@ -6,7 +6,8 @@
 // document asks (NFR-SE-04, FR-ED-39). To an account that holds no role on the
 // document, the address is no page: a document that does not exist, one that
 // is deleted, and one of another account are the same answer (the owner's
-// answer to Q8 of the plan). Nothing of the document's content is rendered
+// answer to Q8 of the plan), but for a document deleted before a clearing, which those who held a role on it may
+// read until the day (FR-AU-91; the owner's answer to S23-1, 26 Oct 2026). Nothing of the document's content is rendered
 // here: it arrives over the collaboration connection, which authorises the
 // account again (FR-AU-08).
 import type { Metadata } from 'next';
@@ -59,7 +60,7 @@ export default async function DocumentPage({ params }: Props) {
           <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
         ) : null}
         {/* FR-ED-21, FR-ED-37: the sharing settings, for every role. */}
-        <Link href={`/documents/${document.id}/sharing`}>Sharing</Link>
+        {document.deletedAt === null ? <Link href={`/documents/${document.id}/sharing`}>Sharing</Link> : null}
         {/* FR-EX-36, FR-ED-44: the draft export, for a role that holds the permission. The editor has this page read
             again when its role or its permissions change (FR-ED-40 (g)), so the control follows them. */}
         {holds(document.permissionSet, role, 'document.export.draft') || noticeRuns(document, new Date()) ? (
@@ -78,6 +79,7 @@ export default async function DocumentPage({ params }: Props) {
         imageDays={settings().imageUnreferencedDays}
         // FR-AU-91: the page is opened already read-only, with the fixed statement, for a document in a clearing.
         deletedOn={document.clearingAt?.toISOString() ?? null}
+        alreadyDeleted={document.deletedAt !== null}
       />
     </Stack>
   );

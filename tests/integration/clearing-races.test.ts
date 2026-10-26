@@ -479,10 +479,12 @@ describe('something that commits between the timer’s read of what is due and i
     const reader = await person('reader');
     const documentId = await documentOf(owner.id);
     await share(documentId, reader.id);
-    await deletedAgo(documentId, owner.id, 31 * DAY_MS);
+    // Within its retention for the clearing (a clearing takes no other, FR-AU-91), and due for a timer whose clock
+    // is two days ahead: the window is the time between the timer's read and its claim, and the two instances' clocks.
+    await deletedAgo(documentId, owner.id, 29 * DAY_MS);
     const run = await inTheWindow(
       async () => expect((await confirmFor(owner.id)).outcome).toBe('confirmed'),
-      () => deleteExpiredDocuments(),
+      () => deleteExpiredDocuments(new Date(Date.now() + 2 * DAY_MS)),
     );
     expect(run).toEqual({ deleted: 0, kept: 0 });
     expect(await row(documentId)).not.toBeNull();

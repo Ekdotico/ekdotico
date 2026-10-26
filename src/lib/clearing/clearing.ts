@@ -16,6 +16,7 @@ import { holdOwnableAccount } from '../account/in-deletion.ts';
 import type { Spend } from '../account/prompt.ts';
 import { publishCollabEvent } from '../collab/events.ts';
 import { db } from '../db.ts';
+import { retainedSince } from '../documents/deletion.ts';
 import { notificationsOf } from '../documents/sharing.ts';
 import { settings } from '../settings.ts';
 import { replaceWithCancelled, tellClearing } from './notices.ts';
@@ -58,12 +59,17 @@ export interface Counted {
  * already (a document in a period keeps its day, and "a further clearing ... covers only the other documents
  * the account then owns"). Read without a lock, for the screen; the confirmation reads them again under one.
  */
-export async function countScope(userId: string, scope: Scope): Promise<Counted> {
+export async function countScope(userId: string, scope: Scope, now: Date = new Date()): Promise<Counted> {
+  // FR-AU-91: a deleted document is in the scope only "still within its retention": one past it, or one the timer has
+  // claimed, is the retention's to delete, and no clearing gives it a period in which its collaborators may read it.
+  const retained = { gt: retainedSince(now) };
   const owned = await db().document.findMany({
     where: {
       ownerId: userId,
       clearingAt: null,
-      ...(scope === 'deleted' ? { deletedAt: { not: null } } : {}),
+      ...(scope === 'deleted'
+        ? { deletedAt: retained, deletionClaimedAt: null }
+        : { OR: [{ deletedAt: null }, { deletedAt: retained, deletionClaimedAt: null }] }),
     },
     select: { id: true, collaborators: { select: { userId: true } } },
     orderBy: { id: 'asc' },
@@ -141,15 +147,19 @@ export async function confirmClearing(
       const stands = await standing(tx);
       if (stands !== 'held') return { outcome: stands };
 
+      // The same scope as `countScope`: a deleted document only within its retention (FR-AU-91), and not claimed.
+      const since = retainedSince(now);
       const rows =
         scope === 'all'
           ? await tx.$queryRaw<{ id: string }[]>`
             SELECT "id" FROM "ekdotico"."Document"
             WHERE "ownerId" = ${userId} AND "clearingAt" IS NULL
+              AND ("deletedAt" IS NULL OR ("deletedAt" > ${since} AND "deletionClaimedAt" IS NULL))
             ORDER BY "id" FOR UPDATE`
           : await tx.$queryRaw<{ id: string }[]>`
             SELECT "id" FROM "ekdotico"."Document"
-            WHERE "ownerId" = ${userId} AND "clearingAt" IS NULL AND "deletedAt" IS NOT NULL
+            WHERE "ownerId" = ${userId} AND "clearingAt" IS NULL
+              AND "deletedAt" > ${since} AND "deletionClaimedAt" IS NULL
             ORDER BY "id" FOR UPDATE`;
       if (!(await holdOwnableAccount(tx, userId))) return { outcome: 'not_found' };
 
@@ -341,8 +351,8 @@ export interface ClearingScreen {
 
 export async function clearingScreen(userId: string, now: Date = new Date()): Promise<ClearingScreen> {
   const [all, deleted, inClearing] = await Promise.all([
-    countScope(userId, 'all'),
-    countScope(userId, 'deleted'),
+    countScope(userId, 'all', now),
+    countScope(userId, 'deleted', now),
     db().document.findMany({
       where: { ownerId: userId, clearingAt: { not: null } },
       select: { id: true, title: true, clearingAt: true, deletionClaimedAt: true },
