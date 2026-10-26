@@ -130,7 +130,7 @@ test('an account that owns none: what is replaced and what is kept, then the con
   await expect(dialog).toBeHidden();
   expect((await page.request.get('/api/documents')).status()).toBe(200);
 
-  // A wrong password: the statement of FR-AU-81 at the head of the form, announced, with focus on it.
+  // A wrong password: the statement of FR-AU-81 at the head of the form, announced as an alert.
   await page.keyboard.press('Enter');
   await dialog.getByLabel('Current password').fill('a wrong password, long enough');
   await dialog.getByRole('button', { name: 'Delete account' }).click();
@@ -138,8 +138,25 @@ test('an account that owns none: what is replaced and what is kept, then the con
   await expect(fault).toContainText(SIGN_IN_REFUSED);
   await expect(dialog).toBeVisible();
   await screens(page, 'delete-account-refused');
-  // Nothing was deleted, and the password is not kept in the page.
+  // Nothing was deleted, and the password is not kept in the page: the field is empty after the refusal.
   expect((await page.request.get('/api/documents')).status()).toBe(200);
+  await expect(dialog.getByLabel('Current password')).toHaveValue('');
+
+  // The dialog keeps its children while it is closed: neither what was typed nor the statement of the last
+  // refusal is there when it is opened again, after Escape or after Cancel.
+  await dialog.getByLabel('Current password').fill('typed and then abandoned');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Current password')).toHaveValue('');
+  await expect(alertOn(page)).toHaveCount(0);
+  await dialog.getByLabel('Current password').fill('typed and then abandoned');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByLabel('Current password')).toHaveValue('');
+  await expect(alertOn(page)).toHaveCount(0);
 
   // The right one, by keyboard alone.
   await dialog.getByLabel('Current password').fill(person.password);

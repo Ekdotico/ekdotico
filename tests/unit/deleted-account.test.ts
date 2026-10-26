@@ -4,7 +4,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { DELETED_ACCOUNT } from '../../src/lib/account/deleted-account.ts';
-import { feedbackIntakeEnabled, feedbackStep } from '../../src/lib/account/feedback-step.ts';
+import {
+  FeedbackIntakeUnbuilt,
+  FeedbackNotAcknowledged,
+  FeedbackSwitchInvalid,
+  feedbackIntakeEnabled,
+  feedbackStep,
+} from '../../src/lib/account/feedback-step.ts';
 import {
   newPseudonym,
   PSEUDONYM_ADJECTIVES,
@@ -68,6 +74,7 @@ describe('the switch of step (c) (FR-AU-58 (c); D112)', () => {
   });
 
   it.each(['TRUE', 'True', '1', 'yes', 'on', ' true', 'true '])('refuses to read %j either way', (value) => {
+    expect(() => feedbackIntakeEnabled({ FEEDBACK_INTAKE_ENABLED: value })).toThrow(FeedbackSwitchInvalid);
     expect(() => feedbackIntakeEnabled({ FEEDBACK_INTAKE_ENABLED: value })).toThrow(
       'FEEDBACK_INTAKE_ENABLED must be true or false.',
     );
@@ -112,12 +119,12 @@ describe('the switch of step (c) (FR-AU-58 (c); D112)', () => {
           },
         },
       }),
-    ).rejects.toThrow('The feedback intake did not acknowledge (Error).');
+    ).rejects.toBeInstanceOf(FeedbackNotAcknowledged);
   });
 
   it('has no client until the Feedback Widget brings one: a switch turned on fails, and does not pretend', async () => {
-    await expect(feedbackStep('user-1', { enabled: () => true })).rejects.toThrow(
-      'The feedback intake did not acknowledge (Error).',
+    await expect(feedbackStep('user-1', { enabled: () => true })).rejects.toBeInstanceOf(
+      FeedbackIntakeUnbuilt,
     );
   });
 });

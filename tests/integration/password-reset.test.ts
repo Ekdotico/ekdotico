@@ -773,7 +773,10 @@ describe('a completed reset clears the counts of failed sign-ins (NFR-SE-07, FR-
     const { email } = await person();
     const token = await linkFor(email);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(valkey(), 'incr').mockRejectedValue(new Error('ECONNREFUSED redis://secret@host'));
+    // The number is raised in a transaction of Valkey that gives it its lifetime (src/lib/auth/sign-in.ts).
+    vi.spyOn(valkey(), 'multi').mockImplementation(() => {
+      throw new Error('ECONNREFUSED redis://secret@host');
+    });
     const done = await complete(token, NEW);
     expect(done.response.status).toBe(200);
     expect(errors.mock.calls).toEqual([['password reset: completed, counts of failed sign-ins not cleared']]);

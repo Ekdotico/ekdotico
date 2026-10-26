@@ -6,7 +6,7 @@
 //
 // What an open connection does when the record is made is in
 // collab-account-deletion.test.ts.
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,18 +33,25 @@ const database = prepare('accountdeletion', {
   RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: `${MOST}/3600`,
   RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS: '500/900',
 });
-const { auth, db, valkey, validateSession, validateSessionRow } = await load();
+const { auth, db, valkey, validateSession, validateSessionRow, settings } = await load();
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { deleteDocument } = await import('../../src/lib/documents/deletion.ts');
 const { answerOffer } = await import('../../src/lib/documents/ownership.ts');
-const { listNotifications, INVITATION_NOTIFICATION } = await import('../../src/lib/documents/sharing.ts');
+const { listNotifications, INVITATION_NOTIFICATION, answerInvitation, deliverInvitations, lockDocument } =
+  await import('../../src/lib/documents/sharing.ts');
+const { makeOffer, deliverOffer } = await import('../../src/lib/documents/ownership.ts');
+const { remindInvitations } = await import('../../src/lib/documents/invitation-timers.ts');
+const { findOpenReset } = await import('../../src/lib/auth/password.ts');
+const { hashToken, newToken } = await import('../../src/lib/token.ts');
+const { FeedbackIntakeUnbuilt } = await import('../../src/lib/account/feedback-step.ts');
 const { ensurePersonalWorkspace } = await import('../../src/lib/workspace.ts');
 const { defaultPermissionSet } = await import('../../src/lib/documents/permissions.ts');
 const { confirmDeletion, ownedDocuments } = await import('../../src/lib/account/deletion.ts');
 const { CLAIM_STALE_MS, carryOutDeletions, oneMonthAfter } =
   await import('../../src/lib/account/deletion-steps.ts');
 const { AccountInDeletion, holdOwnableAccount } = await import('../../src/lib/account/in-deletion.ts');
-const { SIGN_IN_REFUSED, failedSignInsReached } = await import('../../src/lib/auth/sign-in.ts');
+const { SIGN_IN_REFUSED, failedSignInsReached, clearFailedSignIns } =
+  await import('../../src/lib/auth/sign-in.ts');
 const { RESET_LINK } = await import('../../src/lib/token.ts');
 const { beginLock } = await import('../../src/lib/auth/sign-in-lock.ts');
 const { noopAdapter } = await import('../../src/lib/istorico/port.ts');
@@ -205,6 +212,13 @@ async function whileHolding<T>(
   await transaction;
   return pending;
 }
+
+// A fault in the middle of a step, put there in the database: a trigger that refuses the deletion of a row of the account.
+const breakDeleting = (table: string, userId: string) =>
+  database.sql(
+    `CREATE FUNCTION break_it() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD."userId" = '${userId}' THEN RAISE EXCEPTION 'a fault'; END IF; RETURN OLD; END $$; CREATE TRIGGER break_it BEFORE DELETE ON "${table}" FOR EACH ROW EXECUTE FUNCTION break_it()`,
+  );
+const mend = (table: string) => database.sql(`DROP TRIGGER break_it ON "${table}"; DROP FUNCTION break_it()`);
 
 /** What the confirmation does first, left open: the account's row held for update, and the record written. */
 async function confirmationInFlight(
@@ -561,6 +575,9 @@ describe('no deleted account is ever the Owner of a document (FR-AU-58)', () => 
 
   it('a confirmation in flight is found by the creation that waits for it, and no document is made', async () => {
     const who = await person();
+    // The workspace exists already: its creation would otherwise wait on the held row by itself (the foreign
+    // key), before the transaction of the creation, and the test would not show the lock of that transaction.
+    await ensurePersonalWorkspace(who.id);
     await expect(
       whileHolding(
         (tx) => confirmationInFlight(tx, who.id),
@@ -745,14 +762,6 @@ describe('the steps, in order, each repeated until it succeeds (FR-AU-58; NFR-RE
     });
     expect(await carryOutDeletions()).toMatchObject({ steps: 4, completed: 1 });
   });
-
-  // A fault in the middle of a step, put there in the database: a trigger that refuses the deletion of a row of the account.
-  const breakDeleting = (table: string, userId: string) =>
-    database.sql(
-      `CREATE FUNCTION break_it() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD."userId" = '${userId}' THEN RAISE EXCEPTION 'a fault'; END IF; RETURN OLD; END $$; CREATE TRIGGER break_it BEFORE DELETE ON "${table}" FOR EACH ROW EXECUTE FUNCTION break_it()`,
-    );
-  const mend = (table: string) =>
-    database.sql(`DROP TRIGGER break_it ON "${table}"; DROP FUNCTION break_it()`);
 
   it('records nothing of a step that fails in the middle: its work goes with it, no entry is left, and it is owed', async () => {
     const who = await person();
@@ -1404,19 +1413,22 @@ describe('steps (e) and (f), the tombstone and what refers to the account (FR-AU
     const s = await scene();
     await confirm(s.ben.id);
     await carryOutDeletions();
-    // The tables that could hold the address or the name, each read as text and looked through.
-    const tables = [
-      'User',
-      'AdmissionInvitation',
-      'DocumentInvitation',
-      'Notification',
-      'OwnershipOffer',
-      'Verification',
-      'Session',
-      'Account',
-      'AccountDeletion',
-      'SecurityLogEntry',
-    ];
+    // Every table of the application’s schema, as the database lists them (a table added later is read too),
+    // each read as text and looked through.
+    const listed = database.sql(
+      `SELECT string_agg(table_name, ',') FROM information_schema.tables WHERE table_schema = 'ekdotico' AND table_type = 'BASE TABLE' AND table_name <> '_prisma_migrations'`,
+    );
+    const tables = listed.split('\n').at(-1)!.split(',');
+    expect(tables).toEqual(
+      expect.arrayContaining([
+        'User',
+        'TwoFactor',
+        'Workspace',
+        'Document',
+        'DocumentCollaborator',
+        'DocumentImage',
+      ]),
+    );
     for (const table of tables) {
       const text = database.sql(
         `SELECT coalesce(string_agg(row_to_json(t)::text, E'\\n'), '') FROM "${table}" t`,
@@ -1510,5 +1522,371 @@ describe('the one-month limit (NFR-DP-06) and the log (NFR-SE-19)', () => {
       expect(Object.keys(row).sort()).toEqual(['createdAt', 'documentId', 'id', 'kind', 'userId']);
       expect(row.documentId).toBeNull();
     }
+  });
+});
+
+// ── After the review of the pull request (docs/plan/slice-22.md, section 9) ─
+
+/** A pending invitation of a document of `owner` to `to`, sent (the email was claimed), for an account to accept. */
+async function invitationTo(owner: { id: string }, to: { email: string }) {
+  const { id: documentId } = await createDocument(owner.id);
+  const invitation = await db().documentInvitation.create({
+    data: {
+      documentId,
+      email: to.email,
+      role: 'EDITOR',
+      invitedById: owner.id,
+      tokenHash: randomUUID(),
+      expiresAt: new Date(Date.now() + 14 * DAY),
+      emailClaimedAt: new Date(),
+    },
+  });
+  return { documentId, invitation };
+}
+
+describe('an invitation accepted while the deletion is confirmed leaves the tombstone no role (FR-AU-58 (f))', () => {
+  it('is refused after the record, and one that begins while the record is made is refused when it is committed', async () => {
+    const owner = await person('Ada Owner');
+    const ben = await person('Ben Person');
+    const { documentId, invitation } = await invitationTo(owner, ben);
+    const outcome = await whileHolding(
+      (tx) => confirmationInFlight(tx, ben.id),
+      () => answerInvitation(ben.id, { id: invitation.id }, 'accept'),
+    );
+    expect(outcome).toEqual({ outcome: 'no_longer_open' });
+    expect(await db().documentCollaborator.count({ where: { documentId, userId: ben.id } })).toBe(0);
+    expect((await db().documentInvitation.findUniqueOrThrow({ where: { id: invitation.id } })).state).toBe(
+      'PENDING',
+    );
+    // And one that comes after the record is committed.
+    const second = await invitationTo(owner, ben);
+    expect(await answerInvitation(ben.id, { id: second.invitation.id }, 'accept')).toEqual({
+      outcome: 'no_longer_open',
+    });
+    expect(await db().documentCollaborator.count({ where: { userId: ben.id } })).toBe(0);
+  });
+
+  it('still ends a role that an acceptance in flight, past the gate, commits while the step runs', async () => {
+    const owner = await person('Ada Owner');
+    const ben = await person('Ben Person');
+    const { documentId, invitation } = await invitationTo(owner, ben);
+    await confirm(ben.id);
+    // What an acceptance that began before the record does, left open: the document held, the invitation
+    // accepted and the role written, none of it committed.
+    await whileHolding(
+      async (tx) => {
+        expect(await lockDocument(tx, documentId)).toBe(true);
+        await tx.documentInvitation.updateMany({
+          where: { id: invitation.id, state: 'PENDING' },
+          data: { state: 'ACCEPTED', respondedAt: new Date(), acceptedById: ben.id },
+        });
+        await tx.documentCollaborator.create({ data: { documentId, userId: ben.id, role: 'EDITOR' } });
+      },
+      () => carryOutDeletions(),
+    );
+    expect((await recordOf(ben.id))!.completedAt).not.toBeNull();
+    expect(await db().documentCollaborator.count({ where: { userId: ben.id } })).toBe(0);
+  });
+});
+
+describe('a link to set a password does not work once the deletion is confirmed (FR-AU-58 (a); FR-AU-86)', () => {
+  /** A reset link of the account, written as a request for one writes it, and its token. */
+  async function linkOf(who: { id: string }) {
+    const token = newToken();
+    await db().verification.create({
+      data: {
+        id: randomUUID(),
+        identifier: RESET_LINK + hashToken(token),
+        value: who.id,
+        expiresAt: new Date(Date.now() + 3600_000),
+      },
+    });
+    return token;
+  }
+  const NEW = 'another long new password 123';
+  const passwordOf = async (userId: string) =>
+    (await db().account.findFirstOrThrow({ where: { userId } })).password;
+
+  it('is not found by the page or the completion, answers as a link that is not valid, sets nothing, and sends nothing', async () => {
+    const who = await person('Cy Person');
+    const token = await linkOf(who);
+    expect(await findOpenReset(token)).not.toBeNull();
+    await confirm(who.id);
+    const password = await passwordOf(who.id);
+    const before = (await sunk(MAIL)).length;
+    expect(await findOpenReset(token)).toBeNull();
+    const done = await post(auth, '/reset-password', { token, newPassword: NEW }, net());
+    await done.after();
+    expect(done.response.status).toBe(409);
+    expect(await passwordOf(who.id)).toBe(password);
+    expect((await sunk(MAIL)).length).toBe(before);
+  });
+
+  it('is refused when the confirmation commits while the completion waits for the account’s row, and the password is not set', async () => {
+    const who = await person('Cy Person');
+    const token = await linkOf(who);
+    const password = await passwordOf(who.id);
+    const before = (await sunk(MAIL)).length;
+    const response = await whileHolding(
+      (tx) => confirmationInFlight(tx, who.id),
+      async () => {
+        const done = await post(auth, '/reset-password', { token, newPassword: NEW }, net());
+        await done.after();
+        return done.response;
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await passwordOf(who.id)).toBe(password);
+    expect((await sunk(MAIL)).length).toBe(before);
+    // Undone with the transaction: the sessions the reset would have ended are there.
+    expect(await db().session.count({ where: { userId: who.id } })).toBeGreaterThan(0);
+  });
+
+  it('is not written, and not mailed, by a request for one that the confirmation overtakes', async () => {
+    const who = await person('Cy Person');
+    const before = (await sunk(MAIL)).length;
+    await whileHolding(
+      (tx) => confirmationInFlight(tx, who.id),
+      async () => {
+        const asked = await post(auth, '/request-password-reset', { email: who.email }, net());
+        await asked.after();
+        return asked.response;
+      },
+    );
+    expect(
+      await db().verification.count({ where: { identifier: { startsWith: RESET_LINK }, value: who.id } }),
+    ).toBe(0);
+    expect((await sunk(MAIL)).length).toBe(before);
+  });
+});
+
+describe('step (c) says which way it failed, in its line of the log (NFR-SE-19)', () => {
+  /** The lines the run of the steps writes to stderr for one account whose step (c) fails. */
+  async function lines(setting: string, feedback?: Parameters<typeof carryOutDeletions>[1]) {
+    process.env.FEEDBACK_INTAKE_ENABLED = setting;
+    // A run carries out every deletion that is open: the one an earlier call left is not this one's.
+    await db().accountDeletion.deleteMany({ where: { completedAt: null } });
+    const who = await person();
+    await confirm(who.id);
+    const written: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation(
+      (...parts: unknown[]) => void written.push(parts.join(' ')),
+    );
+    await carryOutDeletions(new Date(), feedback);
+    return written;
+  }
+  const feedbackLine = (written: string[]) =>
+    written.filter((line) => line.includes('step feedback not done'));
+
+  it('names a value of the switch that is neither true nor false', async () => {
+    expect(feedbackLine(await lines('yes'))).toEqual([
+      expect.stringMatching(/^account deletion \S+: step feedback not done \(FeedbackSwitchInvalid\)$/),
+    ]);
+  });
+
+  it('names a client that is not built', async () => {
+    expect(feedbackLine(await lines('true'))).toEqual([
+      expect.stringMatching(/^account deletion \S+: step feedback not done \(FeedbackIntakeUnbuilt\)$/),
+    ]);
+    expect(new FeedbackIntakeUnbuilt('x').name).toBe('FeedbackIntakeUnbuilt');
+  });
+
+  it('names an intake that did not acknowledge, with the code of its own fault where it has one', async () => {
+    const refusing = { pseudonymise: async () => false };
+    const down = {
+      pseudonymise: async () => {
+        throw Object.assign(new Error('connect ECONNREFUSED praktico.example:443'), { code: 'ECONNREFUSED' });
+      },
+    };
+    expect(feedbackLine(await lines('true', { feedback: { intake: refusing } }))).toEqual([
+      expect.stringMatching(/\(FeedbackNotAcknowledged\)$/),
+    ]);
+    const written = await lines('true', { feedback: { intake: down } });
+    expect(feedbackLine(written)).toEqual([
+      expect.stringMatching(/\(FeedbackNotAcknowledged ECONNREFUSED\)$/),
+    ]);
+    // Never the message of the fault, which can quote an address.
+    expect(written.join('\n')).not.toContain('praktico.example');
+  });
+});
+
+describe('the roles that end have their entries (NFR-SE-19), and the ends are held to the account (FR-AU-58 (f))', () => {
+  it('writes one entry of a change to the collaborators for each document on which the roles end, with the document', async () => {
+    const ada = await person('Ada Owner');
+    const ben = await person('Ben Person');
+    const one = (await createDocument(ada.id)).id;
+    const two = (await createDocument(ada.id)).id;
+    const three = (await createDocument(ada.id)).id;
+    await grant(one, ben);
+    await grant(two, ben, 'VIEWER');
+    await confirm(ben.id);
+    await carryOutDeletions();
+    const changed = await db().securityLogEntry.findMany({
+      where: { userId: ben.id, kind: 'collaborators_changed' },
+      select: { documentId: true },
+    });
+    expect(changed.map(({ documentId }) => documentId).sort()).toEqual([one, two].sort());
+    expect(changed.map(({ documentId }) => documentId)).not.toContain(three);
+    // The entry of the step stays beside them.
+    expect(await entries(ben.id)).toContain('account_deletion_roles_ended');
+  });
+
+  it('writes no entry for roles that end on no document', async () => {
+    const who = await person();
+    await confirm(who.id);
+    await carryOutDeletions();
+    expect(
+      await db().securityLogEntry.count({ where: { userId: who.id, kind: 'collaborators_changed' } }),
+    ).toBe(0);
+  });
+
+  it('deletes, in the step that ends the roles, a single-use row written after the step that deletes them', async () => {
+    const who = await person();
+    await recordedDocumentOf(who);
+    await confirm(who.id);
+    breakDeleting('DocumentCollaborator', who.id);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // (b), (c) and (d) are done; (e) and (f) fail at the roles.
+      expect(await carryOutDeletions()).toMatchObject({ steps: 3, failed: 1 });
+      await db().verification.create({
+        data: {
+          id: randomUUID(),
+          identifier: `${RESET_LINK}late`,
+          value: who.id,
+          expiresAt: new Date(Date.now() + DAY),
+        },
+      });
+    } finally {
+      mend('DocumentCollaborator');
+    }
+    expect(await carryOutDeletions()).toMatchObject({ steps: 1, completed: 1 });
+    expect(await db().verification.count({ where: { value: who.id } })).toBe(0);
+  });
+});
+
+describe('nothing reaches an account whose deletion is confirmed (FR-AU-58 (a))', () => {
+  it('offers it no ownership', async () => {
+    const owner = await person('Ada Owner');
+    const editor = await person('Ben Editor');
+    const { id } = await createDocument(owner.id);
+    const row = await grant(id, editor);
+    await confirm(editor.id);
+    expect(await makeOffer(id, owner.id, row.id)).toEqual({ outcome: 'not_an_editor' });
+    expect(await db().ownershipOffer.count({ where: { documentId: id } })).toBe(0);
+    expect(await db().notification.count({ where: { recipientId: editor.id } })).toBe(0);
+  });
+
+  it('sends no email of an offer that was made before the record', async () => {
+    const owner = await person('Ada Owner');
+    const editor = await person('Ben Editor');
+    const other = await person('Cy Editor');
+    const { id } = await createDocument(owner.id);
+    await grant(id, editor);
+    const offer = await db().ownershipOffer.create({
+      data: {
+        documentId: id,
+        fromUserId: owner.id,
+        toUserId: editor.id,
+        expiresAt: new Date(Date.now() + DAY),
+      },
+    });
+    const { id: second } = await createDocument(owner.id);
+    await grant(second, other);
+    const control = await db().ownershipOffer.create({
+      data: {
+        documentId: second,
+        fromUserId: owner.id,
+        toUserId: other.id,
+        expiresAt: new Date(Date.now() + DAY),
+      },
+    });
+    await confirm(editor.id);
+    const send = vi.fn(async () => {});
+    await deliverOffer(offer.id, send);
+    expect(send).not.toHaveBeenCalled();
+    await deliverOffer(control.id, send);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes no notification and sends no email of an invitation, and none of its reminder', async () => {
+    const owner = await person('Ada Owner');
+    const ben = await person('Ben Person');
+    const cy = await person('Cy Person');
+    const sent = vi.fn(async () => {});
+    const expiresAt = new Date(Date.now() + 2 * DAY);
+    const make = async (to: { email: string }) => {
+      const { documentId } = await invitationTo(owner, to);
+      const invitation = await db().documentInvitation.findFirstOrThrow({ where: { documentId } });
+      // A reminder is for an invitation sent more than the period before its expiry.
+      await db().documentInvitation.update({
+        where: { id: invitation.id },
+        data: { expiresAt, createdAt: new Date(Date.now() - 5 * DAY), emailClaimedAt: new Date() },
+      });
+      return { documentId, invitation };
+    };
+    const one = await make(ben);
+    const two = await make(cy);
+    await confirm(ben.id);
+
+    // The email at the invitation: the row is not claimed and no notification is written.
+    await db().documentInvitation.updateMany({ data: { emailClaimedAt: null } });
+    const mail = { id: 'x', token: newToken(), role: 'editor' as const, expiresAt, pseudonym: null };
+    await deliverInvitations(
+      one.documentId,
+      owner.id,
+      [{ ...mail, id: one.invitation.id, email: ben.email }],
+      sent,
+    );
+    await deliverInvitations(
+      two.documentId,
+      owner.id,
+      [{ ...mail, id: two.invitation.id, email: cy.email }],
+      sent,
+    );
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(await db().notification.count({ where: { recipientId: ben.id } })).toBe(0);
+    expect(await db().notification.count({ where: { recipientId: cy.id } })).toBe(1);
+
+    // And the reminder.
+    sent.mockClear();
+    await db().documentInvitation.updateMany({ data: { emailClaimedAt: new Date() } });
+    await remindInvitations(sent);
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(await db().notification.count({ where: { recipientId: ben.id } })).toBe(0);
+  });
+});
+
+describe('the number that clears the counts of failed sign-ins for an address (NFR-SE-07; FR-AU-58 (e))', () => {
+  const keyOf = (email: string) =>
+    `sign-in-generation:${createHmac('sha256', settings().authSecret).update(`sign-in-generation:${email}`).digest('hex')}`;
+  // The longest period of the two counts it separates: 3600 seconds, the period of the twentieth failure
+  // (this file's limits are 4 in 3600 and 500 in 900).
+  const PERIOD = 3600;
+
+  it('expires, with the longest period of the counts it separates, and is kept as long again each time it is read', async () => {
+    const who = await person();
+    await clearFailedSignIns(who.email);
+    const ttl = await valkey().ttl(keyOf(who.email));
+    expect(ttl).toBeGreaterThan(PERIOD - 60);
+    expect(ttl).toBeLessThanOrEqual(PERIOD);
+    await valkey().expire(keyOf(who.email), 100);
+    await failedSignInsReached(who.email);
+    expect(await valkey().ttl(keyOf(who.email))).toBeGreaterThan(PERIOD - 60);
+    // Raised again, it is given its period again: a number is never left without one.
+    await valkey().persist(keyOf(who.email));
+    await clearFailedSignIns(who.email);
+    expect(await valkey().ttl(keyOf(who.email))).toBeGreaterThan(PERIOD - 60);
+  });
+
+  it('is deleted with the account, and no other account’s is', async () => {
+    const who = await person();
+    const other = await person();
+    await clearFailedSignIns(who.email);
+    await clearFailedSignIns(other.email);
+    await confirm(who.id);
+    await carryOutDeletions();
+    expect(await valkey().exists(keyOf(who.email))).toBe(0);
+    expect(await valkey().exists(keyOf(other.email))).toBe(1);
   });
 });
