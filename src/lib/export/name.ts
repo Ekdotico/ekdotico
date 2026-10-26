@@ -17,19 +17,47 @@ const CONTROLS = /[\p{Cc}\u202A-\u202E\u2066-\u2069]/gu;
 const QUOTES = /["\u201C-\u201F]/gu;
 // A sequence of two full stops or more: removed whole, so that none is left.
 const DOTS = /\.{2,}/gu;
+// What Windows does not keep in a file name, and a drive-like start (`C:`) that a zip tool reads as a path. Written
+// as the one character `_` (register row S21-2: the rule gives these no word, and a name the archive refuses after
+// the response has begun is a download that cannot succeed).
+const UNSAFE = /[:*?<>|]/gu;
+const REPLACEMENT = '_';
+// The names Windows reserves, with or without an extension: `CON`, `con.txt`.
+const RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
+/**
+ * The most bytes of a stem: an entry name over 255 bytes is refused by the archive (./zip.ts), and `.md` is 3, so
+ * 252 would do; 250 leaves room. A title of 85 characters of Chinese is 255 bytes before it is cut to 100 characters.
+ */
+export const STEM_MOST_BYTES = 250;
 
 /**
  * The stem of the names derived from a title: the rule of FR-EX-36, in the order that leaves no sequence of two
  * full stops behind (a separator, a control character or a quotation mark between two full stops joins them when
- * it goes, so the sequences are removed after the others). The cut is by code point, so that no pair is split.
- * A stem does not end in a full stop or in white space, or the extension would join it into `..`; a stem that is
- * nothing but white space is empty.
+ * it goes, so the sequences are removed after the others); then what Windows does not keep is written `_`. The cut
+ * is by code point, so that no pair is split, to `maxChars` characters and to `STEM_MOST_BYTES` bytes in UTF-8,
+ * whichever comes first. A stem does not end in a full stop or in white space, or the extension would join it into
+ * `..`; a stem that is nothing but white space is empty; a name Windows reserves has `_` put before it.
  */
 export function exportName(title: string, maxChars: number = settings().exportNameMaxChars): string {
-  const kept = title.replace(SEPARATORS, '').replace(CONTROLS, '').replace(QUOTES, '').replace(DOTS, '');
-  const cut = Array.from(kept).slice(0, maxChars).join('');
+  const kept = title
+    .toWellFormed()
+    .replace(SEPARATORS, '')
+    .replace(CONTROLS, '')
+    .replace(QUOTES, '')
+    .replace(DOTS, '')
+    .replace(UNSAFE, REPLACEMENT);
+  let cut = '';
+  let characters = 0;
+  let bytes = 0;
+  for (const each of kept) {
+    bytes += Buffer.byteLength(each);
+    characters += 1;
+    if (characters > maxChars || bytes > STEM_MOST_BYTES) break;
+    cut += each;
+  }
   const stem = cut.replace(/[.\s]+$/u, '').trimStart();
-  return stem === '' ? FALLBACK_NAME : stem;
+  if (stem === '') return FALLBACK_NAME;
+  return RESERVED.test(stem) ? `${REPLACEMENT}${stem}` : stem;
 }
 
 /**

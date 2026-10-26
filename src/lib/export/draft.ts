@@ -30,7 +30,7 @@ import { renderMarkdown } from './markdown.ts';
 import { contentDisposition, exportName } from './name.ts';
 import { imageIdsOf, readDocument } from './read.ts';
 import { guardedStream } from './stream.ts';
-import { zip, type ZipEntry } from './zip.ts';
+import { checkEntryName, zip, type ZipEntry } from './zip.ts';
 
 /** The extension a stored image has in the archive, by its stored type. */
 const EXTENSIONS: Readonly<Record<string, string>> = {
@@ -146,6 +146,10 @@ export async function draftExport({ document, session }: DocumentCall): Promise<
 
     const now = new Date();
     const stem = exportName(current.title);
+    // The names the archive will hold, asked of its own rule before the response begins: a name it refuses is a
+    // statement now, and not a connection that is reset after a 200 (the review of pull request 59).
+    checkEntryName(`${stem}.md`);
+    for (const image of images) checkEntryName(image.path);
     const markdown = Buffer.from(
       renderMarkdown({
         title: current.title,

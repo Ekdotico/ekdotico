@@ -341,8 +341,13 @@ describe('the archive (FR-EX-36)', () => {
       ['..\\..\\Windows', 'Windows'],
       ['a"; filename="evil.exe', 'a; filename=evil.exe'],
       ['report‮gpj.exe', 'reportgpj.exe'],
-      ['line\r\nSet-Cookie: x=1', 'lineSet-Cookie: x=1'],
+      ['line\r\nSet-Cookie: x=1', 'lineSet-Cookie_ x=1'],
       ['x'.repeat(150), 'x'.repeat(100)],
+      // The review of pull request 59: titles the rule passed and the archive refused, after a 200.
+      ['Q: notes', 'Q_ notes'],
+      ['研究'.repeat(45), '研究'.repeat(41) + '研'],
+      ['📚'.repeat(70), '📚'.repeat(62)],
+      ['CON', '_CON'],
       ['/', 'document'],
       ['..', 'document'],
       ['Εκδοτικό 論文 📚', 'Εκδοτικό 論文 📚'],
@@ -366,6 +371,20 @@ describe('the archive (FR-EX-36)', () => {
       // The title is in the front matter as it is, and as a string.
       expect(entries[0]!.bytes.toString()).toContain('title: "');
     }
+  });
+
+  it('asks the archive about its names before the response begins: a name it refuses is a statement, and not a reset after a 200', async () => {
+    const owner = await person();
+    const id = await documentFor(owner, stateOf(p('words')), 'Any title');
+    const naming = await import('../../src/lib/export/name.ts');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(naming, 'exportName').mockReturnValueOnce('a/../b');
+    const refused = await post(id, owner.cookie);
+    expect(refused.status).toBe(500);
+    expect((await errorOf(refused)).code).toBe('internal');
+    expect(await lockExists(owner.id)).toBe(false);
+    // Not counted: the six of the hour are all there.
+    for (let n = 0; n < 6; n += 1) expect((await archiveOf(await post(id, owner.cookie))).length).toBe(1);
   });
 
   it('holds each image as the store holds it, named by its order in the document, and refers to it by that path', async () => {

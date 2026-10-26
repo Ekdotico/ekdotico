@@ -2,9 +2,11 @@
 // "A title could carry a path into the archive or into the download header": every test here is a way that
 // would happen, and each fails when its clause of the rule is taken out.
 import { describe, expect, it } from 'vitest';
-import { FALLBACK_NAME, contentDisposition, exportName } from '../../src/lib/export/name.ts';
+import { FALLBACK_NAME, STEM_MOST_BYTES, contentDisposition, exportName } from '../../src/lib/export/name.ts';
+import { checkEntryName } from '../../src/lib/export/zip.ts';
 
 const MAX = 100;
+const RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 const name = (title: string, max = MAX) => exportName(title, max);
 
 describe('the name derived from a title', () => {
@@ -18,7 +20,7 @@ describe('the name derived from a title', () => {
     expect(name('a/b')).toBe('ab');
     expect(name('a\\b')).toBe('ab');
     expect(name('/etc/passwd')).toBe('etcpasswd');
-    expect(name('C:\\Windows\\x')).toBe('C:Windowsx');
+    expect(name('C:\\Windows\\x')).toBe('C_Windowsx');
   });
 
   it('removes a sequence of two full stops, however long, and leaves no sequence behind', () => {
@@ -58,6 +60,56 @@ describe('the name derived from a title', () => {
     // The cut follows the removal, not the other way about: 100 characters are kept after the separators went.
     expect(Array.from(name(`/${'y'.repeat(150)}`))).toHaveLength(100);
     expect(name('abcdef', 3)).toBe('abc');
+  });
+
+  // The review of pull request 59: names the rule passed and the archive then refused, after a 200.
+  it('is a name the archive takes, for every title the rule gave one it refused', () => {
+    const titles = [
+      'Q: notes',
+      'X:',
+      '研究'.repeat(60),
+      '📚'.repeat(70),
+      '研究'.repeat(30),
+      'a'.repeat(300),
+      'é'.repeat(200),
+      'CON',
+      'con.txt',
+      'Aux. notes',
+      'NUL',
+      'lpt1',
+      'COM9.md',
+      'a:b*c?d<e>f|g',
+    ];
+    for (const title of titles) {
+      for (const max of [100, 200]) {
+        const stem = name(title, max);
+        expect(() => checkEntryName(`${stem}.md`), `${title.slice(0, 12)} / ${max}`).not.toThrow();
+        expect(Buffer.byteLength(stem), `${title.slice(0, 12)} / ${max}`).toBeLessThanOrEqual(
+          STEM_MOST_BYTES,
+        );
+        expect(stem).not.toMatch(RESERVED);
+      }
+    }
+  });
+
+  it('writes what Windows does not keep as `_`, and puts `_` before a name it reserves', () => {
+    expect(name('Q: notes')).toBe('Q_ notes');
+    expect(name('a:b*c?d<e>f|g')).toBe('a_b_c_d_e_f_g');
+    expect(name('CON')).toBe('_CON');
+    expect(name('con.txt')).toBe('_con.txt');
+    expect(name('Console')).toBe('Console');
+    expect(name('LPT9')).toBe('_LPT9');
+    expect(name('LPT10')).toBe('LPT10');
+  });
+
+  it('cuts to 250 bytes of UTF-8 as well as to the characters, on a code point', () => {
+    // 3 bytes each: 83 of them are 249 bytes, and the 84th would be 252.
+    expect(Array.from(name('研'.repeat(200), 200))).toHaveLength(83);
+    // 4 bytes each: 62 are 248.
+    expect(Array.from(name('📚'.repeat(200), 200))).toHaveLength(62);
+    expect(name('📚'.repeat(200), 200).isWellFormed()).toBe(true);
+    // Under the characters' own limit, that one governs.
+    expect(Array.from(name('研'.repeat(200), 10))).toHaveLength(10);
   });
 
   it('is `document` where nothing is left, or only white space', () => {
@@ -119,6 +171,11 @@ describe('the name derived from a title', () => {
       expect(result, JSON.stringify(title)).not.toMatch(/[\p{Cc}\u202A-\u202E\u2066-\u2069"\u201C-\u201F]/u);
       expect(Array.from(result).length).toBeLessThanOrEqual(100);
       expect(result.length).toBeGreaterThan(0);
+      // And the archive takes what the rule gave: a name it refuses after the response has begun cannot be a statement.
+      expect(() => checkEntryName(`${result}.md`), JSON.stringify(title)).not.toThrow();
+      expect(Buffer.byteLength(result)).toBeLessThanOrEqual(STEM_MOST_BYTES);
+      expect(result).not.toMatch(/[:*?<>|]/u);
+      expect(result).not.toMatch(RESERVED);
       expect(result.isWellFormed()).toBe(true);
     }
   });
