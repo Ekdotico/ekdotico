@@ -17,6 +17,7 @@ import {
   watchOrigins,
   type Person,
 } from './account.ts';
+import { FRAGMENT_NAME } from '../../src/lib/collab/protocol.ts';
 import { connectAs, startCollab, stopCollab } from './collab.ts';
 import { accept, invite, INVITATION_LINK, personRow, setRole, shareNew } from './sharing.ts';
 
@@ -4994,4 +4995,99 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     expect(sockets.count).toBe(0);
     await context.close();
   });
+});
+
+// FR-ED-06, the answer to p57-2 (26 October 2026): each entry of a contents list links to `#heading-N`,
+// and the heading it names carries that id, so an entry opened in a new tab, or its link copied, leads
+// to the heading. The id is drawn by the editor and is not in the document.
+test('each entry of the contents list leads to its heading, for an Editor and a Viewer, as headings are added, and the id is not stored', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  await enter(page);
+  const id = await shareNew(page);
+  const viewer = newPerson();
+  const other = await browser.newContext();
+  const theirs = await other.newPage();
+  await enter(theirs, viewer);
+  await invite(page, [viewer.email], 'Viewer');
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  const { found: link } = await mailFor(viewer.email, INVITATION_LINK);
+  await theirs.goto(new URL(link).pathname);
+  await theirs.getByRole('button', { name: 'Accept' }).click();
+  await theirs.waitForURL(`**/documents/${id}`);
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
+
+  await page.goto(`/documents/${id}`);
+  await expect(text(page)).toHaveAttribute('aria-readonly', 'false');
+  await text(page).click();
+  const filler = Array.from({ length: 60 }, (_, n) => `<p>Filler ${n}</p>`).join('');
+  await paste(
+    page,
+    `<nav class="ekd-toc" data-depth="3"></nav><p>Intro</p><h1>Alpha</h1>${filler}<h2>Beta</h2>${filler}<h1>Gamma</h1>`,
+  );
+  await expect(text(page).locator('h1')).toHaveText(['Alpha', 'Gamma']);
+
+  // What each entry's address finds in the page: the element, by the browser's own lookup.
+  const found = (who: Page) =>
+    who.evaluate(() =>
+      [...document.querySelectorAll('nav.ekd-toc a')].map((entry) => {
+        const target = document.getElementById(
+          decodeURIComponent(new URL((entry as HTMLAnchorElement).href).hash.slice(1)),
+        );
+        return [entry.textContent, target ? `${target.tagName} ${target.textContent}` : null];
+      }),
+    );
+  const unique = (who: Page) =>
+    who.evaluate(() => {
+      const ids = [...document.querySelectorAll('[id]')].map((element) => element.id);
+      return ids.length === new Set(ids).size;
+    });
+  const first = [
+    ['Alpha', 'H1 Alpha'],
+    ['Beta', 'H2 Beta'],
+    ['Gamma', 'H1 Gamma'],
+  ];
+  await expect.poll(() => found(page)).toEqual(first);
+  await expect.poll(() => found(theirs)).toEqual(first);
+
+  // A heading inserted above, by the Editor: every entry still leads to its own heading, for both.
+  await placeAtEnd(text(page).locator('p', { hasText: 'Intro' }));
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('# Zero');
+  await expect(text(page).locator('h1')).toHaveText(['Zero', 'Alpha', 'Gamma']);
+  const second = [['Zero', 'H1 Zero'], ...first];
+  await expect.poll(() => found(page)).toEqual(second);
+  await expect.poll(() => found(theirs)).toEqual(second);
+  expect(await unique(page)).toBe(true);
+  expect(await unique(theirs)).toBe(true);
+  await expect(text(theirs).locator('#heading-1')).toHaveText('Zero');
+  await expect(text(theirs).locator('#heading-4')).toHaveText('Gamma');
+
+  // The click goes to the heading as before.
+  await theirs
+    .getByRole('navigation', { name: 'Table of contents' })
+    .getByRole('link', { name: 'Gamma' })
+    .click();
+  await expect(text(theirs).locator('#heading-4')).toBeInViewport();
+
+  // A page opened at the address of an entry, as from a new tab or a copied link, is at the heading.
+  for (const who of [page, theirs]) {
+    await who.goto(`/documents/${id}#heading-4`);
+    await who.reload();
+    await expect(text(who).locator('#heading-4')).toHaveText('Gamma');
+    await expect(text(who).locator('#heading-4')).toBeInViewport();
+  }
+
+  // Not in the document: the shared state, as the server holds it, has no id on any element.
+  const { provider, close } = await connectAs(page.context(), id);
+  try {
+    const shared = provider.document.getXmlFragment(FRAGMENT_NAME).toString();
+    expect(shared).toContain('Zero');
+    expect(shared).not.toMatch(/heading-\d|\sid=/);
+  } finally {
+    close();
+  }
+  await other.close();
 });

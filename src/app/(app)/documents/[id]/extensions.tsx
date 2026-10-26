@@ -78,6 +78,7 @@ import { SlashPalette } from './slash-palette.tsx';
 import { limitRefusal, overLimits } from './block-limits.ts';
 import { CODE_NOT_COLOURED, codeColours } from './code-colours.ts';
 import { Cursors } from './cursors.ts';
+import { HeadingIds, headingsOf } from './heading-ids.ts';
 import {
   TABLE_MOST,
   closeNested,
@@ -270,19 +271,10 @@ function TableOfContentsView({ node, updateAttributes, editor }: NodeViewProps) 
   // rendering", and again at every change, another client's included.
   const headings = useEditorState({
     editor,
-    selector: ({ editor: current }) => {
-      const found: { level: number; text: string; pos: number }[] = [];
-      current.state.doc.descendants((each, pos) => {
-        if (each.type.name === 'heading') {
-          found.push({ level: Number(each.attrs.level), text: each.textContent, pos });
-        }
-        return !each.isTextblock;
-      });
-      return found;
-    },
+    selector: ({ editor: current }) => headingsOf(current.state.doc),
   });
-  // A heading without text would be a link without a name: it is listed once it has one.
-  const entries = headings.filter(({ level, text }) => level <= depth && text.trim() !== '');
+  // A heading without text would be a link without a name: it is listed once it has one (./heading-ids.ts).
+  const entries = headings.filter(({ level }) => level <= depth);
 
   function go(event: React.MouseEvent, pos: number) {
     event.preventDefault();
@@ -301,9 +293,9 @@ function TableOfContentsView({ node, updateAttributes, editor }: NodeViewProps) 
       <p className="ekd-toc-title">{TOC_TITLE}</p>
       {entries.length > 0 ? (
         <ol className="ekd-toc-list">
-          {entries.map(({ level, text, pos }, index) => (
+          {entries.map(({ level, text, pos, id }, index) => (
             <li key={`${index}-${pos}`} data-level={level}>
-              <a href={`#heading-${index + 1}`} onClick={(event) => go(event, pos)}>
+              <a href={`#${id}`} onClick={(event) => go(event, pos)}>
                 {text}
               </a>
             </li>
@@ -1597,6 +1589,8 @@ export function extensions(
     }).configure({ lowlight, defaultLanguage: 'plaintext' }),
     Callout,
     TableOfContents,
+    // The id on each heading that an entry of a contents list links to.
+    HeadingIds,
     PageBreak,
     // A table stands only inside its block, with its caption. Bounded, so
     // that no table a client sends is too large to lay out (`TABLE_MOST`): a
