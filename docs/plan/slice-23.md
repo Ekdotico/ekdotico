@@ -131,6 +131,7 @@ The slice-22 sentence "Clear or transfer it/them first" in the 409 of `DELETE /a
 - API design: the cancellation asks for no password and no code (S23-5, plan disagreement 8); the request names `scope` as `all` or `deleted`; the routes are `POST` and `DELETE /api/account/documents/clear` and `DELETE /api/account/documents/clear/[documentId]`; a body is read to 256 KiB (S23-7). `GET /api/account/deletion` is not built.
 - The `document-deleted` event the claim publishes is the existing one; `clearing-changed` is new (FR-ED-40 (i)).
 - The role notice of the collaboration protocol carries `deletedOn` (an ISO time) while the document is in a clearing; a notice without it, to a tab that knew a day, says that the document will not be deleted. The record of a connection (NFR-SE-03 (a)) gains the day, `deletedOn`.
+- The list of documents and the list of deleted documents (`GET /api/documents`, `GET /api/documents/deleted`) carry `clearingAt`, the day a clearing deletes the document or null, so that a list can say so and withdraw Rename, Delete and Restore; it is shown to the people who hold a role on the document, who are told the day anyway.
 - The plan's disagreement 10 (the re-check omits the notice period) is closed: the record is built from the document's row, so the re-check reads it.
 
 ## 8. Not built, or not tested here, whatever the answer
