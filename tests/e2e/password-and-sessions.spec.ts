@@ -221,7 +221,8 @@ test.describe('the account settings', () => {
       'Name',
       'Email address',
       'Password',
-      'Two-factor authentication',
+      'Sessions',
+      'Delete account',
       'Sessions',
     ]);
     const sessions = page.getByRole('main').getByRole('listitem');
