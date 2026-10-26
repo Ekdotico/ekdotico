@@ -20,6 +20,7 @@
 // it. The event is published after the commit and never before. Nothing here
 // logs a name, an address, a title or an identifier of a person.
 import type { Prisma } from '../../generated/prisma/client.ts';
+import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
 import { publishCollabEvent } from '../collab/events.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
@@ -111,6 +112,28 @@ async function tellOwnerOffersEnded(
   for (const { fromUserId, toUserId } of offers) {
     if (fromUserId !== document.ownerId) continue;
     await notifyOfferEnded(tx, { ownerId: fromUserId, toUserId, documentId, end });
+  }
+}
+
+/**
+ * FR-AU-58 (f): "every pending offer of ownership made to the user is declined (FR-ED-47)". Called in
+ * the transaction of the step that ends the account's roles, with the rows of the documents held. An
+ * offer past its time is left to the timer, which writes it expired. The offer is stored declined, as
+ * the requirement says; the Owner is told it ENDED, not that the Editor declined, because D217 counts
+ * "an account being deleted" among the causes of the Editor ceasing to hold the role, and nobody
+ * declined: the notice names a deleted Editor as "the Editor" (D215). The notification of the
+ * offer goes with the offer (FR-ED-42).
+ */
+export async function declineOffersTo(tx: Tx, userId: string, now: Date): Promise<void> {
+  const ended = await tx.ownershipOffer.updateManyAndReturn({
+    where: { toUserId: userId, ...open(now) },
+    data: { state: 'DECLINED', respondedAt: now },
+    select: { id: true, documentId: true, fromUserId: true, toUserId: true },
+  });
+  if (ended.length === 0) return;
+  await tx.notification.deleteMany({ where: notificationsOf(ended.map(({ id }) => id)) });
+  for (const { documentId, fromUserId, toUserId } of ended) {
+    await tellOwnerOffersEnded(tx, documentId, [{ fromUserId, toUserId }], 'ended');
   }
 }
 
@@ -275,6 +298,8 @@ export async function makeOffer(
       if (!found) return { outcome: 'no_such_collaborator' };
       // A deleted account has no address and "holds no role" (FR-AU-58): it is offered nothing.
       if (found.role !== 'EDITOR' || !found.user.email) return { outcome: 'not_an_editor' };
+      // FR-AU-58 (a): nor to an account whose deletion is confirmed and whose role the steps have not yet ended.
+      if (await inDeletion(found.userId, tx)) return { outcome: 'not_an_editor' };
 
       await settle(tx, documentId, now);
       if (
@@ -393,10 +418,13 @@ export async function deliverOffer(
       select: {
         expiresAt: true,
         from: { select: { name: true, email: true } },
+        toUserId: true,
         to: { select: { email: true } },
       },
     });
     if (!offer?.to.email) return;
+    // FR-AU-58 (a): the email of an offer reaches no account whose deletion is confirmed.
+    if (await inDeletion(offer.toUserId)) return;
     await send(offerEmail(offer.to.email, displayNameOf(offer.from), offer.expiresAt));
   } catch (error) {
     console.error(`ownership offer ${offerId}: email not delivered (${faultOf(error)})`);
@@ -538,6 +566,11 @@ export async function answerOffer(
       return outcome === 'accepted' ? { outcome: 'no_longer_open' } : (judged.view as AnswerResult);
     }
     const { offer } = judged;
+    // FR-AU-58: "no deleted account is ever the Owner of a document". An acceptance makes the account
+    // an Owner, so it holds the account's row against the confirmation of its deletion, as the
+    // creation of a document does (src/lib/account/in-deletion.ts). The offer is declined by the
+    // deletion's own step (`declineOffersTo`).
+    if (answer === 'accept' && !(await holdOwnableAccount(tx, userId))) return { outcome: 'no_longer_open' };
     const { count } = await tx.ownershipOffer.updateMany({
       where: { id: offer.id, toUserId: userId, ...open(now) },
       data: { state: answer === 'accept' ? 'ACCEPTED' : 'DECLINED', respondedAt: now },

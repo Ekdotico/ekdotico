@@ -223,6 +223,7 @@ test.describe('the account settings', () => {
       'Password',
       'Two-factor authentication',
       'Sessions',
+      'Delete account',
     ]);
     const sessions = page.getByRole('main').getByRole('listitem');
     await expect(sessions).toHaveCount(2);

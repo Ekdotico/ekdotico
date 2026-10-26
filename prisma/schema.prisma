@@ -44,6 +44,14 @@ model User {
   closedAlphaNoticeAcknowledgedAt DateTime?
   closedAlphaNoticeVersion        Int?
 
+  // FR-AU-58 (e): when the personal fields of the row were cleared. Null for an
+  // account in use. With its `id` and the two columns above, it is what the
+  // tombstone keeps; `createdAt` and `updatedAt` are the table's own and cannot
+  // be dropped (docs/plan/slice-22.md, row S22-3).
+  erasedAt DateTime?
+
+  // FR-AU-58: the record of a confirmed deletion, which stays with the tombstone.
+  deletion          AccountDeletion?
   sessions          Session[]
   accounts          Account[]
   twoFactor         TwoFactor?
@@ -460,4 +468,42 @@ model DocumentImage {
   document Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
 
   @@index([documentId])
+}
+
+// ─── Account deletion (FR-AU-58; Data models, "Account deletion in Closed α") ─
+
+// One row for each confirmed deletion of an account, written in the transaction
+// that checks that the account owns no document (src/lib/account/deletion.ts).
+// It records which steps of FR-AU-58 have succeeded, so that a step that failed
+// is repeated until it succeeds, and it stays with the tombstone: it holds the
+// internal user identifier and the times of the steps, and no personal field
+// (§2.7, "The record of an account deletion").
+//
+// The steps run in order, and the database holds them to it: a step's time is
+// set only where the step before it has been (the checks in the migration).
+// The step (a), the closing of the connections, is the confirmation itself and
+// has no column: from the row's existence the account makes no request and
+// signs in nowhere. `rowsDoneAt` is the steps (e) and (f) together, one
+// transaction, because (f) finds the invitations addressed to the account by
+// the address that (e) clears.
+//
+// Two departures from Data models (docs/plan/slice-22.md, S22-1, S22-2):
+// `feedbackSkippedAt`, because FR-AU-58 (c) says the step "is recorded as
+// skipped" and a null `feedbackDoneAt` cannot be told from a step that is owed
+// once the switch is on; and `claimedAt`, the claim of the timer, in the manner
+// of `Document.deletionClaimedAt`, so that with two instances one of them
+// carries out the steps (NFR-RE-15).
+model AccountDeletion {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  requestedAt       DateTime  @default(now())
+  istoricoDoneAt    DateTime?
+  feedbackDoneAt    DateTime?
+  feedbackSkippedAt DateTime?
+  credentialsDoneAt DateTime?
+  rowsDoneAt        DateTime?
+  completedAt       DateTime?
+  claimedAt         DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 }

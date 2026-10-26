@@ -424,12 +424,21 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
               userId: true,
               createdAt: true,
               expiresAt: true,
-              user: { select: { email: true } },
+              // FR-ED-41: "an account that is not deleted". FR-AU-58 (a): from the confirmation of
+              // its deletion, which is the row of `deletion`, every connection of the account is
+              // closed (FR-ED-40 (d)); the tombstone has no address, and that is the same fact once
+              // the personal fields are cleared.
+              user: { select: { email: true, deletion: { select: { id: true } } } },
             },
           }),
         );
         for (const { id, userId, createdAt, expiresAt, user } of rows) {
-          sessions.set(id, { userId, createdAt, expiresAt, accountStands: user.email !== null });
+          sessions.set(id, {
+            userId,
+            createdAt,
+            expiresAt,
+            accountStands: user.email !== null && user.deletion === null,
+          });
         }
         break;
       } catch (error) {

@@ -21,6 +21,7 @@ import type { AuthContext } from 'better-auth';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, expireCookie, setSessionCookie } from 'better-auth/cookies';
 import { afterResponse, assertCollecting } from '../after-response.ts';
+import { inDeletion } from '../account/in-deletion.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
@@ -115,10 +116,26 @@ class NoSession extends Error {
 // deleted. So every key of both counts holds a number kept for the address,
 // and clearing raises the number: the counts made under the earlier one are
 // never read again, and leave Valkey when their periods have passed.
-// ponytail: the number has no expiry, one small key for each address that ever
-// reset; were Valkey to evict it, the counts made since the reset are lost with it.
+//
+// The number is a keyed digest of the address, so it is held for as long as the
+// counts it separates and no longer (FR-AU-58 (e): "the counters of NFR-SE-07 that
+// are kept by email address expire within their period"). It expires after the
+// longest period of those two counts, which is 1 hour with the initial values
+// (`generationSeconds`), counted from the last time it was written or read, and every
+// count made under it is read through it (`countKeys`), so a count never outlives
+// its number: one that was made under an earlier number has expired before the number does.
+// And the deletion of the account deletes it (`forgetFailedSignIns`).
 const generationKey = (email: string) =>
   `sign-in-generation:${createHmac('sha256', settings().authSecret).update(`sign-in-generation:${email}`).digest('hex')}`;
+
+/** The longest period of the counts the number separates: with the initial values, 1 hour. */
+const generationSeconds = () => {
+  const { limits } = settings();
+  return Math.max(
+    limits.FAILED_SIGN_IN_PER_EMAIL.windowSeconds,
+    limits.FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS.windowSeconds,
+  );
+};
 
 /**
  * Clears both counts of failed sign-ins for an email address, from every
@@ -126,7 +143,19 @@ const generationKey = (email: string) =>
  * too (FR-AU-81).
  */
 export async function clearFailedSignIns(email: string): Promise<void> {
-  await valkey().incr(generationKey(normalised(email)));
+  const key = generationKey(normalised(email));
+  // One transaction of Valkey: a number that was raised and not given its lifetime would never expire.
+  const done = await valkey().multi().incr(key).expire(key, generationSeconds()).exec();
+  for (const [error] of done ?? []) if (error) throw error;
+}
+
+/**
+ * FR-AU-58 (d), (e): the number of an address that is no longer held by any account is deleted with the
+ * account, so that nothing keyed by the address stays in Valkey but the counts, which expire in their
+ * own periods.
+ */
+export async function forgetFailedSignIns(email: string): Promise<void> {
+  await valkey().del(generationKey(normalised(email)));
 }
 
 /** A limit on failed sign-ins as a check found it, with the key it is counted under. */
@@ -142,7 +171,8 @@ const normalised = enteredAddress;
  * number nor a bucket holds a space, so the first key cannot be read in two ways.
  */
 async function countKeys(email: string, headers: Headers | undefined) {
-  const generation = (await valkey().get(generationKey(email))) ?? '0';
+  // Read, and kept for as long again: the counts made under it live their periods from now.
+  const generation = (await valkey().getex(generationKey(email), 'EX', generationSeconds())) ?? '0';
   return {
     pair: `${generation} ${addressBucket(headers ?? new Headers())} ${email}`,
     everywhere: `${generation} ${email}`,
@@ -245,7 +275,12 @@ export async function checkCodeAtPrompt(
  * answered as every other refusal is.
  */
 export async function checkCredentials(
-  context: Pick<AuthContext, 'internalAdapter' | 'password'>,
+  // The two things it asks of the library's context, and of the hasher only the two functions it calls:
+  // a route of the application holds `await auth().$context`, whose type is that of this configuration
+  // and not the generic one, and the hasher's `checkPassword` takes a context of its own type.
+  context: Pick<AuthContext, 'internalAdapter'> & {
+    password: Pick<AuthContext['password'], 'hash' | 'verify'>;
+  },
   headers: Headers | undefined,
   enteredEmail: string,
   enteredPassword: string,
@@ -275,7 +310,15 @@ export async function checkCredentials(
     // one more cause for which the attempt is not open. The library answers a
     // user without the column, so the row is read for it.
     const locked = lockInForce(await lockedUntilOf(user?.id));
-    const open = byPair.ok && byEmail.ok && !locked;
+    // FR-AU-58 (a): "From the confirmation, a sign-in to the account is
+    // refused with the statement of FR-AU-81": as a lock refuses one, with the
+    // same work and the same statement, counted toward nothing. Asked for every
+    // address, as the lock is, so that the time shows nothing (FR-AU-81). It is
+    // the one place a password is checked at a prompt, so a prompt of an
+    // account in deletion (the confirmation itself, once repeated) is refused too.
+    const deleting = await inDeletion(user?.id);
+    const refusedAnyway = locked || deleting;
+    const open = byPair.ok && byEmail.ok && !refusedAnyway;
     const hash = credential?.password;
     // Verified only where the attempt could succeed: no limit is reached (a
     // refused attempt is not verified; the owner's answer to Q10), the address
@@ -297,7 +340,7 @@ export async function checkCredentials(
     // the count of a failure makes are made here as checks that count nothing,
     // so that Valkey is asked as often as for a wrong password, or for an
     // address without an account (FR-AU-81).
-    else if (locked && byPair.ok && byEmail.ok) {
+    else if (refusedAnyway && byPair.ok && byEmail.ok) {
       await checkLimit('FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS', pair);
       await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
       await checkLimit('FAILED_SIGN_IN_PER_EMAIL', everywhere);
@@ -525,6 +568,8 @@ export const signInLink = createAuthEndpoint('/sign-in/link', { method: 'POST' }
   // now, read after the link, and once more by the claim below.
   const user = await internalAdapter.findUserById(link.userId);
   if (!user) return notValid();
+  // FR-AU-58 (a): no sign-in to an account whose deletion is confirmed, by its lock link either.
+  if (await inDeletion(user.id)) return notValid();
   if ((user as { twoFactorEnabled?: unknown }).twoFactorEnabled === true) return toSecondStep(link.until);
 
   // The password of the account as it is before the session is made, to be

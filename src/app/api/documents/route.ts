@@ -3,7 +3,8 @@
 // neither can ask src/lib/documents/access.ts: the list is the session's own
 // account's and takes no identifier from the request, and a creation is
 // authorised by the workspace, which must be that account's own (FR-AU-12).
-import { fault, notAdmitted, refusedOrigin } from '../../../lib/auth/route-answers.ts';
+import { AccountInDeletion } from '../../../lib/account/in-deletion.ts';
+import { fault, notAdmitted, refusedOrigin, unauthenticated } from '../../../lib/auth/route-answers.ts';
 import { validateSession, validateSessionRow } from '../../../lib/auth/session.ts';
 import { createDocument, listDocuments } from '../../../lib/documents/documents.ts';
 import { errorResponse, notJson, readJson } from '../../../lib/http.ts';
@@ -78,6 +79,9 @@ export async function POST(request: Request): Promise<Response> {
     // The workspace is not handed on: `createDocument` takes the account's own.
     return Response.json(await createDocument(session.userId), { status: 201, headers: NO_STORE });
   } catch (error) {
+    // FR-AU-58 (a): a request that passed the validation just before the confirmation of the
+    // deletion of the account is answered as one without a session (the owner's answer to Q8).
+    if (error instanceof AccountInDeletion) return unauthenticated();
     return fault('documents', error);
   }
 }

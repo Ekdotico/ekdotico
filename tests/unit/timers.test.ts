@@ -36,6 +36,13 @@ vi.mock('../../src/lib/documents/access-notifications.ts', () => ({
 const deleteExpiredImagesNow = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));
 vi.mock('../../src/lib/images/deletion.ts', () => ({ deleteExpiredImagesNow }));
 
+// NFR-RE-15, FR-AU-58: the steps of an account deletion, which run beside them
+// (tests/integration/account-deletion.test.ts runs them against a database).
+const carryOutDeletions = vi.hoisted(() =>
+  vi.fn(async () => ({ steps: 0, completed: 0, failed: 0, overdue: 0 })),
+);
+vi.mock('../../src/lib/account/deletion-steps.ts', () => ({ carryOutDeletions }));
+
 const HOUR_MS = 60 * 60 * 1000;
 let stdout: ReturnType<typeof vi.spyOn>;
 let stderr: ReturnType<typeof vi.spyOn>;
@@ -120,6 +127,27 @@ it('runs the deletion of images at start and each hour, as a timer of its own, a
   );
   await vi.advanceTimersByTimeAsync(HOUR_MS);
   expect(stderr.mock.calls).toEqual([['timer failed: image-deletion (Error AccessDenied)']]);
+});
+
+it('runs the steps of an account deletion at start and each hour, and says how many it carried out', async () => {
+  vi.resetModules();
+  deleteExpiredSecurityLog.mockResolvedValue(0);
+  deleteExpiredDocuments.mockResolvedValue({ deleted: 0, kept: 0 });
+  const { startTimers, TIMERS } = await import('../../src/lib/timers.ts');
+  expect(Object.keys(TIMERS)).toContain('account-deletion-steps');
+  startTimers();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(carryOutDeletions).toHaveBeenCalledTimes(1);
+  expect(stdout).not.toHaveBeenCalled();
+  carryOutDeletions.mockResolvedValueOnce({ steps: 3, completed: 1, failed: 0, overdue: 0 });
+  await vi.advanceTimersByTimeAsync(HOUR_MS);
+  expect(carryOutDeletions).toHaveBeenCalledTimes(2);
+  // It deletes nothing it counts: it carried out steps.
+  expect(stdout.mock.calls).toEqual([['timer ran: account-deletion-steps (3 carried out)']]);
+  // A fault is the class and the code of it, and the other timers go on.
+  carryOutDeletions.mockRejectedValueOnce(Object.assign(new Error('a name'), { code: 'P1001' }));
+  await vi.advanceTimersByTimeAsync(HOUR_MS);
+  expect(stderr.mock.calls).toEqual([['timer failed: account-deletion-steps (Error P1001)']]);
 });
 
 it('says "cleared", and not "deleted", of an address a clearing emptied from a row that stays', async () => {

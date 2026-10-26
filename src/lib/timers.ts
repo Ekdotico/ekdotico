@@ -1,5 +1,6 @@
 // The timers of the application (NFR-RE-15): scheduled work that is not a queue
 // job. Started once when a process starts.
+import { carryOutDeletions } from './account/deletion-steps.ts';
 import { clearAdmissionAddresses } from './admission/invitations.ts';
 import { deleteExpiredRemovedNotifications } from './documents/access-notifications.ts';
 import { deleteExpiredDocuments } from './documents/deletion.ts';
@@ -55,6 +56,10 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // NFR-RE-15, "deletion from storage of an image that no longer appears in its document" (NFR-SE-18):
   // the images out of their documents for 30 days, the object and the row; says how many it deleted.
   'image-deletion': () => deleteExpiredImagesNow(),
+  // NFR-RE-15, "the steps of an account deletion in Closed α" (FR-AU-58): a step that failed is
+  // repeated here until it succeeds, under the claim of the deletion (it needs a claim to be safe
+  // on two instances, which the others above do not); says how many steps it carried out.
+  'account-deletion-steps': async () => (await carryOutDeletions()).steps,
 };
 
 function runTimers(): void {
@@ -62,9 +67,16 @@ function runTimers(): void {
     run().then(
       // A run that found nothing to delete says nothing, or the log would hold a line an hour.
       (count) => {
-        // A clearing empties an address from a row that stays: it says "cleared", not "deleted".
-        if (count > 0)
-          console.log(`timer ran: ${name} (${count} ${name.endsWith('-clearing') ? 'cleared' : 'deleted'})`);
+        // A clearing empties an address from a row that stays: it says "cleared", not "deleted". The
+        // steps of an account deletion delete nothing they count: "carried out".
+        if (count > 0) {
+          const what = name.endsWith('-clearing')
+            ? 'cleared'
+            : name.endsWith('-steps')
+              ? 'carried out'
+              : 'deleted';
+          console.log(`timer ran: ${name} (${count} ${what})`);
+        }
       },
       // The name of the timer, and the class and code of the fault: an error's
       // message can quote a row (NFR-SE-19).
