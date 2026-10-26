@@ -212,7 +212,8 @@ describe('authorisation (NFR-SE-02, NFR-SE-04, NFR-SE-17 (c), FR-ED-44)', () => 
     const row = await db().document.findUniqueOrThrow({ where: { id } });
     // The decision of the route was taken while the document was live; the deletion came after it.
     await db().document.update({ where: { id }, data: { deletedAt: new Date(), deletedById: owner.id } });
-    const { yjsState: _state, ...document } = row;
+    const document: Omit<typeof row, 'yjsState'> & { yjsState?: unknown } = { ...row };
+    delete document.yjsState;
     const response = await draftExport({
       request: new Request(`${ORIGIN}/x`, { method: 'POST' }),
       session: { userId: owner.id } as never,
