@@ -198,6 +198,11 @@ test('a shared document waits for its day: the confirmation names the people, th
       `/documents/${id}`,
     );
     await expectNoSidewaysScroll(guest);
+    // The link leads to the document, read-only, with the export that FR-AU-91 and FR-ED-44 (d) give every role in
+    // the period: a Viewer's set gives it none otherwise.
+    await item.getByRole('link', { name: 'Open the document' }).click();
+    await expect(guest.getByRole('button', { name: 'Export as Markdown' })).toBeVisible();
+    await guest.goBack();
     const mail = await mailFor(
       who.email,
       /The Owner of 1 document that you have access to in Ekdotico will delete it on [^.]+\./,

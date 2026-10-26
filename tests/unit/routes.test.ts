@@ -98,6 +98,8 @@ const OPEN_DURING_A_CLEARING = [
   'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts PATCH',
   'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts DELETE',
   'src/app/api/documents/[id]/leave/route.ts POST',
+  // FR-AU-91, FR-ED-44 (d): the draft export is what the period grants every collaborator (slice 21's route).
+  'src/app/api/documents/[id]/export/draft/route.ts POST',
   'src/app/api/documents/[id]/permissions/route.ts PUT',
   'src/app/api/documents/[id]/ownership-offer/route.ts POST',
   'src/app/api/documents/[id]/ownership-offer/route.ts DELETE',

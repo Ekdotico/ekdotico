@@ -896,6 +896,48 @@ describe('the period: read-only for everyone, and what it leaves open (FR-AU-91,
     expect(refused.status).toBe(404);
   });
 
+  // Mutation P08: the export loads a document that is deleted only while it is not deleted (`deletedAt: null`).
+  // Mutation P09: the export loads a deleted document that is in a clearing whatever its day.
+  it('exports a document deleted before the clearing to its collaborators through the route while the period runs, and not after the day', async () => {
+    const owner = await person();
+    const viewer = await person('viewer');
+    const documentId = await documentOf(owner.id, 'Exported in the period');
+    await share(documentId, viewer.id, 'VIEWER');
+    await deletedAgo(documentId, owner.id, DAY_MS);
+    await clear(owner.cookie, await everything(owner.id));
+    const exporting = await import('../../src/app/api/documents/[id]/export/draft/route.ts');
+    const ask = (cookie: string) =>
+      exporting.POST(
+        w.request('POST', `/api/documents/${documentId}/export/draft`, cookie),
+        context(documentId),
+      );
+    // A Viewer, whose set gives it no export: the period does, for a document that is deleted.
+    for (const who of [viewer, owner]) {
+      const response = await ask(who.cookie);
+      expect(response.status, who.email).toBe(200);
+      expect(response.headers.get('content-type')).toBe('application/zip');
+      const bytes = Buffer.from(await response.arrayBuffer());
+      expect(bytes.subarray(0, 2).toString()).toBe('PK');
+      expect(bytes.includes(Buffer.from('Exported in the period'))).toBe(true);
+    }
+    // After the day: `authorise` finds none, and the handler, called with the row it was authorised on, finds none either.
+    const authorised = (await row(documentId))!;
+    await db().document.update({
+      where: { id: documentId },
+      data: { clearingAt: new Date(Date.now() - 1000) },
+    });
+    expect((await ask(viewer.cookie)).status).toBe(404);
+    const { draftExport } = await import('../../src/lib/export/draft.ts');
+    const late = await draftExport({
+      request: w.request('POST', `/api/documents/${documentId}/export/draft`, viewer.cookie),
+      session: { userId: viewer.id } as never,
+      document: authorised,
+      role: 'viewer',
+      params: { id: documentId },
+    });
+    expect(late.status).toBe(404);
+  });
+
   // Mutation P05: the exception reaches `document.view` of a deleted document (S23-1), or a deleted document that is not in a clearing.
   it('gives a document deleted before the clearing its draft export for its collaborators, and its reading to no one', async () => {
     const owner = await person();
