@@ -55,6 +55,9 @@ const ELSEWHERE: Record<string, string> = {
   // Its body is the bytes of an image and not JSON, which the cases here send.
   'src/app/api/documents/[id]/images/route.ts POST':
     'tests/integration/image-routes.test.ts: "checks the origin before anything is read or counted"',
+  // It sends the file of an archive, and reads no body.
+  'src/app/api/documents/[id]/export/draft/route.ts POST':
+    'tests/integration/export.test.ts: "checks the origin before anything is locked, counted or read"',
 };
 
 // The proxy's answer, byte for byte (src/lib/auth/route-answers.ts).

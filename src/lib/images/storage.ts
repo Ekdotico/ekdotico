@@ -15,6 +15,12 @@ export interface ImageStorage {
    */
   remove(key: string): Promise<void>;
   /**
+   * The bytes of the object as a stream, read as they are consumed and held nowhere: the Markdown draft export
+   * sends an image on as it reads it (FR-EX-36, "under its own credentials"). Rejects where the object is not
+   * there or the store cannot be reached; `signal` ends a read that has begun, and the stream then errors.
+   */
+  read(key: string, signal?: AbortSignal): Promise<ReadableStream<Uint8Array>>;
+  /**
    * A signed link for a GET of the object that is valid for `seconds` and for
    * this key alone, and the storage's own answer to it carries the type given.
    * Issued only by a route that has a session and access to the document

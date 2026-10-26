@@ -69,13 +69,13 @@ export function editorState(json: unknown): Uint8Array {
 /** The whole file for a stored state: the images are the identifiers given, in order, written as `images/NNN.png`. */
 export function fileOf(
   state: Uint8Array | null,
-  options: { title?: string; available?: readonly string[]; now?: Date } = {},
+  options: { title?: string; available?: readonly string[]; now?: Date; id?: string } = {},
 ): string {
   const document = readDocument(state);
   const available = options.available ?? imageIdsOf(document.body);
   return renderMarkdown({
     title: options.title ?? 'Title',
-    id: DOCUMENT_ID,
+    id: options.id ?? DOCUMENT_ID,
     now: options.now ?? NOW,
     document,
     images: new Map(available.map((id, at) => [id, `images/${String(at + 1).padStart(3, '0')}.png`])),
