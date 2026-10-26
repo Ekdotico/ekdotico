@@ -4,7 +4,7 @@
 // is derived from the order of the markers. No automated accessibility checker is a dependency of
 // the repository yet (plan row C5), so what is asked here is the roles, the names, the focus and
 // the keys, which the checker would read.
-import { expect, test, type Page } from './fixtures.ts';
+import { expect, test, type Locator, type Page } from './fixtures.ts';
 import { mailFor, newPerson, signIn, signUp, type Person } from './account.ts';
 import { startCollab, stopCollab } from './collab.ts';
 import { INVITATION_LINK, invite, shareNew } from './sharing.ts';
@@ -282,20 +282,14 @@ test('a marker leads to its entry: by a click, and by Tab and Enter from the tex
 });
 
 // The package gives the marker a target of 24 by 24 CSS pixels, drawn as an out-of-flow ::after centred on the
-// number (WCAG 2.5.8). In a document that can be edited that square lies over the words on either side, so what
+// number (WCAG 2.5.8). In a document that can be edited that square lay over the words on either side, so what
 // is asked is that a click aimed at those words, a few pixels from the number, still puts the caret in the text
-// and follows nothing. The measurements are kept in the report of the run.
+// and follows nothing. domico 0.41.0 removed the square (it had taken all four clicks on 0.40.1); the
+// measurements are kept in the report of the run.
 test('the target of a marker does not take a click aimed at the words beside it, in a document that can be edited', async ({
   page,
 }, testInfo) => {
   test.slow();
-  // KNOWN GAP OF THE PACKAGE, measured on 0.40.1: the square covers about 9.5px on each side of a 4.9px number, so
-  // all four clicks (4px and 8px, left and right) land on the marker and follow it. Expected to fail until the
-  // package narrows the target in an editable surface; when it does, this line is the one to remove.
-  test.fail(
-    true,
-    'domico 0.40.1: the 24 by 24 target of .ekd-footnote-ref takes clicks aimed at the words beside it',
-  );
   await enter(page);
   await openNew(page);
   await text(page).focus();
@@ -343,6 +337,10 @@ test('the target of a marker does not take a click aimed at the words beside it,
   // Every point is asked before the test fails, so that the report holds all four measurements.
   expect(stolen, measured.join('\n')).toEqual([]);
 });
+
+/** The `content` of the ::after of each element: `""` where the package draws the arrow of a link, else `none`. */
+const arrows = (links: Locator) =>
+  links.evaluateAll((all) => all.map((each) => getComputedStyle(each, '::after').content));
 
 /** What holds the focus of the page: its name where it has one, else its role or its tag. */
 const focused = (page: Page) =>
@@ -531,6 +529,26 @@ test('a Viewer reads the footnotes, follows a marker to its entry, and changes n
     await page.keyboard.type(`Line ${line}`);
   }
 
+  // A link in a paragraph, put in by the writer: the arrow of the package is drawn in a document that cannot be
+  // edited and not in one that can (0.41.0: [contenteditable="true"] and what is in it have none).
+  await page.evaluate(() => {
+    const view = document.querySelector('[role="textbox"]') as unknown as {
+      editor: { chain(): { insertContent(html: string): { run(): boolean } } };
+    };
+    view.editor.chain().insertContent('<a href="https://example.org/x">linked words</a>').run();
+  });
+  const written = text(page).locator('p a[href="https://example.org/x"]');
+  await expect(written).toHaveCount(1);
+  expect(await arrows(written)).toEqual(['none']);
+  const read = text(theirs).locator('p a[href="https://example.org/x"]');
+  await expect(read).toHaveCount(1);
+  await expect(text(theirs)).toHaveAttribute('contenteditable', 'false');
+  expect(await arrows(read)).toEqual(['""']);
+  // The links of the header carry none.
+  const header = await arrows(page.getByRole('banner').getByRole('link'));
+  expect(header.length).toBeGreaterThan(0);
+  expect(header.every((each) => each === 'none')).toBe(true);
+
   // The Viewer is shown the marker, with its number, and the entry, with its words.
   await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
   await expect(marker(theirs, 1)).toBeVisible();
@@ -559,4 +577,10 @@ test('a Viewer reads the footnotes, follows a marker to its entry, and changes n
   await page.keyboard.type(' and more');
   await expect(entries(theirs)).toHaveText(['Source and more']);
   await other.close();
+  // The titles of the list of documents carry no arrow either.
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  const titles = await arrows(page.getByRole('main').getByRole('link'));
+  expect(titles.length).toBeGreaterThan(0);
+  expect(titles.every((each) => each === 'none')).toBe(true);
 });
