@@ -20,7 +20,7 @@
 // it. The event is published after the commit and never before. Nothing here
 // logs a name, an address, a title or an identifier of a person.
 import type { Prisma } from '../../generated/prisma/client.ts';
-import { holdOwnableAccount } from '../account/in-deletion.ts';
+import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
 import { publishCollabEvent } from '../collab/events.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
@@ -298,6 +298,8 @@ export async function makeOffer(
       if (!found) return { outcome: 'no_such_collaborator' };
       // A deleted account has no address and "holds no role" (FR-AU-58): it is offered nothing.
       if (found.role !== 'EDITOR' || !found.user.email) return { outcome: 'not_an_editor' };
+      // FR-AU-58 (a): nor to an account whose deletion is confirmed and whose role the steps have not yet ended.
+      if (await inDeletion(found.userId, tx)) return { outcome: 'not_an_editor' };
 
       await settle(tx, documentId, now);
       if (
@@ -416,10 +418,13 @@ export async function deliverOffer(
       select: {
         expiresAt: true,
         from: { select: { name: true, email: true } },
+        toUserId: true,
         to: { select: { email: true } },
       },
     });
     if (!offer?.to.email) return;
+    // FR-AU-58 (a): the email of an offer reaches no account whose deletion is confirmed.
+    if (await inDeletion(offer.toUserId)) return;
     await send(offerEmail(offer.to.email, displayNameOf(offer.from), offer.expiresAt));
   } catch (error) {
     console.error(`ownership offer ${offerId}: email not delivered (${faultOf(error)})`);

@@ -38,6 +38,7 @@ import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { clearAdmissionAddressOf } from '../admission/invitations.ts';
 import { pendingChange } from '../auth/address-links.ts';
+import { forgetFailedSignIns } from '../auth/sign-in.ts';
 import { declineOffersTo } from '../documents/ownership.ts';
 import { endInvitationsOfAccount, lockDocument } from '../documents/sharing.ts';
 import { istorico, type IstoricoPort } from '../istorico/index.ts';
@@ -126,6 +127,9 @@ async function stepIstorico(held: Held, port: IstoricoPort, now: () => Date): Pr
         documents: documents.map(({ documentId }) => ({
           documentId,
           role: 'contributor' as const,
+          // Every document of α 0.1.0 is in a personal workspace (FR-ED-36 "covers documents in a
+          // personal workspace", as `deletePermanently` has it); the kind is read from the document's
+          // workspace when an institutional one exists.
           workspaceKind: 'personal' as const,
         })),
       });
@@ -199,24 +203,38 @@ export async function deleteVerificationRowsOf(
  * row the identity library holds for the user in its session, credential, verification, and
  * second-factor tables is deleted, so that no one can sign in to the account again."
  *
- * In the order a reset of the password takes them (src/lib/auth/password.ts), so that none waits
- * for another in a circle, and so that a sign-in that is on its way meets one of two ends: the
- * credential is gone when it asks for it again (`stillVerified`) and its session is deleted as it
- * is, or its session was made before the sessions here are deleted and is among them. The
- * collaboration servers are told once the transaction has committed, and never before.
+ * In the order a reset of the password takes them (src/lib/auth/password.ts: the single-use
+ * rows, the credential, the sessions), so that none waits for another in a circle, and so that a
+ * sign-in that is on its way meets one of two ends: the credential is gone when it asks for it
+ * again (`stillVerified`) and its session is deleted as it is, or its session was made before the
+ * sessions here are deleted and is among them. The collaboration servers are told once the
+ * transaction has committed, and never before.
+ *
+ * The key in Valkey that clears the counts of failed sign-ins for the address (`sign-in-generation`,
+ * src/lib/auth/sign-in.ts) is deleted after the commit: it is a keyed digest of the address and would
+ * otherwise stay (it has a lifetime of its own, but the address is to be held nowhere once the
+ * account is deleted, FR-AU-58 (e)). A fault of Valkey is one line, and the key expires by itself.
  */
 async function stepCredentials(held: Held, now: () => Date): Promise<void> {
-  await db().$transaction(async (tx) => {
+  const address = await db().$transaction(async (tx) => {
     await holdClaim(tx, held);
     const user = await tx.user.findUnique({ where: { id: held.userId }, select: { email: true } });
+    await deleteVerificationRowsOf(tx, held.userId, user?.email ?? null);
     await tx.account.deleteMany({ where: { userId: held.userId } });
     await tx.twoFactor.deleteMany({ where: { userId: held.userId } });
-    await deleteVerificationRowsOf(tx, held.userId, user?.email ?? null);
     await tx.session.deleteMany({ where: { userId: held.userId } });
     await record(tx, held, 'credentialsDoneAt', now());
     await securityLogIn(tx, { kind: 'account_deletion_credentials_deleted', userId: held.userId });
+    return user?.email ?? null;
   });
   await publishCollabEvent({ kind: 'session-ended', userId: held.userId });
+  if (address) {
+    await forgetFailedSignIns(address).catch((error: unknown) =>
+      console.error(
+        `account deletion ${held.id}: counts of failed sign-ins not forgotten (${faultOf(error)})`,
+      ),
+    );
+  }
 }
 
 // ── (e) and (f) The application's own rows ──────────────────────────────────
@@ -250,25 +268,46 @@ async function stepRows(held: Held, now: () => Date): Promise<void> {
     const at = now();
     const { userId } = held;
 
-    const [roles, offers] = await Promise.all([
-      tx.documentCollaborator.findMany({ where: { userId }, select: { documentId: true } }),
-      tx.ownershipOffer.findMany({
-        where: { toUserId: userId, state: 'PENDING' },
-        select: { documentId: true },
-      }),
-    ]);
-    const documentIds = [...new Set([...roles, ...offers].map(({ documentId }) => documentId))].sort();
-    for (const documentId of documentIds) await lockDocument(tx, documentId);
-
-    // The address is read once, here, before (e) clears it.
+    // The address is read once, here, before (e) clears it: the invitations addressed to the account are
+    // found by it.
     const user = await tx.user.findUniqueOrThrow({
       where: { id: userId },
       select: { email: true, erasedAt: true },
     });
 
+    // The rows of every document on which the account holds a role, has a pending offer, or has a pending
+    // invitation addressed to it are held, in a fixed order: each of those can be changed by a request that
+    // is on its way, and every one of them holds the document's row (`lockDocument`).
+    const [roles, offers, invited] = await Promise.all([
+      tx.documentCollaborator.findMany({ where: { userId }, select: { documentId: true } }),
+      tx.ownershipOffer.findMany({
+        where: { toUserId: userId, state: 'PENDING' },
+        select: { documentId: true },
+      }),
+      user.email
+        ? tx.documentInvitation.findMany({
+            where: { email: user.email, state: 'PENDING' },
+            select: { documentId: true },
+          })
+        : [],
+    ]);
+    const documentIds = [
+      ...new Set([...roles, ...offers, ...invited].map(({ documentId }) => documentId)),
+    ].sort();
+    for (const documentId of documentIds) await lockDocument(tx, documentId);
+
     await declineOffersTo(tx, userId, at);
-    await tx.documentCollaborator.deleteMany({ where: { userId } });
+    // The invitations before the roles: an acceptance that was on its way has committed by now, because its
+    // document is held above, and its role is among those deleted below. Were the roles deleted first, an
+    // acceptance that committed between the two statements would leave the tombstone a role.
     await endInvitationsOfAccount(tx, { id: userId, email: user.email }, at);
+    const ended = await tx.documentCollaborator.findMany({ where: { userId }, select: { documentId: true } });
+    await tx.documentCollaborator.deleteMany({ where: { userId } });
+    // NFR-SE-19: "a change to a document's collaborators" has its entry, one for each document, as a
+    // removal and a leave have theirs (src/lib/documents/collaborators.ts); the one who acts is the one who goes.
+    for (const { documentId } of ended) {
+      await securityLogIn(tx, { kind: 'collaborators_changed', userId, documentId });
+    }
     await clearAdmissionAddressOf(tx, { id: userId, email: user.email });
     // Again, now that the account is held: a request for a reset that began before the sessions
     // ended may have written its link since (d).

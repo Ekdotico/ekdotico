@@ -211,9 +211,11 @@ export async function clearAdmissionAddresses(now: Date = new Date()): Promise<n
  * FR-AU-58 (e): "The address is cleared wherever the application holds it for the account. It is
  * cleared from the admission invitation from which the account was created (FR-AU-89): the row
  * stays, without the address, and is listed to Praktico from then on without one." Found by the
- * account that accepted it, and, for an invitation that was revoked or has expired and has not yet
- * had its address cleared (30 days), by the address itself: the account was admitted under an
- * address that an earlier invitation also named. In the transaction of the step; idempotent.
+ * account that accepted it, and by the address itself, whatever the state of the row: an invitation
+ * that was revoked or has expired and has not yet had its address cleared (30 days) also named it,
+ * and so would a pending one, were there one (none should be: the address belongs to an account), and
+ * a pending one is blanked too, because the address of a deleted account is to be held nowhere.
+ * In the transaction of the step; idempotent.
  */
 export async function clearAdmissionAddressOf(
   tx: Pick<Prisma.TransactionClient, 'admissionInvitation'>,

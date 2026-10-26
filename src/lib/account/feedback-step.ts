@@ -33,10 +33,26 @@ export interface FeedbackIntake {
   pseudonymise(accountId: string): Promise<boolean>;
 }
 
+// The three ways step (c) fails, each an error of its own: the line of the log names the class of a fault and
+// nothing of its message (NFR-SE-19, `faultOf`), so a class is how the reader of the log tells them apart.
+
+/** The switch holds a value that is neither `true` nor `false`: a mistake in the environment. */
+export class FeedbackSwitchInvalid extends Error {
+  name = 'FeedbackSwitchInvalid';
+}
+/** The switch is on and the client of the request is not built: it arrives with the Feedback Widget. */
+export class FeedbackIntakeUnbuilt extends Error {
+  name = 'FeedbackIntakeUnbuilt';
+}
+/** The intake did not acknowledge: it refused, did not answer, or answered that it had not changed the account's feedback. */
+export class FeedbackNotAcknowledged extends Error {
+  name = 'FeedbackNotAcknowledged';
+}
+
 /** The client the release that adds the Feedback Widget brings. Until then there is none, and a call says so. */
 const unbuilt: FeedbackIntake = {
   async pseudonymise() {
-    throw new Error(
+    throw new FeedbackIntakeUnbuilt(
       'The feedback intake client is built with the Feedback Widget; FEEDBACK_INTAKE_ENABLED must stay off until then.',
     );
   },
@@ -51,7 +67,7 @@ export function feedbackIntakeEnabled(env: Record<string, string | undefined> = 
   const value = env.FEEDBACK_INTAKE_ENABLED;
   if (value === undefined || value === '' || value === 'false') return false;
   if (value === 'true') return true;
-  throw new Error('FEEDBACK_INTAKE_ENABLED must be true or false.');
+  throw new FeedbackSwitchInvalid('FEEDBACK_INTAKE_ENABLED must be true or false.');
 }
 
 export type FeedbackOutcome =
@@ -78,8 +94,12 @@ export async function feedbackStep(
   try {
     acknowledged = await intake.pseudonymise(accountId);
   } catch (error) {
-    throw new Error(`The feedback intake did not acknowledge (${faultOf(error)}).`);
+    if (error instanceof FeedbackIntakeUnbuilt) throw error;
+    // The class and the code of the intake's own fault go on as the cause (`faultOf` reads a code there).
+    throw new FeedbackNotAcknowledged(`The feedback intake did not acknowledge (${faultOf(error)}).`, {
+      cause: error,
+    });
   }
-  if (!acknowledged) throw new Error('The feedback intake did not acknowledge.');
+  if (!acknowledged) throw new FeedbackNotAcknowledged('The feedback intake did not acknowledge.');
   return 'done';
 }

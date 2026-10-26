@@ -64,6 +64,7 @@ export function DeleteAccount({ email, secondFactor }: { email: string; secondFa
   const [pending, setPending] = useState(false);
   const ready = useReady();
   const statement = useRef<HTMLParagraphElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   // The control that had focus is gone with the page's state: focus goes to the statement of what was done.
   useEffect(() => {
     if (done) statement.current?.focus();
@@ -93,16 +94,25 @@ export function DeleteAccount({ email, secondFactor }: { email: string; secondFa
       'DELETE',
     );
     setPending(false);
+    // Neither the password nor the code stays in the page, whatever the answer: a refused one is typed again.
+    form.reset();
     if ('fault' in sent) {
       setFault(sent.fault);
       setAttempt((count) => count + 1);
       return;
     }
-    // Neither the password nor the code stays in the page.
-    form.reset();
+    close();
+    setDone(true);
+  }
+
+  /**
+   * Cancel, Escape and the end of a deletion: the dialog keeps its children mounted, so what was typed
+   * and the statement of the last refusal would be there when it is opened again. Neither is.
+   */
+  function close() {
+    formRef.current?.reset();
     setFault(null);
     setOpen(false);
-    setDone(true);
   }
 
   return (
@@ -139,12 +149,12 @@ export function DeleteAccount({ email, secondFactor }: { email: string; secondFa
       </p>
       <Dialog
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={close}
         title={TEXT.control}
         aria-describedby={DIALOG_STATEMENT_ID}
         initialFocusRef={cancel}
       >
-        <form method="post" noValidate onSubmit={confirm}>
+        <form method="post" noValidate ref={formRef} onSubmit={confirm}>
           <Stack gap={5}>
             {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
             <p id={DIALOG_STATEMENT_ID} className={styles.text}>
@@ -186,7 +196,7 @@ export function DeleteAccount({ email, secondFactor }: { email: string; secondFa
               <Button variant="destructive" type="submit" pending={pending} pendingLabel="Deleting account…">
                 {TEXT.control}
               </Button>
-              <Button id={CANCEL_ID} onClick={() => setOpen(false)}>
+              <Button id={CANCEL_ID} onClick={close}>
                 Cancel
               </Button>
             </Cluster>

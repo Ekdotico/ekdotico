@@ -121,6 +121,13 @@ async function handle(request: Request): Promise<Response> {
     };
     if (!verified) return await refusedPassword();
 
+    // A recovery code is looked for here and not spent, as at the turning off of two-factor authentication
+    // (src/lib/auth/two-factor.ts): the code of the authenticator is single-use at the check
+    // (`acceptCode`), and a recovery code that opens a confirmation which the record then refuses (the
+    // account owns a document by now, or its password was set meanwhile) is still its owner's. Where the
+    // confirmation commits, the second-factor row goes with the account in step (d), and the code with it,
+    // so there is nothing left to spend. Spending it in the transaction of the record would cost a write to
+    // a row that step (d) deletes within the hour (docs/plan/slice-22.md, S22-14).
     if (withCode) {
       const factor = await db().twoFactor.findUnique({ where: { userId } });
       const right =

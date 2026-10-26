@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie } from 'better-auth/cookies';
-import { inDeletion } from '../account/in-deletion.ts';
+import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
 import { afterResponse, assertCollecting } from '../after-response.ts';
 import { addressBucket } from '../client-address.ts';
 import { db } from '../db.ts';
@@ -63,6 +63,8 @@ const MESSAGES = {
 // The reset links of the account are rows of the identity library's table of
 // single-use tokens (../token.ts).
 const RESET = RESET_LINK;
+// Thrown inside the transaction of a completed reset, to undo it, where the deletion of the account is confirmed (FR-AU-58 (a)).
+const IN_DELETION = new Error('password reset: the deletion of the account is confirmed');
 
 // FR-AU-87 (c), verbatim. Plain text; nothing of a person but the address it is sent to.
 function resetEmail(to: string, token: string): EmailMessage {
@@ -98,9 +100,6 @@ async function sendResetLink(email: string, now: Date = new Date()): Promise<voi
     select: { id: true, emailVerified: true, updatedAt: true },
   });
   if (!user?.emailVerified) return;
-  // FR-AU-58 (a): an account whose deletion is confirmed is sent no link and no email: its
-  // credentials are deleted (step (d)), so a link would lead to a password that cannot be set.
-  if (await inDeletion(user.id)) return;
   const token = newToken();
   // FR-AU-03: a link is bound to the user, not to the address it is mailed
   // to, and the old address "no longer signs in to it". So the row of the
@@ -116,6 +115,11 @@ async function sendResetLink(email: string, now: Date = new Date()): Promise<voi
       data: { updatedAt: user.updatedAt },
     });
     if (held.count !== 1) return false;
+    // FR-AU-58 (a): an account whose deletion is confirmed is sent no link and no email: its credentials are
+    // deleted (step (d)), so a link would lead to a password that cannot be set. Asked here, with the row of
+    // the account held, and not before the transaction: the record is written under that row, so a record
+    // that commits while this waits for it is found, and one that comes after waits for this.
+    if (await inDeletion(user.id, tx)) return false;
     await tx.verification.create({
       data: {
         id: randomUUID(),
@@ -186,7 +190,11 @@ export async function findOpenReset(
   });
   if (!row) return null;
   const user = await db().user.findUnique({ where: { id: row.value }, select: { email: true } });
-  return user?.email ? { id: row.id, userId: row.value, email: user.email } : null;
+  if (!user?.email) return null;
+  // FR-AU-58 (a): a link written before the confirmation of a deletion does not open from then on, for the
+  // page or for the completion: "the account can make no further request other than those of this deletion".
+  if (await inDeletion(row.value)) return null;
+  return { id: row.id, userId: row.value, email: user.email };
 }
 
 /** The 422 of a new password that does not meet a rule of FR-AU-82, which it names. */
@@ -223,41 +231,51 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
   // NFR-SE-17 (a): the library's own function, scrypt with a salt for each
   // password. Made before the transaction, which it would hold open.
   const hash = await ctx.context.password.hash(entered.newPassword);
-  const completed = await db().$transaction(async (tx) => {
-    // The claim comes first and is one conditional statement: of two
-    // submissions of one link the second waits for the first, then deletes
-    // nothing and changes nothing.
-    const claimed = await tx.verification.deleteMany({
-      where: { id: reset.id, expiresAt: { gt: new Date() } },
+  const completed = await db()
+    .$transaction(async (tx) => {
+      // The claim comes first and is one conditional statement: of two
+      // submissions of one link the second waits for the first, then deletes
+      // nothing and changes nothing.
+      const claimed = await tx.verification.deleteMany({
+        where: { id: reset.id, expiresAt: { gt: new Date() } },
+      });
+      if (claimed.count !== 1) return false;
+      const changed = await tx.account.updateMany({
+        where: { userId: reset.userId, providerId: 'credential' },
+        data: { password: hash },
+      });
+      // No account without a password exists (FR-AU-90). Were one found, nothing
+      // is spent and nothing ended.
+      if (changed.count !== 1) throw new Error('password reset: no credential');
+      // FR-AU-58 (a): a confirmation of the account's deletion that committed since the link was read, or
+      // that is waited for here, ends it: the row of the account is held against it (the credential first, as
+      // the confirmation takes them, so that neither waits for the other in a circle), and what was written
+      // above is undone with the transaction.
+      if (!(await holdOwnableAccount(tx, reset.userId))) throw IN_DELETION;
+      // "The completion of a reset makes void every other reset link of the account."
+      await tx.verification.deleteMany({ where: { value: reset.userId, identifier: { startsWith: RESET } } });
+      // FR-AU-03: a change of address that the old password asked for is not
+      // confirmed after it (address-links.ts; its register row is pending).
+      // After the reset links, as the confirmation of an address takes them.
+      await voidAddressLinks(tx, reset.userId);
+      // FR-AU-83: a second step that the old password began does not complete.
+      // Before the sessions: the second step makes its session first and claims
+      // its row after, so one of the two statements here finds what it made.
+      await tx.verification.deleteMany({
+        where: { value: reset.userId, identifier: { startsWith: SECOND_STEP } },
+      });
+      // "Setting it ends every session of the account" (FR-AU-85).
+      await tx.session.deleteMany({ where: { userId: reset.userId } });
+      // FR-AU-86: it "lifts a lock on the account where one is in force", and
+      // makes void "the sign-in link of a lock email where one is outstanding".
+      // A second step begun from that link went with the steps, above.
+      await liftLock(tx, reset.userId);
+      return true;
+    })
+    .catch((error: unknown) => {
+      if (error === IN_DELETION) return false;
+      throw error;
     });
-    if (claimed.count !== 1) return false;
-    const changed = await tx.account.updateMany({
-      where: { userId: reset.userId, providerId: 'credential' },
-      data: { password: hash },
-    });
-    // No account without a password exists (FR-AU-90). Were one found, nothing
-    // is spent and nothing ended.
-    if (changed.count !== 1) throw new Error('password reset: no credential');
-    // "The completion of a reset makes void every other reset link of the account."
-    await tx.verification.deleteMany({ where: { value: reset.userId, identifier: { startsWith: RESET } } });
-    // FR-AU-03: a change of address that the old password asked for is not
-    // confirmed after it (address-links.ts; its register row is pending).
-    // After the reset links, as the confirmation of an address takes them.
-    await voidAddressLinks(tx, reset.userId);
-    // FR-AU-83: a second step that the old password began does not complete.
-    // Before the sessions: the second step makes its session first and claims
-    // its row after, so one of the two statements here finds what it made.
-    await tx.verification.deleteMany({
-      where: { value: reset.userId, identifier: { startsWith: SECOND_STEP } },
-    });
-    // "Setting it ends every session of the account" (FR-AU-85).
-    await tx.session.deleteMany({ where: { userId: reset.userId } });
-    // FR-AU-86: it "lifts a lock on the account where one is in force", and
-    // makes void "the sign-in link of a lock email where one is outstanding".
-    // A second step begun from that link went with the steps, above.
-    await liftLock(tx, reset.userId);
-    return true;
-  });
   if (!completed) return notValid();
 
   // FR-ED-40 (d): the connections opened under any session of the account close

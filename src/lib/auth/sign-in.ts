@@ -116,10 +116,26 @@ class NoSession extends Error {
 // deleted. So every key of both counts holds a number kept for the address,
 // and clearing raises the number: the counts made under the earlier one are
 // never read again, and leave Valkey when their periods have passed.
-// ponytail: the number has no expiry, one small key for each address that ever
-// reset; were Valkey to evict it, the counts made since the reset are lost with it.
+//
+// The number is a keyed digest of the address, so it is held for as long as the
+// counts it separates and no longer (FR-AU-58 (e): "the counters of NFR-SE-07 that
+// are kept by email address expire within their period"). It expires after the
+// longest period of those two counts, which is 1 hour with the initial values
+// (`generationSeconds`), counted from the last time it was written or read, and every
+// count made under it is read through it (`countKeys`), so a count never outlives
+// its number: one that was made under an earlier number has expired before the number does.
+// And the deletion of the account deletes it (`forgetFailedSignIns`).
 const generationKey = (email: string) =>
   `sign-in-generation:${createHmac('sha256', settings().authSecret).update(`sign-in-generation:${email}`).digest('hex')}`;
+
+/** The longest period of the counts the number separates: with the initial values, 1 hour. */
+const generationSeconds = () => {
+  const { limits } = settings();
+  return Math.max(
+    limits.FAILED_SIGN_IN_PER_EMAIL.windowSeconds,
+    limits.FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS.windowSeconds,
+  );
+};
 
 /**
  * Clears both counts of failed sign-ins for an email address, from every
@@ -127,7 +143,19 @@ const generationKey = (email: string) =>
  * too (FR-AU-81).
  */
 export async function clearFailedSignIns(email: string): Promise<void> {
-  await valkey().incr(generationKey(normalised(email)));
+  const key = generationKey(normalised(email));
+  // One transaction of Valkey: a number that was raised and not given its lifetime would never expire.
+  const done = await valkey().multi().incr(key).expire(key, generationSeconds()).exec();
+  for (const [error] of done ?? []) if (error) throw error;
+}
+
+/**
+ * FR-AU-58 (d), (e): the number of an address that is no longer held by any account is deleted with the
+ * account, so that nothing keyed by the address stays in Valkey but the counts, which expire in their
+ * own periods.
+ */
+export async function forgetFailedSignIns(email: string): Promise<void> {
+  await valkey().del(generationKey(normalised(email)));
 }
 
 /** A limit on failed sign-ins as a check found it, with the key it is counted under. */
@@ -143,7 +171,8 @@ const normalised = enteredAddress;
  * number nor a bucket holds a space, so the first key cannot be read in two ways.
  */
 async function countKeys(email: string, headers: Headers | undefined) {
-  const generation = (await valkey().get(generationKey(email))) ?? '0';
+  // Read, and kept for as long again: the counts made under it live their periods from now.
+  const generation = (await valkey().getex(generationKey(email), 'EX', generationSeconds())) ?? '0';
   return {
     pair: `${generation} ${addressBucket(headers ?? new Headers())} ${email}`,
     everywhere: `${generation} ${email}`,

@@ -19,6 +19,7 @@
 // NFR-SE-19: nothing here logs an address, a name, or a token. The token
 // leaves this module once, inside the email.
 import { Prisma, type DocumentRole as StoredRole } from '../../generated/prisma/client.ts';
+import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
@@ -475,6 +476,8 @@ async function deliver(
     select: { id: true },
   });
   if (!account) return;
+  // FR-AU-58 (a): nothing reaches an account whose deletion is confirmed, neither the notification nor the email.
+  if (await inDeletion(account.id)) return;
   // FR-ED-37, FR-ED-44 (a): to the Owner, or to a user who holds a role, nothing is sent.
   const document = await db().document.findUnique({
     where: { id: documentId },
@@ -648,6 +651,11 @@ export async function answerInvitation(
     // acceptance never falls between the two counts of a creation that would
     // then see one person fewer (FR-ED-37: ten people).
     if (!(await lockDocument(tx, invitation.documentId))) return { outcome: 'no_longer_open' };
+    // FR-AU-58 (f): "a deleted account holds no role". An acceptance gives the account one, so it holds the
+    // account's row against the confirmation of its deletion, as the acceptance of an offer does
+    // (src/lib/account/in-deletion.ts): an acceptance that began before the record is committed before it,
+    // and the deletion's own step ends the role; one that comes after it is refused here.
+    if (answer === 'accept' && !(await holdOwnableAccount(tx, userId))) return { outcome: 'no_longer_open' };
     const { count } = await tx.documentInvitation.updateMany({
       where: { id: invitation.id, emailClaimedAt: { not: null }, ...open(now) },
       data:

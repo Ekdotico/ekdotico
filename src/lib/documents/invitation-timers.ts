@@ -8,6 +8,7 @@
 //
 // NFR-SE-19: nothing here logs an address, a name, or a token. A failure is
 // one line naming the invitation.
+import { inDeletion } from '../account/in-deletion.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
@@ -126,6 +127,8 @@ async function remind(
       select: { id: true },
     });
     if (!account) return null;
+    // FR-AU-58 (a): nothing reaches an account whose deletion is confirmed.
+    if (await inDeletion(account.id, tx)) return null;
     // FR-ED-37, FR-ED-44 (a): a user who holds a role is sent nothing.
     const document = await tx.document.findUnique({
       where: { id: invitation.documentId },
