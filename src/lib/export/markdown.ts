@@ -7,14 +7,26 @@
 // and so that no raw HTML, no link and no image the user did not make can come out of it (NFR-SE-06, NFR-SE-08).
 // The only HTML in a file is the five elements of FR-EX-36 (`u`, `sup`, `sub`, `mark` around escaped text, and `br`
 // in a table cell, which a cell has no other way to break a line with), and the only address is a link's, held to
-// the editor's rule (src/lib/editor/link.ts) when it was read (./read.ts). No character is removed (NFR-I18-03).
+// the editor's rule (src/lib/editor/link.ts) when it was read (./read.ts).
+//
+// WHAT IS NOT KEPT (NFR-I18-03: "no character is removed" of the user's text; register row S21-11). Every code point
+// of a text is in the file, as it is or after a backslash. What Markdown has no way to hold is not: the spaces and
+// tabs at the end of a block and at the edge of a heading, a block of nothing but spaces, a line end that begins or
+// ends a block (a backslash there would be a character), a line end in inline code (a space), and, in a table cell,
+// the line ends of a block (`<br>`).
+//
+// IT IS WRITTEN BY LOOPS, NOT BY SPREADS: `push(...lines)` and `Math.max(...runs)` are calls with an argument for
+// each element, and a call with some 120,000 of them overflows the stack. And no step takes time as the square of a
+// run of spaces (a regular expression anchored at the end does): the white space at the end of what is written is
+// held apart, and cut by a loop (the review of pull request 59).
 import { MAX_ELEMENT_DEPTH } from '../collab/state.ts';
 import type { Block, Cell, Inline, Mark, ReadDocument, Row } from './read.ts';
 
 /**
  * The most a file may be, in bytes. The Docs bound the images of an archive and not the text beside them (register
  * row S21-8), and a document of 5 MB can write a larger file (indentation, escapes, the cells of a table). Past it
- * the export fails before it sends a byte.
+ * the export fails before it sends a byte, and it is asked while the file is written (`spend`), so that a document
+ * that would pass it is stopped and not built whole first.
  */
 export const MARKDOWN_MOST_BYTES = 32 * 1024 * 1024;
 
@@ -37,6 +49,25 @@ export interface MarkdownInput {
   document: ReadDocument;
   /** The relative path of each image of the archive, by the identifier a block holds; a block whose image is not here is written as words. */
   images: ReadonlyMap<string, string>;
+}
+
+/** The numbers footnotes take, in the order the markers are met; what an image is written as; and what has been written. */
+interface Context {
+  notes: Map<string, number>;
+  images: ReadonlyMap<string, string>;
+  /** The bytes written so far, as near as the steps count them: the file is refused past `MARKDOWN_MOST_BYTES`. */
+  bytes: number;
+}
+
+/** Counts what a step writes, and stops the file where it passes the bound. */
+function spend(context: Context, bytes: number): void {
+  context.bytes += bytes;
+  if (context.bytes > MARKDOWN_MOST_BYTES) throw new MarkdownTooLarge();
+}
+
+/** Adds the lines to the end of a list, by a loop (see the head of this file). */
+function append(to: string[], lines: readonly string[]): void {
+  for (const line of lines) to.push(line);
 }
 
 // ── Front matter ────────────────────────────────────────────────────────────
@@ -88,10 +119,27 @@ function atLineStart(text: string): string {
   return text.replace(/^[#>+\-=]/u, '\\$&');
 }
 
+/** The longest run of backticks in a text, by one pass. */
+function longestRun(text: string): number {
+  let longest = 0;
+  let run = 0;
+  for (let at = 0; at < text.length; at += 1) {
+    run = text.charCodeAt(at) === 96 ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  return longest;
+}
+
+/** A text without the spaces and tabs at its end, by a loop: `/[ \t]+$/` takes time as the square of a run of them. */
+function withoutTrailingBlanks(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text.charCodeAt(end - 1) === 32 || text.charCodeAt(end - 1) === 9)) end -= 1;
+  return end === text.length ? text : text.slice(0, end);
+}
+
 /** A backtick span for the code, with a delimiter longer than any run of backticks in it. */
 function codeSpan(code: string): string {
-  const longest = Math.max(0, ...(code.match(/`+/gu) ?? []).map((run) => run.length));
-  const fence = '`'.repeat(longest + 1);
+  const fence = '`'.repeat(longestRun(code) + 1);
   // A space is taken off each side of a span that has one on both; a span that begins or ends with a backtick
   // would run into its delimiter. Either way one space is put on each side to be taken off.
   const pad = /^[ `]|[ `]$/u.test(code) && !/^ +$/u.test(code) ? ' ' : '';
@@ -99,9 +147,10 @@ function codeSpan(code: string): string {
 }
 
 /** An address as a link destination: nothing in it can end the link. It holds no space, control character or backslash (linkAddress). */
-function destination(href: string): string {
+function destination(href: string, cell: boolean): string {
+  // In a cell of a table a vertical bar ends the cell, whatever stands round it: it is written as the escape of an address.
   return href
-    .replace(/[()<>"]/gu, (each) => `%${each.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(cell ? /[()<>"|]/gu : /[()<>"]/gu, (each) => `%${each.charCodeAt(0).toString(16).toUpperCase()}`)
     .replace(REFERENCE, '\\&');
 }
 
@@ -110,7 +159,7 @@ function destination(href: string): string {
  * and is kept, which `trim` of the language would not (NFR-I18-03).
  */
 const blank = (text: string) => /^[ \t\r\n]*$/u.test(text);
-const stripped = (text: string) => text.replace(/^[ \t]+|[ \t]+$/gu, '');
+const stripped = (text: string) => withoutTrailingBlanks(text).replace(/^[ \t]+/u, '');
 const keyOf = (mark: Mark) => (mark.name === 'link' ? `link:${mark.href}` : mark.name);
 /** A run of white space alone that no code span holds. */
 const isSpace = (run: Inline) =>
@@ -130,27 +179,24 @@ const OPEN: Record<Exclude<Mark['name'], 'link' | 'code'>, [string, string]> = {
   highlight: ['<mark>', '</mark>'],
 };
 
-function delimiters(mark: Mark): [string, string] {
-  if (mark.name === 'link') return ['[', `](${destination(mark.href)})`];
+function delimiters(mark: Mark, cell: boolean): [string, string] {
+  if (mark.name === 'link') return ['[', `](${destination(mark.href, cell)})`];
   if (mark.name === 'code') return ['', ''];
   return OPEN[mark.name];
 }
 
 /** How the inline content of one block is written; a table cell and a heading each hold one line. */
 interface Place {
-  /** A cell of a table: a line break is `<br>` and a vertical bar is escaped in code too. */
+  /** A cell of a table: a line break is `<br>`, a vertical bar is escaped in code and in an address too. */
   cell?: boolean;
   /** A heading: one line, and a `#` is escaped wherever it stands. */
   heading?: boolean;
-}
-
-/** The numbers footnotes take, in the order the markers are met, and what an image is written as. */
-interface Context {
-  notes: Map<string, number>;
-  images: ReadonlyMap<string, string>;
+  /** The words of a footnote: a marker in them is nothing. */
+  entry?: boolean;
 }
 
 const BREAK_PATTERN = /\r\n|[\n\r]/u;
+const NO_SPANS: ReadonlyMap<string, number> = new Map();
 
 /**
  * Inline content as Markdown, possibly over several lines (a line break is a backslash at the end of a line).
@@ -159,24 +205,25 @@ const BREAK_PATTERN = /\r\n|[\n\r]/u;
  * the delimiters, since `** a **` is not bold.
  */
 export function inlineMarkdown(content: readonly Inline[], context: Context, place: Place = {}): string {
+  const cell = place.cell === true;
   // A line end in text is a line break, as it would be to a reader of the editor's text; one in code is a space.
-  const expanded = content.flatMap((each): Inline[] => {
+  const expanded: Inline[] = [];
+  for (const each of content) {
     // A marker with no valid identifier is nothing.
-    if (each.kind === 'note' && each.id === null) return [];
+    if (each.kind === 'note' && (each.id === null || place.entry)) continue;
     if (
       each.kind !== 'text' ||
       each.marks.some((mark) => mark.name === 'code') ||
       !BREAK_PATTERN.test(each.text)
     ) {
-      return [each];
+      expanded.push(each);
+      continue;
     }
-    return each.text
-      .split(BREAK_PATTERN)
-      .flatMap((part, at): Inline[] => [
-        ...(at > 0 ? [{ kind: 'break' } as const] : []),
-        ...(part === '' ? [] : [{ ...each, text: part }]),
-      ]);
-  });
+    each.text.split(BREAK_PATTERN).forEach((part, at) => {
+      if (at > 0) expanded.push({ kind: 'break' });
+      if (part !== '') expanded.push({ ...each, text: part });
+    });
+  }
   // Neighbours that hold the same marks are one run.
   const runs: Inline[] = [];
   for (const each of expanded) {
@@ -186,38 +233,63 @@ export function inlineMarkdown(content: readonly Inline[], context: Context, pla
     } else runs.push(each);
   }
   // A line break that begins or ends a block breaks nothing, and the backslash of one would be read as a character;
-  // nor does white space that follows the last. (`isSpace` is declared below, with the other helpers of the file.)
+  // nor does white space that follows the last.
   while (runs.length > 0 && (runs.at(-1)!.kind === 'break' || isSpace(runs.at(-1)!))) runs.pop();
-  // (Blank lines at the start of a block are the same: white space and then a break, as often as there are.)
-  for (
-    let first = runs.findIndex((run) => run.kind !== 'text' || !isSpace(run));
-    runs[first]?.kind === 'break';
-  ) {
-    runs.splice(0, first + 1);
-    first = runs.findIndex((run) => run.kind !== 'text' || !isSpace(run));
+  // (Blank lines at the start of a block are the same: white space and then a break, as often as there are. The
+  // last break of the white space and breaks that open the block is where the block begins.)
+  let begin = 0;
+  for (let at = 0; at < runs.length; at += 1) {
+    const run = runs[at]!;
+    if (run.kind === 'break') begin = at + 1;
+    else if (run.kind !== 'text' || !isSpace(run)) break;
   }
+  const starts = begin === 0 ? runs : runs.slice(begin);
 
-  let out = '';
+  // What is written is in `parts`, in order, and the white space at its end is held apart in `held`, written when
+  // something follows it and dropped when nothing does: a mark that closes is written before it (`**a **` is not
+  // bold), and the end of the block loses it, without a step that looks back over what was written.
+  const parts: string[] = [];
+  let held = '';
   // Where a line begins a block: not in a heading or a cell, which stand after their own syntax.
-  const oneLine = place.heading === true || place.cell === true;
+  const oneLine = place.heading === true || cell;
   let lineStart = !oneLine;
   const open: Mark[] = [];
 
   const emit = (text: string) => {
     if (text === '') return;
-    out += text;
     lineStart = false;
+    let end = text.length;
+    while (end > 0 && (text.charCodeAt(end - 1) === 32 || text.charCodeAt(end - 1) === 9)) end -= 1;
+    if (end === 0) {
+      held += text;
+      return;
+    }
+    if (held !== '') {
+      parts.push(held);
+      held = '';
+    }
+    parts.push(end === text.length ? text : text.slice(0, end));
+    held = text.slice(end);
   };
   const lineBreak = () => {
-    out += place.heading ? ' ' : place.cell ? '<br>' : '\\\n';
+    if (held !== '') {
+      parts.push(held);
+      held = '';
+    }
+    parts.push(place.heading ? ' ' : cell ? '<br>' : '\\\n');
     lineStart = !oneLine;
   };
-  // Closed before any trailing white space: `**a **` is not bold.
+  // Closed before any white space at the end.
   const close = (count: number) => {
     if (count <= 0) return;
-    const closing = open.splice(open.length - count, count).reverse();
-    const tail = /[ \t]*$/u.exec(out)![0];
-    out = out.slice(0, out.length - tail.length) + closing.map((mark) => delimiters(mark)[1]).join('') + tail;
+    for (const mark of open.splice(open.length - count, count).reverse())
+      parts.push(delimiters(mark, cell)[1]);
+  };
+  // A `!` just before a `[` makes the link that follows an image: the one before it is written `\!`.
+  const beforeBracket = () => {
+    if (held !== '' || parts.length === 0) return;
+    const last = parts[parts.length - 1]!;
+    if (last.endsWith('!')) parts[parts.length - 1] = `${last.slice(0, -1)}\\!`;
   };
   const writeText = (text: string) => {
     text.split(BREAK_PATTERN).forEach((part, at) => {
@@ -231,19 +303,21 @@ export function inlineMarkdown(content: readonly Inline[], context: Context, pla
 
   // How many runs from each one on carry each mark (white space alone is carried over): the marks that go on
   // longest are opened first, so that a mark that ends can be closed without closing those that go on.
-  const spans: Map<string, number>[] = [];
-  for (let at = runs.length - 1; at >= 0; at -= 1) {
-    const run = runs[at]!;
-    const next = spans[at + 1];
-    const here = new Map<string, number>();
-    if (run.kind === 'text' && isSpace(run)) next?.forEach((count, key) => here.set(key, count));
-    else if (run.kind === 'text') {
-      for (const mark of run.marks) here.set(keyOf(mark), 1 + (next?.get(keyOf(mark)) ?? 0));
+  const spans: ReadonlyMap<string, number>[] = [];
+  for (let at = starts.length - 1; at >= 0; at -= 1) {
+    const run = starts[at]!;
+    const next = spans[at + 1] ?? NO_SPANS;
+    if (run.kind !== 'text') spans[at] = NO_SPANS;
+    else if (isSpace(run)) spans[at] = next;
+    else if (run.marks.length === 0) spans[at] = NO_SPANS;
+    else {
+      const here = new Map<string, number>();
+      for (const mark of run.marks) here.set(keyOf(mark), 1 + (next.get(keyOf(mark)) ?? 0));
+      spans[at] = here;
     }
-    spans[at] = here;
   }
 
-  runs.forEach((run, at) => {
+  starts.forEach((run, at) => {
     if (run.kind === 'text') {
       const { text, marks } = run;
       const code = marks.some((mark) => mark.name === 'code');
@@ -264,14 +338,14 @@ export function inlineMarkdown(content: readonly Inline[], context: Context, pla
       const lead = code || opening.length === 0 ? '' : /^[ \t]*/u.exec(text)![0];
       if (lead) writeText(lead);
       for (const mark of opening) {
-        emit(delimiters(mark)[0]);
+        if (mark.name === 'link') beforeBracket();
+        emit(delimiters(mark, cell)[0]);
         open.push(mark);
       }
       if (code) {
-        const lines = text.split(BREAK_PATTERN);
         // A code span holds one line: a line break in it is a space.
-        const span = codeSpan(lines.join(' '));
-        emit(place.cell ? span.replace(/\|/gu, '\\|') : span);
+        const span = codeSpan(text.split(BREAK_PATTERN).join(' '));
+        emit(cell ? span.replace(/\|/gu, '\\|') : span);
       } else {
         writeText(text.slice(lead.length));
       }
@@ -281,19 +355,29 @@ export function inlineMarkdown(content: readonly Inline[], context: Context, pla
       else if (run.id !== null) {
         const number = context.notes.get(run.id) ?? context.notes.size + 1;
         context.notes.set(run.id, number);
+        beforeBracket();
         emit(`[^${number}]`);
       }
     }
   });
   close(open.length);
-  // The white space at the end of a block is nothing to Markdown, and a closed mark may have left some.
-  return out.replace(/[ \t]+$/u, '');
+  // What is held is the white space at the end of the block: nothing to Markdown.
+  const written = parts.join('');
+  spend(context, Buffer.byteLength(written));
+  return written;
 }
 
 // ── Blocks ──────────────────────────────────────────────────────────────────
 
-const indented = (lines: string[], by: string) => lines.map((line) => (line === '' ? '' : by + line));
-const quoted = (lines: string[]) => lines.map((line) => (line === '' ? '>' : `> ${line}`));
+/** The lines with a prefix each, and the bytes of the prefixes counted. */
+function indented(lines: string[], by: string, context: Context): string[] {
+  spend(context, lines.length * by.length);
+  return lines.map((line) => (line === '' ? '' : by + line));
+}
+function quoted(lines: string[], context: Context): string[] {
+  spend(context, lines.length * 2);
+  return lines.map((line) => (line === '' ? '>' : `> ${line}`));
+}
 
 /** The lines of a sequence of blocks, a blank line between one and the next. */
 function blocksMarkdown(blocks: readonly Block[], context: Context, depth: number): string[] {
@@ -303,11 +387,14 @@ function blocksMarkdown(blocks: readonly Block[], context: Context, depth: numbe
     const lines = blockMarkdown(block, context, depth, previous);
     if (lines.length === 0) continue;
     if (out.length > 0) out.push('');
-    out.push(...lines);
+    append(out, lines);
     previous = block;
   }
   return out;
 }
+
+/** The marker each list was written with, so that the list that follows one of its kind takes the other. */
+const MARKERS = new WeakMap<Block, string>();
 
 function listMarkdown(
   block: Extract<Block, { kind: 'list' }>,
@@ -315,14 +402,18 @@ function listMarkdown(
   depth: number,
   previous: Block | undefined,
 ): string[] {
-  // A list that follows another of its kind would be read as the same list: a different marker makes it a new one.
-  const after = previous?.kind === 'list' && previous.ordered === block.ordered;
+  // A list that follows another of its kind would be read as the same list: a different marker makes it a new one,
+  // and the third takes the first's again, since it is the second's that it must differ from.
+  const before =
+    previous?.kind === 'list' && previous.ordered === block.ordered ? MARKERS.get(previous) : undefined;
+  const marker = block.ordered ? (before === '.' ? ')' : '.') : before === '-' ? '*' : '-';
+  MARKERS.set(block, marker);
   const out: string[] = [];
   block.items.forEach((item, at) => {
-    const marker = block.ordered ? `${block.start + at}${after ? ')' : '.'} ` : `${after ? '*' : '-'} `;
+    const own = `${block.ordered ? block.start + at : ''}${marker} `;
     const body = itemMarkdown(item, context, depth);
-    const [first = '', ...rest] = body;
-    out.push(`${marker}${first}`.replace(/[ \t]+$/u, ''), ...indented(rest, ' '.repeat(marker.length)));
+    out.push(withoutTrailingBlanks(`${own}${body[0] ?? ''}`));
+    if (body.length > 1) append(out, indented(body.slice(1), ' '.repeat(own.length), context));
   });
   return out;
 }
@@ -336,29 +427,27 @@ function itemMarkdown(item: readonly Block[], context: Context, depth: number): 
     if (lines.length === 0) continue;
     const tight = previous !== undefined && block.kind === 'list' && previous.kind !== 'list';
     if (out.length > 0 && !tight) out.push('');
-    out.push(...lines);
+    append(out, lines);
     previous = block;
   }
   return out;
 }
 
-function imageLines(block: Extract<Block, { kind: 'image' }>, context: Context): string[] {
+function imageLines(block: Extract<Block, { kind: 'image' }>, context: Context, place: Place = {}): string[] {
   const alt = escapeText(block.alt.replace(/\r\n|[\n\r]/gu, ' '));
-  const caption = block.caption ? paragraphLines(block.caption) : [];
+  const caption = block.caption ? paragraphLines(block.caption, context, place) : [];
   const path = block.id === null ? undefined : context.images.get(block.id);
   if (path === undefined) {
     // The image is not available (docs/plan/slice-21.md, S21-1): its words, and no link.
-    return [...(alt ? paragraphLines(block.alt) : []), ...(alt && caption.length ? [''] : []), ...caption];
+    const words = alt ? paragraphLines(block.alt, context, place) : [];
+    return [...words, ...(words.length && caption.length ? [''] : []), ...caption];
   }
   return [`![${alt}](${path})`, ...(caption.length ? ['', ...caption] : [])];
 }
 
-/** A paragraph of plain text: a caption, an alt text on its own. */
-function paragraphLines(text: string): string[] {
-  const written = inlineMarkdown([{ kind: 'text', text, marks: [] }], {
-    notes: new Map(),
-    images: new Map(),
-  });
+/** A paragraph of plain text: a caption, an alt text on its own. In a cell it is one line. */
+function paragraphLines(text: string, context: Context, place: Place = {}): string[] {
+  const written = inlineMarkdown([{ kind: 'text', text, marks: [] }], context, place);
   return blank(written) ? [] : written.split('\n');
 }
 
@@ -374,19 +463,19 @@ function blockMarkdown(block: Block, context: Context, depth: number, previous: 
       return blank(text) ? [] : [`${'#'.repeat(block.level)} ${stripped(text)}`];
     }
     case 'code': {
-      const longest = Math.max(0, ...(block.text.match(/`+/gu) ?? []).map((run) => run.length));
-      const fence = '`'.repeat(Math.max(3, longest + 1));
+      spend(context, Buffer.byteLength(block.text));
+      const fence = '`'.repeat(Math.max(3, longestRun(block.text) + 1));
       const code = block.text === '' ? [] : block.text.split(/\r\n|[\n\r]/u);
       return [`${fence}${block.language ?? ''}`, ...code, fence];
     }
     case 'rule':
       return ['---'];
     case 'quote':
-      return quoted(blocksMarkdown(block.children, context, depth + 1));
+      return quoted(blocksMarkdown(block.children, context, depth + 1), context);
     case 'callout': {
       const label = { note: 'Note', warning: 'Warning', tip: 'Tip' }[block.variant];
       const body = blocksMarkdown(block.children, context, depth + 1);
-      return quoted([`**${label}**`, ...(body.length ? ['', ...body] : [])]);
+      return quoted([`**${label}**`, ...(body.length ? ['', ...body] : [])], context);
     }
     case 'list':
       return listMarkdown(block, context, depth + 1, previous);
@@ -402,33 +491,38 @@ function blockMarkdown(block: Block, context: Context, depth: number, previous: 
 /** The lines a cell holds, in the order of the document, each block flattened to words: a cell is one line of a pipe table. */
 function cellLines(blocks: readonly Block[], context: Context, depth: number): string[] {
   if (depth > MAX_ELEMENT_DEPTH + 1) return [];
+  const here: Place = { cell: true };
   const out: string[] = [];
   for (const block of blocks) {
     switch (block.kind) {
       case 'paragraph':
       case 'heading': {
-        const text = inlineMarkdown(block.content, context, { cell: true });
+        const text = inlineMarkdown(block.content, context, here);
         if (!blank(text)) out.push(text);
         break;
       }
       case 'code':
+        spend(context, Buffer.byteLength(block.text));
         for (const line of block.text.split(/\r\n|[\n\r]/u))
           if (line !== '') out.push(codeSpan(line).replace(/\|/gu, '\\|'));
         break;
       case 'quote':
       case 'callout':
-        out.push(...cellLines(block.children, context, depth + 1));
+        append(out, cellLines(block.children, context, depth + 1));
         break;
       case 'list':
-        for (const item of block.items) out.push(...cellLines(item, context, depth + 1));
+        for (const item of block.items) append(out, cellLines(item, context, depth + 1));
         break;
       case 'table':
         for (const row of block.rows)
-          for (const cell of row) out.push(...cellLines(cell.children, context, depth + 1));
-        if (block.caption) out.push(...paragraphLines(block.caption));
+          for (const cell of row) append(out, cellLines(cell.children, context, depth + 1));
+        if (block.caption) append(out, paragraphLines(block.caption, context, here));
         break;
       case 'image':
-        out.push(...imageLines(block, context).filter((line) => line !== ''));
+        append(
+          out,
+          imageLines(block, context, here).filter((line) => line !== ''),
+        );
         break;
       case 'rule':
         break;
@@ -467,36 +561,74 @@ function gridOf(
 
 function tableMarkdown(block: Extract<Block, { kind: 'table' }>, context: Context, depth: number): string[] {
   const { grid, columns, header } = gridOf(block.rows, context, depth);
-  const caption = block.caption ? paragraphLines(block.caption) : [];
+  const caption = block.caption ? paragraphLines(block.caption, context) : [];
   if (columns === 0) return caption;
   const line = (row: readonly (string | undefined)[]) =>
     `|${Array.from({ length: columns }, (_, at) => (row[at] ? ` ${row[at]} ` : ' ')).join('|')}|`;
-  const [first = [], ...rest] = header ? grid : [[], ...grid];
-  return [
-    line(first),
-    `|${Array.from({ length: columns }, () => ' --- ').join('|')}|`,
-    ...rest.map(line),
-    ...(caption.length ? ['', ...caption] : []),
-  ];
+  const out: string[] = [];
+  out.push(line(header ? (grid[0] ?? []) : []));
+  out.push(`|${Array.from({ length: columns }, () => ' --- ').join('|')}|`);
+  for (const row of header ? grid.slice(1) : grid) out.push(line(row));
+  if (caption.length) {
+    out.push('');
+    append(out, caption);
+  }
+  return out;
+}
+
+// ── Footnotes ───────────────────────────────────────────────────────────────
+
+/**
+ * Whether the words of a footnote, on the line of its label, could be read by a renderer that has no footnotes as the
+ * rest of a link reference definition: `[^1]: https://evil.example/x` is one, and every `[^1]` is then a link to it
+ * (the review of pull request 59). A definition is a label, a destination (one word) and, after it, nothing or a
+ * title; so the line is safe where it holds a second word that does not begin a title. Otherwise the words go on
+ * the lines below, indented, after a blank one (register row S21-10): the footnotes of GitHub, Pandoc and
+ * `markdown-it-footnote` take them as the footnote's, and a renderer without footnotes sees an empty definition,
+ * which is none, and a block of code.
+ */
+function couldBeDefinition(first: string): boolean {
+  const words = first.trim().split(/[ \t]+/u);
+  return words.length === 1 || /^["'(]/u.test(words[1]!);
+}
+
+function definitionLines(
+  number: number,
+  written: string,
+  context: Context,
+): { lines: string[]; loose: boolean } {
+  const label = `[^${number}]:`;
+  if (written === '') return { lines: [label], loose: false };
+  const words = written.split('\n');
+  const lines: string[] = [];
+  if (couldBeDefinition(words[0]!)) {
+    lines.push(label, '');
+    append(lines, indented(words, '    ', context));
+    // A blank line follows it, or the next entry would be read as a line of its last paragraph.
+    return { lines, loose: true };
+  }
+  lines.push(`${label} ${words[0]}`);
+  append(lines, indented(words.slice(1), '    ', context));
+  return { lines, loose: false };
 }
 
 // ── The file ────────────────────────────────────────────────────────────────
 
 /** The Markdown file of a document (FR-EX-36), as text. */
 export function renderMarkdown({ title, id, now, document, images }: MarkdownInput): string {
-  const context: Context = { notes: new Map(), images };
+  const context: Context = { notes: new Map(), images, bytes: 0 };
   const body = blocksMarkdown(document.body, context, 0);
   // The footnotes come after the body, in the order of their markers: the number of a footnote is its place among them.
   const definitions: string[] = [];
+  let loose = false;
   for (const [noteId, number] of context.notes) {
-    const written = inlineMarkdown(document.entries.get(noteId) ?? [], {
-      notes: new Map(),
-      images: new Map(),
-    });
-    const [first = '', ...rest] = written.split('\n');
-    definitions.push(`[^${number}]:${first === '' ? '' : ` ${first}`}`, ...indented(rest, '    '));
+    const written = inlineMarkdown(document.entries.get(noteId) ?? [], context, { entry: true });
+    const entry = definitionLines(number, written, context);
+    if (loose) definitions.push('');
+    append(definitions, entry.lines);
+    loose = entry.loose;
   }
-  const lines = [
+  const lines: string[] = [
     '---',
     `title: ${yamlString(title)}`,
     `date: ${now.toISOString().slice(0, 10)}`,
@@ -505,12 +637,18 @@ export function renderMarkdown({ title, id, now, document, images }: MarkdownInp
     '---',
     '',
     `> ${DRAFT_NOTE}`,
-    ...(body.length ? ['', ...body] : []),
-    ...(definitions.length ? ['', ...definitions] : []),
-    '',
   ];
+  if (body.length) {
+    lines.push('');
+    append(lines, body);
+  }
+  if (definitions.length) {
+    lines.push('');
+    append(lines, definitions);
+  }
+  lines.push('');
   const text = lines.join('\n');
-  // The length of the text in characters bounds the bytes from below, and three times it from above.
+  // The steps counted what they wrote; this is what the file came to.
   if (text.length * 3 > MARKDOWN_MOST_BYTES && Buffer.byteLength(text) > MARKDOWN_MOST_BYTES) {
     throw new MarkdownTooLarge();
   }

@@ -122,7 +122,7 @@ function textOf(run: Y.XmlText): Inline[] {
 function inlineOf(parent: Y.XmlFragment): Inline[] {
   const out: Inline[] = [];
   for (const child of parent.toArray()) {
-    if (isText(child)) out.push(...textOf(child));
+    if (isText(child)) for (const part of textOf(child)) out.push(part);
     else if (isElement(child) && child.nodeName === 'hardBreak') out.push({ kind: 'break' });
     else if (isElement(child) && child.nodeName === 'footnoteReference') {
       const id: unknown = child.getAttribute('id');

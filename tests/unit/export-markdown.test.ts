@@ -171,9 +171,13 @@ describe('blocks (the table of FR-EX-36, row by row)', () => {
   });
 
   it('keeps two lists of one kind that follow each other two lists, by the marker', () => {
-    // The third list follows the second, which already has the other marker: it takes the other of its own.
+    // The third list follows the second: it takes the marker the second does not have, which is the first's
+    // (S3: `* b` and `* c` would be one list).
     expect(md(bullets(item(p('a'))), bullets(item(p('b'))), bullets(item(p('c'))))).toBe(
-      '- a\n\n* b\n\n* c\n',
+      '- a\n\n* b\n\n- c\n',
+    );
+    expect(md(ordered(1, item(p('a'))), ordered(1, item(p('b'))), ordered(1, item(p('c'))))).toBe(
+      '1. a\n\n1) b\n\n1. c\n',
     );
     expect(md(ordered(1, item(p('a'))), ordered(1, item(p('b'))))).toBe('1. a\n\n1) b\n');
   });
@@ -548,9 +552,17 @@ describe('footnotes (the rules of slice 20)', () => {
         '| --- |',
         '| c[^3] |',
         '',
-        '[^1]: c',
-        '[^2]: b',
-        '[^3]: a',
+        '[^1]:',
+        '',
+        '    c',
+        '',
+        '[^2]:',
+        '',
+        '    b',
+        '',
+        '[^3]:',
+        '',
+        '    a',
         '',
       ].join('\n'),
     );
@@ -562,7 +574,7 @@ describe('footnotes (the rules of slice 20)', () => {
         p('a', note(NOTE_A), ' b', note(NOTE_B), ' c', note(NOTE_A)),
         notes(entry(NOTE_A, 'A'), entry(NOTE_B, 'B')),
       ),
-    ).toBe(['a[^1] b[^2] c[^1]', '', '[^1]: A', '[^2]: B', ''].join('\n'));
+    ).toBe(['a[^1] b[^2] c[^1]', '', '[^1]:', '', '    A', '', '[^2]:', '', '    B', ''].join('\n'));
   });
 
   it('finds an entry by its identifier in any list, the first of an identifier in the document winning', () => {
@@ -573,7 +585,20 @@ describe('footnotes (the rules of slice 20)', () => {
         p('a block after the first list'),
         notes(entry(NOTE_A, 'A'), entry(NOTE_B, 'B second'), entry(NOTE_A, 'A again')),
       ),
-    ).toBe(['a[^1][^2]', '', 'a block after the first list', '', '[^1]: A', '[^2]: B first', ''].join('\n'));
+    ).toBe(
+      [
+        'a[^1][^2]',
+        '',
+        'a block after the first list',
+        '',
+        '[^1]:',
+        '',
+        '    A',
+        '',
+        '[^2]: B first',
+        '',
+      ].join('\n'),
+    );
   });
 
   it('writes an entry that has no marker nowhere, and a marker that has no entry with no words', () => {
@@ -586,14 +611,14 @@ describe('footnotes (the rules of slice 20)', () => {
   it('writes no marker that holds no valid identifier, and does not number it', () => {
     for (const id of [null, undefined, '', 'short', 'A'.repeat(24), '../'.repeat(8), 12, `${NOTE_A}0`]) {
       expect(md(p('a', note(id), 'b', note(NOTE_A)), notes(entry(NOTE_A, 'A'))), String(id)).toBe(
-        ['ab[^1]', '', '[^1]: A', ''].join('\n'),
+        ['ab[^1]', '', '[^1]:', '', '    A', ''].join('\n'),
       );
     }
   });
 
   it('puts a line break of an entry on a line of its own, indented under the entry', () => {
     expect(md(p('a', note(NOTE_A)), notes(entry(NOTE_A, 'one', br(), '# two', br(), 'three')))).toBe(
-      ['a[^1]', '', '[^1]: one\\', '    \\# two\\', '    three', ''].join('\n'),
+      ['a[^1]', '', '[^1]:', '', '    one\\', '    \\# two\\', '    three', ''].join('\n'),
     );
   });
 
@@ -604,6 +629,31 @@ describe('footnotes (the rules of slice 20)', () => {
         notes(entry(NOTE_A, tx('bold', { bold: {} }), ' and ', note(NOTE_B), tx(' <b>', { italic: {} }))),
       ),
     ).toBe(['a[^1]', '', '[^1]: **bold** and  *\\<b>*', ''].join('\n'));
+  });
+
+  it('writes no marker inside an entry even where the reader left one, and does not grow the list while it is written', () => {
+    // The reader drops them (./read.ts); the writer is held to the same rule on its own, since a marker met while the
+    // entries are written would add an entry to the list that is being walked.
+    const out = renderMarkdown({
+      title: 'T',
+      id: DOCUMENT_ID,
+      now: NOW,
+      document: {
+        body: [{ kind: 'paragraph', content: [{ kind: 'note', id: NOTE_A }] }],
+        entries: new Map([
+          [
+            NOTE_A,
+            [
+              { kind: 'text', text: 'a b', marks: [] },
+              { kind: 'note', id: NOTE_B },
+            ],
+          ],
+        ]),
+      },
+      images: new Map(),
+    });
+    expect(out).toContain('[^1]: a b\n');
+    expect(out).not.toContain('[^2]');
   });
 
   it('ignores a list of entries that is not at the root, and a marker in one', () => {

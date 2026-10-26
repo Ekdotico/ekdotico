@@ -4,17 +4,23 @@
 // through as syntax shows as a token that is no text. Each test is a place text can stand: a paragraph, an item of a
 // list, a quotation, a callout, a heading, a cell of a table, the alt text and the caption of an image.
 import MarkdownIt from 'markdown-it';
+// @ts-expect-error -- the package ships no declarations; the test uses it as `(parser) => parser.use(plugin)`.
+import footnotes from 'markdown-it-footnote';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
   bodyOf,
+  br,
   bullets,
   cell,
   el,
+  entry,
   headerCell,
   heading,
   image,
   item,
+  note,
+  notes,
   ordered,
   p,
   row,
@@ -24,6 +30,10 @@ import {
 } from './export-fixtures.ts';
 
 const parser = new MarkdownIt({ html: true });
+/** The same parser with the footnotes of GitHub and Pandoc, which the export is written for. */
+const withFootnotes = new MarkdownIt({ html: true }).use(
+  footnotes as (md: InstanceType<typeof MarkdownIt>) => void,
+);
 
 interface Seen {
   /** The types of the block tokens, in order, closing ones left out. */
@@ -333,6 +343,133 @@ describe('the elements a file may hold', () => {
         href,
       ).toBe('go after');
     }
+  });
+});
+
+// The review of pull request 59, S1 and S2: two ways a user's words became syntax that the text tests above did not
+// reach, because the words were right and what stood beside them was not.
+describe('what stands beside the text', () => {
+  it('a `!` at the end of a run is not the start of an image when a link follows it', () => {
+    const body = bodyOf(
+      stateOf(p('Look!', tx('here', { link: { href: 'https://evil.example/pixel.png' } }))),
+    );
+    const seen = read(body);
+    expect(seen.syntax, body).toEqual(['link_open', 'link_close']);
+    expect(seen.text, body).toBe('Look!here');
+    expect(body).toContain('Look\\![here](https://evil.example/pixel.png)');
+    // Inside a mark that goes on, in a cell, and before a footnote marker.
+    for (const content of [
+      p(tx('Look!', { bold: {} }), tx('here', { bold: {}, link: { href: 'https://a.test/' } })),
+      p(tx('Look!'), tx('here', { link: { href: 'https://a.test/' } }), '!', note('a'.repeat(24))),
+    ]) {
+      const text = bodyOf(stateOf(content, notes(entry('a'.repeat(24), 'two words'))));
+      expect(
+        parser
+          .parse(text, {})
+          .flatMap((token) => token.children ?? [])
+          .map((child) => child.type),
+        text,
+      ).not.toContain('image');
+    }
+    const inCell = bodyOf(
+      stateOf(
+        table(
+          '',
+          row(headerCell({}, p('h'))),
+          row(cell({}, p('Look!', tx('x', { link: { href: 'https://a.test/' } })))),
+        ),
+      ),
+    );
+    expect(read(inCell).syntax.filter((type) => type === 'image')).toEqual([]);
+    expect(inCell).toContain('Look\\![x]');
+  });
+
+  it('a footnote that is one word is no link reference definition where footnotes are not known', () => {
+    for (const words of [
+      'https://evil.example/x',
+      'javascript:alert(1)',
+      '<b>',
+      'evil.example',
+      'x "title"',
+      "x 'title'",
+      'x (title)',
+      'x "title',
+    ]) {
+      const state = stateOf(p('see', note('a'.repeat(24))), notes(entry('a'.repeat(24), words)));
+      const body = bodyOf(state);
+      // A renderer that has no footnotes: the marker stays text and nothing is a link.
+      const plain = parser.parse(body, {}).flatMap((token) => token.children ?? []);
+      expect(
+        plain.map((child) => child.type),
+        `${words}: ${body}`,
+      ).not.toContain('link_open');
+      expect(plain.some((child) => child.type === 'text' && child.content.includes('[^1]'))).toBe(true);
+      // A renderer that has them: the marker is a reference, the words are the footnote's.
+      const aware = withFootnotes.parse(body, {});
+      const flat = aware.flatMap((token) => token.children ?? []).map((child) => child.type);
+      expect(flat, `${words}: ${body}`).toContain('footnote_ref');
+      expect(flat).not.toContain('link_open');
+      const block = aware.findIndex((token) => token.type === 'footnote_block_open');
+      expect(block, body).toBeGreaterThan(-1);
+      const inside = aware
+        .slice(block)
+        .filter((token) => token.type === 'inline')
+        .map((token) => token.content)
+        .join(' ');
+      expect(inside.replace(/\\/gu, ''), body).toContain(words.replace(/[<>]/gu, '').split(' ')[0]!);
+    }
+  });
+
+  it('a footnote of several words stays on the line of its label, and a second entry follows a first', () => {
+    const state = stateOf(
+      p('a', note('a'.repeat(24)), note('b'.repeat(24))),
+      notes(entry('a'.repeat(24), 'one', br(), 'two'), entry('b'.repeat(24), 'x y z')),
+    );
+    const body = bodyOf(state);
+    const aware = withFootnotes.parse(body, {});
+    const refs = aware
+      .flatMap((token) => token.children ?? [])
+      .filter((child) => child.type === 'footnote_ref');
+    expect(refs).toHaveLength(2);
+    expect(aware.filter((token) => token.type === 'footnote_open')).toHaveLength(2);
+    expect(body).toContain('[^2]: x y z');
+  });
+
+  it('a vertical bar in the address of a link in a cell does not end the cell', () => {
+    const body = bodyOf(
+      stateOf(
+        table(
+          '',
+          row(headerCell({}, p('h1')), headerCell({}, p('h2'))),
+          row(cell({}, p(tx('x', { link: { href: 'https://e.x/a|b' } }))), cell({}, p('y'))),
+        ),
+      ),
+    );
+    expect(body).toContain('(https://e.x/a%7Cb)');
+    const tokens = parser.parse(body, {});
+    expect(tokens.filter((token) => token.type === 'td_open')).toHaveLength(2);
+    const link = tokens.flatMap((token) => token.children ?? []).find((child) => child.type === 'link_open');
+    expect(link?.attrGet('href')).toBe('https://e.x/a%7Cb');
+    // Outside a table the bar is part of the address as it was.
+    expect(bodyOf(stateOf(p(tx('x', { link: { href: 'https://e.x/a|b' } }))))).toContain('(https://e.x/a|b)');
+  });
+
+  it('a line break in a cell is `<br>` alone, in the alt text and caption of an image as in a paragraph', () => {
+    const body = bodyOf(
+      stateOf(
+        table(
+          '',
+          row(headerCell({}, p('h'))),
+          row(cell({}, image({ id: null, alt: 'one\ntwo', caption: 'three\nfour' }))),
+          row(cell({}, p('five', br(), 'six'))),
+        ),
+      ),
+    );
+    expect(body).toContain('| one<br>two<br>three<br>four |');
+    expect(body).toContain('| five<br>six |');
+    expect(body).not.toContain('\\<br>');
+    expect(body).not.toMatch(/\\\n/u);
+    expect(parser.parse(body, {}).filter((token) => token.type === 'td_open')).toHaveLength(2);
   });
 });
 
