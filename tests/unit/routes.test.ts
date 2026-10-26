@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/lib/documents/permissions.ts';
 import {
   deletedDocumentRoute,
+  duringClearingOf,
   documentRoute,
   permissionOf,
   readsSessionRow,
@@ -87,6 +88,24 @@ const READS_THE_SESSION_ROW = ['src/app/api/documents/[id]/images/[imageId]/rout
 // would restore a document that is not deleted, or rename one that is.
 const ON_A_DELETED_DOCUMENT = ['src/app/api/documents/[id]/restore/route.ts POST'];
 
+// FR-AU-91: what a handler that changes state does for a document in the notice period of a clearing. A handler
+// not in this list is REFUSED with a 409 (the default of `documentRoute`): the period "refuses a request that would
+// change the content, the title, or the images of the document", and the rest it closes (a new invitation, a deletion
+// by hand, a restore). These alone are left open, because they change who may do what and not the document, and
+// do not bring the day forward: removing a collaborator, a change of role, leaving, the permission set, an offer of
+// ownership, and revoking an invitation. A handler that only reads is never refused.
+const OPEN_DURING_A_CLEARING = [
+  'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts PATCH',
+  'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts DELETE',
+  'src/app/api/documents/[id]/leave/route.ts POST',
+  // FR-AU-91, FR-ED-44 (d): the draft export is what the period grants every collaborator (slice 21's route).
+  'src/app/api/documents/[id]/export/draft/route.ts POST',
+  'src/app/api/documents/[id]/permissions/route.ts PUT',
+  'src/app/api/documents/[id]/ownership-offer/route.ts POST',
+  'src/app/api/documents/[id]/ownership-offer/route.ts DELETE',
+  'src/app/api/documents/[id]/invitations/[invitationId]/route.ts DELETE',
+];
+
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const routeOf = (row: string) => row.split(' ')[0]!;
 
@@ -155,6 +174,10 @@ describe('the route handlers of a document', () => {
         expect(readsSessionRow(handler), `${route} ${method}`).toBe(
           READS_THE_SESSION_ROW.includes(`${route} ${method}`),
         );
+        // FR-AU-91: closed during a clearing unless it is on the list of the handlers that are left open.
+        expect(duringClearingOf(handler), `${route} ${method}`).toBe(
+          OPEN_DURING_A_CLEARING.includes(`${route} ${method}`) ? 'allowed' : 'refused',
+        );
       }
     },
   );
@@ -164,11 +187,27 @@ describe('the route handlers of a document', () => {
       ...Object.keys(PERMISSION),
       ...Object.keys(WITHOUT_A_DOCUMENT),
       ...ON_A_DELETED_DOCUMENT,
+      ...OPEN_DURING_A_CLEARING,
     ]) {
       expect(documentRoutes).toContain(routeOf(row));
       const methods = (await handlersOf(routeOf(row))).map(([method]) => method);
       expect(methods, row).toContain(row.split(' ')[1]);
     }
+  });
+
+  // FR-AU-91: refused is what a handler is unless it says otherwise, and the restore of a deleted document always is.
+  it('closes a handler during a clearing unless it is declared open, and knows no handler it did not make', () => {
+    const closed = documentRoute('document.rename', () => new Response());
+    const open = documentRoute('document.leave', () => new Response(), { duringClearing: 'allowed' });
+    expect(duringClearingOf(closed)).toBe('refused');
+    // The draft export is what a clearing grants every collaborator (FR-ED-44 (d)): its route is open without a word.
+    expect(duringClearingOf(documentRoute('document.export.draft', () => new Response()))).toBe('allowed');
+    expect(duringClearingOf(documentRoute('document.export.sealed', () => new Response()))).toBe('refused');
+    expect(duringClearingOf(open)).toBe('allowed');
+    expect(duringClearingOf(deletedDocumentRoute(() => new Response()))).toBe('refused');
+    expect(duringClearingOf(async () => new Response())).toBeUndefined();
+    expect(duringClearingOf(open.bind(null))).toBeUndefined();
+    expect(duringClearingOf(undefined)).toBeUndefined();
   });
 
   it('knows a handler that documentRoute did not make', () => {

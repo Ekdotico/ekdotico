@@ -17,7 +17,9 @@ import type * as Y from 'yjs';
 import { tabbableWithin } from '@ekdotico/domico/a11y';
 import { Button, Cluster, Dialog, FormFault, Stack, SyncStatus } from '@ekdotico/domico/components';
 import { DocumentConnection, syncStatus, type Ending, type Held } from '../../../../lib/collab/client.ts';
+import { CLEARING_ENDED, CLEARING_NOW, CLEARING_UNSAVED } from '../../../../lib/clearing/texts.ts';
 import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL } from '../../../../lib/collab/protocol.ts';
+import { dateText } from '../../../../lib/date-text.ts';
 import type { Limit } from '../../../../lib/collab/shape.ts';
 import { PERMISSIONS_NOW } from '../../../../lib/documents/permission-texts.ts';
 import { ROLE_NAME, type DocumentRole } from '../../../../lib/documents/permissions.ts';
@@ -456,11 +458,11 @@ function HeldChange({ held, text }: { held: Held; text: () => string }) {
  * copied; a change that was not words (a mark, a deletion) is stated, with
  * nothing to copy. The text stays in the document of the tab as well, read-only.
  */
-function Unsaved({ text }: { text: string }) {
+function Unsaved({ text, because = UNSAVED }: { text: string; because?: string }) {
   const [copied, setCopied] = useState<boolean | null>(null);
   return (
     <>
-      <p>{UNSAVED}</p>
+      <p>{because}</p>
       {text ? (
         <Stack gap={3}>
           <Cluster gap={3}>
@@ -478,11 +480,13 @@ function OpenDocument({
   canEdit,
   documentId,
   imageDays,
+  deletedOn: initialDeletedOn,
 }: {
   connection: DocumentConnection;
   canEdit: boolean;
   documentId: string;
   imageDays: number;
+  deletedOn: string | null;
 }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
   // FR-ED-40 (b), (g): the server told this tab that its role, or what its role may do, changed. The page keeps
@@ -540,6 +544,8 @@ function OpenDocument({
   const status = syncStatus(state);
   // FR-ED-40 (b), FR-ED-41: what the server says the connection may do, at each handshake and at each change of role; until it has said, what the page was opened with.
   const mayEdit = state.canEdit ?? canEdit;
+  // FR-AU-91: the day of the deletion as the server last said it, until it has said, the one the page was opened with.
+  const deletedOn = state.deletedOn !== undefined ? state.deletedOn : initialDeletedOn;
   return (
     <Stack gap={4}>
       {/* FR-ED-17: drawn in the header of the page, beside "Sharing" (./people-row.tsx). */}
@@ -569,7 +575,18 @@ function OpenDocument({
           <p>{UNREPAIRED}</p>
         </FormFault>
       ) : null}
-      {state.notice ? (
+      {deletedOn ? (
+        // FR-AU-91, FR-ED-40 (i): the fixed statement, "in place of its editing controls", said again for a new day.
+        <FormFault key={deletedOn} tone="neutral" announce="polite" autoFocus={false}>
+          <p>{CLEARING_NOW(dateText(new Date(deletedOn)))}</p>
+          {state.unsaved ? <Unsaved text={state.unsaved.text} because={CLEARING_UNSAVED} /> : null}
+        </FormFault>
+      ) : state.clearingEnded ? (
+        // The clearing was cancelled for the document, or its ownership passed: it will not be deleted.
+        <FormFault key={`ended ${mayEdit}`} tone="neutral" announce="polite" autoFocus={false}>
+          <p>{CLEARING_ENDED(mayEdit)}</p>
+        </FormFault>
+      ) : state.notice ? (
         // Neither a fault nor the error state: said again for each change of role.
         <FormFault
           key={`${state.notice.role} ${state.notice.canEdit}`}
@@ -623,11 +640,14 @@ export default function Editor({
   canEdit,
   errorAfterMs,
   imageDays,
+  deletedOn,
 }: {
   documentId: string;
   canEdit: boolean;
   errorAfterMs: number;
   imageDays: number;
+  /** FR-AU-91: the day a clearing deletes the document (ISO 8601, UTC), or null. */
+  deletedOn: string | null;
 }) {
   // This module is loaded in the browser alone (./document-view.tsx), so the
   // page's own address is there to read.
@@ -638,6 +658,7 @@ export default function Editor({
         url: `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}${COLLAB_PATH}`,
         documentId,
         errorAfterMs,
+        deletedOn,
         probe: () =>
           fetch(`/api/documents/${documentId}`, { cache: 'no-store', credentials: 'same-origin' }).then(
             (response) => response.status,
@@ -653,6 +674,12 @@ export default function Editor({
   }, [connection]);
 
   return (
-    <OpenDocument connection={connection} canEdit={canEdit} documentId={documentId} imageDays={imageDays} />
+    <OpenDocument
+      connection={connection}
+      canEdit={canEdit}
+      documentId={documentId}
+      imageDays={imageDays}
+      deletedOn={deletedOn}
+    />
   );
 }

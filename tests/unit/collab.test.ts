@@ -136,8 +136,13 @@ describe('what a client may send as an update (src/lib/collab/state.ts)', () => 
 
 describe('what is recorded for a connection (NFR-SE-03 (a))', () => {
   it('holds the user, the document, the role, its permissions, and the session, and nothing else', () => {
-    const recorded = recordConnection(session, { id: ID, permissionSet: defaultPermissionSet() }, 'owner');
+    const recorded = recordConnection(
+      session,
+      { id: ID, permissionSet: defaultPermissionSet(), clearingAt: null },
+      'owner',
+    );
     expect(Object.keys(recorded).sort()).toEqual([
+      'deletedOn',
       'documentId',
       'permissions',
       'role',
@@ -155,7 +160,7 @@ describe('what is recorded for a connection (NFR-SE-03 (a))', () => {
   it.each(ROLES)('records for the role %s the permissions the table gives it by default', (role) => {
     const { permissions } = recordConnection(
       session,
-      { id: ID, permissionSet: defaultPermissionSet() },
+      { id: ID, permissionSet: defaultPermissionSet(), clearingAt: null },
       role,
     );
     const expected = (Object.keys(PERMISSIONS) as Permission[]).filter((permission) =>
@@ -169,7 +174,7 @@ describe('what is recorded for a connection (NFR-SE-03 (a))', () => {
     permissionSet['document.rename'].editor = true;
     // A stored set that was altered gives a Viewer nothing the table fixes.
     permissionSet['document.content.edit'].viewer = true;
-    const document = { id: ID, permissionSet };
+    const document = { id: ID, permissionSet, clearingAt: null };
     expect(recordConnection(session, document, 'editor').permissions).toContain('document.rename');
     expect(recordConnection(session, document, 'viewer').permissions).not.toContain('document.content.edit');
   });
@@ -278,12 +283,18 @@ describe('read-only at the protocol level (NFR-SE-03 (a); FR-ED-44, document.con
     ['viewer', true],
   ] as const)('a connection held as %s: read-only %s', (role, readOnly) => {
     for (const permissionSet of [defaultPermissionSet(), {}, null, 'altered']) {
-      expect(isReadOnly(recordConnection(session, { id: ID, permissionSet }, role))).toBe(readOnly);
+      expect(isReadOnly(recordConnection(session, { id: ID, permissionSet, clearingAt: null }, role))).toBe(
+        readOnly,
+      );
     }
   });
 
   it('is read-only for a role that is not one, and for a record without the permission', () => {
-    expect(isReadOnly(recordConnection(session, { id: ID, permissionSet: {} }, 'admin' as never))).toBe(true);
+    expect(
+      isReadOnly(
+        recordConnection(session, { id: ID, permissionSet: {}, clearingAt: null }, 'admin' as never),
+      ),
+    ).toBe(true);
     expect(isReadOnly({ permissions: [] })).toBe(true);
     expect(isReadOnly({ permissions: ['document.view'] })).toBe(true);
   });

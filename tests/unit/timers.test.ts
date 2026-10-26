@@ -43,6 +43,13 @@ const carryOutDeletions = vi.hoisted(() =>
 );
 vi.mock('../../src/lib/account/deletion-steps.ts', () => ({ carryOutDeletions }));
 
+// NFR-RE-15, FR-AU-91: the deletion of the documents of a clearing and the backstop of its email, which run beside
+// them (tests/integration/clearing-day.test.ts runs them against a database).
+const carryOutClearings = vi.hoisted(() => vi.fn(async () => ({ deleted: 0, kept: 0 })));
+vi.mock('../../src/lib/clearing/deletion.ts', () => ({ carryOutClearings }));
+const deliverUnsentClearingEmails = vi.hoisted(() => vi.fn(async () => 0));
+vi.mock('../../src/lib/clearing/email.ts', () => ({ deliverUnsentClearingEmails }));
+
 const HOUR_MS = 60 * 60 * 1000;
 let stdout: ReturnType<typeof vi.spyOn>;
 let stderr: ReturnType<typeof vi.spyOn>;
@@ -148,6 +155,27 @@ it('runs the steps of an account deletion at start and each hour, and says how m
   carryOutDeletions.mockRejectedValueOnce(Object.assign(new Error('a name'), { code: 'P1001' }));
   await vi.advanceTimersByTimeAsync(HOUR_MS);
   expect(stderr.mock.calls).toEqual([['timer failed: account-deletion-steps (Error P1001)']]);
+});
+
+it('runs the deletion of the documents of a clearing at start and each hour, and says how many it deleted', async () => {
+  vi.resetModules();
+  deleteExpiredSecurityLog.mockResolvedValue(0);
+  deleteExpiredDocuments.mockResolvedValue({ deleted: 0, kept: 0 });
+  const { startTimers, TIMERS } = await import('../../src/lib/timers.ts');
+  expect(Object.keys(TIMERS)).toEqual(expect.arrayContaining(['clearing-deletion', 'clearing-email']));
+  startTimers();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(carryOutClearings).toHaveBeenCalledTimes(1);
+  expect(deliverUnsentClearingEmails).toHaveBeenCalledTimes(1);
+  expect(stdout).not.toHaveBeenCalled();
+  carryOutClearings.mockResolvedValueOnce({ deleted: 2, kept: 1 });
+  await vi.advanceTimersByTimeAsync(HOUR_MS);
+  expect(carryOutClearings).toHaveBeenCalledTimes(2);
+  expect(stdout.mock.calls).toEqual([['timer ran: clearing-deletion (2 deleted)']]);
+  // A fault is the class and the code of it, and the other timers go on.
+  carryOutClearings.mockRejectedValueOnce(Object.assign(new Error('a title'), { code: 'P1001' }));
+  await vi.advanceTimersByTimeAsync(HOUR_MS);
+  expect(stderr.mock.calls).toEqual([['timer failed: clearing-deletion (Error P1001)']]);
 });
 
 it('says "cleared", and not "deleted", of an address a clearing emptied from a row that stays', async () => {

@@ -2900,6 +2900,8 @@ describe('what is recorded for a connection, and a role that cannot edit (NFR-SE
         role: 'owner',
         // Every permission of FR-ED-44 but the one the Owner never holds.
         permissions: Object.keys(PERMISSIONS).filter((permission) => permission !== 'document.leave'),
+        // FR-AU-91: the day a clearing deletes the document, null for a document in none.
+        deletedOn: null,
         sessionId: session.id,
         // The place of NFR-PE-05 and the slot of the cursor (FR-ED-17), which are the server's own bookkeeping
         // and not of the record of NFR-SE-03 (a): tests/integration/presence.test.ts.

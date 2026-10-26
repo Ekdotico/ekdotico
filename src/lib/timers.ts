@@ -3,6 +3,8 @@
 import { carryOutDeletions } from './account/deletion-steps.ts';
 import { clearAdmissionAddresses } from './admission/invitations.ts';
 import { deleteExpiredRemovedNotifications } from './documents/access-notifications.ts';
+import { carryOutClearings } from './clearing/deletion.ts';
+import { deliverUnsentClearingEmails } from './clearing/email.ts';
 import { deleteExpiredDocuments } from './documents/deletion.ts';
 import {
   clearInvitationAddresses,
@@ -60,6 +62,13 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // repeated here until it succeeds, under the claim of the deletion (it needs a claim to be safe
   // on two instances, which the others above do not); says how many steps it carried out.
   'account-deletion-steps': async () => (await carryOutDeletions()).steps,
+  // NFR-RE-15, "the clearing of all of an account's documents" (FR-AU-91): the permanent deletion of each document
+  // a clearing confirmed, "idempotent and repeated on a timer ... until every one of them is deleted" (a shared one
+  // from its day on), under the document's own claim; says how many documents it deleted.
+  'clearing-deletion': async () => (await carryOutClearings()).deleted,
+  // NFR-RE-15, the email of the notice of a clearing: the backstop of the hand-over after the response, under the
+  // clearing's own claim, so that it is sent once. Deletes nothing and says 0.
+  'clearing-email': () => deliverUnsentClearingEmails(),
 };
 
 function runTimers(): void {

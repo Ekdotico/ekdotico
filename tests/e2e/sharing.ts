@@ -113,6 +113,23 @@ export function setPermissions(documentId: string, permissions: string[]) {
   expect(ran.status, ran.stderr).toBe(0);
 }
 
+/** Runs the timer of the clearings of one Owner once, their days brought this many days nearer (tests/e2e/run-clearing.ts). */
+export function runClearing(ownerAddress: string, daysAhead: number) {
+  const ran = spawnSync('node', ['tests/e2e/run-clearing.ts', ownerAddress, String(daysAhead)], {
+    env: {
+      ...process.env,
+      FOUNDING_TEAM_EMAILS: '',
+      APP_ORIGIN,
+      DATABASE_URL: process.env.E2E_DATABASE_URL,
+      VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+      AUTH_SECRET,
+    },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(ran.status, ran.stderr).toBe(0);
+}
+
 /** Moves the expiry of the pending invitations to an address into the past (tests/e2e/expire-invitation.ts). */
 export function expire(address: string) {
   const ran = spawnSync('node', ['tests/e2e/expire-invitation.ts', address], {

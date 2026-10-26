@@ -21,6 +21,7 @@
 // logs a name, an address, a title or an identifier of a person.
 import type { Prisma } from '../../generated/prisma/client.ts';
 import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
+import { announce as announceClearing, takeOutOfClearing } from '../clearing/clearing.ts';
 import { publishCollabEvent } from '../collab/events.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
@@ -242,7 +243,9 @@ export type OfferResult =
   /** A recorded document, or one in an institutional workspace: a 409. */
   | { outcome: 'not_transferable' }
   /** NFR-SE-07, S17-7: past the offers an Owner may make in an hour: a 429. */
-  | { outcome: 'rate_limited'; retryAfterSeconds: number };
+  | { outcome: 'rate_limited'; retryAfterSeconds: number }
+  /** FR-AU-91: the day of the clearing has come: no offer "may still be made". A 409. */
+  | { outcome: 'clearing_over' };
 
 /**
  * The document, read under its row, when the caller is its Owner now. FR-ED-44:
@@ -256,6 +259,7 @@ async function ownedUnderLock(tx: Tx, documentId: string, callerId: string) {
     select: {
       ownerId: true,
       recording: true,
+      clearingAt: true,
       workspace: { select: { type: true } },
       collaborators: { where: { userId: callerId }, select: { id: true } },
     },
@@ -287,6 +291,9 @@ export async function makeOffer(
       const owned = await ownedUnderLock(tx, documentId, callerId);
       if (owned.stop) return owned.stop;
       if (!transferable(owned.document)) return { outcome: 'not_transferable' };
+      // FR-AU-91: "An offer of ownership may still be made for the document" while its notice period runs; the day
+      // has come and the document is the timer's (review item 2).
+      if (owned.document.clearingAt && owned.document.clearingAt <= now) return { outcome: 'clearing_over' };
 
       const found =
         typeof collaboratorId === 'string' && IDENTIFIER.test(collaboratorId)
@@ -527,7 +534,9 @@ export type AnswerResult =
   | { outcome: 'accepted'; documentId: string }
   | { outcome: 'declined' }
   | { outcome: 'no_longer_open' }
-  | { outcome: 'not_open_to_account' };
+  | { outcome: 'not_open_to_account' }
+  /** FR-AU-91, FR-AU-92: the day of the clearing has come: an acceptance takes no document out of it. A 409. */
+  | { outcome: 'clearing_over' };
 
 /** After the commit: tells the collaboration server to look at this person's connections to this document. */
 const announce = (documentId: string, userId: string) =>
@@ -548,73 +557,98 @@ export async function answerOffer(
   answer: 'accept' | 'decline',
   given?: Date,
 ): Promise<AnswerResult> {
-  const done = await db().$transaction(async (tx): Promise<AnswerResult & { from?: string }> => {
-    const first = await judge(tx, userId, offerId, given ?? new Date());
-    const documentId = first.offer?.documentId ?? first.stale;
-    if (!documentId) {
-      const { outcome } = first.view;
-      return outcome === 'accepted' ? { outcome: 'no_longer_open' } : (first.view as AnswerResult);
-    }
-    if (!(await lockDocument(tx, documentId))) return { outcome: 'no_longer_open' };
-    // Again, under the row: what was read a moment ago may have been decided since. The time is read
-    // here, after the wait for the row, so that an acceptance that waited cannot pass the offer's time.
-    const now = given ?? new Date();
-    const judged = await judge(tx, userId, offerId, now);
-    if (!judged.offer) {
-      if (judged.stale) await settle(tx, documentId, now);
-      const { outcome } = judged.view;
-      return outcome === 'accepted' ? { outcome: 'no_longer_open' } : (judged.view as AnswerResult);
-    }
-    const { offer } = judged;
-    // FR-AU-58: "no deleted account is ever the Owner of a document". An acceptance makes the account
-    // an Owner, so it holds the account's row against the confirmation of its deletion, as the
-    // creation of a document does (src/lib/account/in-deletion.ts). The offer is declined by the
-    // deletion's own step (`declineOffersTo`).
-    if (answer === 'accept' && !(await holdOwnableAccount(tx, userId))) return { outcome: 'no_longer_open' };
-    const { count } = await tx.ownershipOffer.updateMany({
-      where: { id: offer.id, toUserId: userId, ...open(now) },
-      data: { state: answer === 'accept' ? 'ACCEPTED' : 'DECLINED', respondedAt: now },
-    });
-    if (count !== 1) return { outcome: 'no_longer_open' };
-    // FR-ED-42: the notification of an offer stays until the offer is no longer pending.
-    await tx.notification.deleteMany({ where: notificationsOf([offer.id]) });
-    if (answer === 'decline') {
-      // S17-5: the Owner is told that the Editor declined, in the transaction of the decline.
-      await notifyOfferEnded(tx, {
-        ownerId: offer.fromUserId,
-        toUserId: userId,
-        documentId,
-        end: 'declined',
+  const done = await db().$transaction(
+    async (tx): Promise<AnswerResult & { from?: string; leftClearing?: boolean }> => {
+      const first = await judge(tx, userId, offerId, given ?? new Date());
+      const documentId = first.offer?.documentId ?? first.stale;
+      if (!documentId) {
+        const { outcome } = first.view;
+        return outcome === 'accepted' ? { outcome: 'no_longer_open' } : (first.view as AnswerResult);
+      }
+      if (!(await lockDocument(tx, documentId))) return { outcome: 'no_longer_open' };
+      // Again, under the row: what was read a moment ago may have been decided since. The time is read
+      // here, after the wait for the row, so that an acceptance that waited cannot pass the offer's time.
+      const now = given ?? new Date();
+      const judged = await judge(tx, userId, offerId, now);
+      if (!judged.offer) {
+        if (judged.stale) await settle(tx, documentId, now);
+        const { outcome } = judged.view;
+        return outcome === 'accepted' ? { outcome: 'no_longer_open' } : (judged.view as AnswerResult);
+      }
+      const { offer } = judged;
+      // FR-AU-58: "no deleted account is ever the Owner of a document". An acceptance makes the account
+      // an Owner, so it holds the account's row against the confirmation of its deletion, as the
+      // creation of a document does (src/lib/account/in-deletion.ts). The offer is declined by the
+      // deletion's own step (`declineOffersTo`).
+      if (answer === 'accept' && !(await holdOwnableAccount(tx, userId)))
+        return { outcome: 'no_longer_open' };
+      // FR-AU-91, FR-AU-92: "an offer of ownership that is accepted during that period takes the document out of the
+      // clearing". After the day it takes nothing out: the document is the timer's, and an acceptance would leave it
+      // read-only for ever with no Owner's clearing to delete it (review item 2). Declining stays open.
+      if (answer === 'accept') {
+        const held = await tx.document.findUnique({
+          where: { id: documentId },
+          select: { clearingAt: true },
+        });
+        if (held?.clearingAt && held.clearingAt <= now) return { outcome: 'clearing_over' };
+      }
+      const { count } = await tx.ownershipOffer.updateMany({
+        where: { id: offer.id, toUserId: userId, ...open(now) },
+        data: { state: answer === 'accept' ? 'ACCEPTED' : 'DECLINED', respondedAt: now },
       });
-      return { outcome: 'declined' };
-    }
+      if (count !== 1) return { outcome: 'no_longer_open' };
+      // FR-ED-42: the notification of an offer stays until the offer is no longer pending.
+      await tx.notification.deleteMany({ where: notificationsOf([offer.id]) });
+      if (answer === 'decline') {
+        // S17-5: the Owner is told that the Editor declined, in the transaction of the decline.
+        await notifyOfferEnded(tx, {
+          ownerId: offer.fromUserId,
+          toUserId: userId,
+          documentId,
+          end: 'declined',
+        });
+        return { outcome: 'declined' };
+      }
 
-    // FR-AU-13: "the document moves to the personal workspace of its new Owner", the one exception.
-    // The workspace is created where it is missing (the backstop of FR-AU-09).
-    let workspace = await tx.workspace.findUnique({ where: { ownerId: userId }, select: { id: true } });
-    if (!workspace) {
-      await tx.workspace.createMany({ data: [{ type: 'PERSONAL', ownerId: userId }], skipDuplicates: true });
-      workspace = await tx.workspace.findUniqueOrThrow({ where: { ownerId: userId }, select: { id: true } });
-    }
-    // `updatedAt` is not named: a transfer is not an edit.
-    const moved = await tx.document.updateMany({
-      where: { id: documentId, ownerId: offer.fromUserId },
-      data: { ownerId: userId, workspaceId: workspace.id },
-    });
-    if (moved.count !== 1) throw new Error('The document is not held by the maker of the offer.');
-    // FR-ED-19: the Owner holds no row; the former Owner becomes an Editor.
-    const left = await tx.documentCollaborator.deleteMany({ where: { documentId, userId } });
-    if (left.count !== 1) throw new Error('The new Owner held no collaborator row.');
-    await tx.documentCollaborator.create({
-      data: { documentId, userId: offer.fromUserId, role: 'EDITOR', addedAt: now, roleSince: now },
-    });
-    // S17-5: the notices of ended offers say "You are still its Owner"; the former Owner is not, from here.
-    await endOfferEndedNotifications(tx, offer.fromUserId, documentId);
-    await securityLogIn(tx, { kind: 'owner_changed', userId, documentId });
-    return { outcome: 'accepted', documentId, from: offer.fromUserId };
-  });
+      // FR-AU-13: "the document moves to the personal workspace of its new Owner", the one exception.
+      // The workspace is created where it is missing (the backstop of FR-AU-09).
+      let workspace = await tx.workspace.findUnique({ where: { ownerId: userId }, select: { id: true } });
+      if (!workspace) {
+        await tx.workspace.createMany({
+          data: [{ type: 'PERSONAL', ownerId: userId }],
+          skipDuplicates: true,
+        });
+        workspace = await tx.workspace.findUniqueOrThrow({
+          where: { ownerId: userId },
+          select: { id: true },
+        });
+      }
+      // `updatedAt` is not named: a transfer is not an edit.
+      const moved = await tx.document.updateMany({
+        where: { id: documentId, ownerId: offer.fromUserId },
+        data: { ownerId: userId, workspaceId: workspace.id },
+      });
+      if (moved.count !== 1) throw new Error('The document is not held by the maker of the offer.');
+      // FR-ED-19: the Owner holds no row; the former Owner becomes an Editor.
+      const left = await tx.documentCollaborator.deleteMany({ where: { documentId, userId } });
+      if (left.count !== 1) throw new Error('The new Owner held no collaborator row.');
+      await tx.documentCollaborator.create({
+        data: { documentId, userId: offer.fromUserId, role: 'EDITOR', addedAt: now, roleSince: now },
+      });
+      // S17-5: the notices of ended offers say "You are still its Owner"; the former Owner is not, from here.
+      await endOfferEndedNotifications(tx, offer.fromUserId, documentId);
+      await securityLogIn(tx, { kind: 'owner_changed', userId, documentId });
+      // FR-AU-91: "its acceptance takes the document out of the clearing, since the account no longer owns it".
+      // Under the document's row, which this transaction holds, and after the roles are rewritten, so that the
+      // people told "it will not be deleted" are those who hold a role now, the former Owner among them.
+      const leftClearing = await takeOutOfClearing(tx, { documentId, ownerId: offer.fromUserId, now });
+      return { outcome: 'accepted', documentId, from: offer.fromUserId, leftClearing };
+    },
+  );
   if (done.outcome === 'accepted') {
     await Promise.all([announce(done.documentId, done.from!), announce(done.documentId, userId)]);
+    // FR-ED-40 (i): the connections of everyone else, read-only until now, return in place.
+    if (done.leftClearing) await announceClearing([done.documentId]);
   }
   return done.outcome === 'accepted' ? { outcome: 'accepted', documentId: done.documentId } : done;
 }

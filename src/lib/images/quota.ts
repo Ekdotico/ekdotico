@@ -16,7 +16,9 @@ export type Reservation =
   /** The document is gone or deleted, or the uploader holds no role on it now: the 404 of a document (FR-ED-39). */
   | { ok: false; reason: 'not_found' }
   /** The uploader holds a role on it that no longer holds `document.content.edit`: a 403. */
-  | { ok: false; reason: 'forbidden' };
+  | { ok: false; reason: 'forbidden' }
+  /** FR-AU-91: the document is in a clearing, or claimed for its deletion: no one adds an image to it. */
+  | { ok: false; reason: 'clearing' };
 
 /**
  * Admits an image of `byteSize` bytes to a document, by writing its row, or
@@ -57,6 +59,8 @@ export async function reserveImage(
       select: {
         ownerId: true,
         permissionSet: true,
+        clearingAt: true,
+        deletionClaimedAt: true,
         collaborators: { where: { userId: input.uploadedById }, select: { role: true } },
       },
     });
@@ -71,6 +75,11 @@ export async function reserveImage(
     if (!document || !role) return { ok: false, reason: 'not_found' };
     if (!holds(document.permissionSet, role, 'document.content.edit'))
       return { ok: false, reason: 'forbidden' };
+    // FR-AU-91: read under the document's row, as the role is: a confirmation that committed while the
+    // body was being received is not outrun by the upload.
+    if (document.clearingAt !== null || document.deletionClaimedAt !== null) {
+      return { ok: false, reason: 'clearing' };
+    }
 
     const { _sum } = await transaction.documentImage.aggregate({
       where: { documentId: input.documentId },

@@ -10,8 +10,14 @@ import { documentRoute } from '../../../../../lib/documents/route.ts';
 export const dynamic = 'force-dynamic';
 
 /** 204; or the 404 of a document, or a role, that is not there now. */
-export const POST = documentRoute('document.leave', async ({ document, session }) => {
-  const left = await leaveDocument(document.id, session.userId);
-  if (left.outcome === 'not_found') return refusal({ outcome: 'not_found' }, session.userId, document.id);
-  return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
-});
+export const POST = documentRoute(
+  'document.leave',
+  async ({ document, session }) => {
+    const left = await leaveDocument(document.id, session.userId);
+    if (left.outcome === 'not_found') return refusal({ outcome: 'not_found' }, session.userId, document.id);
+    return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+  },
+  // FR-AU-91: a collaborator may leave a document that is to be deleted; that "has the effect of a removal" and
+  // does not bring the day forward.
+  { duringClearing: 'allowed' },
+);

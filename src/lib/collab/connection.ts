@@ -19,21 +19,34 @@ export interface CollabConnection {
   permissions: readonly Permission[];
   /** `Session.id` of the session whose cookie the handshake presented. */
   sessionId: string;
+  /**
+   * FR-AU-91, FR-ED-40 (i): the day on which a clearing deletes the document (ISO 8601, UTC), or null. While
+   * it is set the connection is read-only whatever the role: `permissions` does not hold the right to edit.
+   */
+  deletedOn: string | null;
 }
 
 export function recordConnection(
   session: { userId: string; sessionId: string },
-  document: { id: string; permissionSet: unknown },
+  document: { id: string; permissionSet: unknown; clearingAt: Date | null },
   role: DocumentRole,
 ): CollabConnection {
+  const clearing = document.clearingAt !== null;
   return {
     userId: session.userId,
     documentId: document.id,
     role,
-    permissions: (Object.keys(PERMISSIONS) as Permission[]).filter((permission) =>
-      holds(document.permissionSet, role, permission),
+    // FR-ED-40 (i): "every connection to it becomes read-only in place, as under (f), whatever its role, the
+    // Owner's included ... While the period lasts, no event of (b) or (g) makes a connection to the document
+    // editable". The one place the rule is written: a role raised to Editor, or a permission set changed, is
+    // read through here, and cannot give back what the period takes.
+    permissions: (Object.keys(PERMISSIONS) as Permission[]).filter(
+      (permission) =>
+        holds(document.permissionSet, role, permission) &&
+        !(clearing && permission === 'document.content.edit'),
     ),
     sessionId: session.sessionId,
+    deletedOn: document.clearingAt?.toISOString() ?? null,
   };
 }
 

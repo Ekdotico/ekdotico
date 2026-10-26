@@ -50,13 +50,20 @@ export const PATCH = documentRoute(
     );
     return changedAnswer(result, session.userId, document.id);
   },
+  // FR-AU-91: a change of role does not change the document, and does not bring the day forward; no role makes a
+  // connection editable while the period lasts (FR-ED-40 (i)).
+  { duringClearing: 'allowed' },
 );
 
 /** No body, and none is read. */
-export const DELETE = documentRoute('document.collaborators.remove', async ({ document, session, params }) =>
-  removedAnswer(
-    await removeCollaborator(document.id, session.userId, String(params.collaboratorId)),
-    session.userId,
-    document.id,
-  ),
+export const DELETE = documentRoute(
+  'document.collaborators.remove',
+  async ({ document, session, params }) =>
+    removedAnswer(
+      await removeCollaborator(document.id, session.userId, String(params.collaboratorId)),
+      session.userId,
+      document.id,
+    ),
+  // FR-AU-91: "Removing a collaborator during the period does not bring the deletion forward".
+  { duringClearing: 'allowed' },
 );

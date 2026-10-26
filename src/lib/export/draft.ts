@@ -126,10 +126,16 @@ export async function draftExport({ document, session }: DocumentCall): Promise<
       return limitedAnswer(counted.retryAfterSeconds);
     }
 
-    // The state and the title as they are now, of a document that is not deleted: a deletion since the request was
+    // The state and the title as they are now, of a document that is not deleted (or that waits for its day): a deletion since the request was
     // authorised ends the export as it ends every other access.
+    const clock = new Date();
     const current = await db().document.findFirst({
-      where: { id: document.id, deletedAt: null },
+      where: {
+        id: document.id,
+        // FR-AU-91, FR-ED-44 (d): and a document deleted before a clearing, while the notice period of that clearing
+        // runs: "each of them may take a draft export of it until the day of the deletion". Not a moment after it.
+        OR: [{ deletedAt: null }, { clearingAt: { gt: clock }, deletionClaimedAt: null }],
+      },
       select: { title: true, yjsState: true },
     });
     if (!current) {

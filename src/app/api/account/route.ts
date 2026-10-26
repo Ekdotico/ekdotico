@@ -22,14 +22,13 @@ import { after } from 'next/server';
 import { carryOutDeletions } from '../../../lib/account/deletion-steps.ts';
 import { confirmDeletion, ownedDocuments } from '../../../lib/account/deletion.ts';
 import { afterResponse, collecting } from '../../../lib/after-response.ts';
-import { auth } from '../../../lib/auth/auth.ts';
+
 import { fault, notAdmitted, refusedOrigin, unauthenticated } from '../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../lib/auth/session.ts';
-import { checkCredentials, SIGN_IN_REFUSED } from '../../../lib/auth/sign-in.ts';
-import { checkSecondFactorAtPrompt, standing } from '../../../lib/auth/two-factor.ts';
-import { db } from '../../../lib/db.ts';
+
+import { standing } from '../../../lib/auth/two-factor.ts';
+import { passwordRefused, promptAccount, verifyPrompt } from '../../../lib/account/prompt.ts';
 import { errorResponse, notJson, readJson, textFields } from '../../../lib/http.ts';
-import { securityLog } from '../../../lib/security-log.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +41,6 @@ const MESSAGES = {
   passwordShape: 'The request must hold the current password, and nothing else. The account was not deleted.',
   codeShape:
     'The request must hold the current password and a code, and nothing else. The account was not deleted.',
-  code: 'The code is not correct. Enter the code that the authenticator application shows now, or a recovery code that has not been used.',
 };
 
 /** FR-AU-58: "the answer states how many". The deletion screen words it again for the page; this is for a program. */
@@ -92,12 +90,9 @@ async function handle(request: Request): Promise<Response> {
     if (unsupported) return unsupported;
     const body = await readJson(request, MAX_BODY_BYTES);
 
-    const account = await db().user.findUnique({
-      where: { id: userId },
-      select: { email: true, twoFactorEnabled: true },
-    });
-    if (!account?.email) return unauthenticated();
-    const secondFactor = account.twoFactorEnabled === true;
+    const account = await promptAccount(userId);
+    if (!account) return unauthenticated();
+    const { secondFactor } = account;
     // "…and for a code where two-factor authentication is on": the shape depends on the account, as
     // the server reads it now, and a page that was drawn before it changed is told so.
     const withCode = secondFactor ? textFields(body, 'password', 'code') : null;
@@ -111,33 +106,13 @@ async function handle(request: Request): Promise<Response> {
       );
     }
 
-    const context = await auth().$context;
-    // Q10: a wrong password counts as a failed sign-in; a prompt refused by a limit or a lock, or by the
-    // deletion itself, is answered as a wrong password is, with the statement of FR-AU-81. NFR-SE-19: a 403.
-    const { verified } = await checkCredentials(context, request.headers, account.email, entered.password);
-    const refusedPassword = async () => {
-      await securityLog({ kind: 'forbidden', userId });
-      return errorResponse(403, 'password_refused', SIGN_IN_REFUSED);
-    };
-    if (!verified) return await refusedPassword();
-
-    // A recovery code is looked for here and not spent, as at the turning off of two-factor authentication
-    // (src/lib/auth/two-factor.ts): the code of the authenticator is single-use at the check
-    // (`acceptCode`), and a recovery code that opens a confirmation which the record then refuses (the
-    // account owns a document by now, or its password was set meanwhile) is still its owner's. Where the
-    // confirmation commits, the second-factor row goes with the account in step (d), and the code with it,
-    // so there is nothing left to spend. Spending it in the transaction of the record would cost a write to
-    // a row that step (d) deletes within the hour (docs/plan/slice-22.md, S22-14).
-    if (withCode) {
-      const factor = await db().twoFactor.findUnique({ where: { userId } });
-      const right =
-        factor?.verified === true &&
-        (await checkSecondFactorAtPrompt({ context }, request.headers, account.email, factor, withCode.code));
-      if (!right) {
-        await securityLog({ kind: 'forbidden', userId });
-        return errorResponse(403, 'code_refused', MESSAGES.code);
-      }
-    }
+    // Q10 and the code: src/lib/account/prompt.ts, the one prompt of the two confirmations of the screen.
+    const prompt = await verifyPrompt(request, userId, account, {
+      password: entered.password,
+      ...(withCode ? { code: withCode.code } : {}),
+    });
+    if (!prompt.ok) return prompt.response;
+    const { verified } = prompt;
 
     // Inside the transaction of the record the password and the session are asked again, each as a write,
     // as every change under a prompt asks them.
@@ -149,7 +124,7 @@ async function handle(request: Request): Promise<Response> {
       case 'not_found':
         return unauthenticated();
       case 'outrun':
-        return await refusedPassword();
+        return await passwordRefused(userId);
       case 'confirmed':
       case 'already_confirmed':
         // "so that a confirmed deletion completes without the user": the steps begin once the

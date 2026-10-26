@@ -14,6 +14,12 @@
 // (FR-ED-42: "without quoting document content"). The title of a role change is
 // read when the list is read.
 import type { Prisma } from '../../generated/prisma/client.ts';
+import {
+  CLEARING_CANCELLED,
+  CLEARING_DELETED,
+  CLEARING_DELETED_STAYS_DAYS,
+  CLEARING_NOTICE,
+} from '../clearing/notices.ts';
 import { db } from '../db.ts';
 import { OFFER_ENDED_NOTIFICATION, OFFER_ENDED_STAYS_DAYS } from './ownership-notifications.ts';
 import { COLLABORATOR_ROLE, type DocumentRole } from './permissions.ts';
@@ -91,6 +97,11 @@ export async function deleteExpiredRemovedNotifications(now: Date = new Date()):
           kind: OFFER_ENDED_NOTIFICATION,
           createdAt: { lte: new Date(now.getTime() - OFFER_ENDED_STAYS_DAYS * DAY_MS) },
         },
+        {
+          // FR-AU-91: "stays in the list for 30 days", and holds the title of a document that is gone.
+          kind: CLEARING_DELETED,
+          createdAt: { lte: new Date(now.getTime() - CLEARING_DELETED_STAYS_DAYS * DAY_MS) },
+        },
       ],
     },
   });
@@ -117,7 +128,16 @@ export async function deleteAccessNotificationsOf(
 ): Promise<void> {
   await tx.notification.deleteMany({
     where: {
-      kind: { in: [ROLE_CHANGED_NOTIFICATION, REMOVED_NOTIFICATION, OFFER_ENDED_NOTIFICATION] },
+      kind: {
+        in: [
+          ROLE_CHANGED_NOTIFICATION,
+          REMOVED_NOTIFICATION,
+          OFFER_ENDED_NOTIFICATION,
+          // FR-AU-91: the notices of a clearing name the document too, and have no subject once it is gone.
+          CLEARING_NOTICE,
+          CLEARING_CANCELLED,
+        ],
+      },
       payload: { path: ['documentId'], equals: documentId },
     },
   });

@@ -45,6 +45,12 @@ export type NotificationItem =
   | (Shown & { kind: 'removed' })
   // FR-ED-42, FR-ED-47: ownership of a document is offered to the person; the title is shown, behind sign-in (S17-2, D202).
   | (Shown & { kind: 'ownership_offer'; ownerName: string; title: string; offerId: string })
+  // FR-ED-42, FR-AU-91: the document will be deleted by a clearing of its Owner's documents, on the day (ISO 8601, UTC).
+  | (Shown & { kind: 'clearing_notice'; documentId: string; title: string; deleteOn: string })
+  // FR-ED-42, FR-AU-91: the clearing was cancelled for the document, or its ownership passed: it will not be deleted.
+  | (Shown & { kind: 'clearing_cancelled'; documentId: string; title: string })
+  // FR-ED-42, FR-AU-91: the document was deleted; there is nothing to link to, and the title is kept for 30 days.
+  | (Shown & { kind: 'clearing_deleted'; title: string })
   // FR-ED-42, S17-5: the Owner's offer ended without the Owner's own action; the Owner holds the document still.
   | (Shown & {
       kind: 'ownership_offer_ended';
@@ -98,6 +104,26 @@ function Statement({ notification }: { notification: NotificationItem }) {
       );
     case 'ownership_offer_ended':
       return <OfferEnded notification={notification} />;
+    // FR-AU-91, verbatim, the title and the day filled in. The day is in the browser's zone, so the sentence is the browser's.
+    case 'clearing_notice':
+      return (
+        <InBrowser>
+          <bdi>{notification.title}</bdi> will be deleted by its Owner on{' '}
+          <LocalTime at={notification.deleteOn} />. You can take a draft export until then.
+        </InBrowser>
+      );
+    case 'clearing_cancelled':
+      return (
+        <>
+          <bdi>{notification.title}</bdi> will not be deleted.
+        </>
+      );
+    case 'clearing_deleted':
+      return (
+        <>
+          <bdi>{notification.title}</bdi> was deleted by its Owner. It cannot be restored.
+        </>
+      );
   }
 }
 
@@ -168,6 +194,8 @@ function Subject({ notification }: { notification: NotificationItem }) {
       }
     // falls through: a document that stands is opened as for a change of role
     case 'role_changed':
+    case 'clearing_notice':
+    case 'clearing_cancelled':
       return (
         <Link
           id={`open-${notification.id}`}
@@ -186,6 +214,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
         </Link>
       );
     case 'removed':
+    case 'clearing_deleted':
       return null;
   }
 }

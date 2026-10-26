@@ -163,8 +163,7 @@ function base32(text: string): string {
 }
 
 // ── What is stored (NFR-SE-17 (a)) ──────────────────────────────────────────
-const seal = (ctx: GenericEndpointContext, data: string) =>
-  symmetricEncrypt({ key: ctx.context.secretConfig, data });
+const seal = (ctx: Keyed, data: string) => symmetricEncrypt({ key: ctx.context.secretConfig, data });
 // What the reading of a stored secret asks of a request: the library's key, which an endpoint of the
 // library has as its context and a route of the application has as `await auth().$context`.
 type Keyed = { context: Pick<AuthContext, 'secretConfig'> };
@@ -741,6 +740,45 @@ export function checkSecondFactorAtPrompt(
       ? acceptCode(await unseal(ctx, factor.secret), entered)
       : without(await recoveryCodes(ctx, factor.backupCodes), entered) !== null,
   );
+}
+
+/**
+ * As `checkSecondFactorAtPrompt`, for an action that SPENDS a recovery code (FR-AU-83: "a recovery code is accepted
+ * in its place and is then spent"): the clearing of documents, which leaves the account in use, so that a code
+ * that opened one confirmation opens no second (docs/plan/slice-23.md, review item 1). `spend` is null for a
+ * code of the authenticator, and otherwise a write for the transaction of the action, to be made LAST and only
+ * where the action is carried out: over the codes as they were read, so of two requests with one code the second
+ * finds it gone (false). A refused action leaves the code its owner's.
+ */
+export async function checkSecondFactorToSpend(
+  ctx: Keyed,
+  headers: Headers | undefined,
+  email: string,
+  factor: { id: string; secret: string; backupCodes: string },
+  entered: string,
+): Promise<{ right: boolean; spend: ((tx: Prisma.TransactionClient) => Promise<boolean>) | null }> {
+  const read: { fewer: string | null } = { fewer: null };
+  const right = await checkCodeAtPrompt(headers, email, async () => {
+    if (isCode(entered)) return acceptCode(await unseal(ctx, factor.secret), entered);
+    const left = without(await recoveryCodes(ctx, factor.backupCodes), entered);
+    if (left === null) return false;
+    read.fewer = await seal(ctx, JSON.stringify(left));
+    return true;
+  });
+  const { fewer } = read;
+  return {
+    right,
+    spend:
+      right && fewer !== null
+        ? async (tx) =>
+            (
+              await tx.twoFactor.updateMany({
+                where: { id: factor.id, backupCodes: factor.backupCodes },
+                data: { backupCodes: fewer },
+              })
+            ).count === 1
+        : null,
+  };
 }
 
 /**

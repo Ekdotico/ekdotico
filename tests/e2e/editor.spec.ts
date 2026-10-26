@@ -4528,6 +4528,92 @@ test('an Editor whose role becomes Viewer is made read-only in place and told, a
   await other.close();
 });
 
+// FR-AU-91, FR-ED-40 (i), register D117, A103: a shared document in the notice period of a clearing is read-only for
+// everyone, the Owner included, in place: the editor of every open tab states the fixed statement of the requirement
+// in place of its editing controls, within 5 seconds of the confirmation, and says that the document will not be
+// deleted, and is editable again, when the Owner cancels. The words of the second statement are for the owner's
+// approval (docs/plan/slice-23.md, section 6).
+test('a document in the notice period of a clearing is read-only in every open tab, with the fixed statement, and editable again when the clearing is cancelled', async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  const owner = { ...newPerson(), name: 'Ada Owner' };
+  await enter(page, owner);
+  const id = await shareNew(page);
+  const editor = { ...newPerson(), name: 'Bea Editor' };
+  const other = await browser.newContext();
+  const theirs = await other.newPage();
+  await enter(theirs, editor);
+  await invite(page, [editor.email], 'Editor');
+  await expect(page.getByText('2 of 10 people')).toBeVisible();
+  await page.goto(`/documents/${id}`);
+  await expect(status(page, 'In sync')).toBeVisible();
+  await accept(theirs, editor.email, id);
+  await expect(status(theirs, 'In sync')).toBeVisible();
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
+  await text(theirs).click();
+  await theirs.keyboard.type('Written before.');
+  await expect(text(page)).toContainText('Written before.');
+  const statement = (tab: Page) =>
+    tab
+      .getByRole('status')
+      .filter({ hasText: /This document will be deleted on \d{1,2} \w{3} \d{4}, \d{2}:\d{2}\./ });
+  const ended = (tab: Page, words: string) => tab.getByRole('status').filter({ hasText: words });
+
+  // The Owner confirms the clearing from the deletion screen, in a tab of its own.
+  const screen = await page.context().newPage();
+  await screen.goto('/settings/delete-account');
+  await screen.getByRole('button', { name: 'Clear all documents' }).click();
+  const dialog = screen.getByRole('dialog', { name: 'Clear all documents' });
+  await dialog.getByLabel('Current password').fill(owner.password);
+  await dialog.getByRole('button', { name: 'Delete 1 document permanently' }).click();
+  await expect(screen.getByRole('button', { name: 'Cancel deletion' })).toBeVisible();
+
+  // Within 5 seconds of the confirmation, and with no reload: the Editor's tab and the Owner's.
+  for (const tab of [theirs, page]) {
+    await expect(statement(tab)).toHaveText(
+      /^This document will be deleted on \d{1,2} \w{3} \d{4}, \d{2}:\d{2}\. You can read it and take a draft export\. It cannot be edited\.$/,
+      { timeout: 5000 },
+    );
+    await expect(text(tab)).toHaveAttribute('aria-readonly', 'true');
+    await expect(text(tab)).toContainText('Written before.');
+  }
+  await text(theirs).click();
+  await theirs.keyboard.type('Nothing of this.');
+  await text(page).click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type('Nor of this.');
+  await expect(text(theirs)).not.toContainText('Nothing of this.');
+  await expect(text(theirs)).not.toContainText('Nor of this.');
+  await expect(text(page)).not.toContainText('Nothing of this.');
+  await expect(text(page)).not.toContainText('Nor of this.');
+  await expectNoSidewaysScroll(theirs);
+  await screens(theirs, 'editor-clearing');
+
+  // A page opened in the period is read-only from the first paint, with the statement.
+  await theirs.reload();
+  await expect(statement(theirs)).toBeVisible();
+  await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
+
+  // Cancelled: the same connections are editable again, in place, and say that the document will not be deleted.
+  await screen.getByRole('button', { name: 'Cancel deletion' }).click();
+  await expect(screen.getByRole('status').filter({ hasText: 'The deletion was cancelled.' })).toBeVisible();
+  for (const tab of [theirs, page]) {
+    await expect(
+      ended(tab, 'This document will not be deleted. It can be edited in this tab again.'),
+    ).toBeVisible({
+      timeout: 5000,
+    });
+    await expect(statement(tab)).toHaveCount(0);
+    await expect(text(tab)).toHaveAttribute('aria-readonly', 'false');
+  }
+  await placeAtEnd(text(theirs).locator('p').first());
+  await theirs.keyboard.type(' And again.');
+  await expect(text(page)).toContainText('And again.');
+  await other.close();
+});
+
 // FR-ED-17, S14-1, S14-6, F14-1 (docs/plan/presence-row.md, §2.1, §5): the people who have the document
 // open, a Viewer among them, are one row of pictures in the header beside "Sharing": the initials on the
 // colour of each person's connection, and to a screen reader a list of names and roles. Past four, the rest

@@ -56,9 +56,9 @@ model User {
   accounts          Account[]
   twoFactor         TwoFactor?
   // FR-AU-09: at most one, by the unique `Workspace.ownerId`.
-  personalWorkspace Workspace? @relation("PersonalWorkspace")
+  personalWorkspace Workspace?             @relation("PersonalWorkspace")
   // FR-ED-19: the documents the account is the Owner of.
-  ownedDocuments    Document[] @relation("DocumentOwner")
+  ownedDocuments    Document[]             @relation("DocumentOwner")
   // FR-ED-19, FR-ED-21, FR-ED-42: the roles held through an accepted
   // invitation, the invitations made, and the notifications received.
   collaborations    DocumentCollaborator[]
@@ -67,6 +67,8 @@ model User {
   // FR-ED-47: the offers of ownership the account made and received.
   offersMade        OwnershipOffer[]       @relation("OfferedBy")
   offersReceived    OwnershipOffer[]       @relation("OfferedTo")
+  // FR-AU-91: the clearings of its documents that the account confirmed.
+  clearings         DocumentClearing[]
 }
 
 model Session {
@@ -279,6 +281,13 @@ model Document {
   // that was not finished is taken over once it is an hour old. NOT on the
   // Data models page: reported to the owner, with the plan's choice.
   deletionClaimedAt DateTime?
+  // FR-AU-91, FR-ED-40 (i), register A103: the day on which a clearing of its Owner's documents deletes
+  // this one, a copy of `DocumentClearing.deleteSharedAt`, which is the source of the day. While it is
+  // set the document is read-only for everyone, the Owner included, no invitation is created, and it
+  // is not renamed, deleted by hand or restored (src/lib/clearing/period.ts). For a document that is
+  // not shared, the time of the confirmation (docs/plan/slice-23.md, S23-2). Null again where the
+  // clearing is cancelled for the document or its ownership passes to another account.
+  clearingAt        DateTime?
   createdAt         DateTime       @default(now())
   // When the document was last EDITED: created, renamed, or its state stored.
   // Not `@updatedAt`, under which every write moves it, the deletion, the
@@ -506,4 +515,41 @@ model AccountDeletion {
   claimedAt         DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
+// ─── Clearing the documents (FR-AU-91; Data models, "Clearing") ──────────────
+
+enum ClearingScope {
+  ALL
+  DELETED_ONLY
+}
+
+// One row for each confirmed clearing of an account's documents, written in the transaction of the
+// confirmation (src/lib/clearing/clearing.ts) so that the clearing completes without the user
+// (NFR-RE-15). `documentIds` are the documents the user confirmed, fixed at the confirmation: only
+// those are deleted, each idempotently, and a document the account comes to own afterwards is never
+// touched by it. `sharedDocumentIds` are those of them that were shared at the confirmation: they are
+// deleted at `deleteSharedAt`, 7 days later, and the others at once. `cancelledDocumentIds` are the
+// documents taken out of the clearing, by the Owner's cancellation or because their ownership passed
+// to another account (docs/plan/slice-23.md, S23-4): none of them is deleted by it.
+//
+// Two departures from Data models (S23-3, S23-4): `emailsClaimedAt`, the claim of the one email each
+// collaborator is sent, set before any is handed over; and the use of `cancelledDocumentIds` for a
+// document whose ownership passed. By hand in the migration: the checks that tie the lists together.
+// It holds an account identifier and document identifiers and no personal field (§2.7).
+model DocumentClearing {
+  id                   String        @id @default(cuid())
+  userId               String
+  scope                ClearingScope
+  documentIds          String[]      @default([]) @db.Uuid
+  sharedDocumentIds    String[]      @default([]) @db.Uuid
+  cancelledDocumentIds String[]      @default([]) @db.Uuid
+  requestedAt          DateTime      @default(now())
+  deleteSharedAt       DateTime?
+  completedAt          DateTime?
+  emailsClaimedAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
 }

@@ -5,8 +5,9 @@
 // anyone but the Owner, and for a document that is not deleted or whose
 // retention has ended, the answer is the 404 of every other document route.
 //
-// The 409 of the page, for a document that a clearing treats as shared, joins
-// with the clearing (FR-AU-91): until then no document is in that state.
+// FR-AU-91: a document that a clearing treats as shared "cannot be restored under FR-ED-36 during the period":
+// `deletedDocumentRoute` answers it with a 409, and the restore itself carries the condition.
+import { refusedByClearing } from '../../../../../lib/clearing/answer.ts';
 import { refusal } from '../../../../../lib/documents/access.ts';
 import { restoreDocument } from '../../../../../lib/documents/deletion.ts';
 import { deletedDocumentRoute } from '../../../../../lib/documents/route.ts';
@@ -19,6 +20,12 @@ const NO_STORE = { 'Cache-Control': 'no-store' };
 export const POST = deletedDocumentRoute(async ({ document, session }) => {
   const restored = await restoreDocument(document);
   // Its retention ended, or the timer took it, since it was authorised: gone, as to anyone.
-  if (!restored) return refusal({ outcome: 'not_found' }, session.userId, document.id);
+  // Or a clearing took it since (FR-AU-91): it "cannot be restored under FR-ED-36 during the period", a 409.
+  if (!restored) {
+    return (
+      (await refusedByClearing(document.id, 'restore')) ??
+      refusal({ outcome: 'not_found' }, session.userId, document.id)
+    );
+  }
   return Response.json(restored, { headers: NO_STORE });
 });

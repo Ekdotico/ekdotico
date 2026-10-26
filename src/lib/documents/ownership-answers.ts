@@ -4,6 +4,7 @@
 //
 // Nothing here is of Next.js: the route hands over its `after`.
 import { tooManyRequests } from '../auth/route-answers.ts';
+import { CLEARING_MESSAGES } from '../clearing/texts.ts';
 import { errorResponse } from '../http.ts';
 import { refusal } from './access.ts';
 import { deliverOffer, type AnswerResult, type OfferResult, type WithdrawResult } from './ownership.ts';
@@ -45,6 +46,8 @@ export async function offeredAnswer(
       return errorResponse(409, 'offer_pending', OFFER_MESSAGES.pending);
     case 'not_transferable':
       return errorResponse(409, 'not_transferable', OFFER_MESSAGES.notTransferable);
+    case 'clearing_over':
+      return errorResponse(409, 'too_late', CLEARING_MESSAGES.offerTooLate);
     case 'rate_limited':
       // NFR-SE-07, S17-7: the same answer, in the same words, as the limit of invitations.
       return tooManyRequests('OFFERS_PER_USER', userId, result.retryAfterSeconds, userId);
@@ -81,6 +84,8 @@ export function answered(result: AnswerResult): Response {
       return Response.json({ message: OFFER_STATEMENTS.declined }, { headers: NO_STORE });
     case 'no_longer_open':
       return errorResponse(404, 'no_longer_open', OFFER_STATEMENTS.noLongerOpen);
+    case 'clearing_over':
+      return errorResponse(409, 'too_late', CLEARING_MESSAGES.acceptTooLate);
     case 'not_open_to_account':
       return errorResponse(404, 'not_open_to_account', OFFER_STATEMENTS.notOpenToAccount);
   }

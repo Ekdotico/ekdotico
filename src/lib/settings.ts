@@ -128,6 +128,11 @@ export interface Settings {
   documentInvitationAddressDays: number;
   /** FR-ED-47: how long an offer of ownership stays pending, "14 days … (an initial value)". */
   ownershipOfferDays: number;
+  /**
+   * FR-AU-91: how long a shared document waits between the confirmation of a clearing and its deletion, "7 days
+   * (an initial value, and a setting)". It is the notice its collaborators are given to take a copy.
+   */
+  clearingNoticeDays: number;
   /** NFR-SE-19: how long a security log entry is kept. */
   securityLogRetentionDays: number;
   /** FR-ED-36: how long a deleted document is retained, and can be restored, before it is deleted permanently. */
@@ -515,6 +520,7 @@ export function loadSettings(env: Env = process.env): Settings {
     invitationReminderDays,
     documentInvitationAddressDays,
     ownershipOfferDays: wholeNumber(env, 'OWNERSHIP_OFFER_DAYS', 14, 1),
+    clearingNoticeDays: wholeNumber(env, 'CLEARING_NOTICE_DAYS', 7, 1),
     securityLogRetentionDays: wholeNumber(env, 'SECURITY_LOG_RETENTION_DAYS', 30, 1),
     deletedDocumentRetentionDays,
     // At least 1 each: a limit of 0 would refuse every image, a period of 0 would delete an image

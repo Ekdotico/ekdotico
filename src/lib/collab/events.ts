@@ -7,7 +7,9 @@
 // The events are the list of FR-ED-40 and no other. Built so far: (a) and (b),
 // a removal, a leave, and a change of role (`collaborator-changed`); (c), the
 // deletion of a document; (d), the end of a session (`session-ended`); and
-// (g), a change of the permission set (`permission-set-changed`). The
+// (g), a change of the permission set (`permission-set-changed`), and (i), a
+// document entering or leaving the notice period of a clearing
+// (`clearing-changed`). The
 // slices that build the others add a member to `CollabEvent`, a case to
 // `readEvent`, a publish after the commit of the change, and a case where the
 // collaboration server acts on an event.
@@ -54,7 +56,13 @@ export type CollabEvent =
    * server looks at every open connection to it and applies the new set in
    * place, closing none and switching none between editable and read-only.
    */
-  | { kind: 'permission-set-changed'; documentId: string };
+  | { kind: 'permission-set-changed'; documentId: string }
+  /**
+   * FR-ED-40 (i): a clearing was confirmed for this document, or cancelled for it, or its ownership
+   * passed to another account. The server looks at every open connection to it and makes each read-only
+   * in place, or gives it back what its role allows (the rows decide, as for (g)).
+   */
+  | { kind: 'clearing-changed'; documentId: string };
 
 /**
  * The one channel. Every instance of the collaboration server subscribes to it.
@@ -93,6 +101,7 @@ export function readEvent(message: string): CollabEvent | null {
     return { kind, documentId: document, userId: user };
   if (kind === 'session-ended' && user) return { kind, userId: user };
   if (kind === 'permission-set-changed' && document) return { kind, documentId: document };
+  if (kind === 'clearing-changed' && document) return { kind, documentId: document };
   return null;
 }
 
@@ -111,6 +120,7 @@ function messageOf(event: CollabEvent): string {
     case 'session-ended':
       return JSON.stringify({ kind: event.kind, userId: event.userId });
     case 'permission-set-changed':
+    case 'clearing-changed':
       return JSON.stringify({ kind: event.kind, documentId: event.documentId });
   }
 }

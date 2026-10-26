@@ -460,6 +460,8 @@ describe('the list of documents (FR-ED-35; API design, "Documents")', () => {
         'updatedAt',
         'canRename',
         'canDelete',
+        // FR-AU-91: the day a clearing deletes the document, null for a document in none.
+        'clearingAt',
       ]);
       expect(document.recording).toBe('UNRECORDED');
       // The Owner's controls (FR-ED-44): a document shared with the account may hold neither.

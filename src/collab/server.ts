@@ -572,12 +572,24 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       }
       if (!handled) console.error('collab: a downgrade did not wait for all the messages it had received');
     }
-    const { role: was, permissions: held } = connection.context;
+    const { role: was, permissions: held, deletedOn: day } = connection.context;
     const changed = readOnly !== connection.readOnly;
-    Object.assign(connection.context, { role: record.role, permissions: record.permissions });
+    Object.assign(connection.context, {
+      role: record.role,
+      permissions: record.permissions,
+      deletedOn: record.deletedOn,
+    });
     connection.readOnly = readOnly;
-    if (changed || record.role !== was) {
-      connection.sendStateless(roleNotice({ role: record.role, canEdit: !readOnly }));
+    // FR-ED-40 (i): the day of a clearing is told as a role is: a connection that was read-only already
+    // (a Viewer) still learns that the document will be deleted, and that it will not be.
+    if (changed || record.role !== was || record.deletedOn !== day) {
+      connection.sendStateless(
+        roleNotice({
+          role: record.role,
+          canEdit: !readOnly,
+          ...(record.deletedOn === null ? {} : { deletedOn: record.deletedOn }),
+        }),
+      );
     } else if (!sameList(held, record.permissions)) {
       // FR-ED-40 (g): the role is the same and what it holds on this document is not. The
       // connection stays open and stays as editable as it was: that is fixed by role.
@@ -755,7 +767,8 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     if (stopping) return;
     if (event.kind === 'document-deleted') await endDocument(event.documentId);
     else if (event.kind === 'collaborator-changed') await look(pairKey(event.documentId, event.userId));
-    else if (event.kind === 'permission-set-changed') await look(documentKey(event.documentId));
+    else if (event.kind === 'permission-set-changed' || event.kind === 'clearing-changed')
+      await look(documentKey(event.documentId));
     else await look(event.userId);
   }
 
@@ -1073,7 +1086,13 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // connection and not only at a change. A client that was away while its
       // role changed learns it here (its scope says whether it may edit, and
       // this says in which role); one that was not takes it for what it knows.
-      connection.sendStateless(roleNotice({ role: context.role, canEdit: !isReadOnly(context) }));
+      connection.sendStateless(
+        roleNotice({
+          role: context.role,
+          canEdit: !isReadOnly(context),
+          ...(context.deletedOn === null ? {} : { deletedOn: context.deletedOn }),
+        }),
+      );
       // And who is present, the new connection among them (FR-ED-17).
       tellPeople(connection.document);
       const at = ended.get(documentName);

@@ -24,6 +24,8 @@
 // The body is the bytes of the image and nothing else. No file name is read
 // from anywhere, and the declared `Content-Type` is not looked at.
 import { fault } from '../auth/route-answers.ts';
+import { db } from '../db.ts';
+import { refusedByClearing } from '../clearing/answer.ts';
 import { refusal } from '../documents/access.ts';
 import type { DocumentCall } from '../documents/route.ts';
 import { faultOf } from '../fault.ts';
@@ -87,6 +89,14 @@ export async function uploadImage({ request, document, session }: DocumentCall):
     if (!reservation.ok) {
       if (reservation.reason === 'full')
         return fullAnswer(reservation.limitBytes, settings().imageUnreferencedDays);
+      // FR-AU-91: the document entered a clearing since the request was authorised: a 409, as for every request that
+      // would change its images.
+      if (reservation.reason === 'clearing') {
+        return (
+          (await refusedByClearing(document.id, 'change')) ??
+          (await refusal({ outcome: 'not_found' }, session.userId, document.id))
+        );
+      }
       // Read again under the lock: the 404 and the 403 of every route of a document, the 403 written to the log.
       return reservation.reason === 'not_found'
         ? await refusal({ outcome: 'not_found' }, session.userId, document.id)
@@ -95,6 +105,15 @@ export async function uploadImage({ request, document, session }: DocumentCall):
     reserved = reservation.image.id;
 
     await storage.put(objectKey, prepared.bytes, prepared.contentType);
+    // The document may have been deleted between the reservation and the put (a clearing deletes its images as it
+    // deletes it): the row is gone, and an object put after it would be one that nothing names and nothing deletes.
+    if (
+      !(await db().documentImage.findUnique({ where: { id: reservation.image.id }, select: { id: true } }))
+    ) {
+      await storage.remove(objectKey);
+      reserved = null;
+      return await refusal({ outcome: 'not_found' }, session.userId, document.id);
+    }
     return Response.json(
       { id: reservation.image.id, contentType: prepared.contentType, byteSize: prepared.bytes.length },
       { status: 201, headers: { 'Cache-Control': 'no-store' } },

@@ -23,6 +23,8 @@ export function DocumentView(props: {
   errorAfterMs: number;
   /** NFR-SE-18: how many days an image out of the document is kept, for the words of a block whose image is gone. */
   imageDays: number;
+  /** FR-AU-91: the day a clearing deletes the document (ISO 8601, UTC), or null. */
+  deletedOn: string | null;
 }) {
   return <Editor {...props} />;
 }

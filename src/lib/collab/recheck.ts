@@ -4,11 +4,11 @@
 // Pure: the collaboration server (src/collab/server.ts) does the reading, the
 // timer, and the closing.
 //
-// NOT CHECKED, because the column that says it does not exist yet: whether the
-// document is in the notice period of a clearing (FR-ED-40 (i); FR-AU-91;
-// `Document.clearingAt` arrives with the clearing), and whether it is
-// export-locked (FR-ED-40 (f); FR-EX-03). Each is one more reading here, and
-// one more cause for `switch`, when its slice adds the column.
+// The notice period of a clearing (FR-ED-40 (i); FR-AU-91) is read here through the record: the access
+// carries the document's row, `recordConnection` leaves the right to edit out of it while `clearingAt` is set,
+// and so the re-check is the backstop of the event, as FR-ED-41 asks. NOT CHECKED, because the column that says
+// it does not exist yet: whether the document is export-locked (FR-ED-40 (f); FR-EX-03). It is one more reading
+// here, and one more cause for `switch`, when its slice adds the column.
 //
 // Nothing here is of Next.js.
 import type { Access } from '../documents/access.ts';
@@ -80,6 +80,11 @@ export function decide(
   // The record holds what the document's permission set gives the role (`recordConnection` asks
   // `holds` of the set the access carries), so a change of the set with the role unchanged is a
   // switch too (FR-ED-40 (g)).
-  const same = record.role === open.role && sameList(record.permissions, open.permissions);
+  // FR-ED-40 (i): the day of a clearing is part of the record too, so that a connection that is read-only
+  // already (a Viewer) is still told that the document will be deleted, and told again when it will not.
+  const same =
+    record.role === open.role &&
+    sameList(record.permissions, open.permissions) &&
+    record.deletedOn === open.deletedOn;
   return same ? { action: 'keep' } : { action: 'switch', record };
 }

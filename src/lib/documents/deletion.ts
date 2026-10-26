@@ -8,12 +8,13 @@
 //   `deleteDocument`, with sharing. The collaborators need nothing: their rows
 //   and roles stay as they are, a deleted document is `not_found` to everyone
 //   in `authorise`, and so a restore returns them "as they were at deletion".
-// - The refusals of FR-ED-36: an export-locked document (no route applies a
-//   lock in α 0.1.0, and the column arrives with export), and the 409 of a
-//   document in the notice period of a clearing, and of a restore of one a
-//   clearing treats as shared (FR-AU-91: with the clearing).
+// - The refusal of FR-ED-36 for an export-locked document (no route applies a
+//   lock in α 0.1.0, and the column arrives with export). The 409 of a document
+//   in the notice period of a clearing, and of a restore of one a clearing treats
+//   as shared, is here (FR-AU-91; slice 23): `clearingAt: null` in the writes.
 // - The images of a document, deleted from storage with it (NFR-SE-18): one
 //   call, marked in `deletePermanently`.
+import type { Prisma } from '../../generated/prisma/client.ts';
 import { publishCollabEvent } from '../collab/events.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
@@ -39,6 +40,8 @@ export interface DeletedDocumentSummary extends DocumentSummary {
   deletedAt: Date;
   /** FR-ED-36: when the retention ends. The document is deleted permanently by the first run of the timer after it. */
   permanentDeletionAt: Date;
+  /** FR-AU-91: the day a clearing deletes it, for a document that cannot be restored until the clearing is cancelled for it; else null. */
+  clearingAt: Date | null;
 }
 
 /**
@@ -96,7 +99,8 @@ export async function deleteDocument(
     // The Owner is a condition of the write: a deletion authorised just before a transfer committed
     // does not delete the document in the name of someone who is no longer its Owner (FR-ED-47).
     const { count } = await transaction.document.updateMany({
-      where: { id: document.id, deletedAt: null, ownerId: userId },
+      // FR-AU-91: not a document in a clearing: its deletion by hand "is refused" for the period.
+      where: { id: document.id, deletedAt: null, ownerId: userId, clearingAt: null },
       data: { deletedAt: now, deletedById: userId },
     });
     if (count !== 1) return false;
@@ -130,6 +134,7 @@ export async function listDeletedDocuments(
     ...summary(document),
     deletedAt: document.deletedAt!,
     permanentDeletionAt: new Date(document.deletedAt!.getTime() + retentionMs),
+    clearingAt: document.clearingAt,
   }));
 }
 
@@ -153,13 +158,40 @@ export async function restoreDocument(
   now: Date = new Date(),
 ): Promise<DocumentSummary | null> {
   const [restored] = await db().document.updateManyAndReturn({
-    where: { id: document.id, deletedAt: { gt: retainedSince(now) }, deletionClaimedAt: null },
+    // FR-AU-91: and not one in a clearing, which "cannot be restored" until the clearing is cancelled for it.
+    where: {
+      id: document.id,
+      deletedAt: { gt: retainedSince(now) },
+      deletionClaimedAt: null,
+      clearingAt: null,
+    },
     data: { deletedAt: null, deletedById: null },
   });
   return restored ? summary(restored) : null;
 }
 
-type Due = Pick<DocumentRow, 'id' | 'ownerId' | 'recording'>;
+export type Due = Pick<DocumentRow, 'id' | 'ownerId' | 'recording'>;
+
+/**
+ * What distinguishes one permanent deletion from another: under which condition the row may be claimed, and
+ * what is done on the two sides of the claim. The retention (FR-ED-36) and a clearing (FR-AU-91) delete a
+ * document by the same steps, in the same order, in the same function; they differ in this alone.
+ */
+export interface DeletionBasis {
+  /** The condition, besides the document's identifier and a free or stale claim, under which the claim is made. */
+  claimWhere: Prisma.DocumentWhereInput;
+  /** Written in the same statement as the claim, so that nothing falls between the two. */
+  claimData?: Prisma.DocumentUpdateManyMutationInput;
+  /** Once the row is claimed, before Istorico is asked. A clearing ends every collaborator's access here. */
+  onClaimed?: (claimedAt: Date) => Promise<void>;
+  /** In the transaction that deletes the row, before it does, with the title the row holds. */
+  inTransaction?: (tx: Prisma.TransactionClient, title: string) => Promise<void>;
+}
+
+/** Thrown inside the transaction that deletes the row, where the claim it held is no longer the row's. */
+class ClaimLost extends Error {
+  name = 'ClaimLost';
+}
 
 /**
  * Deletes one document permanently, in the order FR-ED-36 gives: `deleted`
@@ -182,28 +214,36 @@ type Due = Pick<DocumentRow, 'id' | 'ownerId' | 'recording'>;
  * were made, and another instance would take the last of them over while this
  * one was still at work on it.
  */
-async function deletePermanently(
+export async function deletePermanently(
   document: Due,
-  retained: Date,
+  basis: DeletionBasis,
   now: Date,
 ): Promise<'deleted' | 'elsewhere' | 'kept'> {
   const claim = { id: document.id, deletionClaimedAt: now };
   const claimed = await db().document.updateMany({
     where: {
-      id: document.id,
-      // Read again in the write: the Owner may have restored it since the list was read.
-      deletedAt: { lte: retained },
-      OR: [
-        { deletionClaimedAt: null },
-        { deletionClaimedAt: { lt: new Date(now.getTime() - CLAIM_STALE_MS) } },
+      AND: [
+        // Read again in the write: the Owner may have restored it since the list was read, or cancelled
+        // the clearing, or passed the document on (src/lib/clearing/deletion.ts).
+        basis.claimWhere,
+        {
+          id: document.id,
+          OR: [
+            { deletionClaimedAt: null },
+            { deletionClaimedAt: { lt: new Date(now.getTime() - CLAIM_STALE_MS) } },
+          ],
+        },
       ],
     },
-    data: { deletionClaimedAt: now },
+    data: { deletionClaimedAt: now, ...basis.claimData },
   });
   if (claimed.count !== 1) return 'elsewhere';
 
   let erased = false;
   try {
+    // FR-AU-91: a clearing ends every collaborator's access, and closes every connection, from here: the
+    // images are deleted next, and no one is to be reading a document that is losing them.
+    await basis.onClaimed?.(now);
     // Contract IC-50, the extension point "Permanent deletion"; IC-29. "Ekdotico
     // first asks Istorico … and deletes its own data only after Istorico
     // reports that it has"; "for an unrecorded document, and wherever the
@@ -265,13 +305,28 @@ async function deletePermanently(
     // been deleted. A fault here leaves the row, its claim and no entry; the
     // run that finds the claim an hour old repeats those steps and writes it.
     return await db().$transaction(async (transaction) => {
+      // FR-AU-91: what a clearing does in this transaction (the notices of the deletion, the end of the
+      // invitations and of the offer) is done only while the claim is still the row's, and is undone
+      // with the transaction where it is not.
+      if (basis.inTransaction) {
+        const held = await transaction.document.findFirst({ where: claim, select: { title: true } });
+        if (!held) return 'elsewhere';
+        await basis.inTransaction(transaction, held.title);
+      }
       const { count } = await transaction.document.deleteMany({ where: claim });
-      if (count !== 1) return 'elsewhere';
+      if (count !== 1) {
+        if (basis.inTransaction) throw new ClaimLost();
+        return 'elsewhere';
+      }
       await securityLogIn(transaction, { kind: 'document_deleted_permanently', documentId: document.id });
       // FR-ED-42: the notifications of a change of role and of a removal named it, and have no subject now.
       await deleteAccessNotificationsOf(transaction, document.id);
       return 'deleted';
     });
+  } catch (error) {
+    // The claim was another run's by the time the row was to be deleted: everything this transaction wrote is undone.
+    if (error instanceof ClaimLost) return 'elsewhere';
+    throw error;
   } finally {
     // Istorico did not erase, or threw although the port does not (IC-10): the
     // document is free for the next run, which asks again. Not where a later
@@ -302,8 +357,11 @@ export async function deleteExpiredDocuments(
 ): Promise<{ deleted: number; kept: number }> {
   const began = Date.now();
   const retained = retainedSince(now);
+  // FR-AU-91: a document in a clearing is deleted on the clearing's day and not by its retention, which may end
+  // inside the notice period of a document that was deleted before the clearing; the condition is in the claim too.
+  const basis: DeletionBasis = { claimWhere: { deletedAt: { lte: retained }, clearingAt: null } };
   const due: Due[] = await db().document.findMany({
-    where: { deletedAt: { lte: retained } },
+    where: { deletedAt: { lte: retained }, clearingAt: null },
     select: { id: true, ownerId: true, recording: true },
   });
   let deleted = 0;
@@ -313,7 +371,7 @@ export async function deleteExpiredDocuments(
     let outcome: Awaited<ReturnType<typeof deletePermanently>> = 'kept';
     try {
       const claimedAt = new Date(now.getTime() + Date.now() - began);
-      outcome = await deletePermanently(document, retained, claimedAt);
+      outcome = await deletePermanently(document, basis, claimedAt);
     } catch (error) {
       fault = faultOf(error);
     }

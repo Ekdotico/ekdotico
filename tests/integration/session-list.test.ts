@@ -384,6 +384,9 @@ describe('the removal of ended sessions (NFR-RE-15, FR-AU-84)', () => {
       'image-deletion',
       // NFR-RE-15, FR-AU-58: the steps of an account deletion; run twice at once here, and found no deletion open.
       'account-deletion-steps',
+      // NFR-RE-15, FR-AU-91: the documents of a clearing and the backstop of its email; run twice at once here, and found none.
+      'clearing-deletion',
+      'clearing-email',
     ]);
     const { email, sessionId } = await person();
     const idle = await browser(email);

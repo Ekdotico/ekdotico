@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { cache } from 'react';
 import { notFound } from 'next/navigation';
 import { Cluster, PageHeading, Stack, Tooltip } from '@ekdotico/domico/components';
+import { noticeRuns } from '../../../../lib/clearing/period.ts';
 import { authorise } from '../../../../lib/documents/access.ts';
 import { holds } from '../../../../lib/documents/permissions.ts';
 import { settings } from '../../../../lib/settings.ts';
@@ -61,7 +62,7 @@ export default async function DocumentPage({ params }: Props) {
         <Link href={`/documents/${document.id}/sharing`}>Sharing</Link>
         {/* FR-EX-36, FR-ED-44: the draft export, for a role that holds the permission. The editor has this page read
             again when its role or its permissions change (FR-ED-40 (g)), so the control follows them. */}
-        {holds(document.permissionSet, role, 'document.export.draft') ? (
+        {holds(document.permissionSet, role, 'document.export.draft') || noticeRuns(document, new Date()) ? (
           <ExportDraft documentId={document.id} />
         ) : null}
         {/* FR-ED-17: the people who have the document open, which the editor draws here once it is connected. */}
@@ -71,10 +72,12 @@ export default async function DocumentPage({ params }: Props) {
         documentId={document.id}
         // FR-ED-44: fixed by role. The server discards what a role that cannot
         // edit sends (FR-ED-39); this only withdraws the controls.
-        canEdit={holds(document.permissionSet, role, 'document.content.edit')}
+        canEdit={holds(document.permissionSet, role, 'document.content.edit') && document.clearingAt === null}
         // FR-ED-23: "30 seconds (an initial value)".
         errorAfterMs={settings().collabErrorAfterMs}
         imageDays={settings().imageUnreferencedDays}
+        // FR-AU-91: the page is opened already read-only, with the fixed statement, for a document in a clearing.
+        deletedOn={document.clearingAt?.toISOString() ?? null}
       />
     </Stack>
   );

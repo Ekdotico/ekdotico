@@ -25,6 +25,12 @@ export default async function Notifications() {
         ) {
           return { ...notification, createdAt };
         }
+        if (notification.kind === 'clearing_notice') {
+          return { ...notification, createdAt, deleteOn: notification.deleteOn.toISOString() };
+        }
+        if (notification.kind === 'clearing_cancelled' || notification.kind === 'clearing_deleted') {
+          return { ...notification, createdAt };
+        }
         if (notification.kind === 'document_invitation_reminder') {
           return {
             ...notification,

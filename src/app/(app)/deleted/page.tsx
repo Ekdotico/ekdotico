@@ -18,12 +18,14 @@ export default async function Deleted() {
   const documents = await reading(() => listDeletedDocuments(userId));
   return (
     <DeletedDocuments
-      documents={documents.map(({ id, title, deletedAt, permanentDeletionAt }) => ({
+      documents={documents.map(({ id, title, deletedAt, permanentDeletionAt, clearingAt }) => ({
         id,
         title,
         // NFR-I18-06: stored and sent in UTC; the browser shows them in its own zone.
         deletedAt: deletedAt.toISOString(),
         permanentDeletionAt: permanentDeletionAt.toISOString(),
+        // FR-AU-91: the day a clearing deletes it; it cannot be restored until the clearing is cancelled for it.
+        deleteOn: clearingAt?.toISOString() ?? null,
       }))}
       retentionDays={settings().deletedDocumentRetentionDays}
     />

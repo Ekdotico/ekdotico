@@ -1043,6 +1043,8 @@ describe('the list of deleted documents (FR-ED-36; API design, "Documents")', ()
       'updatedAt',
       'deletedAt',
       'permanentDeletionAt',
+      // FR-AU-91: the day a clearing deletes it, null for a document in none.
+      'clearingAt',
     ]);
     const { deletedAt } = (await row(later))!;
     expect(documents[0].deletedAt).toBe(deletedAt!.toISOString());

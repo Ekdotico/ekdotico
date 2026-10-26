@@ -52,6 +52,12 @@ const ELSEWHERE: Record<string, string> = {
     'tests/integration/content-type.test.ts: every endpoint of the identity handler, "the origin is looked at first"',
   'src/app/api/sign-up/route.ts POST':
     'tests/integration/sign-up.test.ts: "a request from another origin (NFR-SE-17 (c))"',
+  'src/app/api/account/documents/clear/route.ts POST':
+    'tests/integration/clearing.test.ts: "answers a request without a session 401 and one from another origin 403"',
+  'src/app/api/account/documents/clear/route.ts DELETE':
+    'tests/integration/clearing.test.ts: "refuses a cancellation from another origin"',
+  'src/app/api/account/documents/clear/[documentId]/route.ts DELETE':
+    'tests/integration/clearing.test.ts: "refuses a cancellation from another origin"',
   // Its body is the bytes of an image and not JSON, which the cases here send.
   'src/app/api/documents/[id]/images/route.ts POST':
     'tests/integration/image-routes.test.ts: "checks the origin before anything is read or counted"',
