@@ -164,7 +164,11 @@ export function documentRoute(
   handler: Handler,
   options: { sessionRow?: boolean; duringClearing?: DuringClearing } = {},
 ): DocumentRoute {
-  return make('live', permission, handler, options.sessionRow === true, options.duringClearing ?? 'refused');
+  // FR-AU-91, FR-ED-44 (d): the draft export is what the period grants every collaborator; it changes nothing of
+  // the document (it is a POST because it makes a file), so it is open during a clearing without a word from the
+  // route that asks for it. Every other permission is closed unless the route says otherwise.
+  const during = options.duringClearing ?? (permission === 'document.export.draft' ? 'allowed' : 'refused');
+  return make('live', permission, handler, options.sessionRow === true, during);
 }
 
 /**

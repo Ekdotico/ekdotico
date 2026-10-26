@@ -287,7 +287,7 @@ describe('the confirmation against the other things the Owner can do to the docu
     expect(await db().documentClearing.count({ where: { userId: owner.id } })).toBe(0);
   });
 
-  // Mutation L09: the lock on the documents is not taken in the order of their identifiers (two confirmations deadlock).
+  // A regression test: the lock itself is proved by the test of a collaborator added just before the confirmation.
   it('lets two confirmations of the same documents at once make one clearing, and refuses the other', async () => {
     const owner = await person();
     const reader = await person('reader');

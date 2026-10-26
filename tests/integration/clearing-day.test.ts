@@ -211,6 +211,26 @@ describe('on its day, a shared document is deleted permanently, in the order of 
     expect(await told()).toBe(2);
   });
 
+  // Mutation D06b: the claim is not exclusive: of three runs that reach the document together, each asks Istorico.
+  it('asks Istorico once whatever number of runs reach the document together', async () => {
+    const { documentId, day } = await sharedClearing();
+    await db().document.update({ where: { id: documentId }, data: { recording: 'RECORDED' } });
+    const erase = erasing();
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    erase.mockImplementation(async () => {
+      await opened;
+      return { ok: true, value: [{ documentId, outcome: 'erased' }] } as never;
+    });
+    const runs = Promise.all([carryOutClearings(day), carryOutClearings(day), carryOutClearings(day)]);
+    // Long enough for every run to have reached its claim, and the one that holds it to be waiting for Istorico.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    open();
+    expect((await runs).reduce((sum, { deleted }) => sum + deleted, 0)).toBe(1);
+    expect(erase).toHaveBeenCalledTimes(1);
+    expect(await exists(documentId)).toBe(false);
+  });
+
   // Mutation D07: the run takes over a claim that is not stale, or never takes over one that is.
   it('leaves a document another run holds, and takes over a claim that is an hour old', async () => {
     const { documentId, day } = await sharedClearing();
@@ -381,7 +401,7 @@ describe('when a step cannot be done, the document is kept and the next run does
     );
   });
 
-  // Mutation K02: the row is deleted although an image could not be removed.
+  // Also held by the foreign key from the images to the row, so no weakening of the code alone makes it fail.
   it('keeps the document when an image cannot be removed, and deletes it on the next run', async () => {
     const { documentId, key, day } = await sharedClearing();
     storage.failing.set(key, new Error('the store is down'));

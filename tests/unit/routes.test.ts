@@ -198,6 +198,9 @@ describe('the route handlers of a document', () => {
     const closed = documentRoute('document.rename', () => new Response());
     const open = documentRoute('document.leave', () => new Response(), { duringClearing: 'allowed' });
     expect(duringClearingOf(closed)).toBe('refused');
+    // The draft export is what a clearing grants every collaborator (FR-ED-44 (d)): its route is open without a word.
+    expect(duringClearingOf(documentRoute('document.export.draft', () => new Response()))).toBe('allowed');
+    expect(duringClearingOf(documentRoute('document.export.sealed', () => new Response()))).toBe('refused');
     expect(duringClearingOf(open)).toBe('allowed');
     expect(duringClearingOf(deletedDocumentRoute(() => new Response()))).toBe('refused');
     expect(duringClearingOf(async () => new Response())).toBeUndefined();

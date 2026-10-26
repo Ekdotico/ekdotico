@@ -248,11 +248,20 @@ describe('the end of the period without the deletion', () => {
       expect((await makeOffer(id, owner.id, rows.editor)).outcome).toBe('offered');
       const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId: id } });
       await clear(owner.cookie, await everything(owner.id));
-      const connections = [owner, editor, viewer].map((who) => connectionOf(local, id, who.id)!);
+      // A second Editor, whom the transfer does not name: only the event of the clearing reaches this connection.
+      const another = await person('another');
+      await share(id, another.id, 'EDITOR');
+      const bystander = connect(local.port, another.cookie, id);
+      await bystander.synced;
+      await until(() => bystander.notices.length === 1);
+      const connections = [owner, editor, viewer, another].map((who) => connectionOf(local, id, who.id)!);
       await until(() => connections.every((each) => each.readOnly));
       await answerOffer(editor.id, offer.id, 'accept');
       // The new Owner and the former Owner, now an Editor, write again; the Viewer reads.
-      await until(() => !connections[0]!.readOnly && !connections[1]!.readOnly, FIVE_SECONDS);
+      await until(
+        () => connections.slice(0, 2).every((each) => !each.readOnly) && !connections[3]!.readOnly,
+        FIVE_SECONDS,
+      );
       expect(connections[0]!.context.role).toBe('editor');
       expect(connections[1]!.context.role).toBe('owner');
       expect(connections[2]!.readOnly).toBe(true);

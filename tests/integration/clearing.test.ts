@@ -183,6 +183,36 @@ describe('the confirmation names the documents, and the rows decide', () => {
     expect(await db().documentClearing.count({ where: { userId: owner.id } })).toBe(0);
   });
 
+  // NFR-SE-17 (c), R50: each of the three handlers that change state checks the origin itself (the integration
+  // test of the origin of every handler names this one for them: tests/integration/route-origin.test.ts).
+  // Mutation C18: the origin is not checked by the cancellation.
+  it('refuses a cancellation from another origin before it reads the session, and cancels nothing', async () => {
+    const owner = await person();
+    const reader = await person('reader');
+    const mine = await documentOf(owner.id);
+    await share(mine, reader.id);
+    await clear(owner.cookie, await everything(owner.id));
+    const day = (await row(mine))!.clearingAt;
+    const elsewhere = { origin: 'https://elsewhere.example', cookie: owner.cookie };
+    const refusals = [
+      await clearRoute.DELETE(
+        new Request('https://app.example.test/api/account/documents/clear', {
+          method: 'DELETE',
+          headers: elsewhere,
+        }),
+      ),
+      await oneRoute.DELETE(
+        new Request(`https://app.example.test/api/account/documents/clear/${mine}`, {
+          method: 'DELETE',
+          headers: elsewhere,
+        }),
+        { params: Promise.resolve({ documentId: mine }) },
+      ),
+    ];
+    for (const refusal of refusals) expect(refusal.status).toBe(403);
+    expect((await row(mine))?.clearingAt).toEqual(day);
+  });
+
   it('answers a body that is not JSON 415', async () => {
     const owner = await person();
     const refused = await clearRoute.POST(
@@ -210,7 +240,8 @@ describe('the prompt: the password, and the code where two-factor authentication
     expect(await db().documentClearing.count({ where: { userId: owner.id } })).toBe(0);
   });
 
-  // Mutation C04: a wrong password at the prompt of a clearing is not counted as a failed sign-in.
+  // The count is the function `checkCredentials`'s, shared with the deletion of the account (slice 22): no weakening
+  // of it is made here (docs/plan/slice-23.md, section 8).
   it('counts a wrong password as a failed sign-in, and refuses the right one once the limit is reached', async () => {
     const owner = await person();
     const mine = await documentOf(owner.id);
@@ -409,7 +440,7 @@ describe('what is deleted at once and what waits (FR-AU-91)', () => {
     expect((await row(later1))?.clearingAt).toBeNull();
   });
 
-  // Mutation C13: the documents are read after the lock without the owner condition (a document that left is deleted).
+  // A regression test of the shape of the record; the lists it holds are held together by the migration's checks.
   it('records the clearing with the identifiers it counted, and nothing else', async () => {
     const owner = await person();
     const a = await documentOf(owner.id);
@@ -715,6 +746,27 @@ describe('the period: read-only for everyone, and what it leaves open (FR-AU-91,
     const plain = await documentOf(owner.id);
     await share(plain, viewer.id, 'VIEWER');
     expect((await authorise(viewer.id, plain, 'document.export.draft')).outcome).toBe('forbidden');
+  });
+
+  // Mutation P07: `documentRoute` closes a route for the draft export, a POST, during a clearing. The route of
+  // the export is slice 21's and is not on this branch: a route made as it will be is tried here.
+  it('answers a route for the draft export, made by documentRoute, to every collaborator in the period, a Viewer included', async () => {
+    const { owner, editor, viewer, documentId } = await inPeriod();
+    const { documentRoute } = await import('../../src/lib/documents/route.ts');
+    const exporting = documentRoute('document.export.draft', () => new Response('a file'));
+    for (const who of [owner, editor, viewer]) {
+      const response = await exporting(
+        w.request('POST', `/api/documents/${documentId}/export/draft`, who.cookie),
+        context(documentId),
+      );
+      expect(response.status, who.email).toBe(200);
+    }
+    const stranger = await person('stranger');
+    const refused = await exporting(
+      w.request('POST', `/api/documents/${documentId}/export/draft`, stranger.cookie),
+      context(documentId),
+    );
+    expect(refused.status).toBe(404);
   });
 
   // Mutation P05: the exception reaches `document.view` of a deleted document (S23-1), or a deleted document that is not in a clearing.
