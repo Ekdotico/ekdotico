@@ -11,7 +11,7 @@ import { deflateSync } from 'node:zlib';
 import { png, pngChunk } from '../unit/image-fixtures.ts';
 import { readZip } from '../unit/zip-reader.ts';
 import { expect, test, type Page } from './fixtures.ts';
-import { mailFor, newPerson, signUp, type Person } from './account.ts';
+import { expectNoSidewaysScroll, mailFor, newPerson, screens, signUp, type Person } from './account.ts';
 import { startCollab, stopCollab } from './collab.ts';
 import { APP_ORIGIN, APP_PORT, AUTH_SECRET } from './origin.ts';
 import { INVITATION_LINK, invite, shareNew } from './sharing.ts';
@@ -136,6 +136,9 @@ test('exports what was written, reloaded: an archive named from the title, with 
   const download = await downloading;
   await page.unroute('**/export/draft');
   await expect(page.getByText(READY)).toBeVisible();
+  // FR-AU-88, WCAG 2.2 AA (1.4.10): the control and its statement fit a width of 320 pixels.
+  await expectNoSidewaysScroll(page);
+  await screens(page, 'export-draft');
 
   // Named from the title by the rule: nothing in it is to be removed.
   expect(download.suggestedFilename()).toBe(`${title}.zip`);
@@ -234,6 +237,10 @@ test('a download that fails midway is a failed download, and the next export is 
   page.on('download', () => (saved = true));
   await exportButton(page).click();
   await expect(page.getByText(FAILED)).toBeVisible({ timeout: 15_000 });
+  // The statement takes the focus, as every refusal of a page does (WCAG 3.3.1), and the page does not scroll sideways.
+  await expect(page.getByRole('alert').filter({ hasText: FAILED })).toBeFocused();
+  await expectNoSidewaysScroll(page);
+  await screens(page, 'export-draft-failed');
   expect(saved).toBe(false);
   // And nothing is held: the button works again, and the lock is not.
   await expect(exportButton(page)).toBeEnabled();

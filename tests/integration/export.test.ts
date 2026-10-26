@@ -174,7 +174,7 @@ describe('authorisation (NFR-SE-02, NFR-SE-04, NFR-SE-17 (c), FR-ED-44)', () => 
   it('reads the session`s row and not the cookie`s signed copy: a session that has ended gets no export', async () => {
     const owner = await person();
     const id = await documentFor(owner, stateOf(p('words')));
-    expect((await post(id, owner.cookie)).status).toBe(200);
+    expect((await archiveOf(await post(id, owner.cookie))).length).toBe(1);
     await db().session.deleteMany({ where: { userId: owner.id } });
     // The copy in the cookie is valid for a minute: a request that only reads is still answered with it ...
     const read = await one.GET(
@@ -203,6 +203,29 @@ describe('authorisation (NFR-SE-02, NFR-SE-04, NFR-SE-17 (c), FR-ED-44)', () => 
     // A request that fails to find anything holds no lock, counts nothing, and reads no object.
     expect(storage.reads).toEqual([]);
     expect(await lockExists(stranger.id)).toBe(false);
+  });
+
+  it('answers 404 for a document that was deleted after the request was authorised, with no lock held and no export counted', async () => {
+    const owner = await person();
+    const id = await documentFor(owner, stateOf(p('deleted meanwhile')));
+    const { draftExport } = await import('../../src/lib/export/draft.ts');
+    const row = await db().document.findUniqueOrThrow({ where: { id } });
+    // The decision of the route was taken while the document was live; the deletion came after it.
+    await db().document.update({ where: { id }, data: { deletedAt: new Date(), deletedById: owner.id } });
+    const { yjsState: _state, ...document } = row;
+    const response = await draftExport({
+      request: new Request(`${ORIGIN}/x`, { method: 'POST' }),
+      session: { userId: owner.id } as never,
+      document,
+      role: 'owner',
+      params: { id },
+    });
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain('deleted meanwhile');
+    expect(await lockExists(owner.id)).toBe(false);
+    // Not counted: the six of the hour are all there.
+    const live = await documentFor(owner, stateOf(p('live')));
+    for (let n = 0; n < 6; n += 1) expect((await archiveOf(await post(live, owner.cookie))).length).toBe(1);
   });
 
   it('answers a deleted document 404, with nothing of it', async () => {
@@ -277,6 +300,8 @@ describe('the archive (FR-EX-36)', () => {
       `attachment; filename="My thesis.zip"; filename*=UTF-8''My%20thesis.zip`,
     );
     expect(response.headers.get('cache-control')).toBe('no-store');
+    // A proxy is told not to keep it (docs/operations/deployment.md, item 13).
+    expect(response.headers.get('x-accel-buffering')).toBe('no');
     // Streamed: it has no length.
     expect(response.headers.get('content-length')).toBeNull();
     const entries = readZip(await collect(response.body!));
