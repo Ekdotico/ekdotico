@@ -87,9 +87,11 @@ test('the page of a fault of the server shows the reference that the server’s 
   await expect(statement.getByRole('heading', { level: 2 })).toHaveText(STATEMENT);
   await expect(statement.locator('p')).toHaveText([QUOTE, /^Reference: [0-9]{1,10}$/]);
   const reference = /[0-9]+$/.exec((await statement.locator('p').last().textContent())!)![0];
+  // The lockup (domico 0.34.0) is the tile, which has no text, the letters
+  // "kdotico", and the name "Ekdotico" once in a visually hidden span.
   await expect(page.getByRole('main')).toHaveText(
     new RegExp(
-      `^EkdoticoPage not shown${STATEMENT.replaceAll('.', '\\.')}${QUOTE.replace('.', '\\.')}Reference: ${reference}$`,
+      `^kdoticoEkdoticoPage not shown${STATEMENT.replaceAll('.', '\\.')}${QUOTE.replace('.', '\\.')}Reference: ${reference}$`,
     ),
   );
 
