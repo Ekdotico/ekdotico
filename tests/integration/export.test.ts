@@ -188,6 +188,18 @@ describe('authorisation (NFR-SE-02, NFR-SE-04, NFR-SE-17 (c), FR-ED-44)', () => 
     expect(await refused.text()).not.toContain('words');
   });
 
+  it('gives an account whose deletion is confirmed no export (FR-AU-58 (a)), though its cookie and its session are good', async () => {
+    const owner = await person();
+    const id = await documentFor(owner, stateOf(p('words of a leaving account')));
+    expect((await archiveOf(await post(id, owner.cookie))).length).toBe(1);
+    await db().accountDeletion.create({ data: { userId: owner.id } });
+    const refused = await post(id, owner.cookie);
+    expect(refused.status).toBe(401);
+    expect(await refused.text()).not.toContain('leaving');
+    expect(await lockExists(owner.id)).toBe(false);
+    expect(storage.reads).toEqual([]);
+  });
+
   it('answers a document of another account, and one that does not exist, with the same 404', async () => {
     const owner = await person();
     const stranger = await person();
