@@ -1,8 +1,8 @@
 // What a document may hold (FR-ED-01, FR-ED-02, as far as the cut and this
 // slice go): the blocks, the nine marks, and the controls each block carries
-// inside itself (the owner's decision E3 of 8 October 2026). Images and
-// footnotes join with their own slices; the LaTeX block, the Mermaid block and
-// the citation node are not in α 0.1.0.
+// inside itself (the owner's decision E3 of 8 October 2026). Footnotes are
+// ./footnotes.ts; the LaTeX block, the Mermaid block and the citation node are
+// not in α 0.1.0.
 //
 // THE SCHEMA IS THE SANITISER (NFR-SE-06, A03). Nothing here renders markup
 // that a document or a clipboard supplied: a paste and a change from another
@@ -65,9 +65,11 @@ import type { Awareness } from 'y-protocols/awareness';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
 import { shapeOf } from '../../../../lib/collab/shape.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
+import { isFootnoteId } from '../../../../lib/footnotes/node.ts';
 import { IMAGE_WIDTH_MOST, imageAttributeAllowed } from '../../../../lib/images/node.ts';
 import { BLOCK_CONTROLS, BlockControls, Editable } from './block-controls.tsx';
 import styles from './editor.module.css';
+import { ENTRY, ENTRY_PROMPT, Footnotes, MARKER, TrailingParagraph } from './footnotes.ts';
 import { ImageBlockView, ImageUpload } from './images.tsx';
 import { MarkdownInput } from './input-rules.ts';
 import { Shortcuts } from './shortcuts.ts';
@@ -662,6 +664,9 @@ export const ATTRIBUTE_RULES: Record<string, Record<string, Rule>> = {
     width: (given) =>
       typeof given === 'number' && imageAttributeAllowed('width', given) ? given : IMAGE_WIDTH_MOST,
   },
+  // FR-ED-05: the marker and the entry each hold an identifier of the form the server keeps (src/lib/footnotes/node.ts).
+  [MARKER]: { id: (given) => (isFootnoteId(given) ? given : null) },
+  [ENTRY]: { id: (given) => (isFootnoteId(given) ? given : null) },
 };
 
 const count = (given: unknown): number => (typeof given === 'number' ? given : 1);
@@ -1580,6 +1585,10 @@ export function extensions(
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
+      // The document that takes the list of footnotes after its blocks, and the paragraph kept at its end
+      // that goes before that list, are ./footnotes.ts's.
+      document: false,
+      trailingNode: false,
       // The lowlight block below replaces it.
       codeBlock: false,
       // FR-ED-16: undo and redo are the collaboration extension's, over Yjs.
@@ -1587,6 +1596,8 @@ export function extensions(
       // Replaced by the link below.
       link: false,
     }),
+    // Where the kit's own stood, which is before the table's repair in the order of the plugins.
+    TrailingParagraph,
     Link.extend({
       // The address and nothing else. The library's mark also stores `target`,
       // `rel`, `class` and `title`, each of which another client could set to
@@ -1668,9 +1679,12 @@ export function extensions(
     }),
     // FR-ED-08: the file picker and the drop. A browser that cannot edit has neither.
     ...(reads || !images ? [] : [ImageUpload.configure(images)]),
+    // FR-ED-05: the footnotes (the document, the marker, the list and the entry), and the rule that keeps the list.
+    Footnotes,
     Placeholder.configure({
       showOnlyCurrent: false,
-      placeholder: ({ node }) => (node.type.name === 'tableCaption' ? 'Caption' : ''),
+      placeholder: ({ node }) =>
+        node.type.name === 'tableCaption' ? 'Caption' : node.type.name === ENTRY ? ENTRY_PROMPT : '',
     }),
     EmptyPrompt,
     // A browser that cannot edit is built without the binding (`followShared`).

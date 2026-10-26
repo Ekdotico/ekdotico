@@ -14,6 +14,11 @@
 
   "overrides": [
     {
+      "files": "src/app/*/documents/*/footnotes.ts",
+      "rules": ["vocabulary/document"],
+      "reason": "The matches are values that are not words of the interface: doc-noteref and doc-endnotes are the roles of the digital publishing ARIA module that a screen reader reads a footnote by, and doc is the name of the root node of the editor's schema, which the library requires. None is shown to a person."
+    },
+    {
       "files": "src/app/layout.tsx",
       "rules": ["normal-baseline"],
       "reason": "The match is the CSS keyword in the next/font style array, style: ['normal', 'italic'], which @ekdotico/domico/fonts requires, and not a statement about a person's writing. The rule's own text admits the CSS keyword."

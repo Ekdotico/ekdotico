@@ -28,6 +28,7 @@ import type { Transaction } from '@tiptap/pm/state';
 import { ReplaceStep } from '@tiptap/pm/transform';
 import { ySyncPluginKey } from '@tiptap/y-tiptap';
 import { COUNTED, LIMITS, LISTS, ONE_BLOCK, textBytes, type Limit } from '../../../../lib/collab/shape.ts';
+import { bodyEnd, withNotes } from './footnotes.ts';
 import { TABLE_CELLS_MOST, TABLE_DEPTH_MOST, TABLE_MOST, tablesIn } from './table-bounds.ts';
 
 type Counts = Record<Limit, number>;
@@ -186,15 +187,19 @@ export const deletesOnly = (transaction: Transaction) =>
     if (!(step instanceof ReplaceStep)) return false;
     if (step.slice.size === 0) return true;
     // One empty paragraph, and only where it is all that its parent is left
-    // with, or at the end of the document, where the editor keeps one after a
-    // last block that is not one (the trailing node of the starter kit). Not
-    // blank lines pasted over a selection (the review of pull request 41).
+    // with, or at the end of the body of the document, where the editor keeps
+    // one after a last block that is not one (the trailing node of the starter
+    // kit, which stands before the list of footnotes where there is one:
+    // ./footnotes.ts). Not blank lines pasted over a selection (the review of
+    // pull request 41).
     const { content, openStart, openEnd } = step.slice;
     const paragraph = content.firstChild;
     if (content.childCount !== 1 || openStart || openEnd || paragraph!.type.name !== 'paragraph')
       return false;
     if (paragraph!.content.size > 0) return false;
-    if (step.from === step.to) return step.from === transaction.docs[at]!.content.size;
+    if (step.from === step.to) {
+      return step.from === bodyEnd(transaction.docs[at]!);
+    }
     return (transaction.docs[at + 1] ?? transaction.doc).resolve(step.from).parent.childCount === 1;
   });
 
@@ -212,7 +217,9 @@ export function limitRefusal(transaction: Transaction, before: PMNode): string |
   if (tablesIn(transaction.doc).past && !tablesIn(before).past)
     return pasted ? TABLE_PASTE_NO_ROOM : TABLE_NO_ROOM;
   const was = countsOf(before);
-  const now = countsOf(transaction.doc);
+  // As the document will be once the entries of the markers it holds are made (./footnotes.ts): a marker that is
+  // pasted or dropped at the limit would otherwise stand, and its entry be refused after it, with nothing said.
+  const now = countsOf(withNotes(transaction.doc));
   const limit = ALL.find((each) => now[each] > LIMITS[each] && now[each] > was[each]);
   if (limit) return refusalWords(limit, was, now, pasted);
   const over = overLimits(before);

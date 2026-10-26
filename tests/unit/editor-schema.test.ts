@@ -115,6 +115,13 @@ const ALLOWED: Record<string, Record<string, (value: unknown) => boolean>> = {
     caption: (value) => typeof value === 'string' && value.length <= 500,
     width: (value) => Number.isInteger(value) && (value as number) >= 10 && (value as number) <= 100,
   },
+  // FR-ED-05: written out here and not taken from src/lib/footnotes/node.ts, so that a change to it is seen.
+  footnoteReference: {
+    id: (value) => value === null || (typeof value === 'string' && /^[0-9a-f]{24}$/.test(value)),
+  },
+  footnote: {
+    id: (value) => value === null || (typeof value === 'string' && /^[0-9a-f]{24}$/.test(value)),
+  },
 };
 ALLOWED.tableHeader = ALLOWED.tableCell!;
 
@@ -190,6 +197,22 @@ describe('the attributes of the schema', () => {
     expect(made('tableOfContents', true, { depth: 99 }).depth).toBe(3);
     expect(made('link', false, { href: 'https://example.com/a' }).href).toBe('https://example.com/a');
     expect(made('link', false, { href: ' https://example.com/a' }).href).toBeNull();
+    // FR-ED-05: an identifier is 24 characters of 0-9a-f, and nothing else is one.
+    const id = '0123456789abcdef01234567';
+    for (const name of ['footnoteReference', 'footnote']) {
+      expect(made(name, true, { id }).id).toBe(id);
+      for (const bad of [
+        id.toUpperCase(),
+        id.slice(1),
+        `${id}0`,
+        `${id}\n`,
+        'https://example.com/x',
+        '../../api',
+        7,
+        {},
+      ])
+        expect(made(name, true, { id: bad }).id, JSON.stringify(bad)).toBeNull();
+    }
   });
 
   it('are closed for a node read from JSON, and for one made with content', () => {

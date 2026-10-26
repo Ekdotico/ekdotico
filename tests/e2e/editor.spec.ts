@@ -723,16 +723,22 @@ const SLASH_ROWS: [command: string, row: string, made: string, words?: string][]
   ['page-break', 'Page break', '.ekd-page-break'],
 ];
 
-// What the palette lists: those rows, and `/image` (FR-ED-12) after the code block. Its choice opens the
-// picker and puts no block of its own, so it is not among the rows above, which are chosen one after
-// another; tests/e2e/images.spec.ts chooses it.
+// What the palette lists: those rows, `/image` (FR-ED-12) after the code block, and `/footnote` after the
+// callout. The choice of the first opens the picker, and of the second puts a marker in the text and
+// makes its entry at the end of the document, so neither is among the rows above, which are chosen one
+// after another; tests/e2e/images.spec.ts and tests/e2e/footnotes.spec.ts choose them.
 const LISTED: [command: string, row: string][] = SLASH_ROWS.flatMap(([command, row]): [string, string][] =>
   command === 'code'
     ? [
         [command, row],
         ['image', 'Image'],
       ]
-    : [[command, row]],
+    : command === 'callout'
+      ? [
+          [command, row],
+          ['footnote', 'Footnote'],
+        ]
+      : [[command, row]],
 );
 
 /** Every block of the rows above, once, as it was inserted. */
@@ -824,7 +830,9 @@ test('the slash palette opens where the requirement says, filters by name and al
   await expect(list).toHaveAttribute('id', LIST_ID);
   await expect(doc).not.toHaveAttribute('aria-activedescendant');
   // What a screen reader is told once the count has settled: the count, and the row Enter chooses.
-  await expect(page.getByRole('status').filter({ hasText: '14 blocks. Text first.' })).toBeAttached();
+  await expect(
+    page.getByRole('status').filter({ hasText: `${LISTED.length} blocks. Text first.` }),
+  ).toBeAttached();
 
   // FR-ED-11: "a maximum of eight results at a time and shall be scrollable".
   const whole = () =>
@@ -837,7 +845,7 @@ test('the slash palette opens where the requirement says, filters by name and al
     });
   expect(await whole()).toBe(8);
   expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  await expect(rows(page).nth(13)).not.toBeInViewport();
+  await expect(rows(page).nth(LISTED.length - 1)).not.toBeInViewport();
 
   // The arrow keys move in the list, and the text then names the row; the cursor does not move.
   await page.keyboard.press('ArrowDown');
@@ -847,10 +855,15 @@ test('the slash palette opens where the requirement says, filters by name and al
   await page.keyboard.press('ArrowUp');
   await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(0).getAttribute('id'))!);
   // To the last row, which is scrolled into view; Down stops there.
-  for (let press = 0; press < 15; press += 1) await page.keyboard.press('ArrowDown');
-  await expect(rows(page).nth(13)).toHaveAttribute('aria-selected', 'true');
-  await expect(rows(page).nth(13)).toBeInViewport();
-  await expect(doc).toHaveAttribute('aria-activedescendant', (await rows(page).nth(13).getAttribute('id'))!);
+  for (let press = 0; press < LISTED.length + 1; press += 1) await page.keyboard.press('ArrowDown');
+  await expect(rows(page).nth(LISTED.length - 1)).toHaveAttribute('aria-selected', 'true');
+  await expect(rows(page).nth(LISTED.length - 1)).toBeInViewport();
+  await expect(doc).toHaveAttribute(
+    'aria-activedescendant',
+    (await rows(page)
+      .nth(LISTED.length - 1)
+      .getAttribute('id'))!,
+  );
   await expect(doc).toBeFocused();
   await expect(doc).toHaveText('/');
 

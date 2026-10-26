@@ -1279,6 +1279,103 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
       },
     );
 
+    // FR-ED-05, NFR-SE-06: the marker and the entry of a footnote hold an identifier of one form and no other attribute.
+    const GOOD = '0123456789abcdef01234567';
+    const markerIn = (attributes: Record<string, string | number>) => {
+      const made = new Y.XmlElement('footnoteReference');
+      for (const [name, value] of Object.entries(attributes)) made.setAttribute(name, value as string);
+      const paragraph = new Y.XmlElement('paragraph');
+      paragraph.insert(0, [made]);
+      return paragraph;
+    };
+    const entryIn = (attributes: Record<string, string | number>) => {
+      const made = new Y.XmlElement('footnote');
+      for (const [name, value] of Object.entries(attributes)) made.setAttribute(name, value as string);
+      made.insert(0, [new Y.XmlText('note')]);
+      const list = new Y.XmlElement('footnotes');
+      list.insert(0, [made]);
+      return list;
+    };
+    it.each([
+      ['a marker an address under src', () => markerIn({ id: GOOD, src: 'https://example.com/pixel.png' })],
+      ['a marker an address as the identifier', () => markerIn({ id: 'https://example.com/pixel.png' })],
+      ['a marker an identifier in capitals', () => markerIn({ id: GOOD.toUpperCase() })],
+      ['a marker a script under onclick', () => markerIn({ id: GOOD, onclick: 'alert(1)' })],
+      ['an entry an address under href', () => entryIn({ id: GOOD, href: 'https://example.com/x' })],
+      ['an entry a path as the identifier', () => entryIn({ id: '../../api/auth/sign-out' })],
+      ['an entry an identifier that is a number', () => entryIn({ id: 12345 })],
+    ] as const)('refuses an update that gives %s', { timeout: 60_000 }, async (_name, block) => {
+      await expectRefusedUpdate(
+        await opened(),
+        (document) => document.getXmlFragment('default').push([block()]),
+        REFUSAL.FOOTNOTE_ATTRIBUTES,
+      );
+    });
+
+    // The forms a value can be carried in besides a plain one (the review of pull request 52, B1).
+    it.each([
+      ['JSON', () => new Y.ContentJSON(['https://evil.example/x'])],
+      ['an embed', () => new Y.ContentEmbed({ evil: 'https://evil.example/x' })],
+      ['a format', () => new Y.ContentFormat('src', 'https://evil.example/x')],
+    ] as const)(
+      'refuses an update that carries the identifier of a marker as %s',
+      { timeout: 60_000 },
+      async (_name, content) => {
+        await expectRefusedUpdate(
+          await opened(),
+          (document) => {
+            // In one transaction, so that the content is replaced before the update is encoded and sent.
+            document.transact(() => {
+              const paragraph = markerIn({ id: GOOD });
+              document.getXmlFragment('default').push([paragraph]);
+              const item = (paragraph.get(0) as Y.XmlElement)._map.get('id') as Y.Item;
+              item.content = content();
+            });
+          },
+          REFUSAL.FOOTNOTE_ATTRIBUTES,
+        );
+      },
+    );
+
+    // The review of pull request 55 (B1): a value that is no element and no text among the children of an
+    // element, which no editor writes and which no browser can build a document from.
+    it.each([
+      ['a string inside a marker', () => ['hidden'] as never[]],
+      ['an object inside a marker', () => [{ href: 'javascript:alert(1)' }] as never[]],
+      ['bytes inside a marker', () => [new Uint8Array([1, 2, 3])] as never[]],
+    ] as const)('refuses an update that puts %s', { timeout: 60_000 }, async (_name, children) => {
+      await expectRefusedUpdate(
+        await opened(),
+        (document) =>
+          // In one transaction, so that the paragraph and the value are one update.
+          document.transact(() => {
+            const paragraph = markerIn({ id: GOOD });
+            document.getXmlFragment('default').push([paragraph]);
+            (paragraph.get(0) as Y.XmlElement).insert(0, children());
+          }),
+        REFUSAL.RAW_CONTENT,
+      );
+    });
+
+    it(
+      'takes a footnote, its marker and its entry, stores it, and gives it back',
+      { timeout: 60_000 },
+      async () => {
+        const { owner, id } = await opened();
+        const writing = await sending(owner, id);
+        const fragment = writing.provider.document.getXmlFragment('default');
+        fragment.push([markerIn({ id: GOOD }), entryIn({ id: GOOD })]);
+        await until(() => writing.acknowledged() > writing.before, 20_000);
+        expect(await logged()).toEqual([]);
+        expect(writing.client.framesFor(id).some((each) => each.type === CLOSE)).toBe(false);
+        const later = connect(server.port, await owner.signedIn()).open(id);
+        await later.synced;
+        const text = later.provider.document.getXmlFragment('default').toString();
+        expect(text).toContain(`<footnotereference id="${GOOD}">`);
+        expect(text).toContain(`<footnote id="${GOOD}">note</footnote>`);
+      },
+    );
+
     // The review of pull request 52 (S7): a block that holds no content is given none.
     it.each([
       ['an image', () => element('image', [element('paragraph')])],

@@ -42,13 +42,14 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
   use: { baseURL: APP_ORIGIN },
-  // Two files start the collaboration server of their own, on the one port the application's rewrite names
-  // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor.
+  // Three files start the collaboration server of their own, on the one port the application's rewrite names
+  // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor, and the
+  // footnotes for the images.
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: ['**/editor.spec.ts', '**/images.spec.ts'],
+      testIgnore: ['**/editor.spec.ts', '**/images.spec.ts', '**/footnotes.spec.ts'],
     },
     { name: 'editor', use: { ...devices['Desktop Chrome'] }, testMatch: '**/editor.spec.ts' },
     {
@@ -56,6 +57,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       testMatch: '**/images.spec.ts',
       dependencies: ['editor'],
+    },
+    {
+      name: 'footnotes',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: '**/footnotes.spec.ts',
+      dependencies: ['images'],
     },
   ],
   webServer: {

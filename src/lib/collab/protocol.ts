@@ -120,11 +120,24 @@ export const REFUSAL = {
    */
   IMAGE_ATTRIBUTES: 'image-attributes',
   /**
+   * `footnote-attributes`: it gives the marker or the entry of a footnote an attribute that it may
+   * not hold, or an identifier outside its form (FR-ED-05, NFR-SE-06; src/lib/footnotes/node.ts).
+   * The editor never sends one: the words are for a client that does. The name is provisional, for
+   * the owner's approval.
+   */
+  FOOTNOTE_ATTRIBUTES: 'footnote-attributes',
+  /**
    * `leaf-content`: it puts an element or text inside a block that holds nothing (an image, a divider, a
    * table of contents, a page break, a line break; src/lib/collab/shape.ts, `LEAVES`). The editor never
    * sends one. The name is provisional, for the owner's approval.
    */
   LEAF_CONTENT: 'leaf-content',
+  /**
+   * `raw-content`: it puts a value (a string, binary data, an object, an embed) among the children of an element
+   * or of the root, where an element or a run of text is what stands, which no browser can build a document from
+   * (src/lib/collab/shape.ts, `rawRefused`). The editor never sends one. The name is provisional, for the owner's approval.
+   */
+  RAW_CONTENT: 'raw-content',
   /**
    * A limit of the document (`LIMITS` of src/lib/collab/shape.ts; register
    * D184, D192, D193), refused in the same way: the change would leave the
