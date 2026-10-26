@@ -171,6 +171,13 @@ export interface Settings {
    * Milliseconds, from 1000 to 60000, and 60 seconds where unset: a longer period would not be what the requirement asks, and a shorter one makes the re-check a load of its own.
    */
   collabRecheckMs: number;
+  /**
+   * FR-EX-36: "A response that has sent nothing for 30 seconds is aborted (an initial value)": the Markdown draft
+   * export ends its response, and releases the lock of its user, when that long passes with no progress.
+   */
+  exportIdleSeconds: number;
+  /** FR-EX-36: a name derived from a title "is cut to 100 characters (an initial value)". */
+  exportNameMaxChars: number;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -283,6 +290,18 @@ function imageLinkSeconds(env: Env): number {
     throw new Error(`IMAGE_LINK_SECONDS must be no more than ${IMAGE_LINK_MOST_SECONDS}.`);
   }
   return seconds;
+}
+
+/** The longest a name derived from a title may be: a title is 200 characters (FR-ED-35), so a longer cut cuts nothing. */
+const EXPORT_NAME_MOST_CHARS = 200;
+
+// At least 1: a name of 0 characters would be `document` for every title.
+function exportNameMaxChars(env: Env): number {
+  const chars = wholeNumber(env, 'EXPORT_NAME_MAX_CHARS', 100, 1);
+  if (chars > EXPORT_NAME_MOST_CHARS) {
+    throw new Error(`EXPORT_NAME_MAX_CHARS must be no more than ${EXPORT_NAME_MOST_CHARS}.`);
+  }
+  return chars;
 }
 
 const DAY = 24 * 60 * 60;
@@ -510,6 +529,9 @@ export function loadSettings(env: Env = process.env): Settings {
     collabStoreMaxMs,
     collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),
     collabRecheckMs,
+    // At least 1: an idle period of 0 would abort every export before its first byte.
+    exportIdleSeconds: wholeNumber(env, 'EXPORT_IDLE_SECONDS', 30, 1),
+    exportNameMaxChars: exportNameMaxChars(env),
     limits,
   };
 }
