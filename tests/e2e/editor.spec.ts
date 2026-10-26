@@ -255,6 +255,12 @@ test('every block and every mark, the controls inside each block, and the toolba
   // FR-ED-06: the entries follow the headings and the depth, and each goes to its heading.
   const contents = doc.getByRole('navigation', { name: 'Table of contents' });
   await expect(contents.getByRole('link')).toHaveText(['Heading one', 'Heading two']);
+  // domico 0.41.0: the entries of the contents list carry no arrow, though they are unclassed links.
+  expect(
+    await contents
+      .getByRole('link')
+      .evaluateAll((all) => all.map((each) => getComputedStyle(each, '::after').content)),
+  ).toEqual(['none', 'none']);
   await contents.getByRole('radio', { name: 'Levels 1–3' }).check();
   await expect(contents.getByRole('link')).toHaveText(['Heading one', 'Heading two', 'Heading three']);
   await placeAtEnd(doc.locator('h2'));
