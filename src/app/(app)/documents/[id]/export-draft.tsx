@@ -103,8 +103,10 @@ export function ExportDraft({ documentId }: { documentId: string }) {
         {LABEL}
       </Button>
       {fault ? <FormFault title={fault} focusKey={attempt} /> : null}
-      {/* Present before it has anything to say, so that what it says is announced. */}
-      <p role="status" className={saved > 0 && !fault && !working ? pageStyles.text : 'sr-only'}>
+      {/* Present before it has anything to say, so that what it says is announced. A live region and not
+          `role="status"`: the end-to-end tests of the editor find the editor's own region as the first status
+          that is hidden, and this stands before it in the page. */}
+      <p aria-live="polite" className={saved > 0 && !fault && !working ? pageStyles.text : 'sr-only'}>
         {saved > 0 && !fault && !working ? READY : ''}
       </p>
     </>
