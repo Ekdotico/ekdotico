@@ -318,7 +318,8 @@ describe('the mark of a document (FR-ED-43; contract IC-16, IC-49, IC-50)', () =
     const capabilities = vi.spyOn(port, 'capabilities');
     const register = vi.spyOn(port, 'registerDocument');
     const erase = vi.spyOn(port, 'erase');
-    const insert = vi.spyOn(db().document, 'create');
+    // The insert is made in a transaction that holds the account's row (src/lib/account/in-deletion.ts).
+    const insert = vi.spyOn(db(), '$transaction');
 
     const id = await documentOf(owner.cookie);
 
@@ -326,7 +327,6 @@ describe('the mark of a document (FR-ED-43; contract IC-16, IC-49, IC-50)', () =
     expect(capabilities.mock.results[0]!.value).toMatchObject({ adapter: 'noop', recording: false });
     expect(insert).toHaveBeenCalledTimes(1);
     expect(capabilities.mock.invocationCallOrder[0]!).toBeLessThan(insert.mock.invocationCallOrder[0]!);
-    expect(insert.mock.calls[0]![0].data.recording).toBe('UNRECORDED');
     expect((await row(id)).recording).toBe('UNRECORDED');
     // The port is asked nothing else (IC-49: "makes no other call").
     expect(register).not.toHaveBeenCalled();
@@ -341,7 +341,8 @@ describe('the mark of a document (FR-ED-43; contract IC-16, IC-49, IC-50)', () =
     const reported = port.capabilities();
     vi.spyOn(port, 'capabilities').mockReturnValue({ ...reported, recording: true });
     const register = vi.spyOn(port, 'registerDocument');
-    const insert = vi.spyOn(db().document, 'create');
+    // The insert is made in a transaction that holds the account's row (src/lib/account/in-deletion.ts).
+    const insert = vi.spyOn(db(), '$transaction');
 
     const response = await create(owner.cookie);
     expect(response.status).toBe(201);
@@ -1005,6 +1006,7 @@ describe('what is logged (NFR-SE-19, NFR-SE-06 A10)', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     // An error of the database can quote a row: a title, and an address.
     const quoting = new Error(`Failing row contains (${TITLE}, ${owner.email}).`);
+    vi.spyOn(db(), '$transaction').mockRejectedValue(quoting);
     for (const method of ['findUnique', 'findMany', 'create', 'update'] as const) {
       vi.spyOn(db().document, method).mockRejectedValue(quoting);
     }

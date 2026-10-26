@@ -8,7 +8,7 @@
 import { NextRequest } from 'next/server';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mustCheckOrigin } from '../routes.ts';
-import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
+import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, prepare, signIn } from './identity.ts';
 
 // Every reading of a session by a route, counted: none is made for a request
 // of another origin. The functions themselves are the application's own.
@@ -185,6 +185,15 @@ const CASES: Case[] = [
         where: { id: owner.id },
         select: { closedAlphaNoticeVersion: true, closedAlphaNoticeAcknowledgedAt: true },
       }),
+    status: 200,
+  },
+  {
+    // FR-AU-58: the deletion of the session's own account, which owns no document, with its password.
+    handler: 'src/app/api/account/route.ts DELETE',
+    body: { password: PASSWORD },
+    arrange: async () => '',
+    path: () => '/api/account',
+    state: (owner) => db().accountDeletion.count({ where: { userId: owner.id } }),
     status: 200,
   },
   {
