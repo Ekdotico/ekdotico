@@ -4,6 +4,7 @@
 // src/lib/documents/access.ts, against the caller's role and the document's
 // permission set as they are now (FR-ED-39, NFR-SE-04), and hands over the one
 // document it allowed. The Yjs state joins the GET with the editor.
+import { refusedByClearing } from '../../../../lib/clearing/answer.ts';
 import { authorise, refusal } from '../../../../lib/documents/access.ts';
 import { deleteDocument } from '../../../../lib/documents/deletion.ts';
 import {
@@ -70,7 +71,13 @@ export const PATCH = documentRoute('document.rename', async ({ request, document
   const renamed = await renameDocument(document.id, read.title);
   // Deleted by a request beside this one, after it was authorised: nothing
   // was renamed, and the document is gone, as to anyone (FR-ED-36).
-  if (!renamed) return refusal({ outcome: 'not_found' }, session.userId, document.id);
+  if (!renamed) {
+    // Or the document entered a clearing since the request was authorised (FR-AU-91): the true answer is a 409.
+    return (
+      (await refusedByClearing(document.id, 'change')) ??
+      refusal({ outcome: 'not_found' }, session.userId, document.id)
+    );
+  }
   return Response.json(renamed, { headers: NO_STORE });
 });
 
@@ -88,7 +95,14 @@ export const DELETE = documentRoute('document.delete', async ({ document, sessio
     // Deleted beside this request, or the ownership passed to another after it was authorised
     // (FR-ED-47): the caller is then an Editor, and is told so by a logged 403.
     const now = await authorise(session.userId, document.id, 'document.delete');
-    if (now.outcome === 'allowed') return refusal({ outcome: 'not_found' }, session.userId, document.id);
+    // Or it entered a clearing since (FR-AU-91): the Owner "cannot delete the document under FR-ED-36 during
+    // the period", and is told so by a 409 and not by the 404 of a document that is not there.
+    if (now.outcome === 'allowed') {
+      return (
+        (await refusedByClearing(document.id, 'delete')) ??
+        refusal({ outcome: 'not_found' }, session.userId, document.id)
+      );
+    }
     return refusal(now, session.userId, document.id, 'document.delete');
   }
   return new Response(null, { status: 204, headers: NO_STORE });

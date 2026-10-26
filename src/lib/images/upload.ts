@@ -24,6 +24,7 @@
 // The body is the bytes of the image and nothing else. No file name is read
 // from anywhere, and the declared `Content-Type` is not looked at.
 import { fault } from '../auth/route-answers.ts';
+import { refusedByClearing } from '../clearing/answer.ts';
 import { refusal } from '../documents/access.ts';
 import type { DocumentCall } from '../documents/route.ts';
 import { faultOf } from '../fault.ts';
@@ -87,6 +88,14 @@ export async function uploadImage({ request, document, session }: DocumentCall):
     if (!reservation.ok) {
       if (reservation.reason === 'full')
         return fullAnswer(reservation.limitBytes, settings().imageUnreferencedDays);
+      // FR-AU-91: the document entered a clearing since the request was authorised: a 409, as for every request that
+      // would change its images.
+      if (reservation.reason === 'clearing') {
+        return (
+          (await refusedByClearing(document.id, 'change')) ??
+          (await refusal({ outcome: 'not_found' }, session.userId, document.id))
+        );
+      }
       // Read again under the lock: the 404 and the 403 of every route of a document, the 403 written to the log.
       return reservation.reason === 'not_found'
         ? await refusal({ outcome: 'not_found' }, session.userId, document.id)

@@ -470,6 +470,7 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     'ADMISSION_INVITATION_DAYS',
     'DOCUMENT_INVITATION_DAYS',
     'OWNERSHIP_OFFER_DAYS',
+    'CLEARING_NOTICE_DAYS',
     'INVITATION_REMINDER_DAYS',
     'DOCUMENT_INVITATION_ADDRESS_DAYS',
     'TWO_FACTOR_STEP_SECONDS',
@@ -500,6 +501,9 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     // FR-ED-47: 14 days, "an initial value".
     expect(loadSettings(env).ownershipOfferDays).toBe(14);
     expect(loadSettings({ ...env, OWNERSHIP_OFFER_DAYS: '3' }).ownershipOfferDays).toBe(3);
+    // FR-AU-91: 7 days of notice, "an initial value, and a setting".
+    expect(loadSettings(env).clearingNoticeDays).toBe(7);
+    expect(loadSettings({ ...env, CLEARING_NOTICE_DAYS: '2' }).clearingNoticeDays).toBe(2);
     // FR-ED-48: 3 days, and FR-ED-37: 30 days, each "an initial value".
     expect(loadSettings(env).invitationReminderDays).toBe(3);
     expect(loadSettings(env).documentInvitationAddressDays).toBe(30);

@@ -141,7 +141,7 @@ describe('what is done with an open connection', () => {
     given['document.rename'].editor = true;
     const connection = recordConnection(
       { userId: 'u1', sessionId: 's1' },
-      { id: DOCUMENT, permissionSet: given },
+      { id: DOCUMENT, permissionSet: given, clearingAt: null },
       'editor',
     );
     expect(connection.permissions).toContain('document.rename');

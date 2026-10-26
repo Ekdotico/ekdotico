@@ -21,22 +21,31 @@ const MAX_BODY_BYTES = 1024;
  * and nothing else (register row S17-1: the people list carries no account
  * identifier). The Owner is offered nothing: ownership is offered to an Editor.
  */
-export const POST = documentRoute('document.ownership.transfer', async ({ request, document, session }) => {
-  const unsupported = notJson(request);
-  if (unsupported) return unsupported;
-  const body = await readJson(request, MAX_BODY_BYTES);
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    return errorResponse(422, 'invalid_request', OFFER_MESSAGES.invalid);
-  }
-  const { collaboratorId, ...rest } = body as Record<string, unknown>;
-  if (Object.keys(rest).length > 0 || typeof collaboratorId !== 'string') {
-    return errorResponse(422, 'invalid_request', OFFER_MESSAGES.invalid);
-  }
-  const result = await makeOffer(document.id, session.userId, collaboratorId);
-  return offeredAnswer(result, session.userId, document.id, after);
-});
+export const POST = documentRoute(
+  'document.ownership.transfer',
+  async ({ request, document, session }) => {
+    const unsupported = notJson(request);
+    if (unsupported) return unsupported;
+    const body = await readJson(request, MAX_BODY_BYTES);
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      return errorResponse(422, 'invalid_request', OFFER_MESSAGES.invalid);
+    }
+    const { collaboratorId, ...rest } = body as Record<string, unknown>;
+    if (Object.keys(rest).length > 0 || typeof collaboratorId !== 'string') {
+      return errorResponse(422, 'invalid_request', OFFER_MESSAGES.invalid);
+    }
+    const result = await makeOffer(document.id, session.userId, collaboratorId);
+    return offeredAnswer(result, session.userId, document.id, after);
+  },
+  // FR-AU-91: "An offer of ownership may still be made for the document, and its acceptance takes the
+  // document out of the clearing".
+  { duringClearing: 'allowed' },
+);
 
 /** No body, and none is read. */
-export const DELETE = documentRoute('document.ownership.transfer', async ({ document, session }) =>
-  withdrawnAnswer(await withdrawOffer(document.id, session.userId), session.userId, document.id),
+export const DELETE = documentRoute(
+  'document.ownership.transfer',
+  async ({ document, session }) =>
+    withdrawnAnswer(await withdrawOffer(document.id, session.userId), session.userId, document.id),
+  { duringClearing: 'allowed' },
 );

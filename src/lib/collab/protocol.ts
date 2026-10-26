@@ -186,10 +186,20 @@ export const LIMIT_REFUSAL = {
 export interface RoleNotice {
   role: DocumentRole;
   canEdit: boolean;
+  /**
+   * FR-AU-91, FR-ED-40 (i): the day on which a clearing deletes the document (ISO 8601, UTC), told with every
+   * notice while the document is in one, so that the editor can state it, and absent when it is not. A notice
+   * without it, to a connection that was told one, says that the document will not be deleted.
+   */
+  deletedOn?: string;
 }
 
-export function roleNotice({ role, canEdit }: RoleNotice): string {
-  return JSON.stringify({ kind: 'role', role, canEdit });
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+export function roleNotice({ role, canEdit, deletedOn }: RoleNotice): string {
+  return JSON.stringify(
+    deletedOn === undefined ? { kind: 'role', role, canEdit } : { kind: 'role', role, canEdit, deletedOn },
+  );
 }
 
 /**
@@ -235,9 +245,15 @@ export function readRoleNotice(payload: string): RoleNotice | null {
     return null;
   }
   if (typeof read !== 'object' || read === null || Array.isArray(read)) return null;
-  const { kind, role, canEdit, ...rest } = read as Record<string, unknown>;
+  const { kind, role, canEdit, deletedOn, ...rest } = read as Record<string, unknown>;
   if (kind !== 'role' || Object.keys(rest).length > 0 || typeof canEdit !== 'boolean') return null;
-  return (ROLES as readonly unknown[]).includes(role) ? { role: role as DocumentRole, canEdit } : null;
+  if (!(ROLES as readonly unknown[]).includes(role)) return null;
+  // FR-AU-91: absent, or a time in the form `toISOString` writes; anything else is no notice.
+  if (deletedOn === undefined) return { role: role as DocumentRole, canEdit };
+  if (typeof deletedOn !== 'string' || !ISO_TIME.test(deletedOn) || Number.isNaN(Date.parse(deletedOn))) {
+    return null;
+  }
+  return { role: role as DocumentRole, canEdit, deletedOn };
 }
 
 /** The step of a synchronisation a message carries (y-protocols `sync`): 0, 1 and 2. */

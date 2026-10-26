@@ -8,6 +8,7 @@
 //
 // Nothing here is of Next.js.
 import type { Document } from '../../generated/prisma/client.ts';
+import { noticeRuns } from '../clearing/period.ts';
 import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
@@ -74,14 +75,22 @@ export async function authorise(
   userId: string,
   documentId: unknown,
   permission: Permission,
+  now: Date = new Date(),
 ): Promise<Access> {
   const id = typeof documentId === 'string' && UUID.test(documentId) ? documentId : NO_DOCUMENT;
   // One query whatever the outcome, so that "no such document" and "no access"
   // differ in nothing a caller can measure.
   const { document, role: held } = await documentAndRole(id, userId);
-  const role = document && document.deletedAt === null ? held : null;
+  // FR-ED-44 (d), FR-AU-91: "While a document is in the notice period of a clearing, every user who holds a
+  // role on it may take a draft export of it, whatever the permission set of the document says", and
+  // that includes a document deleted before the clearing and treated by it as shared: "each of them may
+  // take a draft export of it until the day of the deletion". This is the one exception, to this one
+  // permission and to the period alone; reading such a document is not granted (docs/plan/slice-23.md, S23-1).
+  const exportInPeriod =
+    permission === 'document.export.draft' && document !== null && noticeRuns(document, now);
+  const role = document && (document.deletedAt === null || exportInPeriod) ? held : null;
   if (!document || !role) return { outcome: 'not_found' };
-  if (!holds(document.permissionSet, role, permission)) return { outcome: 'forbidden' };
+  if (!exportInPeriod && !holds(document.permissionSet, role, permission)) return { outcome: 'forbidden' };
   return { outcome: 'allowed', role, document };
 }
 

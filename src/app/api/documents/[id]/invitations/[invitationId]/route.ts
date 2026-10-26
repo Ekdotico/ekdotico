@@ -23,4 +23,7 @@ export const DELETE = documentRoute(
       { headers: { 'Cache-Control': 'no-store' } },
     );
   },
+  // FR-AU-91: revoking only closes what the confirmation closed already (the pending invitations are revoked
+  // when the clearing is confirmed); it creates nothing.
+  { duringClearing: 'allowed' },
 );

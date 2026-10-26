@@ -145,8 +145,9 @@ export async function listDocuments(userId: string): Promise<ListedDocument[]> {
     // What the list offers to this account: the routes decide again (FR-ED-39).
     return {
       ...summary(document),
-      canRename: holds(document.permissionSet, role, 'document.rename'),
-      canDelete: holds(document.permissionSet, role, 'document.delete'),
+      canRename: holds(document.permissionSet, role, 'document.rename') && document.clearingAt === null,
+      canDelete: holds(document.permissionSet, role, 'document.delete') && document.clearingAt === null,
+      clearingAt: document.clearingAt,
     };
   });
 }
@@ -155,6 +156,8 @@ export async function listDocuments(userId: string): Promise<ListedDocument[]> {
 export interface ListedDocument extends DocumentSummary {
   canRename: boolean;
   canDelete: boolean;
+  /** FR-AU-91: the day a clearing deletes the document, or null. */
+  clearingAt: Date | null;
 }
 
 /**
@@ -172,7 +175,8 @@ export interface ListedDocument extends DocumentSummary {
  */
 export async function renameDocument(id: string, title: string): Promise<DocumentSummary | null> {
   const [renamed] = await db().document.updateManyAndReturn({
-    where: { id, deletedAt: null },
+    // FR-AU-91: not a document in a clearing, whose title "no one can change" for the period.
+    where: { id, deletedAt: null, clearingAt: null },
     data: { title, updatedAt: new Date() },
   });
   return renamed ? summary(renamed) : null;

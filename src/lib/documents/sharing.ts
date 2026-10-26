@@ -20,6 +20,7 @@
 // leaves this module once, inside the email.
 import { Prisma, type DocumentRole as StoredRole } from '../../generated/prisma/client.ts';
 import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
+import { listClearingNotifications, type ClearingNotificationView } from '../clearing/notices.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
@@ -97,7 +98,9 @@ export type CreateResult =
   /** Deleted by a request beside this one, after the caller was authorised. */
   | { outcome: 'not_found' }
   /** The caller's role no longer holds the permission under the lock (a transfer of ownership in between): a 403. */
-  | { outcome: 'no_permission' };
+  | { outcome: 'no_permission' }
+  /** FR-AU-91: the document is in a clearing (read under its row): no invitation is created for it. A 409. */
+  | { outcome: 'clearing'; clearingAt: Date };
 
 /**
  * FR-ED-21, FR-ED-37: one invitation for each address, pending, with a new
@@ -192,6 +195,11 @@ async function creating(
   const under = await inviterUnderLock(tx, document.id, inviterId);
   if (!under) return { outcome: 'not_found' };
   if (!under.may) return { outcome: 'no_permission' };
+  // FR-AU-91: "No new invitation to it is created during the period", read under the row the confirmation holds,
+  // so that of an invitation and a confirmation at once one is after the other and the loser reads what the
+  // winner left.
+  const clearing = await tx.document.findUnique({ where: { id: document.id }, select: { clearingAt: true } });
+  if (clearing?.clearingAt) return { outcome: 'clearing', clearingAt: clearing.clearingAt };
 
   // The inviter's own address is refused whoever the inviter is: they know it.
   const inviter = await tx.user.findUnique({ where: { id: inviterId }, select: { email: true, name: true } });
@@ -774,7 +782,8 @@ export type ListedNotification =
   | ReminderNotificationView
   | AccessNotificationView
   | OfferNotificationView
-  | OfferEndedNotificationView;
+  | OfferEndedNotificationView
+  | ClearingNotificationView;
 
 /**
  * The account's notifications whose subject still exists, newest first, with
@@ -883,6 +892,8 @@ export async function listNotifications(
     ...(await listOfferNotifications(userId, now)),
     // S17-5: the Owner's notice that an offer ended without the Owner's own action.
     ...(await listOfferEndedNotifications(userId, now)),
+    // FR-ED-42, FR-AU-91: the notices of a clearing: that a document will be deleted, that it will not, that it was.
+    ...(await listClearingNotifications(userId, now)),
   ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   return { unread: notifications.filter(({ read }) => !read).length, notifications };
 }

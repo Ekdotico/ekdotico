@@ -8,6 +8,7 @@
 // parameters of the path as Next.js 16 hands them, a promise.
 import { fault, notAdmitted, refusedOrigin } from '../auth/route-answers.ts';
 import { validateSession, validateSessionRow, type ValidSession } from '../auth/session.ts';
+import { clearingRefusal, type Change } from '../clearing/period.ts';
 import { onlyReads } from '../http.ts';
 import { authorise, authoriseDeleted, refusal, type DocumentRow } from './access.ts';
 import type { DocumentRole, Permission } from './permissions.ts';
@@ -30,14 +31,41 @@ export type DocumentRoute = (
 /** Which of the two decisions of ./access.ts a handler rests on: a document that is not deleted, or one that is. */
 export type DocumentState = 'live' | 'deleted';
 
+/**
+ * What a handler that changes state does for a document in the notice period of a clearing (FR-AU-91): `refused`
+ * is the 409 of "a request that would change the content, the title, or the images of the document", and of the
+ * rest that the requirement closes (a new invitation, a deletion by hand, a restore); `allowed` is for the
+ * handlers that the period leaves open, because they change who may do what and not the document, and do not
+ * bring the day forward (removing a collaborator, a change of role or of the permission set, leaving, an offer
+ * of ownership). The default is `refused`: a route added without a word about it is closed during a clearing.
+ * A handler that only reads is never refused.
+ */
+export type DuringClearing = 'refused' | 'allowed';
+
 // What the two functions below made, with the permission each asks for and the
 // state of the document it is handed. Kept here and not on the function, so
 // that nothing outside this module can mark one.
-const made = new WeakMap<object, { permission: Permission; state: DocumentState; row: boolean }>();
+const made = new WeakMap<
+  object,
+  { permission: Permission; state: DocumentState; row: boolean; clearing: DuringClearing }
+>();
 
 /** The permission a handler asks for, or undefined where this module did not make it. */
 export function permissionOf(handler: unknown): Permission | undefined {
   return typeof handler === 'function' ? made.get(handler)?.permission : undefined;
+}
+
+/** What a handler does for a document in a clearing, or undefined where this module did not make it. */
+export function duringClearingOf(handler: unknown): DuringClearing | undefined {
+  return typeof handler === 'function' ? made.get(handler)?.clearing : undefined;
+}
+
+/** Which words the 409 of a document in a clearing says, for the handler's permission and state. */
+function changeOf(permission: Permission, state: DocumentState): Change {
+  if (state === 'deleted') return 'restore';
+  if (permission === 'document.collaborators.invite') return 'invite';
+  if (permission === 'document.delete') return 'delete';
+  return 'change';
 }
 
 /**
@@ -64,7 +92,13 @@ type Handler = (call: DocumentCall) => Response | Promise<Response>;
  * NFR-SE-02, NFR-SE-17 (c): a request that only reads may be validated against
  * the signed copy of the session; every other reads the session's row.
  */
-function make(state: DocumentState, permission: Permission, handler: Handler, row: boolean): DocumentRoute {
+function make(
+  state: DocumentState,
+  permission: Permission,
+  handler: Handler,
+  row: boolean,
+  clearing: DuringClearing,
+): DocumentRoute {
   const route: DocumentRoute = async (request, { params }) => {
     try {
       // NFR-SE-17 (c): the origin first, and here as well as in the proxy,
@@ -95,6 +129,14 @@ function make(state: DocumentState, permission: Permission, handler: Handler, ro
           : await authoriseDeleted(session.userId, id);
       if (access.outcome !== 'allowed') return await refusal(access, session.userId, id, permission);
 
+      // FR-AU-91: after the authorisation, so that a caller who may not act is told so (a 403) and not
+      // that the document is in a clearing. The handlers that write re-read the column under their own
+      // row (a request can begin before the confirmation and end after it); this answer is the early one.
+      const { clearingAt } = access.document;
+      if (clearing === 'refused' && !onlyReads(request.method) && clearingAt !== null) {
+        return clearingRefusal(clearingAt, changeOf(permission, state));
+      }
+
       return await handler({
         request,
         session,
@@ -106,21 +148,23 @@ function make(state: DocumentState, permission: Permission, handler: Handler, ro
       return fault('documents', error);
     }
   };
-  made.set(route, { permission, state, row });
+  made.set(route, { permission, state, row, clearing });
   return route;
 }
 
 /**
  * A handler for a route under `[id]`, about a document that is not deleted: `authorise` decides. With
  * `sessionRow` the session is validated against its row even for a GET, which is what the issue of a link
- * to an image does (NFR-SE-02, NFR-SE-17 (c)); a handler that changes state reads the row anyway.
+ * to an image does (NFR-SE-02, NFR-SE-17 (c)); a handler that changes state reads the row anyway. With
+ * `duringClearing: 'allowed'` a handler that changes state is not refused for a document in a clearing
+ * (see `DuringClearing`); without it, it is.
  */
 export function documentRoute(
   permission: Permission,
   handler: Handler,
-  options: { sessionRow?: boolean } = {},
+  options: { sessionRow?: boolean; duringClearing?: DuringClearing } = {},
 ): DocumentRoute {
-  return make('live', permission, handler, options.sessionRow === true);
+  return make('live', permission, handler, options.sessionRow === true, options.duringClearing ?? 'refused');
 }
 
 /**
@@ -131,5 +175,7 @@ export function documentRoute(
  * 404 of `documentRoute`, byte for byte.
  */
 export function deletedDocumentRoute(handler: Handler): DocumentRoute {
-  return make('deleted', 'document.delete', handler, false);
+  // FR-ED-36: a document deleted before a clearing, and treated as shared, "cannot be restored under FR-ED-36
+  // during the period": the restore is always refused for a document in a clearing.
+  return make('deleted', 'document.delete', handler, false, 'refused');
 }

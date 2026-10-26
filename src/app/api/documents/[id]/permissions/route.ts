@@ -36,14 +36,20 @@ export const GET = documentRoute('document.view', ({ document, role }) =>
  * (the owner's answer to Q8): a caller who is not the Owner is told nothing of
  * the body, and a fixed cell asked for by one is a 403, not a 422.
  */
-export const PUT = documentRoute('document.permissions.edit', async ({ request, document, session }) => {
-  const unsupported = notJson(request);
-  if (unsupported) return unsupported;
-  const read = readRequest(await readJson(request, MAX_BODY_BYTES));
-  if (!read.ok) return refusedRequest(read.why);
-  return setAnswer(
-    await changePermissionSet(document.id, session.userId, read.request),
-    session.userId,
-    document.id,
-  );
-});
+export const PUT = documentRoute(
+  'document.permissions.edit',
+  async ({ request, document, session }) => {
+    const unsupported = notJson(request);
+    if (unsupported) return unsupported;
+    const read = readRequest(await readJson(request, MAX_BODY_BYTES));
+    if (!read.ok) return refusedRequest(read.why);
+    return setAnswer(
+      await changePermissionSet(document.id, session.userId, read.request),
+      session.userId,
+      document.id,
+    );
+  },
+  // FR-AU-91, FR-ED-40 (i): the set may be changed during the period, and "takes effect for everything but
+  // editing": the connection stays read-only.
+  { duringClearing: 'allowed' },
+);
