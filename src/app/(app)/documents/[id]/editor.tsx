@@ -17,7 +17,7 @@ import type * as Y from 'yjs';
 import { tabbableWithin } from '@ekdotico/domico/a11y';
 import { Button, Cluster, Dialog, FormFault, Stack, SyncStatus } from '@ekdotico/domico/components';
 import { DocumentConnection, syncStatus, type Ending, type Held } from '../../../../lib/collab/client.ts';
-import { CLEARING_ENDED, CLEARING_NOW, CLEARING_UNSAVED } from '../../../../lib/clearing/texts.ts';
+import { CLEARING_ENDED, clearingStatement, CLEARING_UNSAVED } from '../../../../lib/clearing/texts.ts';
 import { COLLAB_PATH, LIMIT_REFUSAL, REFUSAL } from '../../../../lib/collab/protocol.ts';
 import { dateText } from '../../../../lib/date-text.ts';
 import type { Limit } from '../../../../lib/collab/shape.ts';
@@ -481,12 +481,14 @@ function OpenDocument({
   documentId,
   imageDays,
   deletedOn: initialDeletedOn,
+  alreadyDeleted,
 }: {
   connection: DocumentConnection;
   canEdit: boolean;
   documentId: string;
   imageDays: number;
   deletedOn: string | null;
+  alreadyDeleted: boolean;
 }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
   // FR-ED-40 (b), (g): the server told this tab that its role, or what its role may do, changed. The page keeps
@@ -578,7 +580,7 @@ function OpenDocument({
       {deletedOn ? (
         // FR-AU-91, FR-ED-40 (i): the fixed statement, "in place of its editing controls", said again for a new day.
         <FormFault key={deletedOn} tone="neutral" announce="polite" autoFocus={false}>
-          <p>{CLEARING_NOW(dateText(new Date(deletedOn)))}</p>
+          <p>{clearingStatement(alreadyDeleted, dateText(new Date(deletedOn)))}</p>
           {state.unsaved ? <Unsaved text={state.unsaved.text} because={CLEARING_UNSAVED} /> : null}
         </FormFault>
       ) : state.clearingEnded ? (
@@ -641,6 +643,7 @@ export default function Editor({
   errorAfterMs,
   imageDays,
   deletedOn,
+  alreadyDeleted,
 }: {
   documentId: string;
   canEdit: boolean;
@@ -648,6 +651,8 @@ export default function Editor({
   imageDays: number;
   /** FR-AU-91: the day a clearing deletes the document (ISO 8601, UTC), or null. */
   deletedOn: string | null;
+  /** The document had been deleted by its Owner before the clearing: the statement of the period says so. */
+  alreadyDeleted: boolean;
 }) {
   // This module is loaded in the browser alone (./document-view.tsx), so the
   // page's own address is there to read.
@@ -680,6 +685,7 @@ export default function Editor({
       documentId={documentId}
       imageDays={imageDays}
       deletedOn={deletedOn}
+      alreadyDeleted={alreadyDeleted}
     />
   );
 }

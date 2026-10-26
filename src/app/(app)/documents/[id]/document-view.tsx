@@ -25,6 +25,8 @@ export function DocumentView(props: {
   imageDays: number;
   /** FR-AU-91: the day a clearing deletes the document (ISO 8601, UTC), or null. */
   deletedOn: string | null;
+  /** The document was deleted by its Owner before the clearing (a former collaborator reads it in the period). */
+  alreadyDeleted: boolean;
 }) {
   return <Editor {...props} />;
 }

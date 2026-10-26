@@ -79,6 +79,7 @@ export default async function DocumentPage({ params }: Props) {
         imageDays={settings().imageUnreferencedDays}
         // FR-AU-91: the page is opened already read-only, with the fixed statement, for a document in a clearing.
         deletedOn={document.clearingAt?.toISOString() ?? null}
+        alreadyDeleted={document.deletedAt !== null}
       />
     </Stack>
   );

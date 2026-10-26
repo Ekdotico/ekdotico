@@ -137,7 +137,32 @@ describe('the former collaborators read the document during the period (S23-1)',
     const view = find(shown, DocumentView);
     expect(view).toBeDefined();
     // An Editor holds the right to edit; the period takes it, and the page is told the day (FR-AU-91).
-    expect(view!.props).toMatchObject({ documentId: id, canEdit: false, deletedOn: day.toISOString() });
+    expect(view!.props).toMatchObject({
+      documentId: id,
+      canEdit: false,
+      deletedOn: day.toISOString(),
+      alreadyDeleted: true,
+    });
+  });
+
+  // Mutation V17: the page tells the editor that a document in a clearing was deleted already, whether or not it was
+  // (the statement then says "was deleted by its Owner" of a live document), or never tells it of one that was.
+  it('has the editor say "will be deleted" of a live document in a clearing, and "was deleted" of one that was', async () => {
+    const owner = await person();
+    const reader = await person('reader');
+    for (const who of [owner, reader]) await acknowledgeNotice(who.id, CLOSED_ALPHA_NOTICE_VERSION);
+    const live = await documentOf(owner.id, 'Live and cleared');
+    await share(live, reader.id, 'VIEWER');
+    const cleared = await clear(owner.cookie, {
+      scope: 'all',
+      documentIds: (await countScope(owner.id, 'all')).documentIds,
+      password: PASSWORD,
+    });
+    expect(cleared.status).toBe(200);
+    browser.headers = new Headers({ cookie: reader.cookie });
+    const shown = await DocumentPage({ params: Promise.resolve({ id: live }) });
+    expect(find(shown, DocumentView)!.props).toMatchObject({ alreadyDeleted: false });
+    expect(find(shown, DocumentView)!.props.deletedOn).toEqual(expect.any(String));
   });
 
   // Mutation V04: the exception is kept for the Owner as well.
@@ -161,9 +186,52 @@ describe('the former collaborators read the document during the period (S23-1)',
     const one = await import('../../src/app/api/documents/[id]/route.ts');
     const response = await one.GET(w.request('GET', `/api/documents/${id}`, stranger.cookie), context(id));
     expect(response.status).toBe(404);
-    // Nor a role that was removed before the clearing.
-    const left = await person('left');
-    expect(await outcomeOf(left.id, id)).toBe('not_found');
+  });
+
+  // Mutation V05: as above; a role that is gone is no role (the exception reads the rows of the collaborators as they are).
+  it('gives a person whose role was removed, or who left, before the document was deleted, the 404', async () => {
+    const owner = await person();
+    const [keeper, removed, leaver] = [
+      await person('keeper'),
+      await person('removed'),
+      await person('leaver'),
+    ];
+    for (const who of [owner, keeper, removed, leaver])
+      await acknowledgeNotice(who.id, CLOSED_ALPHA_NOTICE_VERSION);
+    const id = await documentOf(owner.id, 'Some left');
+    await share(id, keeper.id, 'VIEWER');
+    const removedRow = await share(id, removed.id, 'EDITOR');
+    await share(id, leaver.id, 'VIEWER');
+    // Through the real routes, as a person does it.
+    const collaborators =
+      await import('../../src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts');
+    const leave = await import('../../src/app/api/documents/[id]/leave/route.ts');
+    const takenOut = await collaborators.DELETE(
+      w.request('DELETE', `/api/documents/${id}/collaborators/${removedRow.id}`, owner.cookie),
+      context(id, { collaboratorId: removedRow.id }),
+    );
+    expect(takenOut.status).toBe(200);
+    const left = await leave.POST(
+      w.request('POST', `/api/documents/${id}/leave`, leaver.cookie),
+      context(id),
+    );
+    expect(left.status).toBe(204);
+    await deletedAgo(id, owner.id, DAY_MS);
+    const cleared = await clear(owner.cookie, {
+      scope: 'all',
+      documentIds: (await countScope(owner.id, 'all')).documentIds,
+      password: PASSWORD,
+    });
+    expect(cleared.status).toBe(200);
+    // The one who stayed reads it; the two who are gone get the page of a document that is not there.
+    expect(await outcomeOf(keeper.id, id)).toBe('allowed');
+    for (const gone of [removed, leaver]) {
+      expect(await outcomeOf(gone.id, id), gone.email).toBe('not_found');
+      browser.headers = new Headers({ cookie: gone.cookie });
+      await expect(DocumentPage({ params: Promise.resolve({ id }) })).rejects.toMatchObject({
+        digest: expect.stringContaining('404'),
+      });
+    }
   });
 
   // Mutation V08: the page of the sharing settings opens for a deleted document.
@@ -277,6 +345,50 @@ describe('only while the notice period runs', () => {
     expect((await row(id))?.clearingAt).toBeNull();
     expect(await outcomeOf(viewer.id, id)).toBe('not_found');
   });
+});
+
+describe('a clearing takes a deleted document only within its retention (FR-AU-91)', () => {
+  const retentionMs = () => loaded.settings().deletedDocumentRetentionDays * DAY_MS;
+
+  // Mutation V18: `countScope` or the locked statement of the confirmation leaves the retention out of the scope (for 'all' or for 'deleted').
+  it.each(['all', 'deleted'] as const)(
+    'leaves out a deleted document whose retention has ended, and one the timer has claimed, so that no one reads either in a period (scope %s)',
+    async (scope) => {
+      const owner = await person();
+      const reader = await person('reader');
+      const within = await documentOf(owner.id, 'Within');
+      const past = await documentOf(owner.id, 'Past');
+      const claimed = await documentOf(owner.id, 'Claimed');
+      for (const id of [within, past, claimed]) await share(id, reader.id, 'VIEWER');
+      await deletedAgo(within, owner.id, retentionMs() - DAY_MS);
+      await deletedAgo(past, owner.id, retentionMs() + DAY_MS);
+      await deletedAgo(claimed, owner.id, DAY_MS);
+      await db().document.update({ where: { id: claimed }, data: { deletionClaimedAt: new Date() } });
+
+      expect((await countScope(owner.id, scope)).documentIds).toEqual([within]);
+      // A request that still names the others is not the documents the account has: the confirmation says so, and does nothing.
+      const stale = await clear(owner.cookie, {
+        scope,
+        documentIds: [within, past, claimed].sort(),
+        password: PASSWORD,
+      });
+      expect(stale.status).toBe(409);
+      expect(
+        await db().document.count({
+          where: { id: { in: [within, past, claimed] }, clearingAt: { not: null } },
+        }),
+      ).toBe(0);
+      const done = await clear(owner.cookie, { scope, documentIds: [within], password: PASSWORD });
+      expect(done.status).toBe(200);
+      // Only the one within its retention is in a period, and its collaborator reads it; the others are not read.
+      expect((await row(within))?.clearingAt).not.toBeNull();
+      expect(await outcomeOf(reader.id, within)).toBe('allowed');
+      expect((await row(past))?.clearingAt).toBeNull();
+      expect((await row(claimed))?.clearingAt).toBeNull();
+      expect(await outcomeOf(reader.id, past)).toBe('not_found');
+      expect(await outcomeOf(reader.id, claimed)).toBe('not_found');
+    },
+  );
 });
 
 describe('a live document keeps its rules', () => {

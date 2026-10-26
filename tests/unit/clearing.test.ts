@@ -9,6 +9,7 @@ import {
   CLEAR_ALL,
   CLEARING_ENDED,
   CLEARING_NOW,
+  clearingStatement,
   cleared,
   confirmation,
   confirmControl,
@@ -30,6 +31,15 @@ describe('the fixed texts of FR-AU-91, verbatim', () => {
     expect(CLEARING_NOW('2 Nov 2026, 14:05')).toBe(
       'This document will be deleted on 2 Nov 2026, 14:05. You can read it and take a draft export. It cannot be edited.',
     );
+  });
+
+  // Mutation V17: the editor says "will be deleted on" of a document that its Owner had deleted already (or the other way round).
+  it('says of a document deleted before the clearing that it was, and of a live one that it will be (S23-1; words proposed, owed to the owner)', () => {
+    const day = '2 Nov 2026, 14:05';
+    expect(clearingStatement(true, day)).toBe(
+      'This document was deleted by its Owner and will be deleted permanently on 2 Nov 2026, 14:05. You can read it and take a draft export. It cannot be edited.',
+    );
+    expect(clearingStatement(false, day)).toBe(CLEARING_NOW(day));
   });
 
   async function email(documents: number, day: Date) {
