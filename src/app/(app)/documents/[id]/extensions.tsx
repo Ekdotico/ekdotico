@@ -64,6 +64,7 @@ import { LightbulbIcon, StickyNoteIcon, TriangleAlertIcon } from '@ekdotico/domi
 import type { Awareness } from 'y-protocols/awareness';
 import { FRAGMENT_NAME } from '../../../../lib/collab/protocol.ts';
 import { shapeOf } from '../../../../lib/collab/shape.ts';
+import { LANGUAGES, codeLanguage } from '../../../../lib/editor/code-languages.ts';
 import { linkAddress } from '../../../../lib/editor/link.ts';
 import { isFootnoteId } from '../../../../lib/footnotes/node.ts';
 import { IMAGE_WIDTH_MOST, imageAttributeAllowed } from '../../../../lib/images/node.ts';
@@ -111,51 +112,9 @@ const CODE_NOT_COPIED =
 
 // ── Code block (FR-ED-03) ───────────────────────────────────────────────────
 
-// "The languages in lowlight's common set" (register D46), each under the name
-// its own project writes. `plaintext` is first, and is what a new block has.
-const LANGUAGES: Record<string, string> = {
-  plaintext: 'Plain text',
-  arduino: 'Arduino',
-  bash: 'Bash',
-  c: 'C',
-  cpp: 'C++',
-  csharp: 'C#',
-  css: 'CSS',
-  diff: 'Diff',
-  go: 'Go',
-  graphql: 'GraphQL',
-  ini: 'INI and TOML',
-  java: 'Java',
-  javascript: 'JavaScript',
-  json: 'JSON',
-  kotlin: 'Kotlin',
-  less: 'Less',
-  lua: 'Lua',
-  makefile: 'Makefile',
-  markdown: 'Markdown',
-  objectivec: 'Objective-C',
-  perl: 'Perl',
-  php: 'PHP',
-  'php-template': 'PHP template',
-  python: 'Python',
-  'python-repl': 'Python REPL',
-  r: 'R',
-  ruby: 'Ruby',
-  rust: 'Rust',
-  scss: 'SCSS',
-  shell: 'Shell session',
-  sql: 'SQL',
-  swift: 'Swift',
-  typescript: 'TypeScript',
-  vbnet: 'Visual Basic .NET',
-  wasm: 'WebAssembly',
-  xml: 'HTML and XML',
-  yaml: 'YAML',
-};
-
-/** The language as one of the list, whatever the attribute holds. */
-export const codeLanguage = (given: unknown): string =>
-  typeof given === 'string' && Object.hasOwn(LANGUAGES, given) ? given : 'plaintext';
+// The languages, and the rule that holds the attribute to them, are src/lib/editor/code-languages.ts, which the
+// Markdown draft export reads too. Exported from here as before.
+export { codeLanguage };
 
 function CodeBlockView({ node, updateAttributes, editor, decorations }: NodeViewProps) {
   const editable = useContext(Editable);

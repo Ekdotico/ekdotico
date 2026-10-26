@@ -70,6 +70,8 @@ const PERMISSION: Record<string, Permission> = {
   // FR-ED-08, NFR-SE-18 (API design, "Images"): the upload asks to edit the document, the link to see it.
   'src/app/api/documents/[id]/images/route.ts POST': 'document.content.edit',
   'src/app/api/documents/[id]/images/[imageId]/route.ts GET': 'document.view',
+  // FR-EX-01 (a), FR-EX-36, FR-ED-44 (API design, "Export"): the Markdown draft export.
+  'src/app/api/documents/[id]/export/draft/route.ts POST': 'document.export.draft',
 };
 
 // NFR-SE-02, NFR-SE-17 (c): the handlers that are a GET and read the session's row all the same, since

@@ -413,6 +413,24 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(() => loadSettings({ ...env, COLLAB_ERROR_AFTER_MS: '0' })).toThrow(/COLLAB_ERROR_AFTER_MS/);
   });
 
+  // FR-EX-36: "30 seconds" and "100 characters", both initial values and so settings.
+  it('aborts a response that sent nothing for 30 seconds, and cuts a name to 100 characters', () => {
+    expect(settings.exportIdleSeconds).toBe(30);
+    expect(loadSettings({ ...env, EXPORT_IDLE_SECONDS: '5' }).exportIdleSeconds).toBe(5);
+    for (const value of ['0', '-1', '1.5', '30s']) {
+      expect(() => loadSettings({ ...env, EXPORT_IDLE_SECONDS: value }), value).toThrow(
+        /EXPORT_IDLE_SECONDS/,
+      );
+    }
+    expect(settings.exportNameMaxChars).toBe(100);
+    expect(loadSettings({ ...env, EXPORT_NAME_MAX_CHARS: '200' }).exportNameMaxChars).toBe(200);
+    for (const value of ['0', '201', '-1', '1.5', '100c']) {
+      expect(() => loadSettings({ ...env, EXPORT_NAME_MAX_CHARS: value }), value).toThrow(
+        /EXPORT_NAME_MAX_CHARS/,
+      );
+    }
+  });
+
   // FR-ED-41: "at least once every 60 seconds": a setting may make it more often and never less.
   it('re-checks every open connection every 60 seconds, and never less often, nor more often than once a second', () => {
     expect(settings.collabRecheckMs).toBe(60_000);

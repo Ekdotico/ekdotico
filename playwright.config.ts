@@ -42,14 +42,14 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
   use: { baseURL: APP_ORIGIN },
-  // Three files start the collaboration server of their own, on the one port the application's rewrite names
-  // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor, and the
-  // footnotes for the images.
+  // Four files start the collaboration server of their own, on the one port the application's rewrite names
+  // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor, the
+  // footnotes for the images, and the export for the footnotes.
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: ['**/editor.spec.ts', '**/images.spec.ts', '**/footnotes.spec.ts'],
+      testIgnore: ['**/editor.spec.ts', '**/images.spec.ts', '**/footnotes.spec.ts', '**/export.spec.ts'],
     },
     { name: 'editor', use: { ...devices['Desktop Chrome'] }, testMatch: '**/editor.spec.ts' },
     {
@@ -63,6 +63,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       testMatch: '**/footnotes.spec.ts',
       dependencies: ['images'],
+    },
+    {
+      name: 'export',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: '**/export.spec.ts',
+      dependencies: ['footnotes'],
     },
   ],
   webServer: {
@@ -87,6 +93,8 @@ export default defineConfig({
       COLLAB_PROXY_TARGET: `http://127.0.0.1:${COLLAB_PORT}`,
       // FR-ED-23: 30 seconds where unset; a test waits for the error state.
       COLLAB_ERROR_AFTER_MS: '6000',
+      // FR-EX-36: 30 seconds where unset; the test of a client that stops reading waits for it.
+      EXPORT_IDLE_SECONDS: '3',
       ADMISSION_SECRET: process.env.E2E_ADMISSION_SECRET,
       COLLAB_EVENTS_CHANNEL: process.env.E2E_EVENTS_CHANNEL,
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,

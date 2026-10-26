@@ -49,6 +49,15 @@ export class S3Storage implements ImageStorage {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 
+  async read(key: string, signal?: AbortSignal): Promise<ReadableStream<Uint8Array>> {
+    const { Body } = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
+      abortSignal: signal,
+    });
+    if (!Body) throw new Error('image store: no body');
+    // The SDK's body is a Node stream with this method; the bytes are not read until the stream is.
+    return Body.transformToWebStream() as ReadableStream<Uint8Array>;
+  }
+
   async link(key: string, seconds: number, contentType: string): Promise<string> {
     // Signed here and never sent: the link is valid for `seconds`, for this key and this method alone, and the
     // answer to it carries the type the server established and `inline`, whatever the object itself says

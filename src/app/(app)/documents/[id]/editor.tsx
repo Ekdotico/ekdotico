@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { EditorContent, useEditor, type Editor as TextEditor } from '@tiptap/react';
 import type { EditorView } from '@tiptap/pm/view';
 import type { Awareness } from 'y-protocols/awareness';
@@ -484,6 +485,14 @@ function OpenDocument({
   imageDays: number;
 }) {
   const state = useSyncExternalStore(connection.subscribe, connection.getState, connection.getState);
+  // FR-ED-40 (b), (g): the server told this tab that its role, or what its role may do, changed. The page keeps
+  // controls outside the editor that the permissions govern (the draft export's, src/app/(app)/documents/[id]/page.tsx):
+  // it is read again from the server, which decides them, and the editor stays as it is.
+  const router = useRouter();
+  const toldOfChange = state.notice ?? state.permissions;
+  useEffect(() => {
+    if (toldOfChange) router.refresh();
+  }, [toldOfChange, state.permissions, router]);
   const [check, setCheck] = useState<'checking' | 'in-sync' | 'unconfirmed' | null>(null);
   // Which check the dialog is showing. An answer to a check whose dialog was
   // closed, or that another check replaced, opens nothing and takes no focus.
