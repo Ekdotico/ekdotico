@@ -243,7 +243,9 @@ export type OfferResult =
   /** A recorded document, or one in an institutional workspace: a 409. */
   | { outcome: 'not_transferable' }
   /** NFR-SE-07, S17-7: past the offers an Owner may make in an hour: a 429. */
-  | { outcome: 'rate_limited'; retryAfterSeconds: number };
+  | { outcome: 'rate_limited'; retryAfterSeconds: number }
+  /** FR-AU-91: the day of the clearing has come: no offer "may still be made". A 409. */
+  | { outcome: 'clearing_over' };
 
 /**
  * The document, read under its row, when the caller is its Owner now. FR-ED-44:
@@ -257,6 +259,7 @@ async function ownedUnderLock(tx: Tx, documentId: string, callerId: string) {
     select: {
       ownerId: true,
       recording: true,
+      clearingAt: true,
       workspace: { select: { type: true } },
       collaborators: { where: { userId: callerId }, select: { id: true } },
     },
@@ -288,6 +291,9 @@ export async function makeOffer(
       const owned = await ownedUnderLock(tx, documentId, callerId);
       if (owned.stop) return owned.stop;
       if (!transferable(owned.document)) return { outcome: 'not_transferable' };
+      // FR-AU-91: "An offer of ownership may still be made for the document" while its notice period runs; the day
+      // has come and the document is the timer's (review item 2).
+      if (owned.document.clearingAt && owned.document.clearingAt <= now) return { outcome: 'clearing_over' };
 
       const found =
         typeof collaboratorId === 'string' && IDENTIFIER.test(collaboratorId)
@@ -528,7 +534,9 @@ export type AnswerResult =
   | { outcome: 'accepted'; documentId: string }
   | { outcome: 'declined' }
   | { outcome: 'no_longer_open' }
-  | { outcome: 'not_open_to_account' };
+  | { outcome: 'not_open_to_account' }
+  /** FR-AU-91, FR-AU-92: the day of the clearing has come: an acceptance takes no document out of it. A 409. */
+  | { outcome: 'clearing_over' };
 
 /** After the commit: tells the collaboration server to look at this person's connections to this document. */
 const announce = (documentId: string, userId: string) =>
@@ -574,6 +582,16 @@ export async function answerOffer(
       // deletion's own step (`declineOffersTo`).
       if (answer === 'accept' && !(await holdOwnableAccount(tx, userId)))
         return { outcome: 'no_longer_open' };
+      // FR-AU-91, FR-AU-92: "an offer of ownership that is accepted during that period takes the document out of the
+      // clearing". After the day it takes nothing out: the document is the timer's, and an acceptance would leave it
+      // read-only for ever with no Owner's clearing to delete it (review item 2). Declining stays open.
+      if (answer === 'accept') {
+        const held = await tx.document.findUnique({
+          where: { id: documentId },
+          select: { clearingAt: true },
+        });
+        if (held?.clearingAt && held.clearingAt <= now) return { outcome: 'clearing_over' };
+      }
       const { count } = await tx.ownershipOffer.updateMany({
         where: { id: offer.id, toUserId: userId, ...open(now) },
         data: { state: answer === 'accept' ? 'ACCEPTED' : 'DECLINED', respondedAt: now },

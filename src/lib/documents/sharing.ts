@@ -659,6 +659,13 @@ export async function answerInvitation(
     // acceptance never falls between the two counts of a creation that would
     // then see one person fewer (FR-ED-37: ten people).
     if (!(await lockDocument(tx, invitation.documentId))) return { outcome: 'no_longer_open' };
+    // FR-AU-91: "so that no one joins a document that is about to be deleted": the pending invitations of a document in
+    // a clearing are revoked at the confirmation, and one that is somehow still pending is not accepted (review item 5).
+    const clearing = await tx.document.findUnique({
+      where: { id: invitation.documentId },
+      select: { clearingAt: true },
+    });
+    if (clearing?.clearingAt) return { outcome: 'no_longer_open' };
     // FR-AU-58 (f): "a deleted account holds no role". An acceptance gives the account one, so it holds the
     // account's row against the confirmation of its deletion, as the acceptance of an offer does
     // (src/lib/account/in-deletion.ts): an acceptance that began before the record is committed before it,

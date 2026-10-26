@@ -13,7 +13,12 @@
 // session's row and no password: FR-AU-58 asks for it at "the confirmation of the deletion, and the confirmation
 // of a clearing", and a cancellation keeps what exists (docs/plan/slice-23.md, S23-5).
 import { after } from 'next/server';
-import { passwordRefused, promptAccount, verifyPrompt } from '../../../../../lib/account/prompt.ts';
+import {
+  CODE_REFUSED,
+  passwordRefused,
+  promptAccount,
+  verifyPrompt,
+} from '../../../../../lib/account/prompt.ts';
 import { afterResponse, collecting } from '../../../../../lib/after-response.ts';
 import { fault, notAdmitted, refusedOrigin, unauthenticated } from '../../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../../lib/auth/session.ts';
@@ -28,7 +33,8 @@ import {
 import { carryOutClearings } from '../../../../../lib/clearing/deletion.ts';
 import { deliverClearingEmails } from '../../../../../lib/clearing/email.ts';
 import { CLEARING_MESSAGES } from '../../../../../lib/clearing/texts.ts';
-import { errorResponse, notJson, readJson } from '../../../../../lib/http.ts';
+import { errorResponse, notJson, readBytes, sentAsJson } from '../../../../../lib/http.ts';
+import { securityLog } from '../../../../../lib/security-log.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -96,7 +102,18 @@ async function confirm(request: Request): Promise<Response> {
     // R28: a body that is not sent as JSON is a 415, after the session and before anything is read.
     const unsupported = notJson(request);
     if (unsupported) return unsupported;
-    const body = await readJson(request, MAX_BODY_BYTES);
+    // A body over the bound names more documents than a clearing may hold: it is told in those words, and not as a
+    // body of the wrong shape (review of pull request 60).
+    const bytes = await readBytes(request, MAX_BODY_BYTES);
+    if (bytes === null) {
+      return errorResponse(422, 'invalid_request', CLEARING_MESSAGES.tooMany(CLEAR_MOST_DOCUMENTS));
+    }
+    let body: unknown = null;
+    try {
+      body = sentAsJson(request) ? JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) : null;
+    } catch {
+      body = null;
+    }
 
     const account = await promptAccount(userId);
     if (!account) return unauthenticated();
@@ -122,13 +139,17 @@ async function confirm(request: Request): Promise<Response> {
     // Inside the transaction of the record the password and the session are asked again, each as a write.
     const confirmed = await confirmClearing(
       userId,
-      { scope: read.scope, documentIds: read.documentIds },
+      { scope: read.scope, documentIds: read.documentIds, spend: prompt.spend },
       (tx) => standing(tx, prompt.verified, session),
     );
     switch (confirmed.outcome) {
       case 'ended':
       case 'not_found':
         return unauthenticated();
+      case 'code_gone':
+        // A recovery code is spent once: the other request that used it first has taken it.
+        await securityLog({ kind: 'forbidden', userId });
+        return errorResponse(403, 'code_refused', CODE_REFUSED);
       case 'outrun':
         return await passwordRefused(userId);
       case 'changed':

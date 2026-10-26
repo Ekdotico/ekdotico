@@ -13,6 +13,7 @@
 import type { Prisma } from '../../generated/prisma/client.ts';
 import type { Standing } from '../account/deletion.ts';
 import { holdOwnableAccount } from '../account/in-deletion.ts';
+import type { Spend } from '../account/prompt.ts';
 import { publishCollabEvent } from '../collab/events.ts';
 import { db } from '../db.ts';
 import { notificationsOf } from '../documents/sharing.ts';
@@ -94,7 +95,14 @@ export type ConfirmResult =
   /** FR-AU-91: the identifiers are not exactly the documents of the scope now. Nothing is recorded. */
   | { outcome: 'changed' }
   /** There is no document to clear in this scope. Nothing is recorded. */
-  | { outcome: 'nothing' };
+  | { outcome: 'nothing' }
+  /** The recovery code that was entered was spent by another request: nothing is recorded. */
+  | { outcome: 'code_gone' };
+
+/** Thrown inside the transaction of the confirmation, to undo it. */
+class CodeGone extends Error {
+  name = 'CodeGone';
+}
 
 /**
  * FR-AU-91: "On confirmation Ekdotico records the clearing with the identifiers of the documents the confirmation
@@ -123,80 +131,90 @@ export type ConfirmResult =
  */
 export async function confirmClearing(
   userId: string,
-  { scope, documentIds }: { scope: Scope; documentIds: readonly string[] },
+  { scope, documentIds, spend }: { scope: Scope; documentIds: readonly string[]; spend?: Spend | null },
   standing: Standing,
   now: Date = new Date(),
 ): Promise<ConfirmResult> {
-  const result = await db().$transaction(async (tx): Promise<ConfirmResult> => {
-    const stands = await standing(tx);
-    if (stands !== 'held') return { outcome: stands };
+  let result: ConfirmResult;
+  try {
+    result = await db().$transaction(async (tx): Promise<ConfirmResult> => {
+      const stands = await standing(tx);
+      if (stands !== 'held') return { outcome: stands };
 
-    const rows =
-      scope === 'all'
-        ? await tx.$queryRaw<{ id: string }[]>`
+      const rows =
+        scope === 'all'
+          ? await tx.$queryRaw<{ id: string }[]>`
             SELECT "id" FROM "ekdotico"."Document"
             WHERE "ownerId" = ${userId} AND "clearingAt" IS NULL
             ORDER BY "id" FOR UPDATE`
-        : await tx.$queryRaw<{ id: string }[]>`
+          : await tx.$queryRaw<{ id: string }[]>`
             SELECT "id" FROM "ekdotico"."Document"
             WHERE "ownerId" = ${userId} AND "clearingAt" IS NULL AND "deletedAt" IS NOT NULL
             ORDER BY "id" FOR UPDATE`;
-    if (!(await holdOwnableAccount(tx, userId))) return { outcome: 'not_found' };
+      if (!(await holdOwnableAccount(tx, userId))) return { outcome: 'not_found' };
 
-    const ids = rows.map(({ id }) => id);
-    if (!sameDocuments(ids, documentIds)) return { outcome: 'changed' };
-    if (ids.length === 0) return { outcome: 'nothing' };
+      const ids = rows.map(({ id }) => id);
+      if (!sameDocuments(ids, documentIds)) return { outcome: 'changed' };
+      if (ids.length === 0) return { outcome: 'nothing' };
 
-    const holders = await tx.documentCollaborator.findMany({
-      where: { documentId: { in: ids } },
-      select: { documentId: true },
-    });
-    const sharedSet = new Set(holders.map(({ documentId }) => documentId));
-    const shared = ids.filter((id) => sharedSet.has(id));
-    const unshared = ids.filter((id) => !sharedSet.has(id));
-    const deleteSharedAt =
-      shared.length > 0 ? new Date(now.getTime() + settings().clearingNoticeDays * DAY_MS) : null;
+      const holders = await tx.documentCollaborator.findMany({
+        where: { documentId: { in: ids } },
+        select: { documentId: true },
+      });
+      const sharedSet = new Set(holders.map(({ documentId }) => documentId));
+      const shared = ids.filter((id) => sharedSet.has(id));
+      const unshared = ids.filter((id) => !sharedSet.has(id));
+      const deleteSharedAt =
+        shared.length > 0 ? new Date(now.getTime() + settings().clearingNoticeDays * DAY_MS) : null;
 
-    const { id: clearingId } = await tx.documentClearing.create({
-      data: {
-        userId,
-        scope: scope === 'all' ? 'ALL' : 'DELETED_ONLY',
+      const { id: clearingId } = await tx.documentClearing.create({
+        data: {
+          userId,
+          scope: scope === 'all' ? 'ALL' : 'DELETED_ONLY',
+          documentIds: ids,
+          sharedDocumentIds: shared,
+          requestedAt: now,
+          deleteSharedAt,
+        },
+        select: { id: true },
+      });
+      // The day for a shared document, and for the rest the moment of the confirmation (S23-2): from here neither
+      // is edited, shared, renamed, deleted by hand or restored, and the rest are due.
+      if (deleteSharedAt) {
+        await tx.document.updateMany({ where: { id: { in: shared } }, data: { clearingAt: deleteSharedAt } });
+      }
+      if (unshared.length > 0) {
+        await tx.document.updateMany({ where: { id: { in: unshared } }, data: { clearingAt: now } });
+      }
+
+      // FR-AU-91: "its pending invitations are revoked when the clearing is confirmed (FR-ED-37), so that no one
+      // joins a document that is about to be deleted"; FR-ED-42: their notifications go with them.
+      const revoked = await tx.documentInvitation.updateManyAndReturn({
+        where: { documentId: { in: ids }, state: 'PENDING' },
+        data: { state: 'REVOKED', respondedAt: now },
+        select: { id: true },
+      });
+      if (revoked.length > 0) {
+        await tx.notification.deleteMany({ where: notificationsOf(revoked.map(({ id }) => id)) });
+      }
+
+      await tellClearing(tx, { clearingId, documentIds: shared, now });
+      // The recovery code that was entered is spent last, and only where the clearing is recorded: a refusal above
+      // leaves it its owner's, and a code that another request spent first rolls this back (review item 1).
+      if (spend && !(await spend(tx))) throw new CodeGone();
+      return {
+        outcome: 'confirmed',
+        clearingId,
         documentIds: ids,
-        sharedDocumentIds: shared,
-        requestedAt: now,
-        deleteSharedAt,
-      },
-      select: { id: true },
+        sharedIds: shared,
+        deleteOn: deleteSharedAt,
+      };
     });
-    // The day for a shared document, and for the rest the moment of the confirmation (S23-2): from here neither
-    // is edited, shared, renamed, deleted by hand or restored, and the rest are due.
-    if (deleteSharedAt) {
-      await tx.document.updateMany({ where: { id: { in: shared } }, data: { clearingAt: deleteSharedAt } });
-    }
-    if (unshared.length > 0) {
-      await tx.document.updateMany({ where: { id: { in: unshared } }, data: { clearingAt: now } });
-    }
-
-    // FR-AU-91: "its pending invitations are revoked when the clearing is confirmed (FR-ED-37), so that no one
-    // joins a document that is about to be deleted"; FR-ED-42: their notifications go with them.
-    const revoked = await tx.documentInvitation.updateManyAndReturn({
-      where: { documentId: { in: ids }, state: 'PENDING' },
-      data: { state: 'REVOKED', respondedAt: now },
-      select: { id: true },
-    });
-    if (revoked.length > 0) {
-      await tx.notification.deleteMany({ where: notificationsOf(revoked.map(({ id }) => id)) });
-    }
-
-    await tellClearing(tx, { clearingId, documentIds: shared, now });
-    return {
-      outcome: 'confirmed',
-      clearingId,
-      documentIds: ids,
-      sharedIds: shared,
-      deleteOn: deleteSharedAt,
-    };
-  });
+  } catch (error) {
+    // The recovery code was spent by another request first: everything this transaction wrote is undone.
+    if (error instanceof CodeGone) return { outcome: 'code_gone' };
+    throw error;
+  }
   if (result.outcome === 'confirmed') await announce(result.documentIds);
   return result;
 }
@@ -271,8 +289,7 @@ export async function cancelClearing(
             WHERE "id" = ${documentId}::uuid AND "ownerId" = ${userId} AND "clearingAt" IS NOT NULL
             FOR UPDATE`;
     const open = rows.filter((row) => row.clearingAt > now && row.deletionClaimedAt === null);
-    if (open.length === 0)
-      return rows.length > 0 && documentId !== null ? { outcome: 'too_late' } : { outcome: 'none' };
+    if (open.length === 0) return rows.length > 0 ? { outcome: 'too_late' } : { outcome: 'none' };
     const out: string[] = [];
     for (const { id } of open) {
       if (await takeOutOfClearing(tx, { documentId: id, ownerId: userId, now })) out.push(id);

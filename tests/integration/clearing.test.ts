@@ -153,6 +153,10 @@ describe('the confirmation names the documents, and the rows decide', () => {
     const refused = await clear(owner.cookie, { scope: 'all', documentIds: names, password: PASSWORD });
     expect(refused.status).toBe(422);
     expect((await json(refused)).error?.message).toContain('at most 6,000 documents');
+    // A body past the bound, however it is made, is told in the same words (review of pull request 60).
+    const long = await clear(owner.cookie, { scope: 'all', documentIds: [], password: 'x'.repeat(300_000) });
+    expect(long.status).toBe(422);
+    expect((await json(long)).error?.message).toContain('at most 6,000 documents');
   });
 
   it('answers a request without a session 401 and one from another origin 403, and clears nothing', async () => {
@@ -283,6 +287,56 @@ describe('the prompt: the password, and the code where two-factor authentication
   });
 });
 
+describe('a recovery code at the prompt (FR-AU-83: "accepted in its place and is then spent")', () => {
+  // Mutation F01: the confirmation does not spend the recovery code that opened it.
+  it('is spent by the clearing it opens, so that it opens no second, and is not spent by one that is refused', async () => {
+    const who = await person();
+    const enrolled = await enrol(auth, who.cookie, {});
+    const [code] = enrolled.recoveryCodes;
+    await documentOf(who.id);
+    // A confirmation that the rows refuse (the identifiers are stale) costs the person no code.
+    const stale = await clear(who.cookie, {
+      scope: 'all',
+      documentIds: [randomUUID()],
+      password: PASSWORD,
+      code,
+    });
+    expect(stale.status).toBe(409);
+    const first = await clear(who.cookie, { ...(await everything(who.id)), code });
+    expect(first.status).toBe(200);
+    await afterResponses();
+    // The same code, for another clearing, is refused as a wrong one is, and clears nothing.
+    const later2 = await documentOf(who.id);
+    const second = await clear(who.cookie, { ...(await everything(who.id)), code });
+    expect(second.status).toBe(403);
+    expect(await codeOf(second)).toBe('code_refused');
+    expect(await exists(later2)).toBe(true);
+    expect((await row(later2))?.clearingAt).toBeNull();
+    // Another code of the ten still opens it.
+    const other = await clear(who.cookie, { ...(await everything(who.id)), code: enrolled.recoveryCodes[1] });
+    expect(other.status).toBe(200);
+  });
+
+  // Mutation F02: a code that another request spent first does not undo the confirmation that waited for it.
+  it('undoes the confirmation of a request whose code another request spent first', async () => {
+    const who = await person();
+    const enrolled = await enrol(auth, who.cookie, {});
+    const mine = await documentOf(who.id);
+    const factor = await db().twoFactor.findFirstOrThrow({ where: { userId: who.id } });
+    const { confirmClearing } = await import('../../src/lib/clearing/clearing.ts');
+    void enrolled;
+    const result = await confirmClearing(
+      who.id,
+      { scope: 'all', documentIds: [mine], spend: async () => false },
+      async () => 'held',
+    );
+    expect(result.outcome).toBe('code_gone');
+    expect((await row(mine))?.clearingAt).toBeNull();
+    expect(await db().documentClearing.count({ where: { userId: who.id } })).toBe(0);
+    expect(factor.id).toBeTruthy();
+  });
+});
+
 describe('what is deleted at once and what waits (FR-AU-91)', () => {
   // Mutation C06: every document is treated as shared (or none is).
   it('deletes at once a document that is not shared, with its images, and keeps a shared one until its day', async () => {
@@ -403,6 +457,59 @@ describe('what is deleted at once and what waits (FR-AU-91)', () => {
     expect((await row(live))?.clearingAt).toBeNull();
   });
 
+  // Mutation C19: the scope of deleted documents does not leave out a document that waits for its day already.
+  it('does not take a deleted document that is waiting for its day into the scope of the deleted documents', async () => {
+    const owner = await person();
+    const reader = await person('reader');
+    const documentId = await documentOf(owner.id);
+    await share(documentId, reader.id);
+    await deletedAgo(documentId, owner.id, DAY_MS);
+    const first = await clear(owner.cookie, await everything(owner.id));
+    const day = (await json(first)).deleteOn as string;
+    expect(await idsOf(owner.id, 'deleted')).toEqual([]);
+    const again = await clear(owner.cookie, {
+      scope: 'deleted',
+      documentIds: [documentId],
+      password: PASSWORD,
+    });
+    expect(again.status).toBe(409);
+    expect((await row(documentId))?.clearingAt?.toISOString()).toBe(day);
+    expect(await db().documentClearing.count({ where: { userId: owner.id } })).toBe(1);
+  });
+
+  // Mutation C20: the pending invitations are revoked only for the documents that are shared.
+  it('revokes the pending invitations of a document that is not shared at the confirmation itself, before its deletion', async () => {
+    const owner = await person();
+    const invitee = await person('invitee');
+    const mine = await documentOf(owner.id);
+    const pending = await invite(mine, owner.id, invitee.email);
+    const confirmed = await confirmClearing(
+      owner.id,
+      { scope: 'all', documentIds: [mine] },
+      async () => 'held',
+    );
+    expect(confirmed.outcome).toBe('confirmed');
+    // The deletion has not run: the document is there, and the invitation is not open.
+    expect(await exists(mine)).toBe(true);
+    expect((await db().documentInvitation.findUniqueOrThrow({ where: { id: pending.id } })).state).toBe(
+      'REVOKED',
+    );
+  });
+
+  // Mutation C21: the acceptance of an invitation does not read the column under the lock.
+  it('does not accept an invitation to a document in a clearing, though one is still pending', async () => {
+    const owner = await person();
+    const invitee = await person('invitee');
+    const mine = await documentOf(owner.id);
+    const pending = await invite(mine, owner.id, invitee.email);
+    await db().document.update({ where: { id: mine }, data: { clearingAt: new Date(Date.now() + DAY_MS) } });
+    const { answerInvitation } = await import('../../src/lib/documents/sharing.ts');
+    expect(await answerInvitation(invitee.id, { id: pending.id }, 'accept')).toEqual({
+      outcome: 'no_longer_open',
+    });
+    expect(await db().documentCollaborator.count({ where: { documentId: mine } })).toBe(0);
+  });
+
   // Mutation C11: a further clearing includes the documents already in a period (and starts their day again).
   it('does not start the period again for a document in one, and covers only the other documents', async () => {
     const owner = await person();
@@ -438,6 +545,26 @@ describe('what is deleted at once and what waits (FR-AU-91)', () => {
     expect(await exists(shared)).toBe(false);
     expect(await exists(later1)).toBe(true);
     expect((await row(later1))?.clearingAt).toBeNull();
+  });
+
+  // Mutation G01: the lists of a clearing may be null (the migration does not make them NOT NULL).
+  it('has lists that are never null: the database refuses a clearing with one', async () => {
+    const owner = await person();
+    for (const column of ['documentIds', 'sharedDocumentIds', 'cancelledDocumentIds']) {
+      const lists: Record<string, string> = {
+        documentIds: 'ARRAY[gen_random_uuid()]',
+        sharedDocumentIds: 'ARRAY[]::uuid[]',
+        cancelledDocumentIds: 'ARRAY[]::uuid[]',
+        [column]: 'NULL',
+      };
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "ekdotico"."DocumentClearing" ("id", "userId", "scope", "documentIds", "sharedDocumentIds", "cancelledDocumentIds", "requestedAt")
+           VALUES ('null-list-${column}', '${owner.id}', 'ALL', ${lists.documentIds}, ${lists.sharedDocumentIds}, ${lists.cancelledDocumentIds}, now())`,
+        ),
+        column,
+      ).rejects.toThrow();
+    }
   });
 
   // A regression test of the shape of the record; the lists it holds are held together by the migration's checks.
@@ -865,7 +992,9 @@ describe('cancelling (FR-AU-91, FR-ED-42)', () => {
     expect((await row(a))?.clearingAt).toBeNull();
     expect((await row(b))?.clearingAt).toBeNull();
     // Nothing is left to cancel.
-    expect((await cancelAll(owner.cookie)).status).toBe(409);
+    const none = await cancelAll(owner.cookie);
+    expect(none.status).toBe(409);
+    expect(await codeOf(none)).toBe('nothing_waiting');
     expect((await cancelOne(owner.cookie, a)).status).toBe(404);
   });
 
@@ -904,7 +1033,10 @@ describe('cancelling (FR-AU-91, FR-ED-42)', () => {
     await db().document.update({ where: { id: b }, data: { deletionClaimedAt: new Date() } });
     expect((await cancelOne(owner.cookie, b)).status).toBe(409);
     expect((await row(a))?.clearingAt).not.toBeNull();
-    expect((await cancelAll(owner.cookie)).status).toBe(409);
+    // For all of them, too: what is left is past its day, which is "too late" and not "nothing is waiting".
+    const all = await cancelAll(owner.cookie);
+    expect(all.status).toBe(409);
+    expect(await codeOf(all)).toBe('too_late');
   });
 });
 

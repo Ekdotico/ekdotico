@@ -26,7 +26,8 @@ const { useImageStorage } = await import('../../src/lib/images/store.ts');
 const { carryOutClearings } = await import('../../src/lib/clearing/deletion.ts');
 const { confirmClearing, cancelClearing, countScope } = await import('../../src/lib/clearing/clearing.ts');
 const { createInvitations, answerInvitation } = await import('../../src/lib/documents/sharing.ts');
-const { deleteDocument, restoreDocument } = await import('../../src/lib/documents/deletion.ts');
+const { deleteDocument, deleteExpiredDocuments, restoreDocument } =
+  await import('../../src/lib/documents/deletion.ts');
 const { answerOffer, makeOffer } = await import('../../src/lib/documents/ownership.ts');
 const { istorico } = await import('../../src/lib/istorico/index.ts');
 const clearRoute = await import('../../src/app/api/account/documents/clear/route.ts');
@@ -383,5 +384,108 @@ describe('a timer’s claim against a cancellation and an acceptance (NFR-RE-15)
     erasing.open();
     expect(await run).toEqual({ deleted: 1, kept: 0 });
     expect(await row(documentId)).toBeNull();
+  });
+});
+
+// The window between what a timer reads as due and the claim it makes (review item 3): something commits there, and
+// the claim, which names its conditions in the write, finds them no longer true and leaves the document alone.
+describe('something that commits between the timer’s read of what is due and its claim', () => {
+  /** Runs `change` once, right after the first read of the due documents (the one that selects `recording`). */
+  async function inTheWindow<T>(change: () => Promise<unknown>, run: () => Promise<T>): Promise<T> {
+    const delegate = db().document;
+    const original = delegate.findMany.bind(delegate);
+    let fired = false;
+    const spy = vi.spyOn(delegate, 'findMany').mockImplementation((async (args: unknown) => {
+      const read = await original(args as never);
+      if (!fired && JSON.stringify(args).includes('recording')) {
+        fired = true;
+        await change();
+      }
+      return read;
+    }) as never);
+    try {
+      const result = await run();
+      expect(fired).toBe(true);
+      return result;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  async function waiting() {
+    const owner = await person();
+    const editor = await person('editor');
+    const documentId = await documentOf(owner.id);
+    await share(documentId, editor.id, 'EDITOR');
+    const response = await w.clear(owner.cookie, {
+      scope: 'all',
+      documentIds: (await countScope(owner.id, 'all')).documentIds,
+      password: PASSWORD,
+    });
+    const day = new Date((await json(response)).deleteOn as string);
+    return { owner, editor, documentId, day };
+  }
+
+  // Mutation W01: the claim of a clearing does not name the day (`clearingAt`) in its write.
+  it('does not delete a document whose clearing was cancelled in the window', async () => {
+    const { owner, documentId, day } = await waiting();
+    const run = await inTheWindow(
+      async () =>
+        expect(await cancelClearing(owner.id, documentId, new Date(day.getTime() - 1))).toMatchObject({
+          outcome: 'cancelled',
+        }),
+      () => carryOutClearings(day),
+    );
+    expect(run).toEqual({ deleted: 0, kept: 0 });
+    expect(await row(documentId)).not.toBeNull();
+    expect((await row(documentId))?.deletedAt).toBeNull();
+  });
+
+  // Mutation W02: the claim of a clearing does not name its Owner in its write.
+  it('does not delete a document that another Owner holds by the time of the claim, the clearing’s day unmoved', async () => {
+    const { editor, documentId, day } = await waiting();
+    const run = await inTheWindow(
+      () => db().document.update({ where: { id: documentId }, data: { ownerId: editor.id } }),
+      () => carryOutClearings(day),
+    );
+    expect(run).toEqual({ deleted: 0, kept: 0 });
+    expect((await row(documentId))?.ownerId).toBe(editor.id);
+    expect((await row(documentId))?.deletedAt).toBeNull();
+  });
+
+  // Mutation W03: the same, by the acceptance of an offer, which moves the Owner and takes the document out together.
+  it('does not delete a document whose ownership was accepted in the window', async () => {
+    const { owner, editor, documentId, day } = await waiting();
+    const collaborator = await db().documentCollaborator.findFirstOrThrow({
+      where: { documentId, userId: editor.id },
+    });
+    expect(
+      (await makeOffer(documentId, owner.id, collaborator.id, new Date(day.getTime() - 60_000))).outcome,
+    ).toBe('offered');
+    const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId, state: 'PENDING' } });
+    const run = await inTheWindow(
+      async () =>
+        expect(await answerOffer(editor.id, offer.id, 'accept', new Date(day.getTime() - 1))).toMatchObject({
+          outcome: 'accepted',
+        }),
+      () => carryOutClearings(day),
+    );
+    expect(run).toEqual({ deleted: 0, kept: 0 });
+    expect((await row(documentId))?.ownerId).toBe(editor.id);
+  });
+
+  // Mutation W04: the retention's claim does not name `clearingAt: null`.
+  it('leaves to its clearing a deleted document that a clearing took after the retention read it', async () => {
+    const owner = await person();
+    const reader = await person('reader');
+    const documentId = await documentOf(owner.id);
+    await share(documentId, reader.id);
+    await deletedAgo(documentId, owner.id, 31 * DAY_MS);
+    const run = await inTheWindow(
+      async () => expect((await confirmFor(owner.id)).outcome).toBe('confirmed'),
+      () => deleteExpiredDocuments(),
+    );
+    expect(run).toEqual({ deleted: 0, kept: 0 });
+    expect(await row(documentId)).not.toBeNull();
+    expect((await row(documentId))?.clearingAt).not.toBeNull();
   });
 });

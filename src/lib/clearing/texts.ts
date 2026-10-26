@@ -40,6 +40,9 @@ export const CLEARING_MESSAGES = {
   nothingWaiting: 'No document of this account is waiting for its deletion.',
   notWaiting: 'This document is not waiting for its deletion.',
   tooLate: 'The day for deleting this document has come, so the deletion can no longer be cancelled.',
+  // The same 409, the same code, for an offer made or accepted after the day (review item 2).
+  offerTooLate: 'The day for deleting this document has come, so its ownership can no longer be offered.',
+  acceptTooLate: 'The day for deleting this document has come, so its ownership can no longer be accepted.',
 } as const;
 
 // ── The deletion screen (FR-AU-58, FR-AU-91) ─────────────────────────────────
@@ -87,6 +90,7 @@ export function confirmation({
   people,
   day,
   noticeDays,
+  accountWaits,
 }: {
   documents: number;
   shared: number;
@@ -94,6 +98,8 @@ export function confirmation({
   /** The day of the deletion of the shared ones, in the reader's own zone, or null where none is shared. */
   day: string | null;
   noticeDays: number;
+  /** Whether every document the account owns is in this clearing, so that the account waits for its day. */
+  accountWaits: boolean;
 }): string[] {
   const lines = [`This deletes ${plural(documents, 'document', 'documents')} permanently.`];
   if (shared === 0) {
@@ -109,7 +115,8 @@ export function confirmation({
     );
   }
   lines.push('No document can be restored once it is deleted.');
-  if (shared > 0 && day !== null) lines.push(`The account cannot be deleted before ${day}.`);
+  // True only where nothing else is owned: for the deleted documents alone, the others stay, and it is not said.
+  if (shared > 0 && day !== null && accountWaits) lines.push(`The account cannot be deleted before ${day}.`);
   lines.push(
     'You can take a copy of a document first by draft export.',
     'Clearing does not delete the account. If you keep it, it has no documents until you create one.',

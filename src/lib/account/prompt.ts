@@ -6,12 +6,16 @@
 //
 // What is asked again inside the transaction of the action (`standing`, src/lib/auth/two-factor.ts) is the
 // route's: it needs the transaction. This is the part before it.
+import type { Prisma } from '../../generated/prisma/client.ts';
 import { auth } from '../auth/auth.ts';
 import { checkCredentials, SIGN_IN_REFUSED } from '../auth/sign-in.ts';
-import { checkSecondFactorAtPrompt } from '../auth/two-factor.ts';
+import { checkSecondFactorToSpend } from '../auth/two-factor.ts';
 import { db } from '../db.ts';
 import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
+
+/** The write that spends the recovery code that was entered, for the transaction of an action that spends it (S23, review item 1). */
+export type Spend = (tx: Prisma.TransactionClient) => Promise<boolean>;
 
 export type Verified = NonNullable<Awaited<ReturnType<typeof checkCredentials>>['verified']>;
 
@@ -50,20 +54,22 @@ export async function verifyPrompt(
   userId: string,
   account: { email: string; secondFactor: boolean },
   entered: { password: string; code?: string },
-): Promise<{ ok: true; verified: Verified } | { ok: false; response: Response }> {
+): Promise<{ ok: true; verified: Verified; spend: Spend | null } | { ok: false; response: Response }> {
   const context = await auth().$context;
   const { verified } = await checkCredentials(context, request.headers, account.email, entered.password);
   if (!verified) return { ok: false, response: await passwordRefused(userId) };
+  let spend: Spend | null = null;
   if (account.secondFactor) {
     const factor = await db().twoFactor.findUnique({ where: { userId } });
-    const right =
-      factor?.verified === true &&
-      entered.code !== undefined &&
-      (await checkSecondFactorAtPrompt({ context }, request.headers, account.email, factor, entered.code));
-    if (!right) {
+    const checked =
+      factor?.verified === true && entered.code !== undefined
+        ? await checkSecondFactorToSpend({ context }, request.headers, account.email, factor, entered.code)
+        : { right: false, spend: null };
+    if (!checked.right) {
       await securityLog({ kind: 'forbidden', userId });
       return { ok: false, response: errorResponse(403, 'code_refused', CODE_REFUSED) };
     }
+    spend = checked.spend;
   }
-  return { ok: true, verified };
+  return { ok: true, verified, spend };
 }

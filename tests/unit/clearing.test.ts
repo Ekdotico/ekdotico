@@ -62,7 +62,15 @@ describe('the fixed texts of FR-AU-91, verbatim', () => {
 
 describe('the confirmation names what FR-AU-91 asks it to name', () => {
   const lines = (over: Partial<Parameters<typeof confirmation>[0]> = {}) =>
-    confirmation({ documents: 5, shared: 2, people: 4, day: '2 Nov 2026, 14:05', noticeDays: 7, ...over });
+    confirmation({
+      documents: 5,
+      shared: 2,
+      people: 4,
+      day: '2 Nov 2026, 14:05',
+      noticeDays: 7,
+      accountWaits: true,
+      ...over,
+    });
 
   it('names the number, how many are shared and with how many people, the day, and the rest', () => {
     expect(lines()).toEqual([
@@ -84,6 +92,12 @@ describe('the confirmation names what FR-AU-91 asks it to name', () => {
     expect(none).not.toContain('collaborators');
     const all = lines({ documents: 2, shared: 2 }).join(' ');
     expect(all).not.toContain('is deleted at once');
+  });
+
+  // Mutation H01: the confirmation of the deleted documents alone says that the account cannot be deleted before the day.
+  it('does not say that the account waits where the others it owns stay (the deleted documents alone)', () => {
+    expect(lines({ accountWaits: false }).join(' ')).not.toContain('The account cannot be deleted before');
+    expect(lines({ accountWaits: true }).join(' ')).toContain('The account cannot be deleted before');
   });
 
   it('is written for one document and one person', () => {

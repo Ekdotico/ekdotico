@@ -320,6 +320,53 @@ describe('what the day leaves alone', () => {
     expect(await exists(documentId)).toBe(true);
   });
 
+  // Mutation O01: an acceptance after the day takes the document out of the clearing, which is then never deleted.
+  // Mutation O02: an offer is made after the day.
+  it('takes nothing out of a clearing whose day has come: an offer is neither accepted nor made, and the timer deletes the document', async () => {
+    const { owner, readers, documentId, day } = await sharedClearing();
+    const editor = readers[0]!;
+    const collaborator = await db().documentCollaborator.findFirstOrThrow({
+      where: { documentId, userId: editor.id },
+    });
+    expect((await makeOffer(documentId, owner.id, collaborator.id)).outcome).toBe('offered');
+    const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId, state: 'PENDING' } });
+    const after = new Date(day.getTime() + 1);
+    // Accepted a moment after the day, before any run of the timer: refused, and the offer stays pending.
+    expect(await answerOffer(editor.id, offer.id, 'accept', after)).toEqual({ outcome: 'clearing_over' });
+    const kept = await row(documentId);
+    expect(kept?.ownerId).toBe(owner.id);
+    expect(kept?.clearingAt?.getTime()).toBe(day.getTime());
+    expect((await db().ownershipOffer.findUniqueOrThrow({ where: { id: offer.id } })).state).toBe('PENDING');
+    // Declining stays open, and no new offer is made after the day.
+    expect((await makeOffer(documentId, owner.id, collaborator.id, after)).outcome).toBe('clearing_over');
+    await db().ownershipOffer.update({ where: { id: offer.id }, data: { state: 'WITHDRAWN' } });
+    expect((await makeOffer(documentId, owner.id, collaborator.id, after)).outcome).toBe('clearing_over');
+    expect(await carryOutClearings(after)).toEqual({ deleted: 1, kept: 0 });
+    expect(await exists(documentId)).toBe(false);
+  });
+
+  it('answers the acceptance of an offer after the day with the 409 of a cancellation that comes too late', async () => {
+    const { owner, readers, documentId } = await sharedClearing();
+    const editor = readers[0]!;
+    const collaborator = await db().documentCollaborator.findFirstOrThrow({
+      where: { documentId, userId: editor.id },
+    });
+    expect((await makeOffer(documentId, owner.id, collaborator.id)).outcome).toBe('offered');
+    const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId, state: 'PENDING' } });
+    await db().document.update({
+      where: { id: documentId },
+      data: { clearingAt: new Date(Date.now() - 1000) },
+    });
+    const answering = await import('../../src/app/api/ownership-offers/[offerId]/[answer]/route.ts');
+    const response = await answering.POST(
+      w.request('POST', `/api/ownership-offers/${offer.id}/accept`, await editor.signedIn()),
+      { params: Promise.resolve({ offerId: offer.id, answer: 'accept' }) },
+    );
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe('too_late');
+    expect((await row(documentId))?.ownerId).toBe(owner.id);
+  });
+
   // Mutation D10: the claim does not check the day of the clearing, so a document of another clearing is deleted.
   it('deletes only the documents of the clearing, under the day that clearing gave them', async () => {
     const owner = await person();
@@ -431,6 +478,60 @@ describe('when a step cannot be done, the document is kept and the next run does
     expect(await carryOutClearings(day)).toEqual({ deleted: 1, kept: 1 });
     expect(await exists(good)).toBe(false);
     expect(await exists(bad)).toBe(true);
+  });
+});
+
+describe('the notices of a clearing and the deletion of their document by the retention (FR-ED-42)', () => {
+  // Mutation N01: the permanent deletion of a document does not take the notices of a clearing with it.
+  it('leaves no notice of a clearing behind a document that is deleted permanently, whatever its notice was', async () => {
+    const owner = await person();
+    const reader = await person('reader');
+    const documentId = await documentOf(owner.id);
+    await share(documentId, reader.id);
+    await clear(owner.cookie, { scope: 'all', documentIds: [documentId], password: PASSWORD });
+    expect((await cancelOne(owner.cookie, documentId)).status).toBe(200);
+    // A notice of the period too, as one that the cancellation did not replace would be.
+    await db().notification.create({
+      data: { recipientId: reader.id, kind: 'clearing_notice', payload: { documentId, clearingId: 'x' } },
+    });
+    expect(
+      await db().notification.count({ where: { payload: { path: ['documentId'], equals: documentId } } }),
+    ).toBe(2);
+    await w.deletedAgo(documentId, owner.id, 31 * DAY_MS);
+    expect(await deleteExpiredDocuments()).toEqual({ deleted: 1, kept: 0 });
+    expect(
+      await db().notification.count({ where: { payload: { path: ['documentId'], equals: documentId } } }),
+    ).toBe(0);
+  });
+});
+
+describe('an upload that crosses the deletion of its document (NFR-SE-18, FR-AU-91)', () => {
+  // Mutation I01: the upload does not look for its row after the put.
+  it('removes the object it put after the document’s images were deleted, and says the document is not there', async () => {
+    const owner = await person();
+    const documentId = await documentOf(owner.id);
+    const { png } = await import('../unit/image-fixtures.ts');
+    const { deleteImagesOfDocument } = await import('../../src/lib/images/deletion.ts');
+    // The deletion of the document's images runs between the reservation and the put.
+    const crossing = new (class extends MemoryStorage {
+      override async put(key: string, bytes: Uint8Array, contentType: string) {
+        await deleteImagesOfDocument(this, documentId);
+        await super.put(key, bytes, contentType);
+      }
+    })();
+    useImageStorage(crossing);
+    const uploads = await import('../../src/app/api/documents/[id]/images/route.ts');
+    const response = await uploads.POST(
+      new Request(`https://app.example.test/api/documents/${documentId}/images`, {
+        method: 'POST',
+        headers: { origin: 'https://app.example.test', cookie: owner.cookie, 'content-type': 'image/png' },
+        body: new Uint8Array(png()),
+      }),
+      { params: Promise.resolve({ id: documentId }) },
+    );
+    expect(response.status).toBe(404);
+    expect(crossing.objects.size).toBe(0);
+    expect(await db().documentImage.count({ where: { documentId } })).toBe(0);
   });
 });
 

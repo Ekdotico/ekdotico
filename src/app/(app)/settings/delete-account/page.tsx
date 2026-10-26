@@ -33,7 +33,8 @@ export default async function DeleteAccountPage() {
       clearingScreen(userId),
     ]),
   );
-  const lastDay = screen.waiting.at(-1)?.deleteOn ?? null;
+  // "The account cannot be deleted before [date]" is true only where every document it owns waits for that day.
+  const lastDay = screen.all.documentIds.length === 0 ? (screen.waiting.at(-1)?.deleteOn ?? null) : null;
 
   return (
     <Stack gap={8}>

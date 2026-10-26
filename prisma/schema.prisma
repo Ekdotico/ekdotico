@@ -541,9 +541,9 @@ model DocumentClearing {
   id                   String        @id @default(cuid())
   userId               String
   scope                ClearingScope
-  documentIds          String[]      @db.Uuid
-  sharedDocumentIds    String[]      @db.Uuid
-  cancelledDocumentIds String[]      @db.Uuid
+  documentIds          String[]      @default([]) @db.Uuid
+  sharedDocumentIds    String[]      @default([]) @db.Uuid
+  cancelledDocumentIds String[]      @default([]) @db.Uuid
   requestedAt          DateTime      @default(now())
   deleteSharedAt       DateTime?
   completedAt          DateTime?

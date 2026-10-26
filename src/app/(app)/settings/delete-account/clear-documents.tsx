@@ -159,6 +159,7 @@ export function ClearDocuments({
                   people: scope.people,
                   day,
                   noticeDays,
+                  accountWaits: scope.scope === 'all',
                 }).map((line) => (
                   <p key={line} className={styles.text}>
                     {line}
@@ -354,7 +355,7 @@ export function WaitingDocuments({
                     </bdi>
                     <InBrowser>
                       <p className={styles.meta}>
-                        Deleted on <LocalTime at={document.deleteOn} />
+                        Will be deleted on <LocalTime at={document.deleteOn} />
                       </p>
                     </InBrowser>
                   </Stack>

@@ -178,7 +178,7 @@ test('a shared document waits for its day: the confirmation names the people, th
   const waiting = main.getByRole('heading', { level: 2, name: 'Waiting for their day' });
   await expect(waiting).toBeVisible();
   await expect(main.getByRole('listitem').filter({ hasText: 'Untitled document' })).toContainText(
-    'Deleted on',
+    'Will be deleted on',
   );
   await expect(main.getByText(new RegExp(`The account cannot be deleted before ${DATE}\\.`))).toBeVisible();
   await expect(main.getByRole('button', { name: 'Clear all documents' })).toHaveCount(0);
