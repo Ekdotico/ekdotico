@@ -23,7 +23,8 @@ const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { useImageStorage } = await import('../../src/lib/images/store.ts');
 const { transferScreen, confirmTransfer } = await import('../../src/lib/account/transfer.ts');
 const { deliverBatch, deliverUnsentBatches } = await import('../../src/lib/account/transfer-email.ts');
-const { answerOffer, makeOffer, deliverUnsentOffers } = await import('../../src/lib/documents/ownership.ts');
+const { answerOffer, makeOffer, deliverUnsentOffers, withdrawOffer } =
+  await import('../../src/lib/documents/ownership.ts');
 const { takeLimit, clearLimit } = await import('../../src/lib/rate-limit.ts');
 const clearRoute = await import('../../src/app/api/account/documents/clear/route.ts');
 const oneRoute = await import('../../src/app/api/account/documents/clear/[documentId]/route.ts');
@@ -458,10 +459,12 @@ describe('the rules (a) and (b), each offer being an offer of FR-ED-47', () => {
     expect((await offersOf(declined)).map(({ toUserId }) => toUserId)).toEqual([first.id, second.id]);
     expect((await offersOf(expired)).map(({ toUserId }) => toUserId)).toEqual([first.id, second.id]);
 
-    // Nobody is left: the document stays declined, and cannot be offered by (a).
+    // Nobody is left: the document has no other Editor, and cannot be offered by (a).
     await answerOffer(second.id, (await offersOf(declined))[1]!.id, 'decline');
     const last = await transferScreen(owner.id);
-    expect(last.documents.find(({ id }) => id === declined)?.state).toMatchObject({ kind: 'declined' });
+    expect(last.documents.find(({ id }) => id === declined)?.state).toMatchObject({
+      kind: 'no_other_editor',
+    });
     expect(last.longest.documentIds).toEqual([expired]);
   });
 });
@@ -506,15 +509,16 @@ describe('the state of each document', () => {
     const screen = await transferScreen(owner.id);
     const state = (id: string) => screen.documents.find((d) => d.id === id)?.state;
     expect(state(offered)).toMatchObject({ kind: 'offered', toName: 'A Person' });
-    expect(state(declined)).toMatchObject({ kind: 'declined' });
-    expect(state(expired)).toMatchObject({ kind: 'expired' });
+    expect(state(declined)).toMatchObject({ kind: 'no_other_editor' });
+    expect(state(expired)).toMatchObject({ kind: 'no_other_editor' });
     expect(state(none)).toEqual({ kind: 'no_editor' });
     expect(state(ready)).toEqual({ kind: 'ready' });
     expect(state(deleted)).toEqual({ kind: 'deleted' });
     expect(state(being)).toEqual({ kind: 'being_deleted' });
     expect(state(recorded)).toEqual({ kind: 'not_transferable' });
     // The offered one is kept and the ready one is offered; the declined and the expired one have no Editor next by the rule of (a).
-    expect(screen.longest.offered).toBe(2);
+    expect(screen.longest.offered).toBe(1);
+    expect(screen.longest.kept).toBe(1);
     expect(screen.longest.cannot).toBe(6);
   });
 
@@ -917,5 +921,147 @@ describe('one Owner for every document', () => {
     expect(first.collaborators).toMatchObject([{ userId: owner.id, role: 'EDITOR' }]);
     expect((await row(ids[1]!))?.ownerId).toBe(owner.id);
     expect((await row(ids[2]!))?.ownerId).toBe(owner.id);
+  });
+});
+
+// The review of pull request 64 (docs/plan/slice-24.md, section 10).
+describe('review of pull request 64', () => {
+  // Item 2, mutation I2: the offers are settled with a statement for each document, and the transaction runs out of time.
+  it('settles thousands of stale offers inside the time of the transaction, as the same writes as for one document', async () => {
+    const owner = await person();
+    const ed = await person('ed');
+    const template = await documentOf(owner.id);
+    const { id, ...fields } = await db().document.findUniqueOrThrow({ where: { id: template } });
+    expect(id).toBe(template);
+    const COUNT = 6000;
+    const copies = Array.from({ length: COUNT }, () => ({
+      ...fields,
+      permissionSet: fields.permissionSet as never,
+      id: randomUUID(),
+    }));
+    await db().document.createMany({ data: copies });
+    const ids = [template, ...copies.map(({ id }) => id)];
+    await db().documentCollaborator.createMany({
+      data: ids.map((documentId) => ({ documentId, userId: ed.id, role: 'EDITOR' as const })),
+    });
+    // All but the template carry an offer stored pending whose time has passed; `ed` is an Editor of each, so the
+    // offers are expired and not withdrawn.
+    await db().ownershipOffer.createMany({
+      data: ids.slice(1).map((documentId) => ({
+        documentId,
+        fromUserId: owner.id,
+        toUserId: ed.id,
+        createdAt: new Date(Date.now() - 20 * DAY_MS),
+        expiresAt: new Date(Date.now() - 6 * DAY_MS),
+      })),
+    });
+    // Only the template is offered: the Editor of the others let an offer expire, and is passed over (S24-3).
+    const started = performance.now();
+    const made = await post(owner.cookie, { mode: 'longest', documentIds: [template] });
+    const took = performance.now() - started;
+    expect(made.status).toBe(201);
+    expect(await json(made)).toEqual({ offered: 1, kept: 0, cannot: COUNT });
+    expect(took).toBeLessThan(4500);
+    // The offers were written expired, and the Owner was told of each, as `settle` does for one document.
+    expect(await db().ownershipOffer.count({ where: { fromUserId: owner.id, state: 'PENDING' } })).toBe(1);
+    expect(await db().ownershipOffer.count({ where: { fromUserId: owner.id, state: 'EXPIRED' } })).toBe(
+      COUNT,
+    );
+    expect(
+      await db().notification.count({ where: { recipientId: owner.id, kind: 'ownership_offer_ended' } }),
+    ).toBe(COUNT);
+  }, 120_000);
+
+  // Item 3, mutation I3: no state of its own for a document whose every Editor was passed over.
+  it('says there is no other Editor where each has declined, and the same after a withdrawal', async () => {
+    const owner = await person();
+    const ed = await person('ed');
+    const documentId = await documentOf(owner.id);
+    const edRow = await editorOf(documentId, ed);
+    expect((await makeOffer(documentId, owner.id, edRow.id)).outcome).toBe('offered');
+    await answerOffer(ed.id, (await offersOf(documentId))[0]!.id, 'decline');
+    expect((await transferScreen(owner.id)).documents[0]?.state).toEqual({ kind: 'no_other_editor' });
+    // Offered once more on its own, withdrawn: it is not "Not offered yet" for a rule that passes the Editor over.
+    expect((await makeOffer(documentId, owner.id, edRow.id)).outcome).toBe('offered');
+    await withdrawOffer(documentId, owner.id);
+    const screen = await transferScreen(owner.id);
+    expect(screen.documents[0]?.state).toEqual({ kind: 'no_other_editor' });
+    expect(screen.longest.documentIds).toEqual([]);
+    // "To one person" still offers it to them.
+    expect(screen.people).toMatchObject([{ offered: 1 }]);
+  });
+
+  // Item 4, mutation I4: a document that already has an offer is counted under the chosen person.
+  it('counts only the new offers of a choice, and states the documents that already have an offer apart', async () => {
+    const owner = await person();
+    const alice = await person('alice');
+    const bob = await person('bob');
+    const kept: string[] = [];
+    for (let n = 0; n < 3; n++) {
+      const id = await documentOf(owner.id);
+      const aliceRow = await editorOf(id, alice, 5);
+      await makeOffer(id, owner.id, aliceRow.id);
+      kept.push(id);
+    }
+    const bobs = await documentOf(owner.id);
+    const bobRow = await editorOf(bobs, bob, 5);
+    const screen = await transferScreen(owner.id);
+    // Alice has nothing new to be offered; Bob has one.
+    expect(screen.people).toHaveLength(1);
+    expect(screen.people[0]).toMatchObject({ offered: 1, kept: 3, cannot: 0 });
+    expect(screen.longest).toMatchObject({ offered: 1, kept: 3, cannot: 0 });
+    const response = await post(owner.cookie, {
+      mode: 'person',
+      collaboratorId: bobRow.id,
+      documentIds: screen.people[0]!.documentIds,
+    });
+    expect(await json(response)).toEqual({ offered: 1, kept: 3, cannot: 0 });
+    // The offers that were kept are not claimed by the batch: they are handed over as single offers, by their own path.
+    const singles = await db().ownershipOffer.findMany({ where: { documentId: { in: kept } } });
+    expect(singles.map(({ batchId }) => batchId)).toEqual([null, null, null]);
+    // Everything now has an offer: nothing new, and the person is no longer one to pick.
+    const after = await transferScreen(owner.id);
+    expect(after.longest).toMatchObject({ offered: 0, kept: 4, cannot: 0 });
+    expect(after.people).toEqual([]);
+  });
+
+  // Item 8, mutation I8: the screen and the plan read every role, not the Editors.
+  it('offers to an Editor only: a long-standing Viewer beside a newer Editor is not the longest-standing Editor', async () => {
+    const owner = await person();
+    const viewer = await person('viewer');
+    const editor = await person('editor');
+    const documentId = await documentOf(owner.id);
+    await db().documentCollaborator.create({
+      data: {
+        documentId,
+        userId: viewer.id,
+        role: 'VIEWER',
+        roleSince: new Date(T0 - 300 * DAY_MS),
+        addedAt: new Date(T0 - 300 * DAY_MS),
+      },
+    });
+    await editorOf(documentId, editor, 2);
+    expect((await post(owner.cookie, await everything(owner))).status).toBe(201);
+    expect((await offersOf(documentId)).map(({ toUserId }) => toUserId)).toEqual([editor.id]);
+  });
+
+  it('offers a chosen person only the documents they are an Editor of, not those they only view', async () => {
+    const owner = await person();
+    const ada = await person('ada');
+    const edits = await documentOf(owner.id);
+    const views = await documentOf(owner.id);
+    const row = await editorOf(edits, ada);
+    await db().documentCollaborator.create({ data: { documentId: views, userId: ada.id, role: 'VIEWER' } });
+    const screen = await transferScreen(owner.id);
+    expect(screen.documents.find(({ id }) => id === views)?.state).toEqual({ kind: 'no_editor' });
+    expect(screen.people).toMatchObject([{ offered: 1, cannot: 1 }]);
+    const response = await post(owner.cookie, {
+      mode: 'person',
+      collaboratorId: row.id,
+      documentIds: screen.people[0]!.documentIds,
+    });
+    expect(response.status).toBe(201);
+    expect(await offersOf(edits)).toHaveLength(1);
+    expect(await offersOf(views)).toHaveLength(0);
   });
 });

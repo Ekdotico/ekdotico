@@ -34,6 +34,7 @@ import { settings } from '../settings.ts';
 import {
   endOfferEndedNotifications,
   notifyOfferEnded,
+  OFFER_ENDED_NOTIFICATION,
   OFFER_NOTIFICATION,
   type OfferEnd,
 } from './ownership-notifications.ts';
@@ -162,29 +163,49 @@ export async function endOffersOf(tx: Tx, documentId: string, now: Date): Promis
  * be found of the second kind; the state is stored, and a reader never trusts
  * it alone.
  */
-export async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
+export const settle = (tx: Tx, documentId: string, now: Date): Promise<void> =>
+  settleMany(tx, [documentId], now);
+
+/**
+ * `settle` for many documents, each of whose rows the caller holds, in a fixed number of statements however many
+ * offers there are: the transfer of all documents settles every document the account owns inside one transaction
+ * (docs/plan/slice-24.md, review of pull request 64: a statement for each document ran it past the time of the
+ * transaction at about 6,000 documents). The same rule as for one: past its time, written expired; recipient not an
+ * Editor now, or maker not the Owner, written withdrawn; the Owner told of the offers this write ended.
+ */
+export async function settleMany(tx: Tx, documentIds: readonly string[], now: Date): Promise<void> {
+  if (documentIds.length === 0) return;
   const pending = await tx.ownershipOffer.findMany({
-    where: { documentId, state: 'PENDING' },
-    select: { id: true, fromUserId: true, toUserId: true, expiresAt: true },
+    where: { documentId: { in: [...documentIds] }, state: 'PENDING' },
+    select: {
+      id: true,
+      documentId: true,
+      fromUserId: true,
+      toUserId: true,
+      expiresAt: true,
+      document: { select: { ownerId: true } },
+    },
   });
   if (pending.length === 0) return;
-  const tell = new Map<OfferEnd, { fromUserId: string; toUserId: string }[]>();
-  const { ownerId } = await tx.document.findUniqueOrThrow({
-    where: { id: documentId },
-    select: { ownerId: true },
-  });
   const editors = new Set(
     (
       await tx.documentCollaborator.findMany({
-        where: { documentId, role: 'EDITOR', userId: { in: pending.map(({ toUserId }) => toUserId) } },
-        select: { userId: true },
+        where: {
+          documentId: { in: [...documentIds] },
+          role: 'EDITOR',
+          userId: { in: [...new Set(pending.map(({ toUserId }) => toUserId))] },
+        },
+        select: { documentId: true, userId: true },
       })
-    ).map(({ userId }) => userId),
+    ).map(({ documentId, userId }) => `${documentId}/${userId}`),
   );
   const expired = pending.filter(({ expiresAt }) => expiresAt <= now);
   const withdrawn = pending.filter(
-    (offer) => !expired.includes(offer) && (!editors.has(offer.toUserId) || offer.fromUserId !== ownerId),
+    (offer) =>
+      !expired.includes(offer) &&
+      (!editors.has(`${offer.documentId}/${offer.toUserId}`) || offer.fromUserId !== offer.document.ownerId),
   );
+  const owners = new Map(pending.map(({ documentId, document }) => [documentId, document.ownerId]));
   for (const [state, end, offers] of [
     ['EXPIRED', 'expired', expired],
     ['WITHDRAWN', 'ended', withdrawn],
@@ -195,12 +216,30 @@ export async function settle(tx: Tx, documentId: string, now: Date): Promise<voi
     const done = await tx.ownershipOffer.updateManyAndReturn({
       where: { id: { in: ids }, state: 'PENDING' },
       data: { state, respondedAt: now },
-      select: { id: true, fromUserId: true, toUserId: true },
+      select: { id: true, documentId: true, fromUserId: true, toUserId: true },
     });
-    await tx.notification.deleteMany({ where: notificationsOf(ids) });
-    tell.set(end, done);
+    await deleteOfferNotifications(tx, ids);
+    // The maker is the Owner now, and is not told of an offer made to themselves (`tellOwnerOffersEnded`, one by one).
+    await tx.notification.createMany({
+      data: done
+        .filter(
+          ({ documentId, fromUserId, toUserId }) =>
+            fromUserId === owners.get(documentId) && fromUserId !== toUserId,
+        )
+        .map(({ documentId, fromUserId, toUserId }) => ({
+          recipientId: fromUserId,
+          kind: OFFER_ENDED_NOTIFICATION,
+          payload: { documentId, toUserId, end },
+        })),
+    });
   }
-  for (const [end, offers] of tell) await tellOwnerOffersEnded(tx, documentId, offers, end);
+}
+
+/** The notifications of these offers, in one statement however many there are (a filter for each would be a condition for each). */
+async function deleteOfferNotifications(tx: Tx, offerIds: readonly string[]): Promise<void> {
+  await tx.$executeRaw`
+    DELETE FROM "ekdotico"."Notification"
+    WHERE "kind" = ${OFFER_NOTIFICATION} AND "payload"->>'offerId' = ANY(${[...offerIds]}::text[])`;
 }
 
 /**

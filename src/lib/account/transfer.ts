@@ -24,7 +24,7 @@ import type { Prisma } from '../../generated/prisma/client.ts';
 import { holdSession, type ValidSession } from '../auth/session.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { db } from '../db.ts';
-import { createOffer, settle, transferable, type Tx } from '../documents/ownership.ts';
+import { createOffer, settleMany, transferable, type Tx } from '../documents/ownership.ts';
 import { takeLimitReturnable } from '../rate-limit.ts';
 import { settings } from '../settings.ts';
 import { DELETED_ACCOUNT } from './deleted-account.ts';
@@ -121,6 +121,14 @@ export function planTransfer(
   }
   return plan;
 }
+
+/**
+ * How many offers of the limit of an hour (NFR-SE-07, D219) an action that makes these new offers uses: the one rule,
+ * in one place, so that the owner's answer to S24-1 is a change of this line. As built, each new offer counts one,
+ * as an offer made on its own does. The answer the plan recommends (register row p64-1) counts one for each person
+ * emailed: `new Set(fresh.map(({ toUserId }) => toUserId)).size`.
+ */
+export const offersCounted = (fresh: readonly { toUserId: string }[]): number => fresh.length;
 
 /** The documents the plan offers or keeps, which the confirmation counts as offered, in the order of the identifiers. */
 export function offeredIds(plan: ReadonlyMap<string, Outcome>): string[] {
@@ -254,7 +262,7 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 export async function confirmTransfer(
   session: ValidSession,
   request: TransferRequest,
-  now: Date = new Date(),
+  given?: Date,
 ): Promise<TransferResult> {
   const userId = session.userId;
   // NFR-SE-07: counted in the transaction, after every refusal, and given back where it then fails.
@@ -270,26 +278,30 @@ export async function confirmTransfer(
       // confirmation counts them under the account's row), so this is the backstop of that rule.
       if (await inDeletion(userId, tx)) return { outcome: 'not_found' };
 
-      // The offers whose time has passed, or whose Editor has lost the role, are written as they are, under the lock.
-      const open = await tx.ownershipOffer.findMany({
-        where: { documentId: { in: ids }, state: 'PENDING' },
-        select: { documentId: true },
-        distinct: ['documentId'],
-      });
-      for (const { documentId } of open) await settle(tx, documentId, now);
-
-      const rows = await tx.document.findMany({
-        ...owned(userId),
-        where: { id: { in: ids }, ownerId: userId },
-      });
-      const candidates = [
-        ...new Set(rows.flatMap(({ collaborators }) => collaborators.map(({ userId: id }) => id))),
-      ].sort();
-      // The accounts that may be offered a document, held until the commit, then asked for their deletion.
+      // The accounts that may be offered a document: the Editors of these documents, held `FOR SHARE` until the
+      // commit and then asked for their deletion.
+      const candidates = (
+        await tx.documentCollaborator.findMany({
+          where: { documentId: { in: ids }, role: 'EDITOR' },
+          select: { userId: true },
+          distinct: ['userId'],
+        })
+      )
+        .map(({ userId: id }) => id)
+        .sort();
       if (candidates.length > 0) {
         await tx.$queryRaw`
           SELECT "id" FROM "ekdotico"."User" WHERE "id" = ANY(${candidates}::text[]) ORDER BY "id" FOR SHARE`;
       }
+      // The time is read here, after every wait for a lock, and not when the request began: the day of a clearing
+      // or the end of an offer that came while this waited is the day it is judged by (as `answerOffer` does).
+      const now = given ?? new Date();
+      // The offers whose time has passed, or whose Editor has lost the role, are written as they are, under the locks.
+      await settleMany(tx, ids, now);
+      const rows = await tx.document.findMany({
+        ...owned(userId),
+        where: { id: { in: ids }, ownerId: userId },
+      });
       const eligible = await eligibleAccounts(tx, candidates);
 
       let choice: Choice;
@@ -320,8 +332,9 @@ export async function confirmTransfer(
       );
       if (fresh.length > 0) {
         const most = settings().limits.OFFERS_PER_USER.max;
-        if (fresh.length > most) return { outcome: 'over_limit', most, wanted: fresh.length };
-        const limit = await takeLimitReturnable('OFFERS_PER_USER', userId, fresh.length);
+        const wanted = offersCounted(fresh);
+        if (wanted > most) return { outcome: 'over_limit', most, wanted };
+        const limit = await takeLimitReturnable('OFFERS_PER_USER', userId, wanted);
         if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
         giveBack = limit.giveBack;
       }
@@ -360,6 +373,7 @@ export type DocumentState =
   | { kind: 'declined'; toName: string }
   | { kind: 'expired'; toName: string }
   | { kind: 'no_editor' }
+  | { kind: 'no_other_editor' }
   | { kind: 'ready' }
   | { kind: 'deleted' }
   | { kind: 'being_deleted' }
@@ -371,10 +385,15 @@ export interface ScreenDocument {
   state: DocumentState;
 }
 
-/** What the confirmation names for a choice: the documents it would offer (or keep), and how many cannot be. */
+/**
+ * What the confirmation names for a choice. `documentIds` are the documents it would offer or keep, which the request
+ * names; `offered` is the number of new offers it would make for this choice, `kept` the number of documents that
+ * already have an offer, which stands whoever it is made to, and `cannot` the rest.
+ */
 export interface Counted {
   documentIds: string[];
   offered: number;
+  kept: number;
   cannot: number;
 }
 
@@ -406,9 +425,13 @@ function stateOf(row: OwnedRow, document: PlanDocument, outcome: Outcome, now: D
         return { kind: 'not_transferable' };
       case 'no_editor':
         return { kind: 'no_editor' };
+      case 'no_other_editor':
+        // Every Editor has been offered it and declined or let it lapse (or the offer was withdrawn since): there is
+        // no next Editor by the rule of (a), whatever the last offer says.
+        return { kind: 'no_other_editor' };
     }
   }
-  // Free to be offered, or left without a next Editor by a decline or an expiry: the last offer says which.
+  // Free to be offered, or left with a next Editor by a decline or an expiry: the last offer says which.
   const last = row.offers[0];
   if (document.editors.length === 0) return { kind: 'no_editor' };
   if (last?.state === 'DECLINED') return { kind: 'declined', toName: nameOf(last.to) };
@@ -431,7 +454,13 @@ export async function transferScreen(userId: string, now: Date = new Date()): Pr
   const longest = planTransfer(documents, { mode: 'longest' }, now);
   const count = (plan: ReadonlyMap<string, Outcome>): Counted => {
     const documentIds = offeredIds(plan);
-    return { documentIds, offered: documentIds.length, cannot: rows.length - documentIds.length };
+    const offered = [...plan.values()].filter(({ kind }) => kind === 'offer').length;
+    return {
+      documentIds,
+      offered,
+      kept: documentIds.length - offered,
+      cannot: rows.length - documentIds.length,
+    };
   };
 
   // Every Editor of the account's documents, by the first of their rows (the account's identifier is not sent).

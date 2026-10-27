@@ -27,7 +27,7 @@ const { transferScreen } = await import('../../src/lib/account/transfer.ts');
 const { confirmDeletion } = await import('../../src/lib/account/deletion.ts');
 const { carryOutDeletions } = await import('../../src/lib/account/deletion-steps.ts');
 const { confirmClearing, countScope } = await import('../../src/lib/clearing/clearing.ts');
-const { answerOffer, makeOffer } = await import('../../src/lib/documents/ownership.ts');
+const { answerOffer, makeOffer, expireOffers } = await import('../../src/lib/documents/ownership.ts');
 const clearRoute = await import('../../src/app/api/account/documents/clear/route.ts');
 const oneRoute = await import('../../src/app/api/account/documents/clear/[documentId]/route.ts');
 const transferRoute = await import('../../src/app/api/account/documents/transfer/route.ts');
@@ -343,6 +343,28 @@ describe('the action against a clearing', () => {
     expect(await offersOf(documentId)).toHaveLength(0);
   });
 
+  // Mutation I1 (review of pull request 64, item 1): the time is read when the request begins, before the waits for the locks.
+  it('judges the day of a clearing by the time after it has waited for the locks, not by the time it began', async () => {
+    const owner = await person();
+    const ed = await person('ed');
+    const documentId = await documentOf(owner.id);
+    await editorOf(documentId, ed);
+    // The day is a second and a half away when the request is made, and has passed when it gets the row.
+    await db().document.update({
+      where: { id: documentId },
+      data: { clearingAt: new Date(Date.now() + 1500) },
+    });
+    const body = await everything(owner);
+    expect(body.documentIds).toEqual([documentId]);
+    let response!: Response;
+    await behind('document', documentId, async (queued) => {
+      await queued(async () => void (response = await post(owner.cookie, body)));
+      await sleep(2200);
+    });
+    expect(response.status).toBe(409);
+    expect(await offersOf(documentId)).toHaveLength(0);
+  }, 30_000);
+
   // Mutation R07b (M30): the documents are locked in the order the database finds them, not in the order of their identifiers.
   it('locks the documents in the order of their identifiers, so that one who takes them in that order does not deadlock with it', async () => {
     const owner = await person();
@@ -379,53 +401,97 @@ describe('the action against a clearing', () => {
     expect(response.status === 'fulfilled' && response.value.status).toBe(201);
   }, 40_000);
 
-  // Mutation R08: the order of the locks is the account before the documents, or the documents in no order.
-  it('does not deadlock with a clearing, the deletion of a recipient and an acceptance begun together', async () => {
+  // Mutation F, deterministically: the accounts are held before the documents. A step of a deletion holds the documents
+  // of the account that goes (`stepRows`), and then writes the account's own row, which waits for any hold on it: a
+  // transfer that held the account first and waited for the documents would be waiting for the step that waits for it.
+  it('takes the documents before the accounts, so that a step that holds documents and then needs an account row does not deadlock with it', async () => {
     const owner = await person();
     const going = await person('going');
-    const staying = await person('staying');
-    const ids: string[] = [];
-    for (let n = 0; n < 6; n++) {
-      const id = await documentOf(owner.id);
-      await editorOf(id, n % 2 === 0 ? going : staying, 5 + n);
-      ids.push(id);
-    }
-    const accepted = await documentOf(owner.id);
-    const acceptedRow = await editorOf(accepted, staying, 3);
-    expect((await makeOffer(accepted, owner.id, acceptedRow.id)).outcome).toBe('offered');
-    const [pending] = await offersOf(accepted);
+    for (let n = 0; n < 2; n++) await editorOf(await documentOf(owner.id), going, 3 + n);
     const body = await everything(owner);
-
-    const settled = await Promise.race([
-      Promise.allSettled([
-        post(owner.cookie, body),
-        confirmClearing(
-          owner.id,
-          { scope: 'all', documentIds: (await countScope(owner.id, 'all')).documentIds },
-          standing,
-        ),
-        confirmDeletion(going.id, standing),
-        answerOffer(staying.id, pending!.id, 'accept'),
-      ]),
-      sleep(25_000).then(() => 'deadlock' as const),
-    ]);
-    expect(settled).not.toBe('deadlock');
-    // Whatever order they took, no document is left with no Owner or two, and no offer is pending to the account in deletion.
-    for (const id of [...ids, accepted]) {
-      const document = await db().document.findUniqueOrThrow({
-        where: { id },
-        include: { collaborators: true },
-      });
-      expect(document.collaborators.map(({ userId }) => userId)).not.toContain(document.ownerId);
-      expect([owner.id, staying.id]).toContain(document.ownerId);
-    }
-    expect(
-      await db().ownershipOffer.count({ where: { toUserId: going.id, state: 'PENDING' } }),
-    ).toBeLessThanOrEqual(
-      // An offer made before the record stands pending until the step of the deletion declines it.
-      3,
+    const step = db().$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT "id" FROM "ekdotico"."Document" WHERE "ownerId" = ${owner.id} ORDER BY "id" FOR UPDATE`;
+        await sleep(1500);
+        await tx.$executeRaw`UPDATE "ekdotico"."User" SET "name" = "name" WHERE "id" = ${going.id}`;
+      },
+      { timeout: 30_000 },
     );
-    await carryOutDeletions();
-    expect(await db().ownershipOffer.count({ where: { toUserId: going.id, state: 'PENDING' } })).toBe(0);
+    await sleep(300);
+    const [response, finished] = await Promise.allSettled([post(owner.cookie, body), step]);
+    expect(finished.status).toBe('fulfilled');
+    expect(response.status === 'fulfilled' && response.value.status).toBe(201);
   }, 40_000);
+
+  // Mutation F (review of pull request 64, item 6): the accounts of the recipients are held before the documents.
+  // Each round runs two Owners' transfers (the second Owner's document is edited by the first, so each holds an
+  // account the other's transaction asks for), a clearing, the deletion of a recipient with its steps, an acceptance
+  // and the expiry of offers, begun together. A deadlock is not a hang: the database ends one of the transactions
+  // after a second, and that one is a rejection or a 500, which this counts.
+  it('does not deadlock with a clearing, the deletion of a recipient and its steps, an acceptance and an expiry begun together', async () => {
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => void errors.push(args.join(' ')));
+    const failures: string[] = [];
+    for (let round = 0; round < 12; round++) {
+      const owner = await person();
+      const going = await person('going');
+      const staying = await person('staying');
+      const ids: string[] = [];
+      for (let n = 0; n < 6; n++) {
+        const id = await documentOf(owner.id);
+        await editorOf(id, n % 2 === 0 ? going : staying, 5 + n);
+        ids.push(id);
+      }
+      // A second Owner whose document `owner` edits: its transfer holds `owner`'s account row `FOR SHARE`.
+      const other = await person('other');
+      await editorOf(await documentOf(other.id), owner, 2);
+      const accepted = await documentOf(owner.id);
+      const acceptedRow = await editorOf(accepted, staying, 3);
+      expect((await makeOffer(accepted, owner.id, acceptedRow.id)).outcome).toBe('offered');
+      const pending = (await offersOf(accepted))[0]!;
+      const results = await Promise.race([
+        Promise.allSettled([
+          post(owner.cookie, await everything(owner)),
+          post(other.cookie, await everything(other)),
+          confirmClearing(
+            owner.id,
+            { scope: 'all', documentIds: (await countScope(owner.id, 'all')).documentIds },
+            standing,
+          ),
+          confirmDeletion(going.id, standing).then(() => carryOutDeletions()),
+          answerOffer(staying.id, pending.id, 'accept'),
+          expireOffers(),
+        ]),
+        sleep(25_000).then(() => 'hang' as const),
+      ]);
+      if (results === 'hang') {
+        failures.push(`round ${round}: hang`);
+        continue;
+      }
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') failures.push(`round ${round}: ${index} rejected`);
+        else if (result.value instanceof Response && result.value.status >= 500) {
+          failures.push(`round ${round}: ${index} answered ${result.value.status}`);
+        }
+      });
+      // Whatever order they took, no document is left with no Owner or two, and no offer is pending to the account
+      // whose deletion has been carried out.
+      for (const id of [...ids, accepted]) {
+        const document = await db().document.findUniqueOrThrow({
+          where: { id },
+          include: { collaborators: true },
+        });
+        expect(document.collaborators.map(({ userId }) => userId)).not.toContain(document.ownerId);
+        expect([owner.id, staying.id]).toContain(document.ownerId);
+        expect(
+          await db().ownershipOffer.count({ where: { documentId: id, state: 'PENDING' } }),
+        ).toBeLessThanOrEqual(1);
+      }
+      await carryOutDeletions();
+      expect(await db().ownershipOffer.count({ where: { toUserId: going.id, state: 'PENDING' } })).toBe(0);
+    }
+    expect(failures).toEqual([]);
+    expect(errors.filter((line) => /deadlock|40P01/i.test(line))).toEqual([]);
+  }, 400_000);
 });

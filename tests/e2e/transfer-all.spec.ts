@@ -65,7 +65,6 @@ test('the Owner offers the ownership of all documents to the longest-standing Ed
   await expect(dialog.getByRole('radio', { name: 'To one person' })).not.toBeChecked();
   await expect(dialog.locator('#transfer-statement').getByRole('paragraph')).toHaveText([
     'You are offering the ownership of 1 document, each to its longest-standing Editor.',
-    'A document that already has an offer keeps it, and is counted as offered.',
     'Ownership changes only when an Editor accepts. You stay the Owner of each document until then. Each offer is open for 14 days.',
   ]);
   await expect(dialog).toHaveAccessibleDescription(/^You are offering the ownership of 1 document/);
@@ -75,8 +74,13 @@ test('the Owner offers the ownership of all documents to the longest-standing Ed
 
   // "To one person" shows the Editors of the account's documents, and the number each would be offered.
   await dialog.getByRole('radio', { name: 'To one person' }).check();
-  await expect(dialog.getByRole('combobox', { name: 'Person' })).toHaveValue(/.+/);
-  await expect(dialog.getByRole('option')).toHaveText(['Bea Editor (1 document)']);
+  // No person is put in the place of one who is not chosen: the action waits until one is.
+  await expect(dialog.getByRole('combobox', { name: 'Person' })).toHaveValue('');
+  await expect(dialog.locator('#transfer-statement').getByRole('paragraph')).toHaveText([
+    'Choose a person to see how many documents can be offered to them.',
+  ]);
+  await expect(dialog.getByRole('button', { name: 'Offer ownership' })).toBeDisabled();
+  await dialog.getByRole('combobox', { name: 'Person' }).selectOption({ label: 'Bea Editor (1 document)' });
   await expect(dialog.locator('#transfer-statement').getByRole('paragraph').first()).toHaveText(
     'You are offering the ownership of 1 document to Bea Editor.',
   );
@@ -126,9 +130,7 @@ test('an account that owns a document without an Editor is told so, and has no o
   await expect(
     main.getByText('Without an Editor. Give a collaborator the Editor role, or clear it.'),
   ).toBeVisible();
-  await expect(
-    main.getByText('No document can be offered in this way. No offer will be made.').first(),
-  ).toBeVisible();
+  await expect(main.getByText('No new offer can be made in this way.').first()).toBeVisible();
   await expect(main.getByRole('button', { name: 'Transfer ownership of all documents' })).toHaveCount(0);
   await expectNoSidewaysScroll(page);
 });

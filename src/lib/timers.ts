@@ -52,9 +52,12 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   'ownership-offer-expiry': () => expireOffers(),
   // NFR-RE-15, "the email of an offer of ownership": the backstop of the hand-over after the response (S17-6),
   // and the same for the one email to each person offered by a transfer of all documents (FR-AU-92).
+  // Both are run whatever the other does: a failure of one is the timer's failure, after the other has run.
   'ownership-offer-email': async () => {
-    await deliverUnsentBatches();
-    return deliverUnsentOffers();
+    const [batches, offers] = await Promise.allSettled([deliverUnsentBatches(), deliverUnsentOffers()]);
+    if (offers.status === 'rejected') throw offers.reason;
+    if (batches.status === 'rejected') throw batches.reason;
+    return offers.value;
   },
   // FR-ED-42 (register row PR-8): the notification of a removal stays 30 days, and so does the Owner's
   // notice of an ended offer (D217), which the same run deletes. The name

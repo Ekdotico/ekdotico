@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   longestStanding,
+  offersCounted,
   offeredIds,
   planTransfer,
   type PlanDocument,
@@ -14,7 +15,9 @@ import {
   offeredStatement,
   OPTION_LONGEST,
   OPTION_PERSON,
+  TRANSFER_MESSAGES,
 } from '../../src/lib/account/transfer-texts.ts';
+import { chosenPerson } from '../../src/lib/account/transfer-choice.ts';
 
 const ORIGIN = 'https://app.example.test';
 const NOW = new Date('2026-10-28T12:00:00Z');
@@ -180,17 +183,61 @@ describe('the texts', () => {
   });
 
   it('names the number offered and the number that cannot be, in the singular and the plural', () => {
-    expect(confirmation({ mode: 'longest', personName: '', offered: 3, cannot: 1 })).toEqual([
+    expect(confirmation({ mode: 'longest', personName: null, offered: 3, kept: 0, cannot: 1 })).toEqual([
       'You are offering the ownership of 3 documents, each to its longest-standing Editor.',
       '1 document cannot be offered. The list on the page says why.',
     ]);
-    expect(confirmation({ mode: 'person', personName: 'Ada', offered: 1, cannot: 2 })).toEqual([
+    expect(confirmation({ mode: 'person', personName: 'Ada', offered: 1, kept: 0, cannot: 2 })).toEqual([
       'You are offering the ownership of 1 document to Ada.',
       '2 documents cannot be offered. The list on the page says why.',
     ]);
     expect(confirmControl(1)).toBe('Offer 1 document');
     expect(confirmControl(5)).toBe('Offer 5 documents');
-    expect(offeredStatement({ offered: 2, kept: 1 })).toContain('1 already had an offer');
+    expect(offeredStatement({ offered: 2, kept: 1 })).toBe(
+      'Ownership of 2 documents offered. Each Editor has been told by a notification and by email. 1 document already had an offer, which stands.',
+    );
+  });
+
+  // Mutation I4 (review of pull request 64, item 4): the documents that already have an offer are counted in "to [name]".
+  it('says the documents that already have an offer apart from the new offers, and makes none of them a new one', () => {
+    expect(confirmation({ mode: 'person', personName: 'Ada', offered: 2, kept: 3, cannot: 0 })).toEqual([
+      'You are offering the ownership of 2 documents to Ada.',
+      '3 documents already have an offer, which stands.',
+    ]);
+    expect(confirmation({ mode: 'longest', personName: null, offered: 0, kept: 1, cannot: 0 })).toEqual([
+      'No new offer can be made in this way.',
+      '1 document already has an offer, which stands.',
+    ]);
+    expect(offeredStatement({ offered: 0, kept: 2 })).toBe(
+      'No new offer was made. 2 documents already had an offer, which stands.',
+    );
+  });
+
+  // Mutation I5: "To one person" with nobody chosen is worded as a choice made.
+  it('asks for a person where none is chosen, and puts none in the place of one who has left', () => {
+    expect(confirmation({ mode: 'person', personName: null, offered: 0, kept: 0, cannot: 0 })).toEqual([
+      'Choose a person to see how many documents can be offered to them.',
+    ]);
+    const people = [{ collaboratorId: 'a' }, { collaboratorId: 'b' }];
+    expect(chosenPerson(people, 'b')).toBe(people[1]);
+    expect(chosenPerson(people, '')).toBeUndefined();
+    expect(chosenPerson(people, 'gone')).toBeUndefined();
+    expect(chosenPerson([], 'a')).toBeUndefined();
+  });
+
+  // Mutation L1 (item 9): the rule of the count is spread over the places that use it.
+  it('counts, as built, one offer of the limit for each new offer, whoever it is made to', () => {
+    expect(offersCounted([])).toBe(0);
+    expect(offersCounted([{ toUserId: 'a' }, { toUserId: 'a' }, { toUserId: 'b' }])).toBe(3);
+  });
+
+  it('words the refusal over the limit with the shared allowance and the hour it is counted over', () => {
+    const text = TRANSFER_MESSAGES.overLimit(20, 25);
+    expect(text).toContain('at most 20 offers of ownership in any hour, counted over the last hour');
+    expect(text).toContain('offers made one by one from the sharing pages use the same allowance');
+    expect(text).toContain('This would make 25.');
+    expect(TRANSFER_MESSAGES.changed).not.toMatch(/reload/i);
+    expect(TRANSFER_MESSAGES.noSuchPerson).not.toMatch(/reload/i);
   });
 
   // Mutation P13: the subject or the text is reworded.

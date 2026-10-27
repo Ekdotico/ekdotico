@@ -16,6 +16,7 @@ import {
   TRANSFER_DIALOG,
   TRANSFER_SCREEN,
 } from '../../../../lib/account/transfer-texts.ts';
+import { chosenPerson } from '../../../../lib/account/transfer-choice.ts';
 import styles from '../../../pages.module.css';
 import { InBrowser, LocalTime } from '../../local-time.tsx';
 
@@ -23,7 +24,9 @@ import { InBrowser, LocalTime } from '../../local-time.tsx';
 export type ShownState =
   | { kind: 'offered'; toName: string; expiresAt: string }
   | { kind: 'declined' | 'expired'; toName: string }
-  | { kind: 'no_editor' | 'ready' | 'deleted' | 'being_deleted' | 'not_transferable' };
+  | {
+      kind: 'no_editor' | 'no_other_editor' | 'ready' | 'deleted' | 'being_deleted' | 'not_transferable';
+    };
 
 export interface ShownDocument {
   id: string;
@@ -34,6 +37,7 @@ export interface ShownDocument {
 interface Counted {
   documentIds: string[];
   offered: number;
+  kept: number;
   cannot: number;
 }
 
@@ -57,6 +61,8 @@ function StateText({ state }: { state: ShownState }) {
       return <span>{TRANSFER_SCREEN.expired(state.toName)}</span>;
     case 'no_editor':
       return <span>{TRANSFER_SCREEN.noEditor}</span>;
+    case 'no_other_editor':
+      return <span>{TRANSFER_SCREEN.noOtherEditor}</span>;
     case 'ready':
       return <span>{TRANSFER_SCREEN.ready}</span>;
     case 'deleted':
@@ -103,9 +109,11 @@ export function TransferDocuments({
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
 
-  // The person chosen, as the list now holds them: one who has left it is no longer chosen.
-  const person = people.find(({ collaboratorId }) => collaboratorId === chosen) ?? people[0];
-  const counted = mode === 'person' && person ? person : longest;
+  // The person chosen, as the list now holds them: one who has left it is no longer chosen, and none is put in their
+  // place (src/lib/account/transfer-choice.ts); the action waits until a person is chosen again.
+  const person = chosenPerson(people, chosen);
+  const counted: Counted =
+    mode === 'longest' ? longest : (person ?? { documentIds: [], offered: 0, kept: 0, cannot: 0 });
   const cancel = useMemo(
     () => ({
       get current() {
@@ -140,7 +148,9 @@ export function TransferDocuments({
     }
     const answer = sent.answer as { offered: number; kept: number } | null;
     close();
-    setStatus(answer ? offeredStatement(answer) : offeredStatement({ offered: counted.offered, kept: 0 }));
+    setStatus(
+      answer ? offeredStatement(answer) : offeredStatement({ offered: counted.offered, kept: counted.kept }),
+    );
     router.refresh();
   }
 
@@ -224,12 +234,15 @@ export function TransferDocuments({
               { value: 'person', label: OPTION_PERSON, disabled: people.length === 0 },
             ]}
           />
-          {mode === 'person' && person ? (
+          {mode === 'person' ? (
             <Select
               label={TRANSFER_DIALOG.person}
-              value={person.collaboratorId}
+              value={person?.collaboratorId ?? ''}
               onChange={(event) => setChosen(event.target.value)}
             >
+              <option value="" disabled>
+                {TRANSFER_DIALOG.choose}
+              </option>
               {people.map(({ collaboratorId, name, offered }) => (
                 <option key={collaboratorId} value={collaboratorId}>
                   {TRANSFER_DIALOG.personOption(name, offered)}
@@ -241,31 +254,27 @@ export function TransferDocuments({
             <Stack gap={3}>
               {confirmation({
                 mode,
-                personName: person?.name ?? '',
+                personName: person ? person.name : null,
                 offered: counted.offered,
+                kept: counted.kept,
                 cannot: counted.cannot,
               }).map((line) => (
                 <p key={line} className={styles.text}>
                   {line}
                 </p>
               ))}
-              {counted.offered > 0 ? (
-                <>
-                  <p className={styles.text}>{TRANSFER_DIALOG.keeps}</p>
-                  <p className={styles.text}>{TRANSFER_DIALOG.acceptance(days)}</p>
-                </>
-              ) : null}
+              {counted.offered > 0 ? <p className={styles.text}>{TRANSFER_DIALOG.acceptance(days)}</p> : null}
             </Stack>
           </div>
           <Cluster gap={3}>
             <Button
               type="button"
-              disabled={counted.offered === 0}
+              disabled={counted.offered === 0 || (mode === 'person' && !person)}
               pending={pending}
               pendingLabel={TRANSFER_DIALOG.pending}
               onClick={() => void confirm()}
             >
-              {confirmControl(counted.offered)}
+              {counted.offered > 0 ? confirmControl(counted.offered) : TRANSFER_DIALOG.legend}
             </Button>
             <Button id={CANCEL_ID} onClick={close}>
               {TRANSFER_DIALOG.cancel}

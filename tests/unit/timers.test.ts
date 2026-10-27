@@ -14,11 +14,13 @@ vi.mock('../../src/lib/auth/password.ts', () => ({ deleteExpiredTokens: async ()
 vi.mock('../../src/lib/auth/session-list.ts', () => ({ deleteEndedSessions: async () => 0 }));
 // The expiry of offers of ownership and the backstop of their email, which run beside them
 // (tests/integration/ownership.test.ts runs them against a database).
+const deliverUnsentOffers = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));
+const deliverUnsentBatches = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));
 vi.mock('../../src/lib/documents/ownership.ts', () => ({
   expireOffers: async () => 0,
-  deliverUnsentOffers: async () => 0,
+  deliverUnsentOffers,
 }));
-vi.mock('../../src/lib/account/transfer-email.ts', () => ({ deliverUnsentBatches: async () => 0 }));
+vi.mock('../../src/lib/account/transfer-email.ts', () => ({ deliverUnsentBatches }));
 // The reminder, the two clearings of addresses and the notifications of ended invitations
 // (tests/integration/invitation-clearing.test.ts runs them against a database).
 const clearInvitationAddresses = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));
@@ -135,6 +137,23 @@ it('runs the deletion of images at start and each hour, as a timer of its own, a
   );
   await vi.advanceTimersByTimeAsync(HOUR_MS);
   expect(stderr.mock.calls).toEqual([['timer failed: image-deletion (Error AccessDenied)']]);
+});
+
+// Mutation N1 (docs/plan/slice-24.md, section 9): the two hand-overs of the email of an offer run one after the other, and a
+// failure of the first skips the second.
+it('hands over the emails of the batches and of the single offers whichever of the two fails', async () => {
+  vi.resetModules();
+  const { TIMERS } = await import('../../src/lib/timers.ts');
+  const run = TIMERS['ownership-offer-email']!;
+  deliverUnsentBatches.mockClear();
+  deliverUnsentOffers.mockClear();
+  deliverUnsentBatches.mockRejectedValueOnce(new Error('batches'));
+  await expect(run()).rejects.toThrow('batches');
+  expect(deliverUnsentOffers).toHaveBeenCalledTimes(1);
+  deliverUnsentOffers.mockRejectedValueOnce(new Error('offers'));
+  await expect(run()).rejects.toThrow('offers');
+  expect(deliverUnsentBatches).toHaveBeenCalledTimes(2);
+  await expect(run()).resolves.toBe(0);
 });
 
 it('runs the steps of an account deletion at start and each hour, and says how many it carried out', async () => {
