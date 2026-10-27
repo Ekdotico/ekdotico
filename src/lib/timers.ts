@@ -11,6 +11,7 @@ import {
   deleteEndedInvitationNotifications,
   remindInvitations,
 } from './documents/invitation-timers.ts';
+import { deliverUnsentBatches } from './account/transfer-email.ts';
 import { deliverUnsentOffers, expireOffers } from './documents/ownership.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
@@ -49,8 +50,12 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // NFR-RE-15, "the expiry of the offer" (FR-ED-47): writes the offers past their time expired and
   // deletes their notifications; it says how many offers it expired.
   'ownership-offer-expiry': () => expireOffers(),
-  // NFR-RE-15, "the email of an offer of ownership": the backstop of the hand-over after the response (S17-6).
-  'ownership-offer-email': () => deliverUnsentOffers(),
+  // NFR-RE-15, "the email of an offer of ownership": the backstop of the hand-over after the response (S17-6),
+  // and the same for the one email to each person offered by a transfer of all documents (FR-AU-92).
+  'ownership-offer-email': async () => {
+    await deliverUnsentBatches();
+    return deliverUnsentOffers();
+  },
   // FR-ED-42 (register row PR-8): the notification of a removal stays 30 days, and so does the Owner's
   // notice of an ended offer (D217), which the same run deletes. The name
   // is kept: a claim row and the logs know it.

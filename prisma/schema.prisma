@@ -424,6 +424,9 @@ model OwnershipOffer {
   expiresAt      DateTime
   respondedAt    DateTime?
   emailClaimedAt DateTime?
+  // The transfer of all documents (FR-AU-92) that made the offer; null for an offer made on its own. It
+  // groups the one email to each person offered, and lists the documents of the action that were accepted.
+  batchId        String?             @db.Uuid
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   from     User     @relation("OfferedBy", fields: [fromUserId], references: [id], onDelete: Restrict)

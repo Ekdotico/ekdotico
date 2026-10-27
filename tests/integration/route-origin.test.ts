@@ -58,6 +58,8 @@ const ELSEWHERE: Record<string, string> = {
     'tests/integration/clearing.test.ts: "refuses a cancellation from another origin"',
   'src/app/api/account/documents/clear/[documentId]/route.ts DELETE':
     'tests/integration/clearing.test.ts: "refuses a cancellation from another origin"',
+  'src/app/api/account/documents/transfer/route.ts POST':
+    'tests/integration/transfer.test.ts: "answers a request without a session 401, and one from another origin 403, and offers nothing"',
   // Its body is the bytes of an image and not JSON, which the cases here send.
   'src/app/api/documents/[id]/images/route.ts POST':
     'tests/integration/image-routes.test.ts: "checks the origin before anything is read or counted"',

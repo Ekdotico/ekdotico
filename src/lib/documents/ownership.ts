@@ -54,9 +54,9 @@ const notificationsOf = (offerIds: string[]): Prisma.NotificationWhereInput => (
 });
 
 /** An offer is open while it is stored pending and its time is ahead ("expired" is derived). */
-const open = (now: Date) => ({ state: 'PENDING' as const, expiresAt: { gt: now } });
+export const open = (now: Date) => ({ state: 'PENDING' as const, expiresAt: { gt: now } });
 
-type Tx = Prisma.TransactionClient;
+export type Tx = Prisma.TransactionClient;
 
 // ── What may be transferred ─────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ type Tx = Prisma.TransactionClient;
  * workspace". A recorded document, and one in an institutional workspace,
  * cannot be transferred until it is decided (Q34). None exists in α 0.1.0.
  */
-const transferable = (document: { recording: string; workspace: { type: string } }) =>
+export const transferable = (document: { recording: string; workspace: { type: string } }) =>
   document.recording === 'UNRECORDED' && document.workspace.type === 'PERSONAL';
 
 // ── Settling what has ended without anyone's action ─────────────────────────
@@ -162,7 +162,7 @@ export async function endOffersOf(tx: Tx, documentId: string, now: Date): Promis
  * be found of the second kind; the state is stored, and a reader never trusts
  * it alone.
  */
-async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
+export async function settle(tx: Tx, documentId: string, now: Date): Promise<void> {
   const pending = await tx.ownershipOffer.findMany({
     where: { documentId, state: 'PENDING' },
     select: { id: true, fromUserId: true, toUserId: true, expiresAt: true },
@@ -272,6 +272,33 @@ async function ownedUnderLock(tx: Tx, documentId: string, callerId: string) {
 }
 
 /**
+ * The one place an offer of ownership is written (FR-ED-47): the row, with its period (`ownershipOfferDays`),
+ * and the notification of the Editor (FR-ED-42). Under the document's row, in the transaction of the caller,
+ * which has decided that the offer may be made. `batchId` is the transfer of all documents that made it
+ * (FR-AU-92); an offer made on its own has none.
+ */
+export async function createOffer(
+  tx: Tx,
+  {
+    documentId,
+    fromUserId,
+    toUserId,
+    now,
+    batchId,
+  }: { documentId: string; fromUserId: string; toUserId: string; now: Date; batchId?: string },
+): Promise<{ id: string; expiresAt: Date }> {
+  const expiresAt = new Date(now.getTime() + settings().ownershipOfferDays * DAY_MS);
+  const { id } = await tx.ownershipOffer.create({
+    data: { documentId, fromUserId, toUserId, createdAt: now, expiresAt, ...(batchId ? { batchId } : {}) },
+    select: { id: true },
+  });
+  await tx.notification.create({
+    data: { recipientId: toUserId, kind: OFFER_NOTIFICATION, payload: { offerId: id }, createdAt: now },
+  });
+  return { id, expiresAt };
+}
+
+/**
  * FR-ED-47: the Owner offers the ownership of the document to the collaborator
  * whose row this is. In one transaction under the document's row: the offer
  * and the Editor's notification (FR-ED-42). The email is `deliverOffer`'s,
@@ -317,18 +344,11 @@ export async function makeOffer(
       const limit = await takeLimitReturnable('OFFERS_PER_USER', callerId);
       if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
       giveBack = limit.giveBack;
-      const expiresAt = new Date(now.getTime() + settings().ownershipOfferDays * DAY_MS);
-      const { id } = await tx.ownershipOffer.create({
-        data: { documentId, fromUserId: callerId, toUserId: found.userId, createdAt: now, expiresAt },
-        select: { id: true },
-      });
-      await tx.notification.create({
-        data: {
-          recipientId: found.userId,
-          kind: OFFER_NOTIFICATION,
-          payload: { offerId: id },
-          createdAt: now,
-        },
+      const { id, expiresAt } = await createOffer(tx, {
+        documentId,
+        fromUserId: callerId,
+        toUserId: found.userId,
+        now,
       });
       return { outcome: 'offered', offer: { id, expiresAt, name: displayNameOf(found.user) } };
     });
@@ -416,7 +436,8 @@ export async function deliverOffer(
   try {
     const now = new Date();
     const { count } = await db().ownershipOffer.updateMany({
-      where: { id: offerId, emailClaimedAt: null, ...open(now) },
+      // An offer of a transfer of all documents is announced by the one email of its batch (FR-AU-92).
+      where: { id: offerId, emailClaimedAt: null, batchId: null, ...open(now) },
       data: { emailClaimedAt: now },
     });
     if (count !== 1) return;
@@ -450,7 +471,7 @@ export async function deliverUnsentOffers(
   now: Date = new Date(),
 ): Promise<number> {
   const unsent = await db().ownershipOffer.findMany({
-    where: { emailClaimedAt: null, ...open(now) },
+    where: { emailClaimedAt: null, batchId: null, ...open(now) },
     select: { id: true },
   });
   for (const { id } of unsent) await deliverOffer(id, send);

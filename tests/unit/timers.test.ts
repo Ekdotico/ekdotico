@@ -18,6 +18,7 @@ vi.mock('../../src/lib/documents/ownership.ts', () => ({
   expireOffers: async () => 0,
   deliverUnsentOffers: async () => 0,
 }));
+vi.mock('../../src/lib/account/transfer-email.ts', () => ({ deliverUnsentBatches: async () => 0 }));
 // The reminder, the two clearings of addresses and the notifications of ended invitations
 // (tests/integration/invitation-clearing.test.ts runs them against a database).
 const clearInvitationAddresses = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));

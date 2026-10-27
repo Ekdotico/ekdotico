@@ -72,7 +72,10 @@ test('an account whose documents are not shared clears them at once: the control
   await screen(page);
 
   const main = page.getByRole('main');
-  await expect(main.getByRole('heading', { level: 2 })).toHaveText(['Clear all documents']);
+  await expect(main.getByRole('heading', { level: 2 })).toHaveText([
+    'Transfer ownership of all documents',
+    'Clear all documents',
+  ]);
   await expect(main.getByRole('paragraph').first()).toHaveText(
     'This account owns 1 document. An account that owns a document cannot be deleted, because every document needs an Owner. Delete the document, transfer its ownership to an Editor who accepts it, or clear it, and then return to this page.',
   );
@@ -177,8 +180,8 @@ test('a shared document waits for its day: the confirmation names the people, th
   // The Owner's screen lists it, with the day and the means to cancel it, and says when the account can be deleted.
   const waiting = main.getByRole('heading', { level: 2, name: 'Waiting for their day' });
   await expect(waiting).toBeVisible();
-  await expect(main.getByRole('listitem').filter({ hasText: 'Untitled document' })).toContainText(
-    'Will be deleted on',
+  await expect(main.getByRole('listitem').filter({ hasText: 'Will be deleted on' })).toContainText(
+    'Untitled document',
   );
   await expect(main.getByText(new RegExp(`The account cannot be deleted before ${DATE}\\.`))).toBeVisible();
   await expect(main.getByRole('button', { name: 'Clear all documents' })).toHaveCount(0);

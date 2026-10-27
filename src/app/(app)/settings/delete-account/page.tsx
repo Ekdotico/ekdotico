@@ -3,11 +3,12 @@
 // itself"); the refusal is the route's as well and does not rest on this (src/app/api/account/route.ts).
 // It offers the two actions that FR-AU-58 names: "Clear all documents" (FR-AU-91; slice 23), with the
 // documents that wait for their day and the means to cancel each, and "Transfer ownership of all
-// documents" (FR-AU-92; slice 24, which joins it). The path is this application's choice: no page of
+// documents" (FR-AU-92; slice 24). The path is this application's choice: no page of
 // the specification names one.
 import Link from 'next/link';
 import { PageHeading, Stack } from '@ekdotico/domico/components';
 import { ownedDocuments } from '../../../../lib/account/deletion.ts';
+import { transferScreen } from '../../../../lib/account/transfer.ts';
 import { clearingScreen } from '../../../../lib/clearing/clearing.ts';
 import { db } from '../../../../lib/db.ts';
 import { settings } from '../../../../lib/settings.ts';
@@ -16,6 +17,7 @@ import styles from '../../../pages.module.css';
 import { currentAccount, titled } from '../../account.ts';
 import { Clearing } from './clear-documents.tsx';
 import { DeleteAccount } from './delete-account.tsx';
+import { TransferDocuments } from './transfer-documents.tsx';
 
 export const generateMetadata = () => titled('Delete account');
 
@@ -26,11 +28,12 @@ export default async function DeleteAccountPage() {
   if ((await currentAccount()).noticeDue) return null; // FR-AU-55: see account.ts
   const { userId } = await currentAccount();
   // A fault of any read is the page of a fault, and one line (page-fault.ts).
-  const [owned, user, screen] = await reading(() =>
+  const [owned, user, screen, transfer] = await reading(() =>
     Promise.all([
       ownedDocuments(userId),
       db().user.findUnique({ where: { id: userId }, select: { email: true, twoFactorEnabled: true } }),
       clearingScreen(userId),
+      transferScreen(userId),
     ]),
   );
   // "The account cannot be deleted before [date]" is true only where every document it owns waits for that day.
@@ -58,6 +61,19 @@ export default async function DeleteAccountPage() {
                 </p>
               ) : null}
             </Stack>
+            <TransferDocuments
+              documents={transfer.documents.map(({ id, title, state }) => ({
+                id,
+                title,
+                // NFR-I18-06: stored and sent in UTC; the browser shows it in its own zone.
+                state:
+                  state.kind === 'offered' ? { ...state, expiresAt: state.expiresAt.toISOString() } : state,
+              }))}
+              accepted={transfer.accepted}
+              longest={transfer.longest}
+              people={transfer.people}
+              days={settings().ownershipOfferDays}
+            />
             <Clearing
               all={{
                 scope: 'all',
