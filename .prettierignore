@@ -9,3 +9,4 @@ LICENSE
 CLAUDE.md
 src/lib/istorico/port.ts
 src/generated
+tests/fixtures/reference-document.json
