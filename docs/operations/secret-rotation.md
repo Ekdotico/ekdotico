@@ -51,14 +51,18 @@ Note on Valkey: the counts of NFR-SE-07 and the marks of used codes are stored u
 
 ## 3. Re-sealing the second factor
 
-`OLD_AUTH_SECRET` and `NEW_AUTH_SECRET` are put in the environment of one command, which is run on a host of the deployment, with `DATABASE_URL` of the runtime role:
+`OLD_AUTH_SECRET` and `NEW_AUTH_SECRET` are put in the environment of one command, which is run on a host of the deployment, with `DATABASE_URL` of the runtime role. They are read from the keyboard, so that none is in the command line, in the history of the shell, or in `ps`; paste each at its prompt, which echoes nothing:
 
 ```bash
-OLD_AUTH_SECRET=… NEW_AUTH_SECRET=… DATABASE_URL=… node scripts/rotate-auth-secret.ts            # a dry run
-OLD_AUTH_SECRET=… NEW_AUTH_SECRET=… DATABASE_URL=… node scripts/rotate-auth-secret.ts --apply
+read -rs OLD_AUTH_SECRET && export OLD_AUTH_SECRET
+read -rs NEW_AUTH_SECRET && export NEW_AUTH_SECRET
+read -rs DATABASE_URL && export DATABASE_URL
+node scripts/rotate-auth-secret.ts            # a dry run
+node scripts/rotate-auth-secret.ts --apply
+unset OLD_AUTH_SECRET NEW_AUTH_SECRET DATABASE_URL
 ```
 
-It opens each `TwoFactor.secret` and `TwoFactor.backupCodes` with the old value, seals it with the new one, and deletes every `Session` row, in one transaction. It prints counts and no value. A row that opens under neither value stops it with nothing changed; the owner then decides what becomes of that account (the library's own way to rotate without loss, `BETTER_AUTH_SECRETS`, is refused by `settings.ts` and is register row R27-3). A run that is repeated finds the rows under the new value and changes nothing twice. `tests/integration/rotate-auth-secret.test.ts` shows each of these.
+It opens each `TwoFactor.secret` and `TwoFactor.backupCodes` with the old value, seals it with the new one, and deletes every `Session` row, in one transaction. It prints counts and no value. A row that opens under neither value stops it with nothing changed; the owner then decides what becomes of that account (the library's own way to rotate without loss, `BETTER_AUTH_SECRETS`, is refused by `settings.ts` and is register row R27-3). A run that is repeated finds the rows already under the new value and re-seals none; it still ends any session made since the run before. `tests/integration/rotate-auth-secret.test.ts` shows each of these.
 
 ## 4. The record
 
@@ -70,4 +74,4 @@ Treat it as seen: rotate it at once, then read the security log for the days it 
 
 ## 6. The key of the copies
 
-The pair is made on a machine that is not a host of the deployment: `BACKUP_KEY_PASSPHRASE=… node scripts/backup-restore.ts keygen --out <directory>` (docs/operations/backup.md). The public file goes to the host. To replace it: make a new pair, put the new public file on the host, make one copy, and open it with the new private key (procedure 6, steps 8 and 9) before the old private key is retired. **Keep the old private key until the last copy sealed to it has expired**, 4 weeks: it is the only way to open those copies.
+The pair is made on a machine that is not a host of the deployment: `read -rs BACKUP_KEY_PASSPHRASE && export BACKUP_KEY_PASSPHRASE`, then `node scripts/backup-restore.ts keygen --out <directory>` (docs/operations/backup.md). The public file goes to the host. To replace it: make a new pair, put the new public file on the host, make one copy, and open it with the new private key (procedure 6, steps 8 and 9) before the old private key is retired. **Keep the old private key until the last copy sealed to it has expired**, 4 weeks: it is the only way to open those copies.

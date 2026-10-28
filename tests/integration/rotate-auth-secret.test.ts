@@ -120,4 +120,20 @@ describe('the rotation of AUTH_SECRET', () => {
     });
     expect(refused.status).toBe(2);
   });
+
+  it('says a fault by its class and not by its message: a connection that fails names no host and no role', () => {
+    const wrong = new URL(database.appUrl);
+    wrong.username = 'ekdotico_no_such_role';
+    wrong.password = 'a-wrong-password-of-a-test';
+    const failed = spawnSync('node', ['scripts/rotate-auth-secret.ts'], {
+      env: { NODE_ENV: 'test', PATH: process.env.PATH!, OLD_AUTH_SECRET: NEW, NEW_AUTH_SECRET: `${NEW}-another-one`, DATABASE_URL: wrong.toString() },
+      encoding: 'utf8',
+    });
+    expect(failed.status).toBe(1);
+    // A class, and a code where there is one; not the empty "failed ()" of a message that was empty.
+    expect(failed.stderr).toMatch(/rotate: failed \([A-Za-z]\S*[^)]*\)\n$/);
+    for (const leak of [wrong.hostname, wrong.username, wrong.password, 'password authentication']) {
+      expect(failed.stdout + failed.stderr, leak).not.toContain(leak);
+    }
+  });
 });

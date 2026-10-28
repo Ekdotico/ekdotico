@@ -33,7 +33,7 @@ describe('the tables and columns of the migrated database', () => {
     '%s: every column is matched, and every column named is there',
     (table, columns) => {
       const entry = matched.get(table)!;
-      expect(entry.wildcard).toBe(true);
+      expect(columns.filter((column) => !entry.named.includes(column))).toEqual([]);
       expect(entry.named.filter((column) => !columns.includes(column))).toEqual([]);
     },
   );

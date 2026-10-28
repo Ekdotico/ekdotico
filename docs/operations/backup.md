@@ -6,7 +6,7 @@ The commands are `scripts/backup.ts` (the job), `scripts/backup-restore.ts` (key
 
 ## What the host needs
 
-`node` 26, the repository's `scripts/`, `src/lib/images/storage.ts` and `node_modules` (`pnpm install --prod` is enough), and `pg_dump` and `psql` of the major version of the server or later. A copy is never made by a person at a keyboard with a password typed into a command line.
+`node` 26, the repository's `scripts/`, `src/lib/images/storage.ts` and `node_modules` (`pnpm install --prod` is enough), and `pg_dump` and `psql` of the major version of the server or later. A copy is never made by a person at a keyboard with a password typed into a command line. **Run the job as an operating-system user of its own**, one that holds no other secret and that nothing else runs as: its password is in the environment of the tools it starts, and another process of the same user can read it (`ps -E`).
 
 Settings, all in the environment of the job and none in a file (the job reads no `.env`):
 
@@ -22,11 +22,15 @@ Exit codes: 0 the copy is stored; 1 a fault, nothing stored; 2 a refusal, nothin
 
 ## Setting up, once, by the owner
 
-1. **The key pair**, on a machine that is not a host of the deployment: `BACKUP_KEY_PASSPHRASE='…' node scripts/backup-restore.ts keygen --out <directory>`. `backup-public.pem` goes to the host. `backup-private.pem` and the passphrase are kept offline, in at least two places, by two people. Losing them makes every copy unreadable.
+1. **The key pair**, on a machine that is not a host of the deployment: `read -rs BACKUP_KEY_PASSPHRASE && export BACKUP_KEY_PASSPHRASE` (typed at the prompt, which echoes nothing, so that it is not in the history of the shell), then `node scripts/backup-restore.ts keygen --out <directory>`. `backup-public.pem` goes to the host. `backup-private.pem` and the passphrase are kept offline, in at least two places, by two people. Losing them makes every copy unreadable.
 2. **The role.** `ekdotico_backup` is made by `scripts/provision.sql` (select on the schema, nothing else) with the password given to it there. The job refuses any role that can write, create or truncate, or that cannot read every table.
-3. **The bucket at Scaleway**, in an EEA region, recorded in procedure 6: no public read, no listing; the credential the host holds can put and cannot delete. Register row R27-2: the protocol has no right to put only where nothing exists, so an overwrite of a key is, for a credential that may put, possible. The job gives every copy a key of its own (`backups/<year>/<month>/<time>-<random>.ekdbak`) and asks the store not to replace (`If-None-Match: *`). Make the bucket **versioned**, deny deletion of any version to the host's credential, and write the 4 weeks as a lifecycle rule that expires old versions as well as current objects, on the prefix `backups/`. Read Scaleway's documentation for each of the three before relying on it, and record what it says.
+3. **The bucket at Scaleway**, in an EEA region, recorded in procedure 6: no public read, no listing; the credential the host holds can put and cannot delete. Register row R27-2: the protocol has no right to put only where nothing exists, so an overwrite of a key is, for a credential that may put, possible. The job gives every copy a key of its own (`backups/<year>/<month>/<time>-<random>.ekdbak`) and asks the store not to replace (`If-None-Match: *`). Make the bucket **versioned**, deny deletion of any version to the host's credential, and write the 4 weeks as a lifecycle rule that expires old versions as well as current objects, on the prefix `backups/`. **The host's credential holds no right over the bucket's configuration** (its lifecycle rule, its policy, its versioning): a credential that could change them could shorten the 4 weeks or lift the deny, so they are the owner's alone, set with another credential. Object Lock in compliance mode for 4 weeks is the alternative to the versioning and the deny. Which rights a Scaleway credential can be given and refused is for the owner to check in Scaleway's IAM, and to record in procedure 6; none of it is shown here.
 4. **The image credential**: a Spaces key limited to the image bucket with read only.
 5. **A first copy and a restore from it** before the first test user is admitted (procedure 6).
+
+## What the seal gives, and what it does not
+
+The seal gives secrecy (only the private half opens a copy) and integrity (a copy that was changed does not open: its tag does not match). It does **not** give origin. The key that seals is public, so anyone who holds it, or who finds it on the host, can make a copy that opens and shows the manifest of a real one. A copy proves that what it holds is whole, not who made it or that the host was sound when it was made. **After any suspected compromise of the host, restore from a copy made before it**, and not from the latest.
 
 ## What the job does not do
 

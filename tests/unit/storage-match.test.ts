@@ -13,6 +13,7 @@ import {
   section,
   timerNames,
   valkeyFiles,
+  valkeyPrefixes,
 } from './storage-match.ts';
 
 describe('the rows of the retention schedule that the record uses', () => {
@@ -36,12 +37,16 @@ describe('the tables and columns of the Prisma schema', () => {
     );
   });
 
+  // No row stands for "the rest": the columns named are exactly the columns of the table, each once.
   it.each([...schema.entries()])(
-    '%s: every column is matched once, and none that is named is missing',
+    '%s: every column is named once, and every column named is there',
     (table, columns) => {
       const entry = matched.get(table)!;
-      expect(entry.wildcard, `${table} has a row for the rest of its columns`).toBe(true);
       expect(new Set(entry.named).size, 'a column is named once').toBe(entry.named.length);
+      expect(
+        columns.filter((column) => !entry.named.includes(column)),
+        'a column of the schema that the record does not name',
+      ).toEqual([]);
       expect(
         entry.named.filter((column) => !columns.includes(column)),
         'named but not a column',
@@ -75,6 +80,18 @@ describe('Valkey', () => {
   it('every file that uses it is matched, and every file matched uses it', () => {
     const matched = section('D.').map((cells) => cells[0]!);
     expect(matched.sort()).toEqual(valkeyFiles());
+  });
+
+  it('the prefixes of each file are exactly those the record names for it', () => {
+    for (const [file, , listed] of section('D.')) {
+      if (file === 'src/lib/collab/events.ts') continue;
+      const named = listed!
+        .split(',')
+        .map((prefix) => prefix.trim())
+        .filter(Boolean)
+        .sort();
+      expect(valkeyPrefixes(file!), file).toEqual(named);
+    }
   });
 });
 
@@ -111,12 +128,25 @@ function readSettings() {
 
 describe('the periods that are settings (NFR-DP-02: validated against §2.7)', () => {
   it('are the periods the record states, which are those of §2.7', () => {
-    const settings = readSettings() as unknown as Record<string, number>;
-    const rows = section('G.');
-    expect(rows.length).toBeGreaterThanOrEqual(6);
-    for (const [name, value, row] of rows) {
+    const settings = readSettings() as unknown as Record<string, unknown>;
+    const retention = section('G.');
+    expect(retention.length).toBeGreaterThanOrEqual(6);
+    for (const [name, value, row] of retention) {
       expect(settings[name!], name).toBe(Number(value));
       expect(rowIsValid(row!), name).toBe(true);
     }
+    for (const [name, value, why] of section('H.')) {
+      expect(settings[name!], name).toBe(Number(value));
+      expect(why!.length, name).toBeGreaterThan(5);
+    }
+  });
+
+  it('every numeric setting is in G or in H, once: a new period fails until it has a row', () => {
+    const settings = readSettings() as unknown as Record<string, unknown>;
+    const numeric = Object.keys(settings)
+      .filter((name) => typeof settings[name] === 'number')
+      .sort();
+    const named = [...section('G.'), ...section('H.')].map((cells) => cells[0]!).sort();
+    expect(named).toEqual(numeric);
   });
 });

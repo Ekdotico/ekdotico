@@ -13,7 +13,9 @@
 //   chunk      = u32 length, that many bytes
 //
 // The tag is checked once, at the end, so what `unseal` has written is not to be believed until
-// it returns; it removes everything it wrote when it throws.
+// it returns; it removes everything it wrote when it throws, and when SIGINT or SIGTERM stops it. SIGKILL
+// and a loss of power cannot be caught: they leave `.archive.plain`, the plain archive, in the directory
+// it was opening into, and whoever stopped it that way removes the directory (procedure 6, step 9).
 //
 // ponytail: one GCM stream under one key and one IV is sound up to 64 GiB, and the file is stored
 // with one request, which takes 5 GiB; a copy past either is refused (CEILING). Seal in segments
@@ -30,6 +32,7 @@ import {
   randomBytes,
   type KeyObject,
 } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { mkdir, open, rm, stat, type FileHandle } from 'node:fs/promises';
 import { dirname, join, normalize, sep } from 'node:path';
 
@@ -180,6 +183,13 @@ export async function unseal(
   const plainPath = join(directory, '.archive.plain');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const written: string[] = [plainPath];
+  // An interrupted opening does not leave the plain archive behind (a handler can run only at a signal that can be caught).
+  const onSignal = (signal: NodeJS.Signals) => {
+    for (const path of written) rmSync(path, { force: true });
+    process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
   try {
     await decryptTo(file, privateKey, plainPath);
     return await cut(plainPath, directory, written);
@@ -187,6 +197,8 @@ export async function unseal(
     await Promise.all(written.map((path) => rm(path, { force: true })));
     throw error;
   } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
     await rm(plainPath, { force: true });
   }
 }

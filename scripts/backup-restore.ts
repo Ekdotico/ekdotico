@@ -4,22 +4,28 @@
 // from where it is held offline. Every setting comes from the environment or a flag, none from a file
 // but the key; no secret is printed or put in an argument.
 //
-//   BACKUP_KEY_PASSPHRASE='…' node scripts/backup-restore.ts keygen --out <directory>
-//   BACKUP_KEY_PASSPHRASE='…' node scripts/backup-restore.ts decrypt --in <copy> --key <private.pem> --out <directory>
-//   RESTORE_DATABASE_URL='postgresql://ekdotico_migrate:…@host/db' node scripts/backup-restore.ts database --dir <directory>
-//   RESTORE_IMAGES_ENDPOINT=… RESTORE_IMAGES_BUCKET=… RESTORE_IMAGES_ACCESS_KEY_ID=… RESTORE_IMAGES_SECRET_ACCESS_KEY=… \
-//     node scripts/backup-restore.ts images --dir <directory>
+//   A secret is read from the keyboard, never typed in a command: `read -rs NAME && export NAME` (no echo, nothing in
+//   the history of the shell or in `ps`).
+//   read -rs BACKUP_KEY_PASSPHRASE && export BACKUP_KEY_PASSPHRASE
+//   node scripts/backup-restore.ts keygen --out <directory>
+//   node scripts/backup-restore.ts decrypt --in <copy> --key <private.pem> --out <directory>
+//   read -rs RESTORE_DATABASE_URL && export RESTORE_DATABASE_URL     (postgresql://ekdotico_migrate:…@host/db)
+//   node scripts/backup-restore.ts database --dir <directory>
+//   export RESTORE_IMAGES_ENDPOINT=… RESTORE_IMAGES_BUCKET=… RESTORE_IMAGES_ACCESS_KEY_ID=…
+//   read -rs RESTORE_IMAGES_SECRET_ACCESS_KEY && export RESTORE_IMAGES_SECRET_ACCESS_KEY
+//   node scripts/backup-restore.ts images --dir <directory>
 //
 // `database` loads into an empty database that scripts/provision.sql has provisioned, as the owner of the
 // schema (the migration role), so that the roles hold what they hold on a deployment. It refuses a
 // schema that already has a table.
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { documentOfKey } from '../src/lib/images/storage.ts';
 import { EnvelopeError, newKeyPair, unseal } from './backup-envelope.ts';
+import { connectionEnv, describeError, LOCAL, run, tlsOrLocal } from './backup-tools.ts';
 
 class Refusal extends Error {
   name = 'Refusal';
@@ -34,26 +40,6 @@ function flag(args: string[], name: string): string {
   const value = at >= 0 ? args[at + 1] : undefined;
   if (!value || value.startsWith('--')) throw new Refusal(`--${name} is needed.`);
   return value;
-}
-
-function run(command: string, args: string[], env: Record<string, string>): Promise<string> {
-  return new Promise((resolveRun, reject) => {
-    const child = spawn(command, args, { env: env as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    child.stdout.on('data', (chunk) => (out += chunk));
-    child.stderr.on('data', (chunk) => (err += chunk));
-    child.once('error', (error) =>
-      reject(
-        new Error(`${command} could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`),
-      ),
-    );
-    child.once('close', (code) =>
-      code === 0
-        ? resolveRun(out)
-        : reject(new Error(`${command} failed (${code}): ${err.trim().slice(0, 500)}`)),
-    );
-  });
 }
 
 // ── keygen ──────────────────────────────────────────────────────────────────
@@ -85,6 +71,12 @@ async function decrypt(args: string[]): Promise<void> {
   secrets = passphrase ? [passphrase] : [];
   const file = resolve(flag(args, 'in'));
   const key = await readFile(resolve(flag(args, 'key')), 'utf8');
+  // A private key kept offline is kept under a passphrase: a file that anyone who finds it can use is not offline.
+  if (!/-----BEGIN ENCRYPTED PRIVATE KEY-----|Proc-Type: 4,ENCRYPTED/.test(key)) {
+    throw new Refusal(
+      'The private key is not encrypted with a passphrase: make the pair again with the keygen command.',
+    );
+  }
   const directory = resolve(flag(args, 'out'));
   try {
     if ((await readdir(directory)).length > 0) throw new Refusal('The directory to write to is not empty.');
@@ -129,16 +121,13 @@ async function database(args: string[]): Promise<void> {
   const url = new URL(raw);
   const password = decodeURIComponent(url.password);
   secrets = [raw, password, encodeURIComponent(password)].filter((value) => value.length >= 4);
-  const env = {
-    PATH: process.env.PATH ?? '',
-    PGHOST: url.hostname.replace(/^\[|\]$/g, ''),
-    PGPORT: url.port || '5432',
-    PGUSER: decodeURIComponent(url.username),
-    PGPASSWORD: password,
-    PGDATABASE: decodeURIComponent(url.pathname.slice(1)),
-    ...(url.searchParams.get('sslmode') ? { PGSSLMODE: url.searchParams.get('sslmode')! } : {}),
-    PGCONNECT_TIMEOUT: '15',
-  };
+  // As the job requires of its own connection: away from this machine the password does not cross the network in clear.
+  if (!tlsOrLocal(url)) {
+    throw new Refusal(
+      'RESTORE_DATABASE_URL must say sslmode=require (or verify-ca, verify-full) away from localhost.',
+    );
+  }
+  const env = connectionEnv(url, { PGOPTIONS: '-c statement_timeout=0' });
   const state = (
     await run(
       'psql',
@@ -176,7 +165,7 @@ async function database(args: string[]): Promise<void> {
   try {
     await run(
       'pg_restore',
-      ['--no-owner', '--no-acl', '--exit-on-error', '-L', listFile, '-d', env.PGDATABASE, dump],
+      ['--no-owner', '--no-acl', '--exit-on-error', '-L', listFile, '-d', env.PGDATABASE!, dump],
       env,
     );
   } finally {
@@ -206,7 +195,7 @@ async function images(args: string[]): Promise<void> {
   if (absent.length > 0) throw new Refusal(`${absent.join(', ')} not set.`);
   const endpoint = process.env.RESTORE_IMAGES_ENDPOINT!;
   const { protocol, hostname } = new URL(endpoint);
-  const here = ['localhost', '127.0.0.1'].includes(hostname);
+  const here = LOCAL.includes(hostname);
   if (protocol !== 'https:' && !(protocol === 'http:' && here))
     throw new Refusal('RESTORE_IMAGES_ENDPOINT must use https, except on localhost.');
   secrets = [process.env.RESTORE_IMAGES_SECRET_ACCESS_KEY!];
@@ -228,7 +217,12 @@ async function images(args: string[]): Promise<void> {
       throw new Refusal('The bucket is not empty: restore into an empty bucket.');
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as Manifest;
     let put = 0;
-    for (const entry of manifest.entries.filter((each) => each.name.startsWith('images/'))) {
+    const objects = manifest.entries.filter((each) => each.name !== 'dump.pgdump');
+    // What the manifest names as an object is put under that name: it must be the name of an image object, and nothing else.
+    if (objects.some((each) => documentOfKey(each.name) === null)) {
+      throw new Refusal('The manifest names an object that is not an image key: nothing was put.');
+    }
+    for (const entry of objects) {
       const handle = await open(join(directory, entry.name), 'r');
       try {
         await client.send(
@@ -265,12 +259,7 @@ if (import.meta.main) {
       console.error(clean(`restore: refused: ${error.message}`));
       process.exit(2);
     }
-    const message = error instanceof Error ? error.message.split('\n')[0]!.slice(0, 300) : '';
-    console.error(
-      clean(
-        `restore: failed (${error instanceof Error ? error.name : 'Error'}${message ? `: ${message}` : ''})`,
-      ),
-    );
+    console.error(clean(`restore: failed (${describeError(error)})`));
     process.exit(1);
   }
 }

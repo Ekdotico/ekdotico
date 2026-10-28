@@ -29,8 +29,9 @@
 //
 // ponytail: one request stores the copy, so it is at most 5 GiB (the envelope refuses more). Use
 // multipart storing when a copy outgrows that.
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import { createInterface } from 'node:readline';
 import { createReadStream } from 'node:fs';
 import { open, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -38,6 +39,15 @@ import { join } from 'node:path';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { documentOfKey } from '../src/lib/images/storage.ts';
 import { EnvelopeError, publicKeyOf, seal, type Entry } from './backup-envelope.ts';
+import {
+  connectionEnv,
+  describeError,
+  LOCAL,
+  run,
+  tlsOrLocal,
+  toolFailed,
+  ToolFault,
+} from './backup-tools.ts';
 
 /** Where a copy goes in its bucket. The bucket's expiry rule is written for this prefix (docs/operations/backup.md). */
 export const BACKUP_PREFIX = 'backups';
@@ -72,9 +82,6 @@ export interface Settings {
 }
 
 type Env = Record<string, string | undefined>;
-
-const LOCAL = ['localhost', '127.0.0.1', '[::1]', '::1'];
-const TLS = ['require', 'verify-ca', 'verify-full'];
 
 function need(env: Env, names: string[]): void {
   const absent = names.filter((name) => !env[name]);
@@ -123,7 +130,7 @@ function storeOf(env: Env, prefix: 'BACKUP_STORE' | 'BACKUP_IMAGES', defaultRegi
  */
 export function loadSettings(env: Env): Settings {
   need(env, ['BACKUP_DATABASE_URL', 'BACKUP_PUBLIC_KEY_FILE']);
-  // Rule 3 comes first among the checks: nothing below is looked at before the key has been.
+  // Only the settings are looked at here; the key is read, and refused if it is not a public key, before anything is connected to.
   const databaseUrl = env.BACKUP_DATABASE_URL!;
   if (!URL.canParse(databaseUrl)) throw new Refusal('BACKUP_DATABASE_URL is not a URL.');
   const url = new URL(databaseUrl);
@@ -133,7 +140,7 @@ export function loadSettings(env: Env): Settings {
     throw new Refusal('BACKUP_DATABASE_URL must name a user, a password and a database.');
   }
   const sslmode = url.searchParams.get('sslmode') ?? undefined;
-  if (!LOCAL.includes(url.hostname) && !(sslmode && TLS.includes(sslmode))) {
+  if (!tlsOrLocal(url)) {
     throw new Refusal(
       'BACKUP_DATABASE_URL must say sslmode=require (or verify-ca, verify-full) away from localhost.',
     );
@@ -184,53 +191,40 @@ const complain = (line: string) => console.error(clean(line));
 
 /** The environment of a tool this job starts: its path, and the connection by name. The password is here and in no argument. */
 function toolEnv(s: Settings): Record<string, string> {
-  return {
-    PATH: process.env.PATH ?? '',
-    PGHOST: s.database.host,
-    PGPORT: s.database.port,
-    PGUSER: s.database.user,
-    PGPASSWORD: s.database.password,
-    PGDATABASE: s.database.name,
-    ...(s.database.sslmode ? { PGSSLMODE: s.database.sslmode } : {}),
-    PGCONNECT_TIMEOUT: '15',
+  return connectionEnv(new URL(s.databaseUrl), {
     PGAPPNAME: 'ekdotico-backup',
     // Defence in depth for rule 4: a session of this job cannot write, whatever its role could.
     PGOPTIONS: '-c default_transaction_read_only=on',
-  };
-}
-
-function run(command: string, args: string[], env: Record<string, string>): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env: env as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    child.stdout.on('data', (chunk) => (out += chunk));
-    child.stderr.on('data', (chunk) => (err += chunk));
-    child.once('error', (error) =>
-      reject(
-        new Error(`${command} could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`),
-      ),
-    );
-    child.once('close', (code) =>
-      code === 0
-        ? resolve(out)
-        : reject(new Error(`${command} failed (${code}): ${err.trim().slice(0, 500)}`)),
-    );
   });
 }
 
+// VERBOSITY=sqlstate: an error of the server is only its SQLSTATE, which is all a fault says (backup-tools.ts).
 const psql = (s: Settings, sql: string) =>
-  run('psql', ['-X', '-w', '-At', '-F', '|', '-v', 'ON_ERROR_STOP=1', '-c', sql], toolEnv(s));
+  run(
+    'psql',
+    ['-X', '-w', '-At', '-F', '|', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate', '-c', sql],
+    toolEnv(s),
+  );
 
 // ── Rule 4: the role ────────────────────────────────────────────────────────
 
 const WRITES = 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER';
+/** Schemas that are the system's: nothing of the application, and rights there are the defaults of every role. */
+const OUTSIDE = `n.nspname NOT IN ('ekdotico', 'information_schema') AND n.nspname !~ '^pg_'`;
 
 /**
- * Refuses a role that can do more than read the schema, or cannot read all of it: a dump under a role
- * that could write is not the copy of NFR-RE-10, and one that misses a table is a copy that is not whole.
+ * Refuses a role that can do more than read the schema `ekdotico`, or cannot read all of it: a dump under a role
+ * that could write is not the copy of NFR-RE-10 (NFR-IC-17: select on the application schema and nothing else),
+ * and one that misses a table is a copy that is not whole. Refused: an attribute beyond a login; any membership of
+ * another role (a built-in such as pg_write_all_data, or one that may only be switched to); a write, a column
+ * privilege to write, or MAINTAIN on any relation of the schema; the right to advance a sequence; EXECUTE on a
+ * routine of the schema; CREATE anywhere; and any right on a relation or a schema outside the application's.
  */
 export async function checkRole(s: Settings): Promise<string> {
+  // MAINTAIN is a privilege of PostgreSQL 17 and later; an earlier server does not know the word.
+  const version = Number((await psql(s, 'SHOW server_version_num')).trim());
+  const writes = version >= 170000 ? `${WRITES},MAINTAIN` : WRITES;
+  const inSchema = `FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'ekdotico'`;
   const row = await psql(
     s,
     `SELECT current_user,
@@ -238,32 +232,60 @@ export async function checkRole(s: Settings): Promise<string> {
        has_schema_privilege(current_user, 'ekdotico', 'USAGE'),
        has_schema_privilege(current_user, 'ekdotico', 'CREATE'),
        has_database_privilege(current_user, current_database(), 'CREATE,TEMPORARY'),
+       (SELECT count(*) ${inSchema} AND c.relkind IN ('r','p','v','m','f')
+          AND (has_table_privilege(current_user, c.oid, '${writes}')
+               OR has_any_column_privilege(current_user, c.oid, 'INSERT,UPDATE,REFERENCES'))),
+       (SELECT count(*) ${inSchema} AND c.relkind = 'S' AND has_sequence_privilege(current_user, c.oid, 'UPDATE,USAGE')),
+       (SELECT count(*) ${inSchema}
+          AND ((c.relkind IN ('r','p') AND NOT has_table_privilege(current_user, c.oid, 'SELECT'))
+            OR (c.relkind = 'S' AND NOT has_sequence_privilege(current_user, c.oid, 'SELECT')))),
+       (SELECT count(*) ${inSchema} AND c.relkind IN ('r','p')),
+       (SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = current_user),
+       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'ekdotico' AND has_function_privilege(current_user, p.oid, 'EXECUTE')),
        (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'ekdotico' AND c.relkind IN ('r','p','v','m','f') AND has_table_privilege(current_user, c.oid, '${WRITES}')),
-       (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'ekdotico' AND c.relkind = 'S' AND has_sequence_privilege(current_user, c.oid, 'UPDATE,USAGE')),
-       (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'ekdotico'
-           AND ((c.relkind IN ('r','p') AND NOT has_table_privilege(current_user, c.oid, 'SELECT'))
-             OR (c.relkind = 'S' AND NOT has_sequence_privilege(current_user, c.oid, 'SELECT')))),
-       (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'ekdotico' AND c.relkind IN ('r','p'))`,
+         WHERE ${OUTSIDE} AND ((c.relkind IN ('r','p','v','m','f')
+                 AND (has_table_privilege(current_user, c.oid, 'SELECT,${writes}')
+                      OR has_any_column_privilege(current_user, c.oid, 'SELECT,INSERT,UPDATE,REFERENCES')))
+               OR (c.relkind = 'S' AND has_sequence_privilege(current_user, c.oid, 'SELECT,UPDATE,USAGE')))),
+       (SELECT count(*) FROM pg_namespace n WHERE ${OUTSIDE} AND has_schema_privilege(current_user, n.oid, 'CREATE'))`,
   );
-  const [user, wide, usage, create, database, writable, sequences, unreadable, tables] = row
-    .trim()
-    .split('|');
+  const [
+    user,
+    wide,
+    usage,
+    create,
+    database,
+    writable,
+    sequences,
+    unreadable,
+    tables,
+    member,
+    routines,
+    outside,
+    createOutside,
+  ] = row.trim().split('|');
   if (wide !== 'f')
     throw new Refusal(
       'The role holds an attribute beyond a login (superuser, createdb, createrole, replication or bypassrls).',
+    );
+  if (Number(member) > 0)
+    throw new Refusal(
+      `The role is a member of ${member} other role(s): it holds their rights, or may take them on. It reads the schema by grants of its own.`,
     );
   if (usage !== 't') throw new Refusal('The role cannot use the schema `ekdotico`.');
   if (create === 't') throw new Refusal('The role can create in the schema `ekdotico`.');
   if (database === 't') throw new Refusal('The role can create objects or temporary tables in the database.');
   if (Number(writable) > 0)
     throw new Refusal(
-      `The role can write ${writable} table(s) of the schema: the dump is taken under a role that only reads.`,
+      `The role can write ${writable} table(s) of the schema, or one of their columns, or maintain it: the dump is taken under a role that only reads.`,
     );
   if (Number(sequences) > 0) throw new Refusal('The role can advance a sequence of the schema.');
+  if (Number(routines) > 0) throw new Refusal(`The role can execute ${routines} routine(s) of the schema.`);
+  if (Number(outside) > 0 || Number(createOutside) > 0)
+    throw new Refusal(
+      'The role holds a right outside the schema `ekdotico`: it has none but the select of the schema.',
+    );
   if (Number(unreadable) > 0)
     throw new Refusal(
       `The role cannot read ${unreadable} table(s) or sequence(s) of the schema: the copy would not be whole.`,
@@ -271,6 +293,76 @@ export async function checkRole(s: Settings): Promise<string> {
   if (Number(tables) === 0)
     throw new Refusal('The schema `ekdotico` holds no table: this is not the application database.');
   return user!;
+}
+
+// ── One snapshot for the dump and the list of the images ────────────────────
+
+/**
+ * A session that holds a snapshot open: `pg_dump --snapshot` dumps the rows as they were in it, and the keys of
+ * the image objects are read in it too, so that the objects copied are those of the rows dumped. A row added
+ * after the snapshot is in neither; an object deleted after it is the "no longer there" of the report.
+ */
+class Snapshot {
+  readonly id: string;
+  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly lines: AsyncIterator<string>;
+
+  private constructor(child: ChildProcessWithoutNullStreams, lines: AsyncIterator<string>, id: string) {
+    this.child = child;
+    this.lines = lines;
+    this.id = id;
+  }
+
+  static async open(s: Settings): Promise<Snapshot> {
+    const child = spawn('psql', ['-X', '-w', '-At', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate'], {
+      env: toolEnv(s) as NodeJS.ProcessEnv,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let err = '';
+    child.stderr.on('data', (chunk) => (err += chunk));
+    const exited = new Promise<never>((_, reject) => {
+      child.once('error', () => reject(new ToolFault('psql could not be started')));
+      child.once('close', (code) => reject(toolFailed('psql', code, err)));
+    });
+    exited.catch(() => {});
+    const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    child.stdin.write(
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT 'SNAPSHOT:' || pg_export_snapshot();\n",
+    );
+    const id = await Snapshot.until(lines, exited, (line) => line.startsWith('SNAPSHOT:'));
+    return new Snapshot(child, lines, id.slice('SNAPSHOT:'.length));
+  }
+
+  private static async until(
+    lines: AsyncIterator<string>,
+    exited: Promise<never>,
+    found: (line: string) => boolean,
+  ): Promise<string> {
+    for (;;) {
+      const next = await Promise.race([lines.next(), exited]);
+      if (next.done) throw new ToolFault('psql ended before it answered');
+      if (found(next.value)) return next.value;
+    }
+  }
+
+  /** The keys of the image objects, as the rows were in the snapshot. */
+  async imageKeys(): Promise<string[]> {
+    this.child.stdin.write(
+      `SELECT 'KEY:' || "objectKey" FROM ekdotico."DocumentImage" ORDER BY "createdAt", id;\nSELECT 'END:';\n`,
+    );
+    const keys: string[] = [];
+    for (;;) {
+      const next = await this.lines.next();
+      if (next.done) throw new ToolFault('psql ended before it answered');
+      if (next.value === 'END:') return keys;
+      if (next.value.startsWith('KEY:')) keys.push(next.value.slice('KEY:'.length));
+    }
+  }
+
+  close(): void {
+    this.child.stdin.end();
+    this.child.kill();
+  }
 }
 
 // ── The copy ────────────────────────────────────────────────────────────────
@@ -318,17 +410,22 @@ async function* entriesOf(
   report: Report,
   counts: Counted[],
 ): AsyncGenerator<Entry> {
+  // The snapshot first: the dump and the list of the images are both read in it.
+  const snapshot = await Snapshot.open(s);
   // The dump, straight from pg_dump into the seal.
-  const dump = spawn('pg_dump', ['-w', '--schema=ekdotico', '--no-owner', '--no-acl', '--format=custom'], {
-    env: toolEnv(s) as NodeJS.ProcessEnv,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const dump = spawn(
+    'pg_dump',
+    ['-w', `--snapshot=${snapshot.id}`, '--schema=ekdotico', '--no-owner', '--no-acl', '--format=custom'],
+    { env: toolEnv(s) as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
   let dumpError = '';
   dump.stderr.on('data', (chunk) => (dumpError += chunk));
   const exited = new Promise<number | null>((resolve) => dump.once('close', resolve));
   const failed = new Promise<never>((_, reject) =>
     dump.once('error', (error) =>
-      reject(new Error(`pg_dump could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`)),
+      reject(
+        new ToolFault(`pg_dump could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`),
+      ),
     ),
   );
   failed.catch(() => {});
@@ -337,15 +434,12 @@ async function* entriesOf(
   try {
     yield { name: dumped.name, body: counting(dump.stdout, dumped) };
     const code = await Promise.race([exited, failed]);
-    if (code !== 0) throw new Error(`pg_dump failed (${code}): ${dumpError.trim().slice(0, 500)}`);
+    if (code !== 0) throw toolFailed('pg_dump', code, dumpError);
     counts.push(dumped);
 
-    // The objects of the images, named by the rows of the table, so that the credential lists nothing (NFR-SE-18).
-    const listed = (
-      await psql(s, `SELECT "objectKey" FROM ekdotico."DocumentImage" ORDER BY "createdAt", id`)
-    )
-      .split('\n')
-      .filter(Boolean);
+    // The objects of the images, named by the rows of the table as they were in the snapshot of the dump, so that
+    // the credential lists nothing (NFR-SE-18) and the objects are those of the rows dumped.
+    const listed = await snapshot.imageKeys();
     report.images.listed = listed.length;
     for (const key of listed) {
       if (documentOfKey(key) === null) {
@@ -393,6 +487,7 @@ async function* entriesOf(
     };
   } finally {
     source.destroy();
+    snapshot.close();
     // A job that stops early does not leave a dump running.
     if (dump.exitCode === null && dump.signalCode === null) dump.kill();
   }
@@ -485,10 +580,8 @@ if (import.meta.main) {
       complain(`backup: refused: ${error.message}`);
       process.exit(2);
     }
-    // The class of the fault and what the tool said, with every secret removed (rule 2).
-    const name = error instanceof Error ? error.name : 'Error';
-    const message = error instanceof Error ? error.message.split('\n')[0]!.slice(0, 300) : '';
-    complain(`backup: failed (${name}${message ? `: ${message}` : ''})`);
+    // The class of the fault, and a code or a status: never what the tool or the SDK wrote, which names a host or a role (rule 2).
+    complain(`backup: failed (${describeError(error)})`);
     process.exit(1);
   }
 }

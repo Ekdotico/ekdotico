@@ -9,7 +9,16 @@
 // Needs pg_dump of the version of the server or later, and psql and pg_restore beside it.
 import { spawn, spawnSync } from 'node:child_process';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -21,7 +30,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase } from './database.ts';
 
 const given = Boolean(process.env.IMAGE_STORAGE_ENDPOINT);
@@ -140,6 +149,13 @@ describe.skipIf(!given)('the copy of the backups', () => {
     return (listed.Contents ?? []).map((each) => each.Key!).sort();
   }
 
+  /** Makes one copy in the bucket, which is empty when a test begins, and returns what the bucket holds. */
+  async function makeCopy(): Promise<string[]> {
+    const ran = await backup(good());
+    expect(ran.status, ran.err).toBe(0);
+    return copies();
+  }
+
   async function fetchObject(bucket: string, key: string): Promise<Buffer> {
     const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
     return Buffer.from(await object.Body!.transformToByteArray());
@@ -202,7 +218,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
       INSERT INTO "Workspace" (id, type, "ownerId") VALUES ('w1', 'PERSONAL', 'u1');
       INSERT INTO "Document" (id, "workspaceId", "ownerId", title, "permissionSet", recording, "updatedAt", "yjsState")
         VALUES ('${DOCUMENT}', 'w1', 'u1', '${MARKER}', '{}', 'UNRECORDED', now(), decode('00010203', 'hex'));
-      INSERT INTO "DocumentImage" (id, "documentId", "objectKey", "contentType", "byteSize", "uploadedById")
+      INSERT INTO ekdotico."DocumentImage" (id, "documentId", "objectKey", "contentType", "byteSize", "uploadedById")
         VALUES ('i1', '${DOCUMENT}', '${KEY_A}', 'image/png', 2048, 'u1'),
                ('i2', '${DOCUMENT}', '${KEY_B}', 'image/png', 2048, 'u1'),
                ('i3', '${DOCUMENT}', '${KEY_GONE}', 'image/png', 2048, 'u1'),
@@ -232,6 +248,11 @@ describe.skipIf(!given)('the copy of the backups', () => {
   });
 
   // ── The copy, and the restore from it ──────────────────────────────────────
+
+  // Each test begins with no copy in the bucket, so that none counts on another's.
+  beforeEach(async () => {
+    await empty(COPIES);
+  });
 
   it('stores a copy that opens, with the private half, to what was dumped, and restores to a working database and bucket', async () => {
     const ran = await backup(good());
@@ -327,7 +348,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
   }
 
   it('stores nothing in clear: the copy shows no title, no image byte, no dump header, no schema name', async () => {
-    const [key] = await copies();
+    const [key] = await makeCopy();
     const bytes = await fetchObject(COPIES, key!);
     for (const clear of [MARKER, IMAGE_MARKER, 'PGDMP', 'ekdotico', 'Document', 'a@example.com', KEY_A]) {
       expect(bytes.includes(Buffer.from(clear)), clear).toBe(false);
@@ -337,7 +358,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
   // ── Rule 5: it only adds ───────────────────────────────────────────────────
 
   it('adds a second copy under a key of its own and leaves the first as it was', async () => {
-    const before = await copies();
+    const before = await makeCopy();
     expect(before).toHaveLength(1);
     const firstBytes = await fetchObject(COPIES, before[0]!);
     const ran = await backup(good());
@@ -371,7 +392,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
     const ran = await backup({}, here);
     expect(ran.status).toBe(2);
     expect(ran.err).toMatch(/^backup: refused: BACKUP_DATABASE_URL, BACKUP_PUBLIC_KEY_FILE are not set\.\n$/);
-    expect(await copies()).toHaveLength(2);
+    expect(await copies()).toEqual([]);
   });
 
   it('has no way to read a file but the public key', () => {
@@ -420,6 +441,15 @@ describe.skipIf(!given)('the copy of the backups', () => {
         expect(ran.out + ran.err, sentinel).not.toContain(sentinel);
       }
     }
+    // Nor does a fault name a host, a port or a role (item 9 of the review of PR 65): a class and an exit status.
+    for (const ran of runs.slice(1)) {
+      for (const name of ['ekdotico_no_such_role', 'localhost', '127.0.0.1', '8333']) {
+        expect(ran.out + ran.err, name).not.toContain(name);
+      }
+    }
+    expect(runs[1]!.err).toMatch(
+      /^backup: failed \(ToolFault: psql failed \(exit \d+, connection fault\)\)\n$/,
+    );
     const calls = readFileSync(log, 'utf8');
     // Arguments: the lines that begin with the tool's name. Environment: the PG lines.
     const commandLines = calls.split('\n').filter((line) => /^(pg_dump|psql) /.test(line));
@@ -523,6 +553,95 @@ describe.skipIf(!given)('the copy of the backups', () => {
     expect(await copies()).toEqual([]);
   });
 
+  // One test for each right a role could hold beyond the select of the schema (NFR-IC-17, A28; item 1 of the review
+  // of PR 65). Each is granted by the administrator, the job is run, and the grant is taken away whatever happens.
+  const asAdmin = (sql: string) =>
+    psql(urlOf(admin.username || userInfo().username, admin.password, databaseName), ['-c', sql]);
+  const serverVersion = () => Number(asAdmin('SHOW server_version_num'));
+
+  async function refusedWith(grant: string, revoke: string, message: RegExp) {
+    asAdmin(grant);
+    try {
+      const ran = await backup(good());
+      expect(ran.status, ran.err + ran.out).toBe(2);
+      expect(ran.err).toMatch(message);
+      expect(ran.out).toBe('');
+      expect(readdirSync(ran.workDirectory)).toEqual([]);
+    } finally {
+      asAdmin(revoke);
+    }
+    expect(await copies()).toEqual([]);
+  }
+
+  it('refuses a role that is a member of a built-in role that writes (pg_write_all_data)', async () => {
+    await refusedWith(
+      'GRANT pg_write_all_data TO ekdotico_backup',
+      'REVOKE pg_write_all_data FROM ekdotico_backup',
+      /member of 1 other role/,
+    );
+  });
+
+  it('refuses a role that may only switch to another role (membership with SET and without INHERIT)', async () => {
+    asAdmin('CREATE ROLE ekdotico_test_other NOLOGIN');
+    try {
+      await refusedWith(
+        'GRANT ekdotico_test_other TO ekdotico_backup WITH INHERIT FALSE, SET TRUE',
+        'REVOKE ekdotico_test_other FROM ekdotico_backup',
+        /member of 1 other role/,
+      );
+    } finally {
+      asAdmin('DROP ROLE ekdotico_test_other');
+    }
+  });
+
+  it('refuses a role that may write one column of a table (a column privilege)', async () => {
+    await refusedWith(
+      `GRANT UPDATE (title) ON ekdotico."Document" TO ekdotico_backup`,
+      `REVOKE UPDATE (title) ON ekdotico."Document" FROM ekdotico_backup`,
+      /can write 1 table\(s\) of the schema, or one of their columns/,
+    );
+  });
+
+  it('refuses a role that may maintain a table (MAINTAIN, PostgreSQL 17)', async () => {
+    if (serverVersion() < 170000) return;
+    await refusedWith(
+      `GRANT MAINTAIN ON ekdotico."Notification" TO ekdotico_backup`,
+      `REVOKE MAINTAIN ON ekdotico."Notification" FROM ekdotico_backup`,
+      /can write 1 table\(s\)/,
+    );
+  });
+
+  it('refuses a role that may execute a routine of the schema', async () => {
+    asAdmin('CREATE FUNCTION ekdotico.ekdotico_test_routine() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$');
+    try {
+      await refusedWith(
+        'REVOKE ALL ON FUNCTION ekdotico.ekdotico_test_routine() FROM PUBLIC; GRANT EXECUTE ON FUNCTION ekdotico.ekdotico_test_routine() TO ekdotico_backup',
+        'REVOKE EXECUTE ON FUNCTION ekdotico.ekdotico_test_routine() FROM ekdotico_backup',
+        /can execute 1 routine\(s\) of the schema/,
+      );
+    } finally {
+      asAdmin('DROP FUNCTION ekdotico.ekdotico_test_routine()');
+    }
+  });
+
+  it('refuses a role that holds a right outside the schema (a table of another schema, the right to create in public)', async () => {
+    asAdmin('CREATE SCHEMA ekdotico_test_other; CREATE TABLE ekdotico_test_other.t (i int)');
+    try {
+      await refusedWith(
+        'GRANT USAGE ON SCHEMA ekdotico_test_other TO ekdotico_backup; GRANT SELECT ON ekdotico_test_other.t TO ekdotico_backup',
+        'REVOKE ALL ON ekdotico_test_other.t FROM ekdotico_backup; REVOKE ALL ON SCHEMA ekdotico_test_other FROM ekdotico_backup',
+        /right outside the schema `ekdotico`/,
+      );
+      await refusedWith(
+        'GRANT CREATE ON SCHEMA public TO ekdotico_backup',
+        'REVOKE CREATE ON SCHEMA public FROM ekdotico_backup',
+        /right outside the schema `ekdotico`/,
+      );
+    } finally {
+      asAdmin('DROP SCHEMA ekdotico_test_other CASCADE');
+    }
+  });
+
   it('refuses settings that are not what the copy is: no TLS away from localhost, a bucket at DigitalOcean, one bucket for both', async () => {
     const cases: [Record<string, string>, RegExp][] = [
       [
@@ -558,7 +677,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
     chmodSync(join(dir, 'pg_dump'), 0o755);
     const ran = await backup(good(), ROOT, `${dir}:${process.env.PATH}`);
     expect(ran.status).toBe(1);
-    expect(ran.err).toMatch(/pg_dump failed \(3\)/);
+    expect(ran.err).toMatch(/pg_dump failed \(exit 3\)/);
     expect(readdirSync(ran.workDirectory)).toEqual([]);
     expect(await copies()).toEqual([]);
   });
@@ -574,24 +693,42 @@ describe.skipIf(!given)('the copy of the backups', () => {
   // ── The restore refuses what it should ─────────────────────────────────────
 
   it('does not open a copy with another key, nor load into a schema that has tables, nor as another role', async () => {
-    const [key] = await copies().then((list) => (list.length ? list : backup(good()).then(() => copies())));
+    const [key] = await makeCopy();
     const file = join(work, 'second.ekdbak');
     writeFileSync(file, await fetchObject(COPIES, key!));
     const other = generateKeyPairSync('rsa', {
       modulusLength: 3072,
       publicKeyEncoding: { type: 'spki', format: 'pem' },
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem', cipher: 'aes-256-cbc', passphrase: PASSPHRASE },
     });
     const otherPath = join(work, 'other.pem');
     writeFileSync(otherPath, other.privateKey);
     const out = join(work, 'never');
     const refused = spawnSync('node', [RESTORE, 'decrypt', '--in', file, '--key', otherPath, '--out', out], {
-      env: { NODE_ENV: 'test', PATH: process.env.PATH! },
+      env: { NODE_ENV: 'test', PATH: process.env.PATH!, BACKUP_KEY_PASSPHRASE: PASSPHRASE },
       encoding: 'utf8',
     });
     expect(refused.status).toBe(2);
     expect(refused.stderr).toMatch(/does not open the copy/);
     expect(() => readdirSync(out)).toThrow(/ENOENT/);
+
+    // A private key that is not under a passphrase is refused before the copy is touched (item 12).
+    const bare = generateKeyPairSync('rsa', {
+      modulusLength: 3072,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    const barePath = join(work, 'bare.pem');
+    writeFileSync(barePath, bare.privateKey);
+    const bareOut = join(work, 'never-bare');
+    const bareRefused = spawnSync(
+      'node',
+      [RESTORE, 'decrypt', '--in', file, '--key', barePath, '--out', bareOut],
+      { env: { NODE_ENV: 'test', PATH: process.env.PATH! }, encoding: 'utf8' },
+    );
+    expect(bareRefused.status).toBe(2);
+    expect(bareRefused.stderr).toMatch(/not encrypted with a passphrase/);
+    expect(() => readdirSync(bareOut)).toThrow(/ENOENT/);
 
     const opened = join(work, 'opened-again');
     const ok = spawnSync('node', [RESTORE, 'decrypt', '--in', file, '--key', writeKey(), '--out', opened], {
@@ -636,6 +773,116 @@ describe.skipIf(!given)('the copy of the backups', () => {
     });
     expect(notEmpty.status).toBe(2);
     expect(notEmpty.stderr).toMatch(/bucket is not empty/);
+
+    // Away from this machine the restore requires TLS, as the job does (item 4)...
+    const clear = spawnSync('node', [RESTORE, 'database', '--dir', opened], {
+      env: {
+        NODE_ENV: 'test',
+        PATH: process.env.PATH!,
+        RESTORE_DATABASE_URL: 'postgresql://ekdotico_migrate:x@db.example.test:25060/ekdotico',
+      },
+      encoding: 'utf8',
+    });
+    expect(clear.status).toBe(2);
+    expect(clear.stderr).toMatch(/sslmode=require/);
+
+    // ...and takes [::1] for this machine: an http endpoint there is not refused for its scheme (item 4).
+    const loopback = spawnSync('node', [RESTORE, 'images', '--dir', opened], {
+      env: {
+        NODE_ENV: 'test',
+        PATH: process.env.PATH!,
+        RESTORE_IMAGES_ENDPOINT: 'http://[::1]:1',
+        RESTORE_IMAGES_BUCKET: RESTORED,
+        RESTORE_IMAGES_ACCESS_KEY_ID: accessKeyId,
+        RESTORE_IMAGES_SECRET_ACCESS_KEY: secretAccessKey,
+      },
+      encoding: 'utf8',
+    });
+    expect(loopback.stderr).not.toMatch(/must use https/);
+    expect(loopback.status).toBe(1);
+
+    // A manifest that names an object that is not an image key puts nothing anywhere (item 13).
+    const forged = join(work, 'forged');
+    mkdirSync(forged, { recursive: true });
+    writeFileSync(
+      join(forged, 'manifest.json'),
+      JSON.stringify({ format: 'ekdbak-1', entries: [{ name: '../escape', bytes: 1, sha256: 'x' }] }),
+    );
+    const emptyBucket = `ekdotico-test-empty-${suffix}`;
+    await s3.send(new CreateBucketCommand({ Bucket: emptyBucket }));
+    try {
+      const bad = spawnSync('node', [RESTORE, 'images', '--dir', forged], {
+        env: {
+          NODE_ENV: 'test',
+          PATH: process.env.PATH!,
+          RESTORE_IMAGES_ENDPOINT: endpoint,
+          RESTORE_IMAGES_BUCKET: emptyBucket,
+          RESTORE_IMAGES_ACCESS_KEY_ID: accessKeyId,
+          RESTORE_IMAGES_SECRET_ACCESS_KEY: secretAccessKey,
+        },
+        encoding: 'utf8',
+      });
+      expect(bad.status).toBe(2);
+      expect(bad.stderr).toMatch(/not an image key: nothing was put/);
+    } finally {
+      await empty(emptyBucket);
+      await s3.send(new DeleteBucketCommand({ Bucket: emptyBucket })).catch(() => {});
+    }
     mkdirSync(join(work, 'unused'), { recursive: true });
+  }, 120_000);
+
+  // ── The images of the copy are those of the rows dumped (item 10) ──────────
+
+  it('lists the images in the snapshot of the dump: a row added while the dump waits is in neither', async () => {
+    // pg_dump is held by a tool that says it has started and waits for a file; the snapshot was opened before it.
+    const dir = mkdtempSync(join(work, 'held-'));
+    const real = spawnSync('which', ['pg_dump'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(
+      join(dir, 'pg_dump'),
+      `#!/bin/sh\ntouch '${dir}/started'\nwhile [ ! -f '${dir}/go' ]; do sleep 0.05; done\nexec '${real}' "$@"\n`,
+    );
+    chmodSync(join(dir, 'pg_dump'), 0o755);
+    const running = backup(good(), ROOT, `${dir}:${process.env.PATH}`);
+    const began = Date.now();
+    while (!existsSync(join(dir, 'started')) && Date.now() - began < 20_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(existsSync(join(dir, 'started'))).toBe(true);
+    const later = `images/${DOCUMENT}/${'e'.repeat(32)}`;
+    asAdmin(`
+      INSERT INTO ekdotico."Document" (id, "workspaceId", "ownerId", title, "permissionSet", recording, "updatedAt")
+        VALUES ('4a2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b', 'w1', 'u1', 'added-after-the-snapshot', '{}', 'UNRECORDED', now());
+      INSERT INTO ekdotico."DocumentImage" (id, "documentId", "objectKey", "contentType", "byteSize", "uploadedById")
+        VALUES ('i5', '4a2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b', '${later}', 'image/png', 2048, 'u1')`);
+    try {
+      writeFileSync(join(dir, 'go'), '');
+      const ran = await running;
+      expect(ran.status, ran.err).toBe(0);
+      // Four images were listed, as before the row: the fifth is not.
+      expect(ran.out).toMatch(/\(2 of 4 images, 1 no longer there, 1 refused\)/);
+      const [key] = await copies();
+      const file = join(work, 'snapshot.ekdbak');
+      writeFileSync(file, await fetchObject(COPIES, key!));
+      const opened = join(work, 'snapshot-opened');
+      const decrypted = spawnSync(
+        'node',
+        [RESTORE, 'decrypt', '--in', file, '--key', writeKey(), '--out', opened],
+        {
+          env: { NODE_ENV: 'test', PATH: process.env.PATH!, BACKUP_KEY_PASSPHRASE: PASSPHRASE },
+          encoding: 'utf8',
+        },
+      );
+      expect(decrypted.status, decrypted.stderr).toBe(0);
+      const text = spawnSync('pg_restore', ['-f', '-', join(opened, 'dump.pgdump')], {
+        encoding: 'utf8',
+        maxBuffer: 1 << 26,
+      }).stdout;
+      expect(text).toContain(MARKER);
+      expect(text).not.toContain('added-after-the-snapshot');
+    } finally {
+      asAdmin(
+        `DELETE FROM ekdotico."DocumentImage" WHERE id = 'i5'; DELETE FROM ekdotico."Document" WHERE id = '4a2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b'`,
+      );
+    }
   }, 120_000);
 });

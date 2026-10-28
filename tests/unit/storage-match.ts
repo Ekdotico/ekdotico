@@ -47,16 +47,25 @@ export function schemaColumns(): Map<string, string[]> {
 }
 
 /** The table names and the columns the record gives each, by rows of section B. */
-export function matchedColumns(): Map<string, { named: string[]; wildcard: boolean; rows: string[] }> {
-  const result = new Map<string, { named: string[]; wildcard: boolean; rows: string[] }>();
+export function matchedColumns(): Map<string, { named: string[]; rows: string[] }> {
+  const result = new Map<string, { named: string[]; rows: string[] }>();
   for (const [table, columns, row] of section('B.')) {
-    const entry = result.get(table!) ?? { named: [], wildcard: false, rows: [] };
-    if (columns === '*') entry.wildcard = true;
-    else entry.named.push(...columns!.split(',').map((column) => column.trim()));
+    const entry = result.get(table!) ?? { named: [], rows: [] };
+    entry.named.push(...columns!.split(',').map((column) => column.trim()));
     entry.rows.push(row!);
     result.set(table!, entry);
   }
   return result;
+}
+
+/** Every string of the form `name:` followed by an interpolation or a quote: the prefixes of the keys a file builds, and of what it digests. */
+export function valkeyPrefixes(file: string): string[] {
+  const text = readFileSync(file, 'utf8');
+  return [
+    ...new Set(
+      [...text.matchAll(/[`'"]([a-z][a-z0-9]*(?:-[a-z0-9]+)*):(?=\$\{|['"`])/g)].map((match) => match[1]!),
+    ),
+  ].sort();
 }
 
 /** The files under src that import the Valkey client, apart from the client and the settings. */

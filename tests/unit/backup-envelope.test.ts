@@ -1,5 +1,6 @@
 // The envelope of the copy of the backups (NFR-RE-10, D118; docs/plan/slice-27.md, S27-10): what is
 // sealed on the host opens only with the private half, and a copy that was changed opens as nothing.
+import { spawn } from 'node:child_process';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -167,4 +168,48 @@ describe('seal and unseal', () => {
       );
     },
   );
+});
+
+describe('what an opening that fails leaves behind', () => {
+  it('nothing: a copy that is validly sealed and that the cutting rejects (an entry twice) leaves the directory empty', async () => {
+    const file = join(work, 'twice.ekdbak');
+    writeFileSync(
+      file,
+      await sealed([
+        { name: 'dump.pgdump', body: bodyOf(Buffer.from('one')) },
+        { name: 'dump.pgdump', body: bodyOf(Buffer.from('two')) },
+      ]),
+    );
+    const out = folder();
+    // The tag is right, the plain archive is written, and then the second entry of the name cannot be made.
+    await expect(unseal(file, pair.privateKey, PASSPHRASE, out)).rejects.toThrow();
+    expect(readdirSync(out)).toEqual([]);
+  });
+
+  it('nothing, when SIGTERM stops it in the middle: the plain archive is removed and the status is 143', async () => {
+    // A copy of 300 MB, so that the opening is still under way when the signal comes.
+    async function* large() {
+      yield { name: 'big', body: bodyOf(...Array.from({ length: 300 }, () => randomBytes(1024 * 1024))) };
+    }
+    const file = join(work, 'large.ekdbak');
+    const pieces: Buffer[] = [];
+    for await (const piece of seal(publicKeyOf(pair.publicKey), large())) pieces.push(piece);
+    writeFileSync(file, Buffer.concat(pieces));
+    const keyFile = join(work, 'key.pem');
+    writeFileSync(keyFile, pair.privateKey, { mode: 0o600 });
+    const out = folder();
+    const child = spawn('node', ['tests/fixtures/open-archive.ts', file, keyFile, out], {
+      env: { NODE_ENV: 'test', PATH: process.env.PATH!, KEY_PASSPHRASE: PASSPHRASE } as NodeJS.ProcessEnv,
+      stdio: 'ignore',
+    });
+    const status = new Promise<number | null>((resolve) => child.once('close', resolve));
+    const began = Date.now();
+    while (!readdirSync(out).includes('.archive.plain') && Date.now() - began < 20_000) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(readdirSync(out)).toContain('.archive.plain');
+    child.kill('SIGTERM');
+    expect(await status).toBe(143);
+    expect(readdirSync(out)).toEqual([]);
+  }, 60_000);
 });
