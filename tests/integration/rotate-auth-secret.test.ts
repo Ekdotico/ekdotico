@@ -126,7 +126,13 @@ describe('the rotation of AUTH_SECRET', () => {
     wrong.username = 'ekdotico_no_such_role';
     wrong.password = 'a-wrong-password-of-a-test';
     const failed = spawnSync('node', ['scripts/rotate-auth-secret.ts'], {
-      env: { NODE_ENV: 'test', PATH: process.env.PATH!, OLD_AUTH_SECRET: NEW, NEW_AUTH_SECRET: `${NEW}-another-one`, DATABASE_URL: wrong.toString() },
+      env: {
+        NODE_ENV: 'test',
+        PATH: process.env.PATH!,
+        OLD_AUTH_SECRET: NEW,
+        NEW_AUTH_SECRET: `${NEW}-another-one`,
+        DATABASE_URL: wrong.toString(),
+      },
       encoding: 'utf8',
     });
     expect(failed.status).toBe(1);

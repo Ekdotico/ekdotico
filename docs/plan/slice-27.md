@@ -99,6 +99,27 @@ Each tried once on the final commit's code, the file copied aside first and put 
 | The percentile rounded down                          | `measure-stats.test.ts`: does not depend on the order, and does not interpolate                                    |
 | A change a receiver never saw not counted            | `measure-editor.test.ts`: counts a change a receiver never saw                                                     |
 
+### After the review of PR 65
+
+Fourteen further mutations, each killed, the file restored from its copy:
+
+| Mutation                                                | First test that failed                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| A new column `nickname` added to `User`                 | `storage-match.test.ts`: User: every column is named once                             |
+| A new numeric setting in `settings.ts`                  | `storage-match.test.ts`: every numeric setting is in G or in H                        |
+| A new key family `example-family:` in `rate-limit.ts`   | `storage-match.test.ts`: the prefixes of each file are exactly those the record names |
+| Membership of another role allowed                      | `backup.test.ts`: refuses a role that is a member of a built-in role that writes      |
+| EXECUTE on a routine of the schema allowed              | `backup.test.ts`: refuses a role that may execute a routine                           |
+| A right outside the schema allowed                      | `backup.test.ts`: refuses a role that holds a right outside the schema                |
+| `pg_dump` run without `--snapshot`                      | `backup.test.ts`: lists the images in the snapshot of the dump                        |
+| A fault printed with the message of the tool or the SDK | `backup.test.ts`: prints no secret, and starts its tools …                            |
+| The restore without the TLS requirement                 | `backup.test.ts`: does not open a copy with another key …                             |
+| The restore taking an unencrypted private key           | the same                                                                              |
+| The restore putting objects with any manifest name      | the same                                                                              |
+| The files written by an opening that fails not removed  | `backup-envelope.test.ts`: a copy that is validly sealed and that the cutting rejects |
+| No handler for SIGTERM during an opening                | `backup-envelope.test.ts`: when SIGTERM stops it in the middle                        |
+| The rotation printing the message of a fault            | `rotate-auth-secret.test.ts`: says a fault by its class and not by its message        |
+
 ## 9. As built, and what was not tested
 
 Built as section 1 says, with these differences from the plan as first written: the match is by column as well as by table, and covers timers; the log of the 14 days is `docs/records/dependency-patches.md` and not a section of `advisories.md`; `ci.yml` gains a step that installs the PostgreSQL 17 client, which the test of the copy needs and which cannot be run while GitHub Actions does not run.
