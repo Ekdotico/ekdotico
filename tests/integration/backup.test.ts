@@ -22,7 +22,6 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { unseal } from '../../scripts/backup-envelope.ts';
 import { createDatabase } from './database.ts';
 
 const given = Boolean(process.env.IMAGE_STORAGE_ENDPOINT);
@@ -42,7 +41,8 @@ const MARKER = 'a-title-no-copy-may-show-in-clear';
 const IMAGE_MARKER = 'IMAGE-BYTES-THAT-NO-COPY-MAY-SHOW';
 const images = new Map<number, Buffer>();
 const image = (n: number) => {
-  if (!images.has(n)) images.set(n, Buffer.concat([Buffer.from(`\x89PNG-${n}-${IMAGE_MARKER}`), randomBytes(2048)]));
+  if (!images.has(n))
+    images.set(n, Buffer.concat([Buffer.from(`\x89PNG-${n}-${IMAGE_MARKER}`), randomBytes(2048)]));
   return images.get(n)!;
 };
 const KEY_A = `images/${DOCUMENT}/${'a'.repeat(32)}`;
@@ -111,15 +111,27 @@ describe.skipIf(!given)('the copy of the backups', () => {
   }
 
   /** The script as a process, with the environment given and no other (the PATH and nothing of the test's own). */
-  function backup(env: Record<string, string | undefined>, cwd = ROOT, path = process.env.PATH!): Promise<Ran> {
+  function backup(
+    env: Record<string, string | undefined>,
+    cwd = ROOT,
+    path = process.env.PATH!,
+  ): Promise<Ran> {
     return new Promise((resolve) => {
-      const clean = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined)) as Record<string, string>;
-      const child = spawn('node', [SCRIPT], { cwd, env: { PATH: path, ...clean }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const clean = Object.fromEntries(
+        Object.entries(env).filter(([, value]) => value !== undefined),
+      ) as Record<string, string>;
+      const child = spawn('node', [SCRIPT], {
+        cwd,
+        env: { NODE_ENV: 'test', PATH: path, ...clean },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       let out = '';
       let err = '';
       child.stdout.on('data', (chunk) => (out += chunk));
       child.stderr.on('data', (chunk) => (err += chunk));
-      child.once('close', (status) => resolve({ status, out, err, workDirectory: clean.BACKUP_WORK_DIRECTORY ?? '' }));
+      child.once('close', (status) =>
+        resolve({ status, out, err, workDirectory: clean.BACKUP_WORK_DIRECTORY ?? '' }),
+      );
     });
   }
 
@@ -143,15 +155,22 @@ describe.skipIf(!given)('the copy of the backups', () => {
   /** A database provisioned and not migrated, as the restore procedure makes it (step 10). */
   function provisioned(label: string): string {
     const name = `ekdotico_test_${label}_${randomBytes(4).toString('hex')}`;
-    psql(admin.toString(), ['-c', `CREATE DATABASE ${name} ENCODING 'UTF8' LOCALE 'en_US.UTF-8' LOCALE_PROVIDER libc TEMPLATE template0`]);
+    psql(admin.toString(), [
+      '-c',
+      `CREATE DATABASE ${name} ENCODING 'UTF8' LOCALE 'en_US.UTF-8' LOCALE_PROVIDER libc TEMPLATE template0`,
+    ]);
     databases.push(name);
     const into = new URL(admin);
     into.pathname = `/${name}`;
     psql(into.toString(), [
-      '-v', 'migrate_password=local-migrate',
-      '-v', 'app_password=local-app',
-      '-v', 'backup_password=local-backup',
-      '-f', 'scripts/provision.sql',
+      '-v',
+      'migrate_password=local-migrate',
+      '-v',
+      'app_password=local-app',
+      '-v',
+      'backup_password=local-backup',
+      '-f',
+      'scripts/provision.sql',
     ]);
     return name;
   }
@@ -165,7 +184,8 @@ describe.skipIf(!given)('the copy of the backups', () => {
       requestChecksumCalculation: 'WHEN_REQUIRED',
       responseChecksumValidation: 'WHEN_REQUIRED',
     });
-    for (const bucket of [COPIES, IMAGES, RESTORED]) await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+    for (const bucket of [COPIES, IMAGES, RESTORED])
+      await s3.send(new CreateBucketCommand({ Bucket: bucket }));
 
     const pair = generateKeyPairSync('rsa', {
       modulusLength: 3072,
@@ -188,8 +208,13 @@ describe.skipIf(!given)('the copy of the backups', () => {
                ('i3', '${DOCUMENT}', '${KEY_GONE}', 'image/png', 2048, 'u1'),
                ('i4', '${DOCUMENT}', '${KEY_ODD}', 'image/png', 2048, 'u1');
     `);
-    for (const [key, n] of [[KEY_A, 1], [KEY_B, 2]] as const) {
-      await s3.send(new PutObjectCommand({ Bucket: IMAGES, Key: key, Body: image(n), ContentLength: image(n).length }));
+    for (const [key, n] of [
+      [KEY_A, 1],
+      [KEY_B, 2],
+    ] as const) {
+      await s3.send(
+        new PutObjectCommand({ Bucket: IMAGES, Key: key, Body: image(n), ContentLength: image(n).length }),
+      );
     }
   }, 120_000);
 
@@ -208,73 +233,89 @@ describe.skipIf(!given)('the copy of the backups', () => {
 
   // ── The copy, and the restore from it ──────────────────────────────────────
 
-  it(
-    'stores a copy that opens, with the private half, to what was dumped, and restores to a working database and bucket',
-    async () => {
-      const ran = await backup(good());
-      expect(ran.err).toBe('');
-      expect(ran.status).toBe(0);
-      const stored = /^backup: stored (\d+) bytes as (backups\/\d{4}\/\d{2}\/\d{8}T\d{6}Z-[0-9a-f]{16}\.ekdbak) in region fr-par \(2 of 4 images, 1 no longer there, 1 refused\)\n$/.exec(ran.out);
-      expect(stored, ran.out).not.toBeNull();
-      expect(await copies()).toEqual([stored![2]]);
-      expect(readdirSync(ran.workDirectory)).toEqual([]);
+  it('stores a copy that opens, with the private half, to what was dumped, and restores to a working database and bucket', async () => {
+    const ran = await backup(good());
+    expect(ran.err).toBe('');
+    expect(ran.status).toBe(0);
+    const stored =
+      /^backup: stored (\d+) bytes as (backups\/\d{4}\/\d{2}\/\d{8}T\d{6}Z-[0-9a-f]{16}\.ekdbak) in region fr-par \(2 of 4 images, 1 no longer there, 1 refused\)\n$/.exec(
+        ran.out,
+      );
+    expect(stored, ran.out).not.toBeNull();
+    expect(await copies()).toEqual([stored![2]]);
+    expect(readdirSync(ran.workDirectory)).toEqual([]);
 
-      // Step 8 and 9 of procedure 6: the copy is fetched, and opened with the private key.
-      const file = join(work, 'fetched.ekdbak');
-      writeFileSync(file, await fetchObject(COPIES, stored![2]!));
-      expect(statSize(file)).toBe(Number(stored![1]));
-      const opened = join(work, 'opened');
-      const decrypted = spawnSync('node', [RESTORE, 'decrypt', '--in', file, '--key', writeKey(), '--out', opened], {
-        env: { PATH: process.env.PATH!, BACKUP_KEY_PASSPHRASE: PASSPHRASE },
+    // Step 8 and 9 of procedure 6: the copy is fetched, and opened with the private key.
+    const file = join(work, 'fetched.ekdbak');
+    writeFileSync(file, await fetchObject(COPIES, stored![2]!));
+    expect(statSize(file)).toBe(Number(stored![1]));
+    const opened = join(work, 'opened');
+    const decrypted = spawnSync(
+      'node',
+      [RESTORE, 'decrypt', '--in', file, '--key', writeKey(), '--out', opened],
+      {
+        env: { NODE_ENV: 'test', PATH: process.env.PATH!, BACKUP_KEY_PASSPHRASE: PASSPHRASE },
         encoding: 'utf8',
-      });
-      expect(decrypted.stderr).toBe('');
-      expect(decrypted.status).toBe(0);
-      expect(decrypted.stdout).toMatch(/opened 4 entries .* 2 of 4 images, 1 were no longer there/);
-      expect(readFileSync(join(opened, KEY_A)).equals(image(1))).toBe(true);
-      expect(readFileSync(join(opened, KEY_B)).equals(image(2))).toBe(true);
-      const manifest = JSON.parse(readFileSync(join(opened, 'manifest.json'), 'utf8'));
-      expect(manifest).toMatchObject({
-        format: 'ekdbak-1',
-        role: 'ekdotico_backup',
-        storeRegion: 'fr-par',
-        images: { listed: 4, copied: 2, missing: 1, refused: 1 },
-      });
-      expect(manifest.entries.map((entry: { name: string }) => entry.name)).toEqual(['dump.pgdump', KEY_A, KEY_B]);
+      },
+    );
+    expect(decrypted.stderr).toBe('');
+    expect(decrypted.status).toBe(0);
+    expect(decrypted.stdout).toMatch(/opened 4 entries .* 2 of 4 images, 1 were no longer there/);
+    expect(readFileSync(join(opened, KEY_A)).equals(image(1))).toBe(true);
+    expect(readFileSync(join(opened, KEY_B)).equals(image(2))).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(opened, 'manifest.json'), 'utf8'));
+    expect(manifest).toMatchObject({
+      format: 'ekdbak-1',
+      role: 'ekdotico_backup',
+      storeRegion: 'fr-par',
+      images: { listed: 4, copied: 2, missing: 1, refused: 1 },
+    });
+    expect(manifest.entries.map((entry: { name: string }) => entry.name)).toEqual([
+      'dump.pgdump',
+      KEY_A,
+      KEY_B,
+    ]);
 
-      // Step 10: an empty database with the schema and its roles, by the provisioning script; the dump is loaded into it.
-      const restored = provisioned('restored');
-      const loaded = spawnSync('node', [RESTORE, 'database', '--dir', opened], {
-        env: { PATH: process.env.PATH!, RESTORE_DATABASE_URL: urlOf('ekdotico_migrate', 'local-migrate', restored) },
-        encoding: 'utf8',
-      });
-      expect(loaded.stderr).toBe('');
-      expect(loaded.stdout).toMatch(/the schema now holds \d+ tables/);
-      const app = urlOf('ekdotico_app', 'local-app', restored);
-      expect(psql(app, ['-c', `SELECT title FROM ekdotico."Document"`])).toBe(MARKER);
-      expect(psql(app, ['-c', `SELECT count(*) FROM ekdotico."DocumentImage"`])).toBe('4');
-      expect(psql(app, ['-c', `SELECT encode("yjsState", 'hex') FROM ekdotico."Document"`])).toBe('00010203');
-      // The roles hold on the restored schema what they hold on a deployment: the runtime role writes, the backup role does not.
-      expect(psql(app, ['-c', `UPDATE ekdotico."Document" SET title = 'changed' RETURNING title`]).split('\n')[0]).toBe('changed');
-      expect(() => psql(backupUrl().replace(databaseName, restored), ['-c', `UPDATE ekdotico."Document" SET title = 'x'`])).toThrow(/permission denied/);
+    // Step 10: an empty database with the schema and its roles, by the provisioning script; the dump is loaded into it.
+    const restored = provisioned('restored');
+    const loaded = spawnSync('node', [RESTORE, 'database', '--dir', opened], {
+      env: {
+        NODE_ENV: 'test',
+        PATH: process.env.PATH!,
+        RESTORE_DATABASE_URL: urlOf('ekdotico_migrate', 'local-migrate', restored),
+      },
+      encoding: 'utf8',
+    });
+    expect(loaded.stderr).toBe('');
+    expect(loaded.stdout).toMatch(/the schema now holds \d+ tables/);
+    const app = urlOf('ekdotico_app', 'local-app', restored);
+    expect(psql(app, ['-c', `SELECT title FROM ekdotico."Document"`])).toBe(MARKER);
+    expect(psql(app, ['-c', `SELECT count(*) FROM ekdotico."DocumentImage"`])).toBe('4');
+    expect(psql(app, ['-c', `SELECT encode("yjsState", 'hex') FROM ekdotico."Document"`])).toBe('00010203');
+    // The roles hold on the restored schema what they hold on a deployment: the runtime role writes, the backup role does not.
+    expect(
+      psql(app, ['-c', `UPDATE ekdotico."Document" SET title = 'changed' RETURNING title`]).split('\n')[0],
+    ).toBe('changed');
+    expect(() =>
+      psql(backupUrl().replace(databaseName, restored), ['-c', `UPDATE ekdotico."Document" SET title = 'x'`]),
+    ).toThrow(/permission denied/);
 
-      // Step 10, the objects: put into an empty bucket, and read back.
-      const put = spawnSync('node', [RESTORE, 'images', '--dir', opened], {
-        env: {
-          PATH: process.env.PATH!,
-          RESTORE_IMAGES_ENDPOINT: endpoint,
-          RESTORE_IMAGES_BUCKET: RESTORED,
-          RESTORE_IMAGES_ACCESS_KEY_ID: accessKeyId,
-          RESTORE_IMAGES_SECRET_ACCESS_KEY: secretAccessKey,
-        },
-        encoding: 'utf8',
-      });
-      expect(put.stderr).toBe('');
-      expect(put.stdout).toBe('restore: put 2 image objects into the bucket\n');
-      expect((await fetchObject(RESTORED, KEY_B)).equals(image(2))).toBe(true);
-    },
-    120_000,
-  );
+    // Step 10, the objects: put into an empty bucket, and read back.
+    const put = spawnSync('node', [RESTORE, 'images', '--dir', opened], {
+      env: {
+        NODE_ENV: 'test',
+        PATH: process.env.PATH!,
+        RESTORE_IMAGES_ENDPOINT: endpoint,
+        RESTORE_IMAGES_BUCKET: RESTORED,
+        RESTORE_IMAGES_ACCESS_KEY_ID: accessKeyId,
+        RESTORE_IMAGES_SECRET_ACCESS_KEY: secretAccessKey,
+      },
+      encoding: 'utf8',
+    });
+    expect(put.stderr).toBe('');
+    expect(put.stdout).toBe('restore: put 2 image objects into the bucket\n');
+    expect((await fetchObject(RESTORED, KEY_B)).equals(image(2))).toBe(true);
+  }, 120_000);
 
   function writeKey(): string {
     const path = join(work, 'private.pem');
@@ -311,7 +352,10 @@ describe.skipIf(!given)('the copy of the backups', () => {
     const source = readFileSync(SCRIPT, 'utf8');
     expect(source).toMatch(/IfNoneMatch: '\*'/);
     const imported = /import \{([^}]*)\} from '@aws-sdk\/client-s3'/.exec(source)![1]!;
-    const names = imported.split(',').map((name) => name.trim()).filter(Boolean);
+    const names = imported
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
     expect(names.sort()).toEqual(['GetObjectCommand', 'PutObjectCommand', 'S3Client']);
   });
 
@@ -322,7 +366,8 @@ describe.skipIf(!given)('the copy of the backups', () => {
     const settings = Object.entries(good())
       .map(([name, value]) => `${name}=${value}`)
       .join('\n');
-    for (const name of ['.env', '.env.local', '.env.production']) writeFileSync(join(here, name), `${settings}\n`);
+    for (const name of ['.env', '.env.local', '.env.production'])
+      writeFileSync(join(here, name), `${settings}\n`);
     const ran = await backup({}, here);
     expect(ran.status).toBe(2);
     expect(ran.err).toMatch(/^backup: refused: BACKUP_DATABASE_URL, BACKUP_PUBLIC_KEY_FILE are not set\.\n$/);
@@ -345,7 +390,10 @@ describe.skipIf(!given)('the copy of the backups', () => {
     for (const tool of ['pg_dump', 'psql']) {
       const real = spawnSync('which', [tool], { encoding: 'utf8' }).stdout.trim();
       const shim = join(dir, tool);
-      writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "${tool} $*" >> '${log}'\nenv | grep '^PG' >> '${log}'\nexec '${real}' "$@"\n`);
+      writeFileSync(
+        shim,
+        `#!/bin/sh\nprintf '%s\\n' "${tool} $*" >> '${log}'\nenv | grep '^PG' >> '${log}'\nexec '${real}' "$@"\n`,
+      );
       chmodSync(shim, 0o755);
     }
     return { path: `${dir}:${process.env.PATH}`, log };
@@ -357,7 +405,11 @@ describe.skipIf(!given)('the copy of the backups', () => {
     const runs = [
       await backup(good(), ROOT, path),
       // A password the server refuses, a key the store refuses, a store that does not answer, an image store that refuses:
-      await backup(good({ BACKUP_DATABASE_URL: urlOf('ekdotico_no_such_role', 'not-the-password') }), ROOT, path),
+      await backup(
+        good({ BACKUP_DATABASE_URL: urlOf('ekdotico_no_such_role', 'not-the-password') }),
+        ROOT,
+        path,
+      ),
       await backup(good({ BACKUP_STORE_SECRET_ACCESS_KEY: `${secretAccessKey}-changed` }), ROOT, path),
       await backup(good({ BACKUP_STORE_ENDPOINT: 'http://127.0.0.1:1' }), ROOT, path),
       await backup(good({ BACKUP_IMAGES_SECRET_ACCESS_KEY: `${secretAccessKey}-changed` }), ROOT, path),
@@ -391,7 +443,11 @@ describe.skipIf(!given)('the copy of the backups', () => {
 
   it.each([
     ['no key file named', { BACKUP_PUBLIC_KEY_FILE: undefined }, /BACKUP_PUBLIC_KEY_FILE is not set/],
-    ['a key file that is not there', { BACKUP_PUBLIC_KEY_FILE: '/nonexistent/public.pem' }, /could not be read/],
+    [
+      'a key file that is not there',
+      { BACKUP_PUBLIC_KEY_FILE: '/nonexistent/public.pem' },
+      /could not be read/,
+    ],
   ])('refuses to run with %s, before it connects to anything', async (_, override, message) => {
     // The database and the stores are given addresses that answer nothing: a refusal, and not a failure to connect, is what is seen.
     const ran = await backup(good({ ...UNREACHABLE, ...override }));
@@ -431,8 +487,16 @@ describe.skipIf(!given)('the copy of the backups', () => {
 
   it.each([
     ['the runtime role', () => urlOf('ekdotico_app', 'local-app'), /can write \d+ table/],
-    ['the migration role', () => urlOf('ekdotico_migrate', 'local-migrate'), /can write \d+ table|create in the schema/],
-    ['the administrator', () => urlOf(admin.username || userInfo().username, admin.password || 'unused'), /beyond a login/],
+    [
+      'the migration role',
+      () => urlOf('ekdotico_migrate', 'local-migrate'),
+      /can write \d+ table|create in the schema/,
+    ],
+    [
+      'the administrator',
+      () => urlOf(admin.username || userInfo().username, admin.password || 'unused'),
+      /beyond a login/,
+    ],
   ])('refuses to dump under %s', async (_, url, message) => {
     const ran = await backup(good({ BACKUP_DATABASE_URL: url() }));
     expect(ran.status).toBe(2);
@@ -442,20 +506,29 @@ describe.skipIf(!given)('the copy of the backups', () => {
   });
 
   it('refuses a role that cannot read every table, since the copy would not be whole', async () => {
-    psql(urlOf(admin.username || userInfo().username, admin.password, databaseName), ['-c', `REVOKE SELECT ON ekdotico."Notification" FROM ekdotico_backup`]);
+    psql(urlOf(admin.username || userInfo().username, admin.password, databaseName), [
+      '-c',
+      `REVOKE SELECT ON ekdotico."Notification" FROM ekdotico_backup`,
+    ]);
     try {
       const ran = await backup(good());
       expect(ran.status).toBe(2);
       expect(ran.err).toMatch(/cannot read 1 table\(s\) or sequence\(s\)/);
     } finally {
-      psql(urlOf(admin.username || userInfo().username, admin.password, databaseName), ['-c', `GRANT SELECT ON ekdotico."Notification" TO ekdotico_backup`]);
+      psql(urlOf(admin.username || userInfo().username, admin.password, databaseName), [
+        '-c',
+        `GRANT SELECT ON ekdotico."Notification" TO ekdotico_backup`,
+      ]);
     }
     expect(await copies()).toEqual([]);
   });
 
   it('refuses settings that are not what the copy is: no TLS away from localhost, a bucket at DigitalOcean, one bucket for both', async () => {
     const cases: [Record<string, string>, RegExp][] = [
-      [{ BACKUP_DATABASE_URL: 'postgresql://ekdotico_backup:x@db.example.test:25060/ekdotico' }, /sslmode=require/],
+      [
+        { BACKUP_DATABASE_URL: 'postgresql://ekdotico_backup:x@db.example.test:25060/ekdotico' },
+        /sslmode=require/,
+      ],
       [{ BACKUP_STORE_ENDPOINT: 'https://fra1.digitaloceanspaces.com' }, /at DigitalOcean/],
       [{ BACKUP_STORE_ENDPOINT: 'http://store.example.test' }, /must use https/],
       [{ BACKUP_STORE_BUCKET: IMAGES }, /bucket of the images/],
@@ -501,7 +574,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
   // ── The restore refuses what it should ─────────────────────────────────────
 
   it('does not open a copy with another key, nor load into a schema that has tables, nor as another role', async () => {
-    const [key] = await copies().then((list) => (list.length ? list : (backup(good()).then(() => copies()))));
+    const [key] = await copies().then((list) => (list.length ? list : backup(good()).then(() => copies())));
     const file = join(work, 'second.ekdbak');
     writeFileSync(file, await fetchObject(COPIES, key!));
     const other = generateKeyPairSync('rsa', {
@@ -513,7 +586,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
     writeFileSync(otherPath, other.privateKey);
     const out = join(work, 'never');
     const refused = spawnSync('node', [RESTORE, 'decrypt', '--in', file, '--key', otherPath, '--out', out], {
-      env: { PATH: process.env.PATH! },
+      env: { NODE_ENV: 'test', PATH: process.env.PATH! },
       encoding: 'utf8',
     });
     expect(refused.status).toBe(2);
@@ -522,13 +595,17 @@ describe.skipIf(!given)('the copy of the backups', () => {
 
     const opened = join(work, 'opened-again');
     const ok = spawnSync('node', [RESTORE, 'decrypt', '--in', file, '--key', writeKey(), '--out', opened], {
-      env: { PATH: process.env.PATH!, BACKUP_KEY_PASSPHRASE: PASSPHRASE },
+      env: { NODE_ENV: 'test', PATH: process.env.PATH!, BACKUP_KEY_PASSPHRASE: PASSPHRASE },
       encoding: 'utf8',
     });
     expect(ok.status, ok.stderr).toBe(0);
     // Into the database the copy was taken from: it has tables, so it is refused.
     const into = spawnSync('node', [RESTORE, 'database', '--dir', opened], {
-      env: { PATH: process.env.PATH!, RESTORE_DATABASE_URL: urlOf('ekdotico_migrate', 'local-migrate') },
+      env: {
+        NODE_ENV: 'test',
+        PATH: process.env.PATH!,
+        RESTORE_DATABASE_URL: urlOf('ekdotico_migrate', 'local-migrate'),
+      },
       encoding: 'utf8',
     });
     expect(into.status).toBe(2);
@@ -536,7 +613,11 @@ describe.skipIf(!given)('the copy of the backups', () => {
     // As a role that does not own the schema.
     const emptied = provisioned('notowner');
     const wrongRole = spawnSync('node', [RESTORE, 'database', '--dir', opened], {
-      env: { PATH: process.env.PATH!, RESTORE_DATABASE_URL: urlOf('ekdotico_app', 'local-app', emptied) },
+      env: {
+        NODE_ENV: 'test',
+        PATH: process.env.PATH!,
+        RESTORE_DATABASE_URL: urlOf('ekdotico_app', 'local-app', emptied),
+      },
       encoding: 'utf8',
     });
     expect(wrongRole.status).toBe(2);
@@ -544,6 +625,7 @@ describe.skipIf(!given)('the copy of the backups', () => {
     // Into a bucket that has an object.
     const notEmpty = spawnSync('node', [RESTORE, 'images', '--dir', opened], {
       env: {
+        NODE_ENV: 'test',
         PATH: process.env.PATH!,
         RESTORE_IMAGES_ENDPOINT: endpoint,
         RESTORE_IMAGES_BUCKET: RESTORED,

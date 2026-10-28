@@ -56,7 +56,14 @@ interface Store {
 }
 
 export interface Settings {
-  database: { host: string; port: string; user: string; password: string; name: string; sslmode: string | undefined };
+  database: {
+    host: string;
+    port: string;
+    user: string;
+    password: string;
+    name: string;
+    sslmode: string | undefined;
+  };
   databaseUrl: string;
   publicKeyFile: string;
   store: Store;
@@ -71,7 +78,8 @@ const TLS = ['require', 'verify-ca', 'verify-full'];
 
 function need(env: Env, names: string[]): void {
   const absent = names.filter((name) => !env[name]);
-  if (absent.length > 0) throw new Refusal(`${absent.join(', ')} ${absent.length === 1 ? 'is' : 'are'} not set.`);
+  if (absent.length > 0)
+    throw new Refusal(`${absent.join(', ')} ${absent.length === 1 ? 'is' : 'are'} not set.`);
 }
 
 function storeOf(env: Env, prefix: 'BACKUP_STORE' | 'BACKUP_IMAGES', defaultRegion?: string): Store {
@@ -84,7 +92,9 @@ function storeOf(env: Env, prefix: 'BACKUP_STORE' | 'BACKUP_IMAGES', defaultRegi
   ]);
   const endpoint = env[`${prefix}_ENDPOINT`]!;
   if (!URL.canParse(endpoint) || new URL(endpoint).origin !== endpoint) {
-    throw new Refusal(`${prefix}_ENDPOINT must be an origin: a scheme, a host and an optional port, with nothing after.`);
+    throw new Refusal(
+      `${prefix}_ENDPOINT must be an origin: a scheme, a host and an optional port, with nothing after.`,
+    );
   }
   const { protocol, hostname } = new URL(endpoint);
   const here = LOCAL.includes(hostname);
@@ -96,7 +106,8 @@ function storeOf(env: Env, prefix: 'BACKUP_STORE' | 'BACKUP_IMAGES', defaultRegi
     throw new Refusal(`${prefix}_BUCKET must be a bucket name: 3 to 63 characters of a to z, 0 to 9 and -.`);
   }
   const region = env[`${prefix}_REGION`] || defaultRegion!;
-  if (!/^[a-z0-9-]{2,32}$/.test(region)) throw new Refusal(`${prefix}_REGION must be 2 to 32 characters of a to z, 0 to 9 and -.`);
+  if (!/^[a-z0-9-]{2,32}$/.test(region))
+    throw new Refusal(`${prefix}_REGION must be 2 to 32 characters of a to z, 0 to 9 and -.`);
   return {
     endpoint,
     bucket,
@@ -116,18 +127,24 @@ export function loadSettings(env: Env): Settings {
   const databaseUrl = env.BACKUP_DATABASE_URL!;
   if (!URL.canParse(databaseUrl)) throw new Refusal('BACKUP_DATABASE_URL is not a URL.');
   const url = new URL(databaseUrl);
-  if (!['postgresql:', 'postgres:'].includes(url.protocol)) throw new Refusal('BACKUP_DATABASE_URL is not a PostgreSQL URL.');
+  if (!['postgresql:', 'postgres:'].includes(url.protocol))
+    throw new Refusal('BACKUP_DATABASE_URL is not a PostgreSQL URL.');
   if (!url.username || !url.password || url.pathname.length < 2) {
     throw new Refusal('BACKUP_DATABASE_URL must name a user, a password and a database.');
   }
   const sslmode = url.searchParams.get('sslmode') ?? undefined;
   if (!LOCAL.includes(url.hostname) && !(sslmode && TLS.includes(sslmode))) {
-    throw new Refusal('BACKUP_DATABASE_URL must say sslmode=require (or verify-ca, verify-full) away from localhost.');
+    throw new Refusal(
+      'BACKUP_DATABASE_URL must say sslmode=require (or verify-ca, verify-full) away from localhost.',
+    );
   }
   const store = storeOf(env, 'BACKUP_STORE');
   const images = storeOf(env, 'BACKUP_IMAGES', 'fra1');
   // The copy is outside DigitalOcean (NFR-RE-10): a bucket there is a misspelt setting, not a copy.
-  if (!LOCAL.includes(new URL(store.endpoint).hostname) && /(^|\.)digitalocean(spaces)?\.com$/.test(new URL(store.endpoint).hostname)) {
+  if (
+    !LOCAL.includes(new URL(store.endpoint).hostname) &&
+    /(^|\.)digitalocean(spaces)?\.com$/.test(new URL(store.endpoint).hostname)
+  ) {
     throw new Refusal('BACKUP_STORE_ENDPOINT is at DigitalOcean: the copy is kept outside it.');
   }
   if (store.endpoint === images.endpoint && store.bucket === images.bucket) {
@@ -189,14 +206,21 @@ function run(command: string, args: string[], env: Record<string, string>): Prom
     let err = '';
     child.stdout.on('data', (chunk) => (out += chunk));
     child.stderr.on('data', (chunk) => (err += chunk));
-    child.once('error', (error) => reject(new Error(`${command} could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`)));
+    child.once('error', (error) =>
+      reject(
+        new Error(`${command} could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`),
+      ),
+    );
     child.once('close', (code) =>
-      code === 0 ? resolve(out) : reject(new Error(`${command} failed (${code}): ${err.trim().slice(0, 500)}`)),
+      code === 0
+        ? resolve(out)
+        : reject(new Error(`${command} failed (${code}): ${err.trim().slice(0, 500)}`)),
     );
   });
 }
 
-const psql = (s: Settings, sql: string) => run('psql', ['-X', '-w', '-At', '-F', '|', '-v', 'ON_ERROR_STOP=1', '-c', sql], toolEnv(s));
+const psql = (s: Settings, sql: string) =>
+  run('psql', ['-X', '-w', '-At', '-F', '|', '-v', 'ON_ERROR_STOP=1', '-c', sql], toolEnv(s));
 
 // ── Rule 4: the role ────────────────────────────────────────────────────────
 
@@ -225,15 +249,27 @@ export async function checkRole(s: Settings): Promise<string> {
        (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'ekdotico' AND c.relkind IN ('r','p'))`,
   );
-  const [user, wide, usage, create, database, writable, sequences, unreadable, tables] = row.trim().split('|');
-  if (wide !== 'f') throw new Refusal('The role holds an attribute beyond a login (superuser, createdb, createrole, replication or bypassrls).');
+  const [user, wide, usage, create, database, writable, sequences, unreadable, tables] = row
+    .trim()
+    .split('|');
+  if (wide !== 'f')
+    throw new Refusal(
+      'The role holds an attribute beyond a login (superuser, createdb, createrole, replication or bypassrls).',
+    );
   if (usage !== 't') throw new Refusal('The role cannot use the schema `ekdotico`.');
   if (create === 't') throw new Refusal('The role can create in the schema `ekdotico`.');
   if (database === 't') throw new Refusal('The role can create objects or temporary tables in the database.');
-  if (Number(writable) > 0) throw new Refusal(`The role can write ${writable} table(s) of the schema: the dump is taken under a role that only reads.`);
+  if (Number(writable) > 0)
+    throw new Refusal(
+      `The role can write ${writable} table(s) of the schema: the dump is taken under a role that only reads.`,
+    );
   if (Number(sequences) > 0) throw new Refusal('The role can advance a sequence of the schema.');
-  if (Number(unreadable) > 0) throw new Refusal(`The role cannot read ${unreadable} table(s) or sequence(s) of the schema: the copy would not be whole.`);
-  if (Number(tables) === 0) throw new Refusal('The schema `ekdotico` holds no table: this is not the application database.');
+  if (Number(unreadable) > 0)
+    throw new Refusal(
+      `The role cannot read ${unreadable} table(s) or sequence(s) of the schema: the copy would not be whole.`,
+    );
+  if (Number(tables) === 0)
+    throw new Refusal('The schema `ekdotico` holds no table: this is not the application database.');
   return user!;
 }
 
@@ -276,18 +312,24 @@ interface Report {
   images: { listed: number; copied: number; missing: number; refused: number };
 }
 
-async function* entriesOf(s: Settings, user: string, report: Report, counts: Counted[]): AsyncGenerator<Entry> {
+async function* entriesOf(
+  s: Settings,
+  user: string,
+  report: Report,
+  counts: Counted[],
+): AsyncGenerator<Entry> {
   // The dump, straight from pg_dump into the seal.
-  const dump = spawn(
-    'pg_dump',
-    ['-w', '--schema=ekdotico', '--no-owner', '--no-acl', '--format=custom'],
-    { env: toolEnv(s) as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'] },
-  );
+  const dump = spawn('pg_dump', ['-w', '--schema=ekdotico', '--no-owner', '--no-acl', '--format=custom'], {
+    env: toolEnv(s) as NodeJS.ProcessEnv,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   let dumpError = '';
   dump.stderr.on('data', (chunk) => (dumpError += chunk));
   const exited = new Promise<number | null>((resolve) => dump.once('close', resolve));
   const failed = new Promise<never>((_, reject) =>
-    dump.once('error', (error) => reject(new Error(`pg_dump could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`))),
+    dump.once('error', (error) =>
+      reject(new Error(`pg_dump could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`)),
+    ),
   );
   failed.catch(() => {});
   const dumped: Counted = { name: 'dump.pgdump', bytes: 0, sha256: '' };
@@ -299,7 +341,9 @@ async function* entriesOf(s: Settings, user: string, report: Report, counts: Cou
     counts.push(dumped);
 
     // The objects of the images, named by the rows of the table, so that the credential lists nothing (NFR-SE-18).
-    const listed = (await psql(s, `SELECT "objectKey" FROM ekdotico."DocumentImage" ORDER BY "createdAt", id`))
+    const listed = (
+      await psql(s, `SELECT "objectKey" FROM ekdotico."DocumentImage" ORDER BY "createdAt", id`)
+    )
       .split('\n')
       .filter(Boolean);
     report.images.listed = listed.length;
@@ -355,7 +399,12 @@ async function* entriesOf(s: Settings, user: string, report: Report, counts: Cou
 }
 
 /** Seals the copy into a file of this job's own, mode 0600, and returns its path and size. */
-async function sealToFile(s: Settings, key: ReturnType<typeof publicKeyOf>, user: string, report: Report): Promise<{ path: string; size: number }> {
+async function sealToFile(
+  s: Settings,
+  key: ReturnType<typeof publicKeyOf>,
+  user: string,
+  report: Report,
+): Promise<{ path: string; size: number }> {
   const path = join(s.workDirectory, `ekdotico-backup-${randomBytes(8).toString('hex')}.ekdbak`);
   const file = await open(path, 'wx', 0o600);
   try {
@@ -371,7 +420,10 @@ async function sealToFile(s: Settings, key: ReturnType<typeof publicKeyOf>, user
 
 function newKey(): string {
   const now = new Date();
-  const stamp = now.toISOString().replaceAll(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const stamp = now
+    .toISOString()
+    .replaceAll(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z');
   return `${BACKUP_PREFIX}/${stamp.slice(0, 4)}/${stamp.slice(4, 6)}/${stamp}-${randomBytes(8).toString('hex')}.ekdbak`;
 }
 

@@ -119,7 +119,9 @@ describe('seal and unseal', () => {
     writeFileSync(file, await sealed(entries()));
     const out = folder();
     await expect(unseal(file, other.privateKey, undefined, out)).rejects.toThrow(/does not open the copy/);
-    await expect(unseal(file, pair.privateKey, 'not the passphrase', out)).rejects.toThrow(/passphrase may be wrong/);
+    await expect(unseal(file, pair.privateKey, 'not the passphrase', out)).rejects.toThrow(
+      /passphrase may be wrong/,
+    );
     expect(readdirSync(out)).toEqual([]);
   });
 
@@ -152,13 +154,17 @@ describe('seal and unseal', () => {
     await expect(unseal(cut, pair.privateKey, PASSPHRASE, folder())).rejects.toThrow(EnvelopeError);
     const text = join(work, 'text.ekdbak');
     writeFileSync(text, 'this is not a copy of the backups, however long it is made to be');
-    await expect(unseal(text, pair.privateKey, PASSPHRASE, folder())).rejects.toThrow(/not a copy of this form/);
+    await expect(unseal(text, pair.privateKey, PASSPHRASE, folder())).rejects.toThrow(
+      /not a copy of this form/,
+    );
   });
 
   it.each(['', '../x', '/abs', 'a//b', 'a/../b', 'a\\b', 'a\0b', './a'])(
     'does not seal an entry named %j',
     async (name) => {
-      await expect(sealed([{ name, body: bodyOf(Buffer.from('x')) }])).rejects.toThrow(/not a plain relative path/);
+      await expect(sealed([{ name, body: bodyOf(Buffer.from('x')) }])).rejects.toThrow(
+        /not a plain relative path/,
+      );
     },
   );
 });

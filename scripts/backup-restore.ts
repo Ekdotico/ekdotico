@@ -43,9 +43,15 @@ function run(command: string, args: string[], env: Record<string, string>): Prom
     let err = '';
     child.stdout.on('data', (chunk) => (out += chunk));
     child.stderr.on('data', (chunk) => (err += chunk));
-    child.once('error', (error) => reject(new Error(`${command} could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`)));
+    child.once('error', (error) =>
+      reject(
+        new Error(`${command} could not be started (${(error as NodeJS.ErrnoException).code ?? 'fault'})`),
+      ),
+    );
     child.once('close', (code) =>
-      code === 0 ? resolveRun(out) : reject(new Error(`${command} failed (${code}): ${err.trim().slice(0, 500)}`)),
+      code === 0
+        ? resolveRun(out)
+        : reject(new Error(`${command} failed (${code}): ${err.trim().slice(0, 500)}`)),
     );
   });
 }
@@ -89,7 +95,8 @@ async function decrypt(args: string[]): Promise<void> {
     const opened = await unseal(file, key, passphrase, directory);
     // The copy is whole when every entry is what the manifest says it is.
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as Manifest;
-    if (manifest.format !== 'ekdbak-1') throw new Refusal('The manifest is of a form this tool does not know.');
+    if (manifest.format !== 'ekdbak-1')
+      throw new Refusal('The manifest is of a form this tool does not know.');
     for (const entry of manifest.entries) {
       const hash = createHash('sha256');
       let bytes = 0;
@@ -150,9 +157,12 @@ async function database(args: string[]): Promise<void> {
   ).trim();
   const [owns, tables] = state.split('|');
   if (owns !== 't') {
-    throw new Refusal('The schema `ekdotico` is missing or not owned by this user: provision the database (scripts/provision.sql) and restore as the migration role.');
+    throw new Refusal(
+      'The schema `ekdotico` is missing or not owned by this user: provision the database (scripts/provision.sql) and restore as the migration role.',
+    );
   }
-  if (Number(tables) > 0) throw new Refusal('The schema already holds a table: restore into an empty database.');
+  if (Number(tables) > 0)
+    throw new Refusal('The schema already holds a table: restore into an empty database.');
 
   const dump = join(directory, 'dump.pgdump');
   await stat(dump);
@@ -164,11 +174,21 @@ async function database(args: string[]): Promise<void> {
   const listFile = join(directory, '.restore-list');
   await writeFile(listFile, list, { mode: 0o600 });
   try {
-    await run('pg_restore', ['--no-owner', '--no-acl', '--exit-on-error', '-L', listFile, '-d', env.PGDATABASE, dump], env);
+    await run(
+      'pg_restore',
+      ['--no-owner', '--no-acl', '--exit-on-error', '-L', listFile, '-d', env.PGDATABASE, dump],
+      env,
+    );
   } finally {
     await rm(listFile, { force: true });
   }
-  const count = (await run('psql', ['-X', '-w', '-At', '-c', `SELECT count(*) FROM pg_tables WHERE schemaname = 'ekdotico'`], env)).trim();
+  const count = (
+    await run(
+      'psql',
+      ['-X', '-w', '-At', '-c', `SELECT count(*) FROM pg_tables WHERE schemaname = 'ekdotico'`],
+      env,
+    )
+  ).trim();
   say(`restore: loaded the dump into the database; the schema now holds ${count} tables`);
 }
 
@@ -176,13 +196,19 @@ async function database(args: string[]): Promise<void> {
 
 async function images(args: string[]): Promise<void> {
   const directory = resolve(flag(args, 'dir'));
-  const names = ['RESTORE_IMAGES_ENDPOINT', 'RESTORE_IMAGES_BUCKET', 'RESTORE_IMAGES_ACCESS_KEY_ID', 'RESTORE_IMAGES_SECRET_ACCESS_KEY'];
+  const names = [
+    'RESTORE_IMAGES_ENDPOINT',
+    'RESTORE_IMAGES_BUCKET',
+    'RESTORE_IMAGES_ACCESS_KEY_ID',
+    'RESTORE_IMAGES_SECRET_ACCESS_KEY',
+  ];
   const absent = names.filter((name) => !process.env[name]);
   if (absent.length > 0) throw new Refusal(`${absent.join(', ')} not set.`);
   const endpoint = process.env.RESTORE_IMAGES_ENDPOINT!;
   const { protocol, hostname } = new URL(endpoint);
   const here = ['localhost', '127.0.0.1'].includes(hostname);
-  if (protocol !== 'https:' && !(protocol === 'http:' && here)) throw new Refusal('RESTORE_IMAGES_ENDPOINT must use https, except on localhost.');
+  if (protocol !== 'https:' && !(protocol === 'http:' && here))
+    throw new Refusal('RESTORE_IMAGES_ENDPOINT must use https, except on localhost.');
   secrets = [process.env.RESTORE_IMAGES_SECRET_ACCESS_KEY!];
   const bucket = process.env.RESTORE_IMAGES_BUCKET!;
   const client = new S3Client({
@@ -198,14 +224,20 @@ async function images(args: string[]): Promise<void> {
   });
   try {
     const present = await client.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
-    if ((present.KeyCount ?? 0) > 0) throw new Refusal('The bucket is not empty: restore into an empty bucket.');
+    if ((present.KeyCount ?? 0) > 0)
+      throw new Refusal('The bucket is not empty: restore into an empty bucket.');
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as Manifest;
     let put = 0;
     for (const entry of manifest.entries.filter((each) => each.name.startsWith('images/'))) {
       const handle = await open(join(directory, entry.name), 'r');
       try {
         await client.send(
-          new PutObjectCommand({ Bucket: bucket, Key: entry.name, Body: handle.createReadStream(), ContentLength: entry.bytes }),
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: entry.name,
+            Body: handle.createReadStream(),
+            ContentLength: entry.bytes,
+          }),
         );
       } finally {
         await handle.close();
@@ -234,7 +266,11 @@ if (import.meta.main) {
       process.exit(2);
     }
     const message = error instanceof Error ? error.message.split('\n')[0]!.slice(0, 300) : '';
-    console.error(clean(`restore: failed (${error instanceof Error ? error.name : 'Error'}${message ? `: ${message}` : ''})`));
+    console.error(
+      clean(
+        `restore: failed (${error instanceof Error ? error.name : 'Error'}${message ? `: ${message}` : ''})`,
+      ),
+    );
     process.exit(1);
   }
 }

@@ -82,7 +82,8 @@ export function publicKeyOf(pem: string): KeyObject {
 
 /** A pair for the founding team to make on a machine that is not a host of the deployment. */
 export function newKeyPair(passphrase: string): { publicKey: string; privateKey: string } {
-  if (passphrase.length < 12) throw new EnvelopeError('The passphrase of the private key has under 12 characters.');
+  if (passphrase.length < 12)
+    throw new EnvelopeError('The passphrase of the private key has under 12 characters.');
   return generateKeyPairSync('rsa', {
     modulusLength: 4096,
     publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -164,7 +165,12 @@ export interface Unsealed {
  * its own first, so that the tag is checked before anything is cut from it, then cuts it into the entries.
  * On any fault it removes what it wrote, the plain archive among it.
  */
-export async function unseal(file: string, privateKeyPem: string, passphrase: string | undefined, directory: string): Promise<Unsealed> {
+export async function unseal(
+  file: string,
+  privateKeyPem: string,
+  passphrase: string | undefined,
+  directory: string,
+): Promise<Unsealed> {
   let privateKey: KeyObject;
   try {
     privateKey = createPrivateKey({ key: privateKeyPem, passphrase });
@@ -190,9 +196,11 @@ async function decryptTo(file: string, privateKey: KeyObject, plainPath: string)
   const handle = await open(file, 'r');
   try {
     const head = Buffer.alloc(MAGIC.length + 2);
-    if (size < head.length + IV_BYTES + TAG_BYTES) throw new EnvelopeError('The file is too short to be a copy.');
+    if (size < head.length + IV_BYTES + TAG_BYTES)
+      throw new EnvelopeError('The file is too short to be a copy.');
     await handle.read(head, 0, head.length, 0);
-    if (!head.subarray(0, MAGIC.length).equals(MAGIC)) throw new EnvelopeError('The file is not a copy of this form.');
+    if (!head.subarray(0, MAGIC.length).equals(MAGIC))
+      throw new EnvelopeError('The file is not a copy of this form.');
     const wrappedLength = head.readUInt16BE(MAGIC.length);
     const headerLength = head.length + wrappedLength + IV_BYTES;
     if (headerLength + TAG_BYTES > size) throw new EnvelopeError('The file is too short to be a copy.');
