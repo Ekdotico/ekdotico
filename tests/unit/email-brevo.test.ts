@@ -44,7 +44,10 @@ async function load() {
 
 const fetchMock = vi.fn<typeof fetch>();
 
-const answer = (status: number) => async () => new Response(ANSWER, { status });
+const answer =
+  (status: number, body: string = ANSWER) =>
+  async () =>
+    new Response(body, { status });
 
 beforeEach(() => {
   process.env.EMAIL_TRANSPORT = 'brevo';
@@ -211,7 +214,9 @@ describe('sendEmail through Brevo: the answer', () => {
       fetchMock.mockImplementationOnce(answer(status)).mockImplementation(answer(201));
       vi.spyOn(console, 'error').mockImplementation(() => {});
       const waits: number[] = [];
-      expect(await handOver(MESSAGE, undefined, sendEmail, async (ms) => void waits.push(ms))).toBe(true);
+      expect(await handOver(MESSAGE, 'password reset', sendEmail, async (ms) => void waits.push(ms))).toBe(
+        true,
+      );
       expect(waits).toEqual([5_000]);
       expect(fetchMock).toHaveBeenCalledTimes(2);
     },
@@ -236,7 +241,7 @@ describe('sendEmail through Brevo: the answer', () => {
       fetchMock.mockReset();
       fetchMock.mockRejectedValueOnce(fault).mockImplementation(answer(201));
       vi.spyOn(console, 'error').mockImplementation(() => {});
-      expect(await handOver(MESSAGE, undefined, sendEmail, async () => {})).toBe(true);
+      expect(await handOver(MESSAGE, 'password reset', sendEmail, async () => {})).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(2);
     }
   });
@@ -246,6 +251,186 @@ describe('sendEmail through Brevo: the answer', () => {
     const { sendEmail } = await load();
     await sendEmail(MESSAGE).catch(() => {});
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The timeout is tested by the request's own signal: the stub waits on `init.signal` as the real `fetch`
+// does, so a request sent with no signal never ends, and the test fails.
+describe('sendEmail through Brevo: the timeout', () => {
+  it('ends a request that gets no answer when the signal of 10 seconds fires, and not before', async () => {
+    const controller = new AbortController();
+    const requested: number[] = [];
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      requested.push(ms);
+      return controller.signal;
+    });
+    fetchMock.mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) return reject(new Error('the request has no signal: nothing would end it'));
+          signal.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+    const { sendEmail } = await load();
+    let settled = false;
+    const sent = sendEmail(MESSAGE).then(
+      () => (settled = true),
+      (e: unknown) => ((settled = true), e as Error),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(requested).toEqual([10_000]);
+    expect(settled).toBe(false); // waiting for the answer
+    controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    const error = (await sent) as Error & { code?: string };
+    expect(error.message).toBe('Brevo could not be reached.');
+    expect(error.code).toBe('Timeout');
+  });
+});
+
+// The `code` of a 400 is the one part of an answer that is read, and only through a fixed list. Each body
+// quotes the markers in its `message`, as Brevo's does.
+describe('sendEmail through Brevo: the code of a 400', () => {
+  const body = (code: unknown) =>
+    JSON.stringify({ code, message: `marker-answer: invalid email marker.person@example.com ${KEY}` });
+
+  it.each([
+    ['invalid_parameter', 'INVALID'],
+    ['missing_parameter', 'MISSING'],
+    ['out_of_range', 'RANGE'],
+  ])('refuses the message on %s, and handOver prints %s and does not try again', async (code, label) => {
+    fetchMock.mockImplementation(answer(400, body(code)));
+    const { sendEmail, handOver, MessageRefused } = await load();
+    const error = await sendEmail(MESSAGE).then(
+      () => undefined,
+      (e: unknown) => e as Error & { code?: string },
+    );
+    expect(error).toBeInstanceOf(MessageRefused);
+    expect(error!.code).toBe(label);
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fetchMock.mockClear();
+    const wait = vi.fn(async () => {});
+    expect(await handOver(MESSAGE, 'invitation cm0', sendEmail, wait)).toBe(false);
+    expect(wait).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(logged.mock.calls).toEqual([
+      [`email: a message was refused and not handed over (MessageRefused ${label}) (invitation cm0)`],
+    ]);
+  });
+
+  it.each(['duplicate_request', 'Request already processed'])(
+    'stops on %s with a line of its own: it very likely arrived, so it is neither refused nor sent again',
+    async (code) => {
+      fetchMock.mockImplementation(answer(400, body(code)));
+      const { sendEmail, handOver, MessageRefused, MessageSentAlready } = await load();
+      const error = await sendEmail(MESSAGE).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(MessageSentAlready);
+      expect(error).not.toBeInstanceOf(MessageRefused);
+
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      fetchMock.mockClear();
+      const wait = vi.fn(async () => {});
+      expect(await handOver(MESSAGE, 'password reset', sendEmail, wait)).toBe(true);
+      expect(wait).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(logged.mock.calls).toEqual([
+        [
+          'email: a message was seen by the service already, not sent again (MessageSentAlready DUPLICATE) (password reset)',
+        ],
+      ]);
+    },
+  );
+
+  it.each([
+    ['not_enough_credits', '400_CREDITS'],
+    ['Insufficient credits', '400_CREDITS'],
+    ['permission_denied', '400_PERMISSION'],
+    ['account_under_validation', '400_VALIDATION'],
+    ['api-key not found', '400_KEY'],
+    ['Authentication failed', '400_KEY'],
+    ['DMARC policy requires domain authentication', '400_DOMAIN'],
+    ['DNS records not properly configured', '400_DOMAIN'],
+    ['unauthorized', '400_KEY'],
+    ['a_code_that_is_not_listed', '400'],
+    [`marker-answer ${KEY}`, '400'],
+    [42, '400'],
+    [null, '400'],
+  ])('tries again on the code %j, and handOver prints %s', async (code, printed) => {
+    fetchMock.mockImplementationOnce(answer(400, body(code))).mockImplementation(answer(201));
+    const { sendEmail, handOver, MessageRefused } = await load();
+    const error = await sendEmail(MESSAGE).then(
+      () => undefined,
+      (e: unknown) => e as Error & { code?: string },
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(MessageRefused);
+    expect(error!.code).toBe(printed);
+    expect(error!.message).toBe('Brevo answered with status 400.');
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fetchMock.mockReset();
+    fetchMock.mockImplementationOnce(answer(400, body(code))).mockImplementation(answer(201));
+    expect(await handOver(MESSAGE, 'password reset', sendEmail, async () => {})).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(logged.mock.calls).toEqual([
+      [`email: hand-over failed, trying again (Error ${printed}) (password reset)`],
+    ]);
+  });
+
+  it('prints the line for not_enough_credits that tells an operator what to mend', async () => {
+    fetchMock.mockImplementation(answer(400, body('not_enough_credits')));
+    const { sendEmail, handOver } = await load();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await handOver(MESSAGE, 'notice of a lock', sendEmail, async () => {});
+    expect(logged.mock.calls[0]).toEqual([
+      'email: hand-over failed, trying again (Error 400_CREDITS) (notice of a lock)',
+    ]);
+  });
+
+  it.each(['not json at all', '', '{"code":', '[1,2]', 'null'])(
+    'counts the body %j as no code: tried again, as any other 400',
+    async (text) => {
+      fetchMock.mockImplementation(answer(400, text));
+      const { sendEmail, MessageRefused } = await load();
+      const error = await sendEmail(MESSAGE).then(
+        () => undefined,
+        (e: unknown) => e as Error & { code?: string },
+      );
+      expect(error).not.toBeInstanceOf(MessageRefused);
+      expect(error!.code).toBe('400');
+    },
+  );
+
+  it('reads the body of a 400 for its code and of no other answer', async () => {
+    const json = vi.fn(async () => ({ code: 'not_enough_credits' }));
+    const never = () => {
+      throw new Error('read');
+    };
+    fetchMock.mockResolvedValueOnce({
+      status: 400,
+      body: { cancel: async () => {} },
+      json,
+      text: never,
+    } as unknown as Response);
+    const { sendEmail } = await load();
+    await sendEmail(MESSAGE).catch(() => {});
+    expect(json).toHaveBeenCalledTimes(1);
+
+    json.mockClear();
+    for (const status of [401, 402, 403, 429, 500]) {
+      fetchMock.mockResolvedValueOnce({
+        status,
+        body: { cancel: async () => {} },
+        json,
+        text: never,
+      } as unknown as Response);
+      await sendEmail(MESSAGE).catch(() => {});
+    }
+    expect(json).not.toHaveBeenCalled();
   });
 });
 
@@ -340,17 +525,21 @@ describe('sendEmail through Brevo: what no fault holds', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { sendEmail, handOver } = await load();
     fetchMock.mockImplementation(answer(429));
-    await handOver(MESSAGE, undefined, sendEmail, async () => {});
-    expect(spy.mock.calls[0]).toEqual(['email: hand-over failed, trying again (Error 429)']);
+    await handOver(MESSAGE, 'password reset', sendEmail, async () => {});
+    expect(spy.mock.calls[0]).toEqual(['email: hand-over failed, trying again (Error 429) (password reset)']);
 
     spy.mockClear();
     fetchMock.mockImplementation(FAILURES.find(([name]) => name === 'a timeout')![1]);
-    await handOver(MESSAGE, undefined, sendEmail, async () => {});
-    expect(spy.mock.calls[0]).toEqual(['email: hand-over failed, trying again (Error Timeout)']);
+    await handOver(MESSAGE, 'password reset', sendEmail, async () => {});
+    expect(spy.mock.calls[0]).toEqual([
+      'email: hand-over failed, trying again (Error Timeout) (password reset)',
+    ]);
 
     spy.mockClear();
     fetchMock.mockImplementation(FAILURES.find(([name]) => name === 'a refusal to connect')![1]);
-    await handOver(MESSAGE, undefined, sendEmail, async () => {});
-    expect(spy.mock.calls[0]).toEqual(['email: hand-over failed, trying again (Error ECONNREFUSED)']);
+    await handOver(MESSAGE, 'password reset', sendEmail, async () => {});
+    expect(spy.mock.calls[0]).toEqual([
+      'email: hand-over failed, trying again (Error ECONNREFUSED) (password reset)',
+    ]);
   });
 });

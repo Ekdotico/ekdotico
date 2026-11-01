@@ -346,7 +346,12 @@ const IMAGE_LINK_MOST_SECONDS = 3600;
 /** §2.7: the invited address of an invitation that ended is cleared 30 days after, the longest it may be kept. */
 const DOCUMENT_INVITATION_ADDRESS_MAX_DAYS = 30;
 
-export function loadSettings(env: Env = process.env): Settings {
+/**
+ * `sendsEmail` is true for the web application, which sends email, and false for the collaboration server, which
+ * sends none: with Brevo chosen it then neither reads nor checks `BREVO_API_KEY` and `EMAIL_FROM`, so the key is
+ * held by the one process that uses it (see `collabSettings`).
+ */
+export function loadSettings(env: Env = process.env, sendsEmail = true): Settings {
   // NFR-SE-17 (b), (c): the identity library also reads variables of its own,
   // which can switch its telemetry on and add trusted origins whatever the
   // application configures. Refused here, so that both processes refuse. The
@@ -414,7 +419,7 @@ export function loadSettings(env: Env = process.env): Settings {
   const emailFrom = env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>';
   let sender: EmailSender | undefined;
   let brevoKey: string | undefined;
-  if (transport === 'brevo') {
+  if (transport === 'brevo' && sendsEmail) {
     brevoKey = brevoApiKey(env);
     if (!env.EMAIL_FROM) {
       throw new Error(
@@ -429,6 +434,12 @@ export function loadSettings(env: Env = process.env): Settings {
     sender = emailSender(emailFrom);
     if (!sender) {
       throw new Error('EMAIL_FROM must be a name and an address, in the form Ekdotico <no-reply@ekdoti.co>.');
+    }
+    // Brevo takes a name of 70 characters at most, and a domain: the rule of an address lets an IP address pass.
+    if (sender.name.length > 70)
+      throw new Error('EMAIL_FROM must have a name of no more than 70 characters.');
+    if (/^[\d.]+$|[:[\]]/.test(sender.email.slice(sender.email.indexOf('@') + 1))) {
+      throw new Error('EMAIL_FROM must be on a domain, not an IP address.');
     }
   }
   // NFR-SE-07; the owner's decision of 8 October 2026: the limits for each
@@ -462,6 +473,14 @@ export function loadSettings(env: Env = process.env): Settings {
   // leaks opens one door. The message holds neither.
   const admission = admissionSecret(env);
   if (admission === authSecret) throw new Error('ADMISSION_SECRET must differ from AUTH_SECRET.');
+  // The key of Brevo goes to a third party in a header: one that was another secret by a slip of the paste
+  // would give that secret to it. The message holds neither.
+  if (
+    brevoKey !== undefined &&
+    [authSecret, admission, env.IMAGE_STORAGE_SECRET_ACCESS_KEY].includes(brevoKey)
+  ) {
+    throw new Error('BREVO_API_KEY must differ from the other secrets of the application.');
+  }
 
   const sessionIdleSeconds = wholeNumber(env, 'SESSION_IDLE_SECONDS', 7 * DAY, 1);
   const sessionRenewSeconds = wholeNumber(env, 'SESSION_RENEW_SECONDS', DAY, 1);
@@ -642,4 +661,12 @@ let loaded: Settings | undefined;
 /** The settings of this process, read once. A process checks them at start by calling `loadSettings`. */
 export function settings(): Settings {
   return (loaded ??= loadSettings());
+}
+
+/**
+ * The settings of the collaboration server, which sends no email: the first call of its start, before any
+ * `settings()`, so that every later `settings()` of that process is this load. It holds no key of Brevo.
+ */
+export function collabSettings(): Settings {
+  return (loaded ??= loadSettings(process.env, false));
 }

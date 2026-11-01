@@ -130,7 +130,7 @@ async function sendResetLink(email: string, now: Date = new Date()): Promise<voi
     });
     return true;
   });
-  if (written) await handOver(resetEmail(email, token));
+  if (written) await handOver(resetEmail(email, token), 'password reset');
 }
 
 /**
@@ -290,7 +290,7 @@ export const resetPassword = createAuthEndpoint('/reset-password', { method: 'PO
     console.error('password reset: completed, counts of failed sign-ins not cleared'),
   );
   // FR-AU-87 (d): the notice, after the answer.
-  afterResponse('password notice', () => handOver(passwordChangedEmail(reset.email)));
+  afterResponse('password notice', () => handOver(passwordChangedEmail(reset.email), 'password notice'));
 
   // A browser that held a session of the account has its cookies cleared: the
   // session has ended, and its signed copy would otherwise read pages for up
@@ -430,7 +430,7 @@ export const changePassword = createAuthEndpoint(
 
     // FR-AU-87 (d): the notice, after the answer.
     const { email } = user;
-    afterResponse('password notice', () => handOver(passwordChangedEmail(email)));
+    afterResponse('password notice', () => handOver(passwordChangedEmail(email), 'password notice'));
     ctx.setHeader('Cache-Control', 'no-store');
     return ctx.json({});
   },

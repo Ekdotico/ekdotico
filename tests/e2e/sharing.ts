@@ -88,6 +88,8 @@ export function remind(address: string) {
       DATABASE_URL: process.env.E2E_DATABASE_URL,
       VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
       AUTH_SECRET,
+      // The sink, whatever a .env.local or the shell says: a run of the tests sends no real email (register D262).
+      EMAIL_TRANSPORT: 'sink',
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
     },
     encoding: 'utf8',

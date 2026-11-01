@@ -40,7 +40,10 @@ describe('faultOf', () => {
     'two words',
     'redis://secret@host',
     '',
-    'A'.repeat(17),
+    'A'.repeat(33),
+    'not_enough_credits',
+    'UND_ERR_connect',
+    'abcdefghijklmnopqrstuv',
     42501,
     { toString: () => 'P1001' },
   ])('does not print the code %j', (code) => {

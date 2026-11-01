@@ -415,7 +415,7 @@ export const verifyEmail = createAuthEndpoint(
     await sessionEnded(userId);
 
     // FR-AU-87 (e): the notice to the old address, after the answer.
-    afterResponse('address notice', () => handOver(addressChangedEmail(oldEmail)));
+    afterResponse('address notice', () => handOver(addressChangedEmail(oldEmail), 'address notice'));
     // The signed copy carries the address: the browser that confirmed reads the
     // new one at once. Every other session has ended, and its copy reads for up
     // to a minute more and changes nothing (NFR-SE-17 (c)).

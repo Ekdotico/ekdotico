@@ -76,6 +76,45 @@ describe('the code against the record', () => {
     expect(email).not.toMatch(/https?\.request|net\.connect/);
   });
 
+  // FR-ED-21: the email of a document is marked before it is handed over and never tried again. `handOver` tries
+  // again, so none of these may call it: a timeout, where the outcome is unknown, would send a second email.
+  it('keeps the email of a document, sent once, away from handOver', () => {
+    const files = [
+      'src/lib/documents/sharing.ts',
+      'src/lib/documents/invitation-timers.ts',
+      'src/lib/documents/ownership.ts',
+      'src/lib/clearing/email.ts',
+      'src/lib/account/transfer-email.ts',
+    ];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      expect(text, file).toMatch(/from '\.\.\/email\/index\.ts'/);
+      expect(text, file).not.toMatch(/from '[^']*hand-over[^']*'|\bhandOver\b/);
+    }
+  });
+
+  // A run of the tests sends no real email, whatever a .env.local or the shell holds (register D262).
+  it('pins the sink in every end-to-end environment that names a sink directory', () => {
+    const files = ['playwright.config.ts', ...readdirSync('tests/e2e').map((name) => join('tests/e2e', name))]
+      .filter((path) => /\.ts$/.test(path))
+      .map((path) => [path, readFileSync(path, 'utf8')] as const);
+    const named = files.filter(([, text]) => /EMAIL_SINK_DIRECTORY:/.test(text)).map(([path]) => path);
+    expect(named).toEqual(
+      expect.arrayContaining([
+        'playwright.config.ts',
+        join('tests/e2e', 'fault-page.spec.ts'),
+        join('tests/e2e', 'sharing.ts'),
+        join('tests/e2e', 'smoke.spec.ts'),
+      ]),
+    );
+    for (const [path, text] of files.filter(([path]) => named.includes(path))) {
+      expect(text, path).toMatch(/EMAIL_TRANSPORT: 'sink'/);
+    }
+    // And none sets Brevo, or the key.
+    for (const [path, text] of files)
+      expect(text, path).not.toMatch(/BREVO_API_KEY|EMAIL_TRANSPORT: 'brevo'/);
+  });
+
   it('reads the key of Brevo in settings.ts alone', () => {
     const found = sources('src')
       .filter(([, text]) => /BREVO_API_KEY/.test(text))
