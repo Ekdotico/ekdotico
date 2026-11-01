@@ -80,9 +80,9 @@ The test takes every file under `src` that imports `valkey.ts` (`settings.ts` an
 
 ## E. Files on a host
 
-| Directory                         | Row        | Note                                                                                                                                         |
-| --------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EMAIL_SINK_DIRECTORY` (the sink) | none R27-1 | A file for each message: an address, and a single-use link. The only sender there is, so a deployment writes them, and no timer deletes them |
+| Directory                         | Row        | Note                                                                                                                                                                                                                                                    |
+| --------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMAIL_SINK_DIRECTORY` (the sink) | none R27-1 | A file for each message: an address, and a single-use link. Written with `EMAIL_TRANSPORT=sink` alone; Brevo writes no file (what it keeps is in processors.md, not on a host of ours). A deployment on the sink writes them, and no timer deletes them |
 
 ## F. Timers
 
