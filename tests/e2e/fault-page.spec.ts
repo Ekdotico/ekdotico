@@ -35,6 +35,8 @@ test.beforeAll(async () => {
       VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
       AUTH_SECRET,
       ADMISSION_SECRET: process.env.E2E_ADMISSION_SECRET,
+      // The sink, whatever a .env.local or the shell says: a run of the tests sends no real email (register D262).
+      EMAIL_TRANSPORT: 'sink',
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
       // As for the first server (playwright.config.ts): the count of requests
       // without a session is kept in Valkey, which the two share.

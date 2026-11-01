@@ -39,7 +39,9 @@ describe('handOver', () => {
     expect(send).toHaveBeenCalledTimes(4);
     expect(waits).toEqual([5_000, 10_000, 20_000]);
     // The class and the code of the fault, and nothing of its message.
-    expect(logged.mock.calls).toEqual([['email: hand-over failed, trying again (Error EACCES)']]);
+    expect(logged.mock.calls).toEqual([
+      [`email: hand-over failed, trying again (Error EACCES) (${REFERENCE})`],
+    ]);
   });
 
   it('gives up within 10 minutes, without rejecting, and logs the reference and nothing of the message', async () => {
@@ -56,7 +58,7 @@ describe('handOver', () => {
     expect(send).toHaveBeenCalledTimes(waits.length + 1);
     // Two lines however often it tried: the first failure, and the loss with what was lost.
     expect(logged.mock.calls).toEqual([
-      ['email: hand-over failed, trying again (Error)'],
+      [`email: hand-over failed, trying again (Error) (${REFERENCE})`],
       [`email: a message was not handed over within 10 minutes (${REFERENCE})`],
     ]);
     const output = JSON.stringify(logged.mock.calls);
@@ -65,13 +67,16 @@ describe('handOver', () => {
     }
   });
 
-  it('prints the loss without a reference where it was given none', async () => {
+  it('prints the kind it was given on the first line and on the loss, whatever the kind is called', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const send = async () => {
       throw new Error('unreachable');
     };
-    expect(await handOver(MESSAGE, undefined, send, async () => {})).toBe(false);
-    expect(logged.mock.calls.at(-1)).toEqual(['email: a message was not handed over within 10 minutes']);
+    expect(await handOver(MESSAGE, 'password reset', send, async () => {})).toBe(false);
+    expect(logged.mock.calls.map(([line]) => line)).toEqual([
+      'email: hand-over failed, trying again (Error) (password reset)',
+      'email: a message was not handed over within 10 minutes (password reset)',
+    ]);
   });
 
   it('does not try again where the message itself is refused', async () => {
@@ -83,7 +88,9 @@ describe('handOver', () => {
     expect(await handOver(MESSAGE, REFERENCE, send, wait)).toBe(false);
     expect(send).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();
-    expect(logged.mock.calls).toEqual([[`email: a message was refused and not handed over (${REFERENCE})`]]);
+    expect(logged.mock.calls).toEqual([
+      [`email: a message was refused and not handed over (MessageRefused) (${REFERENCE})`],
+    ]);
   });
 
   it('is refused by the sink for a line break in the recipient, with the error that is not tried again', async () => {

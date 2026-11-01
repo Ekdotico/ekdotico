@@ -4,14 +4,23 @@
 // can quote a row, an address, or a connection string.
 
 /**
- * The class of an error, and its code or that of its cause. A code is printed
- * only where it is a short string of letters and digits: the field is whatever
- * the thrower put there, and anything else could be an address.
+ * A code that may be printed: a short string of letters and digits (`P1001`,
+ * `ECONNREFUSED`), or of capitals, digits and underscores (`UND_ERR_CONNECT_TIMEOUT`,
+ * `EAI_AGAIN`). The field is whatever the thrower put there, and anything else
+ * could be an address. The second pattern is capitals only and the first is
+ * short, since a token of a link is mixed-case and 22 characters or more.
  */
+export function printableCode(code: unknown): string | undefined {
+  return typeof code === 'string' && (/^[A-Za-z0-9]{1,16}$/.test(code) || /^[A-Z0-9_]{1,32}$/.test(code))
+    ? code
+    : undefined;
+}
+
+/** The class of an error, and its code or that of its cause (`printableCode`). */
 export function faultOf(error: unknown): string {
   if (!(error instanceof Error)) return 'unknown';
   const code = [error, error.cause]
-    .map((each) => (each as { code?: unknown } | null | undefined)?.code)
-    .find((each) => typeof each === 'string' && /^[A-Za-z0-9]{1,16}$/.test(each));
+    .map((each) => printableCode((each as { code?: unknown } | null | undefined)?.code))
+    .find((each) => each !== undefined);
   return code ? `${error.name} ${code}` : error.name;
 }

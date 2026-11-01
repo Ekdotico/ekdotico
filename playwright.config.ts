@@ -97,6 +97,8 @@ export default defineConfig({
       EXPORT_IDLE_SECONDS: '3',
       ADMISSION_SECRET: process.env.E2E_ADMISSION_SECRET,
       COLLAB_EVENTS_CHANNEL: process.env.E2E_EVENTS_CHANNEL,
+      // The sink, whatever a .env.local or the shell says: a run of the tests sends no real email (register D262).
+      EMAIL_TRANSPORT: 'sink',
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
       // The object store of the images (FR-ED-08, NFR-SE-18), where the run is given one: the local store of
       // compose.yaml, or the one CI starts. Without it the application stores no image and the tests of

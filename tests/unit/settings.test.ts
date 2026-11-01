@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadSettings, refuseBuiltCollabRewrite } from '../../src/lib/settings.ts';
 
@@ -123,9 +124,9 @@ describe('loadSettings: what a process cannot start without', () => {
     expect(loadSettings({ ...env, APP_ORIGIN: origin }).appOrigin).toBe(origin);
   });
 
-  // Register D70 (the three checks stand), D92: the only sender writes to a
-  // file. A deployment must not lose its email by leaving a setting out.
-  it('refuses to start away from a development machine unless the local sink is chosen', () => {
+  // Register D262: Brevo or the local sink. A deployment must not lose its
+  // email by leaving a setting out.
+  it('refuses to start away from a development machine unless a sender is chosen', () => {
     expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: undefined })).toThrow(/EMAIL_TRANSPORT/);
     expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: 'scaleway' })).toThrow(/EMAIL_TRANSPORT/);
     expect(() =>
@@ -172,6 +173,163 @@ describe('loadSettings: what a process cannot start without', () => {
       expect(load).not.toThrow(/1000000/);
     },
   );
+});
+
+// Register D262: EMAIL_TRANSPORT is sink or brevo. NFR-SE-19: a settings error never repeats the key.
+describe('loadSettings: the email transport', () => {
+  const KEY = 'marker-key-d41f8cd98f00b204e980';
+  const brevo = {
+    ...env,
+    EMAIL_TRANSPORT: 'brevo',
+    EMAIL_SINK_DIRECTORY: undefined,
+    EMAIL_FROM: 'Ekdotico <no-reply@ekdoti.co>',
+    BREVO_API_KEY: KEY,
+  };
+
+  it('takes sink and brevo, and refuses anything else with a message that names both', () => {
+    expect(loadSettings(env).emailTransport).toBe('sink');
+    expect(loadSettings(brevo).emailTransport).toBe('brevo');
+    for (const value of ['scaleway', 'Brevo', 'SINK', ' sink', 'smtp']) {
+      for (const origin of ['https://app.example.test', 'http://localhost:3000']) {
+        const start = () => loadSettings({ ...env, APP_ORIGIN: origin, EMAIL_TRANSPORT: value });
+        expect(start).toThrow(/^EMAIL_TRANSPORT must be set to sink or brevo\.$/);
+      }
+    }
+  });
+
+  it('means the sink where it is unset on localhost, and Brevo needs a choice away from it', () => {
+    const local = { ...env, APP_ORIGIN: 'http://localhost:3000', EMAIL_TRANSPORT: undefined };
+    expect(loadSettings(local).emailTransport).toBe('sink');
+    expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: undefined })).toThrow(/sink or brevo/);
+    expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: '' })).toThrow(/sink or brevo/);
+  });
+
+  it('keeps the sink as it was: still allowed away from localhost, with its directory required', () => {
+    expect(loadSettings(env)).toMatchObject({
+      emailTransport: 'sink',
+      emailSender: undefined,
+      brevoApiKey: undefined,
+    });
+    expect(() => loadSettings({ ...env, EMAIL_SINK_DIRECTORY: undefined })).toThrow(/EMAIL_SINK_DIRECTORY/);
+    // The sink needs neither the key nor a sender that parses.
+    expect(loadSettings({ ...env, EMAIL_FROM: 'someone@localhost' }).emailFrom).toBe('someone@localhost');
+  });
+
+  it('starts with Brevo, away from localhost, with the key and a sender, and no directory', () => {
+    const settings = loadSettings(brevo);
+    expect(settings.emailTransport).toBe('brevo');
+    expect(settings.brevoApiKey).toBe(KEY);
+    expect(settings.emailSender).toEqual({ name: 'Ekdotico', email: 'no-reply@ekdoti.co' });
+    expect(loadSettings({ ...brevo, EMAIL_SINK_DIRECTORY: '/var/lib/ekdotico/mail' }).emailTransport).toBe(
+      'brevo',
+    );
+    expect(loadSettings({ ...brevo, APP_ORIGIN: 'http://localhost:3000' }).emailTransport).toBe('brevo');
+  });
+
+  it.each([
+    ['not set', undefined],
+    ['empty', ''],
+    ['with a space in it', `${KEY} ${KEY}`],
+    ['with a line break at its end', `${KEY}\n`],
+    ['with a carriage return', `${KEY}\r`],
+    ['with a tab', `${KEY}\t`],
+    ['with a letter outside ASCII', `${KEY}é`],
+  ])('refuses Brevo with a key that is %s, and never repeats it', (_name, key) => {
+    const start = () => loadSettings({ ...brevo, BREVO_API_KEY: key });
+    expect(start).toThrow(/BREVO_API_KEY/);
+    expect(start).not.toThrow(new RegExp(KEY));
+  });
+
+  it.each([
+    ['not set', undefined],
+    ['empty', ''],
+    ['an address alone', 'no-reply@ekdoti.co'],
+    ['a name alone', 'Ekdotico'],
+    ['a name and no address', 'Ekdotico <>'],
+    ['an address that cannot be one', 'Ekdotico <no-reply>'],
+    ['an address with two parts', 'Ekdotico <a@ekdoti.co b@ekdoti.co>'],
+    ['text after the address', 'Ekdotico <no-reply@ekdoti.co> (no replies)'],
+    ['a line break', 'Ekdotico\r\nBcc: x@ekdoti.co <no-reply@ekdoti.co>'],
+    ['a quote in the name', 'Ek"dotico <no-reply@ekdoti.co>'],
+  ])('refuses Brevo with a sender that is %s', (_name, from) => {
+    const start = () => loadSettings({ ...brevo, EMAIL_FROM: from });
+    expect(start).toThrow(/^EMAIL_FROM /);
+    expect(start).not.toThrow(new RegExp(KEY));
+  });
+
+  it.each([
+    'Ekdotico <no-reply@localhost>',
+    'Ekdotico <no-reply@mail.localhost>',
+    'Ekdotico <no-reply@LOCALHOST>',
+  ])('refuses Brevo with the sender %s', (from) => {
+    expect(() => loadSettings({ ...brevo, EMAIL_FROM: from })).toThrow(
+      /^EMAIL_FROM must not use localhost with Brevo\.$/,
+    );
+  });
+
+  // NFR-SE-17 (e): the secrets differ, so that one that leaks opens one door, and a paste that put another
+  // secret here would send it to Brevo in a header.
+  it.each([
+    ['AUTH_SECRET', { AUTH_SECRET: KEY.repeat(2) }],
+    ['ADMISSION_SECRET', { ADMISSION_SECRET: KEY.repeat(2) }],
+    [
+      'IMAGE_STORAGE_SECRET_ACCESS_KEY',
+      {
+        IMAGE_STORAGE_ENDPOINT: 'https://fra1.digitaloceanspaces.com',
+        IMAGE_STORAGE_BUCKET: 'ekdotico-images',
+        IMAGE_STORAGE_ACCESS_KEY_ID: 'an-access-key-id',
+        IMAGE_STORAGE_SECRET_ACCESS_KEY: KEY.repeat(2),
+      },
+    ],
+  ])('refuses a key that is the value of %s, and never repeats it', (_name, other) => {
+    const key = KEY.repeat(2);
+    const start = () => loadSettings({ ...brevo, BREVO_API_KEY: key, ...other });
+    expect(start).toThrow(/must differ from/);
+    expect(start).not.toThrow(new RegExp(KEY));
+  });
+
+  it('refuses a sender name of more than 70 characters, and an IP address for a domain', () => {
+    expect(
+      loadSettings({ ...brevo, EMAIL_FROM: `${'n'.repeat(70)} <no-reply@ekdoti.co>` }).emailTransport,
+    ).toBe('brevo');
+    expect(() => loadSettings({ ...brevo, EMAIL_FROM: `${'n'.repeat(71)} <no-reply@ekdoti.co>` })).toThrow(
+      /^EMAIL_FROM must have a name of no more than 70 characters\.$/,
+    );
+    for (const address of [
+      'no-reply@127.0.0.1',
+      'no-reply@192.0.2.7',
+      'no-reply@[::1]',
+      'no-reply@[192.0.2.7]',
+    ]) {
+      expect(() => loadSettings({ ...brevo, EMAIL_FROM: `Ekdotico <${address}>` })).toThrow(
+        /^EMAIL_FROM must /,
+      );
+    }
+  });
+
+  // The collaboration server sends no email, so it neither holds nor checks the key.
+  it('is loaded by the collaboration server with no key, no sender, and nothing to check of them', () => {
+    const without = { ...brevo, BREVO_API_KEY: undefined, EMAIL_FROM: undefined };
+    const collab = loadSettings(without, false);
+    expect(collab).toMatchObject({ emailTransport: 'brevo', brevoApiKey: undefined, emailSender: undefined });
+    // Even where the key is in its environment, it is not held, and its faults are not that process's.
+    const held = loadSettings({ ...brevo, BREVO_API_KEY: 'with a space', EMAIL_FROM: 'nonsense' }, false);
+    expect(held.brevoApiKey).toBeUndefined();
+    expect(() => loadSettings(without)).toThrow(/BREVO_API_KEY is not set/);
+    // It still refuses a transport that is none, as before.
+    expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: 'smtp' }, false)).toThrow(/sink or brevo/);
+  });
+
+  it('is what the collaboration server starts with: collabSettings, and nowhere else', () => {
+    const entry = readFileSync('src/collab/server.ts', 'utf8');
+    expect(entry).toMatch(/createCollabServer\(collabSettings\(\)\)/);
+    expect(entry).not.toMatch(/createCollabServer\(settings\(\)\)/);
+  });
+
+  it('does not require the key where the sink is chosen, and ignores one', () => {
+    expect(loadSettings({ ...env, BREVO_API_KEY: undefined }).brevoApiKey).toBeUndefined();
+    expect(loadSettings({ ...env, BREVO_API_KEY: KEY }).brevoApiKey).toBeUndefined();
+  });
 });
 
 describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-SE-19)', () => {

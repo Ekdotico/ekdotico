@@ -430,7 +430,7 @@ async function confirmEnrolment(ctx: GenericEndpointContext, own: ValidSession):
   if (outcome === 'replaced') return notBegun();
 
   const { email } = account;
-  afterResponse('two-factor notice', () => handOver(turnedEmail(email, 'on')));
+  afterResponse('two-factor notice', () => handOver(turnedEmail(email, 'on'), 'two-factor notice'));
   await freshCopy(ctx);
   ctx.setHeader('Cache-Control', 'no-store');
   return ctx.json({ recoveryCodes: codes });
@@ -845,7 +845,7 @@ export const disableTwoFactor = createAuthEndpoint(
     }
 
     const { email } = account;
-    afterResponse('two-factor notice', () => handOver(turnedEmail(email, 'off')));
+    afterResponse('two-factor notice', () => handOver(turnedEmail(email, 'off'), 'two-factor notice'));
     await freshCopy(ctx);
     ctx.setHeader('Cache-Control', 'no-store');
     return ctx.json({});
@@ -892,7 +892,9 @@ export const generateBackupCodes = createAuthEndpoint(
     if (outcome === 'off') return errorResponse(409, 'two_factor_not_on', MESSAGES.notOn);
 
     const { email } = account;
-    afterResponse('recovery codes notice', () => handOver(codesReplacedEmail(email)));
+    afterResponse('recovery codes notice', () =>
+      handOver(codesReplacedEmail(email), 'recovery codes notice'),
+    );
     ctx.setHeader('Cache-Control', 'no-store');
     return ctx.json({ recoveryCodes: codes });
   },
