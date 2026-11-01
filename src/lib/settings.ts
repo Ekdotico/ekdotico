@@ -152,10 +152,16 @@ export interface Settings {
    * settings is given, and then no image can be uploaded or shown.
    */
   imageStorage: ImageStorageSettings | undefined;
-  /** Where the local sink writes each message (register D70 (the three checks stand), D92: no real email yet). */
+  /** Where email goes (register D262): the local sink, which writes each message to a file, or Brevo. */
+  emailTransport: 'sink' | 'brevo';
+  /** Where the local sink writes each message. Not required with Brevo, which writes no file. */
   emailSinkDirectory: string;
   /** The address messages are sent from. */
   emailFrom: string;
+  /** `emailFrom` as a name and an address: set with Brevo, which needs both, and undefined with the sink. */
+  emailSender: EmailSender | undefined;
+  /** The key of the Brevo account: set with Brevo, undefined with the sink. Read here and nowhere else (NFR-SE-19). */
+  brevoApiKey: string | undefined;
   /**
    * NFR-RE-07 (register P14): the collaboration server stores a document's
    * state no later than the first after the last change it received, and at
@@ -187,6 +193,30 @@ export interface Settings {
 }
 
 type Env = Record<string, string | undefined>;
+
+/** The sender of an email: `Ekdotico <no-reply@ekdoti.co>` as a name and an address. */
+export interface EmailSender {
+  name: string;
+  email: string;
+}
+
+// A name, then the address in angle brackets. The name holds none of the characters that would end it early
+// or add a header, and the address is held to the one rule of an address (FR-AU-02).
+function emailSender(from: string): EmailSender | undefined {
+  const match = /^([^<>"\r\n]+?)\s*<([^<>\s]+)>$/.exec(from.trim());
+  const email = match && acceptedAddress(match[2]);
+  return email ? { name: match[1]!.trim(), email } : undefined;
+}
+
+// The key goes into a header. A space or a line break at its end, as a pasted secret often has, makes the HTTP
+// client refuse the header with a message that may quote it (NFR-SE-19), so it is refused here, without a word of it.
+function brevoApiKey(env: Env): string {
+  const key = required(env, 'BREVO_API_KEY', 'Set it to the API key of the Brevo account.');
+  if (!/^[\x21-\x7e]+$/.test(key)) {
+    throw new Error('BREVO_API_KEY must be the key alone: no space, no line break.');
+  }
+  return key;
+}
 
 function required(env: Env, name: string, hint: string): string {
   const value = env[name];
@@ -358,11 +388,10 @@ export function loadSettings(env: Env = process.env): Settings {
   if (protocol !== 'https:' && !(protocol === 'http:' && ['localhost', '127.0.0.1'].includes(hostname))) {
     throw new Error('APP_ORIGIN must use https, except on localhost.');
   }
-  // The only sender yet is the local sink, which writes each message to a file
-  // and sends nothing (register D70 (the three checks stand), D92). Anywhere but
-  // a development machine it has to be chosen in so many words, so that no
-  // deployment loses its email unnoticed: sign-in and reset answer the same
-  // whether or not a message went.
+  // Two senders: the local sink, which writes each message to a file, and Brevo
+  // (register D262). Anywhere but a development machine one has to be chosen in
+  // so many words, so that no deployment loses its email unnoticed: sign-in and
+  // reset answer the same whether or not a message went.
   const local = ['localhost', '127.0.0.1'].includes(hostname);
   // docs/operations/deployment.md, item 9: the web application passes `/collab`
   // to the collaboration server itself on a development machine alone
@@ -372,14 +401,35 @@ export function loadSettings(env: Env = process.env): Settings {
   if (!local && env.COLLAB_PROXY_TARGET) {
     throw new Error('COLLAB_PROXY_TARGET is for a development machine: unset it.');
   }
-  if (env.EMAIL_TRANSPORT ? env.EMAIL_TRANSPORT !== 'sink' : !local) {
-    throw new Error('EMAIL_TRANSPORT must be set to sink: no other sender of email is built yet.');
+  const transport = env.EMAIL_TRANSPORT || (local ? 'sink' : undefined);
+  if (transport !== 'sink' && transport !== 'brevo') {
+    throw new Error('EMAIL_TRANSPORT must be set to sink or brevo.');
   }
   // NFR-SE-19: each file of the sink holds an address and may hold a single-use
   // link. A deployment says where they go; it does not get a directory under
-  // the working directory by leaving the setting out.
-  if (!local && !env.EMAIL_SINK_DIRECTORY) {
+  // the working directory by leaving the setting out. Brevo writes no file.
+  if (transport === 'sink' && !local && !env.EMAIL_SINK_DIRECTORY) {
     throw new Error('EMAIL_SINK_DIRECTORY is not set. Set it to the directory the email sink writes to.');
+  }
+  const emailFrom = env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>';
+  let sender: EmailSender | undefined;
+  let brevoKey: string | undefined;
+  if (transport === 'brevo') {
+    brevoKey = brevoApiKey(env);
+    if (!env.EMAIL_FROM) {
+      throw new Error(
+        'EMAIL_FROM is not set. Set it to the sender, in the form Ekdotico <no-reply@ekdoti.co>.',
+      );
+    }
+    // A sender on a development machine is one Brevo cannot verify. Asked of the text before it is parsed,
+    // since the rule of an address refuses a domain with no dot and the message would then say the wrong thing.
+    if (/@([^@\s>]*\.)?localhost\s*>?\s*$/i.test(emailFrom)) {
+      throw new Error('EMAIL_FROM must not use localhost with Brevo.');
+    }
+    sender = emailSender(emailFrom);
+    if (!sender) {
+      throw new Error('EMAIL_FROM must be a name and an address, in the form Ekdotico <no-reply@ekdoti.co>.');
+    }
   }
   // NFR-SE-07; the owner's decision of 8 October 2026: the limits for each
   // network address need the address, and without a proxy that writes it there
@@ -529,8 +579,11 @@ export function loadSettings(env: Env = process.env): Settings {
     imageUnreferencedDays: wholeNumber(env, 'IMAGE_UNREFERENCED_DAYS', 30, 1),
     imageLinkSeconds: imageLinkSeconds(env),
     imageStorage: imageStorage(env, [authSecret, admission]),
+    emailTransport: transport,
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
-    emailFrom: env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>',
+    emailFrom,
+    emailSender: sender,
+    brevoApiKey: brevoKey,
     collabStoreDelayMs,
     collabStoreMaxMs,
     collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),

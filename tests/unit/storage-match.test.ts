@@ -106,7 +106,7 @@ describe('the timers', () => {
 });
 
 describe('the files of the email sink', () => {
-  it('are matched while the sink is the only sender', () => {
+  it('are matched, and are written by the sink alone', () => {
     const settings = readSettings();
     expect(settings.emailSinkDirectory).toBeTruthy();
     expect(section('E.')).toHaveLength(1);
