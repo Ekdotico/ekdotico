@@ -225,10 +225,13 @@ describe('the texts', () => {
     expect(chosenPerson([], 'a')).toBeUndefined();
   });
 
-  // Mutation L1 (item 9): the rule of the count is spread over the places that use it.
-  it('counts, as built, one offer of the limit for each new offer, whoever it is made to', () => {
+  // Mutation L1 (register D268): the count goes back to one for each document.
+  it('counts one offer of the limit for each person emailed, and not one for each document', () => {
     expect(offersCounted([])).toBe(0);
-    expect(offersCounted([{ toUserId: 'a' }, { toUserId: 'a' }, { toUserId: 'b' }])).toBe(3);
+    expect(offersCounted([{ toUserId: 'a' }])).toBe(1);
+    expect(offersCounted([{ toUserId: 'a' }, { toUserId: 'a' }, { toUserId: 'b' }])).toBe(2);
+    const forty = Array.from({ length: 40 }, () => ({ toUserId: 'a' }));
+    expect(offersCounted(forty)).toBe(1);
   });
 
   it('words the refusal over the limit with the shared allowance and the hour it is counted over', () => {

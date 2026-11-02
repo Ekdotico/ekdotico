@@ -124,11 +124,12 @@ export function planTransfer(
 
 /**
  * How many offers of the limit of an hour (NFR-SE-07, D219) an action that makes these new offers uses: the one rule,
- * in one place, so that the owner's answer to S24-1 is a change of this line. As built, each new offer counts one,
- * as an offer made on its own does. The answer the plan recommends (register row p64-1) counts one for each person
- * emailed: `new Set(fresh.map(({ toUserId }) => toUserId)).size`.
+ * in one place. One for each person it emails, and not one for each document (FR-AU-92; the owner's answer to S24-1,
+ * register D268): forty documents offered to one person count one. An offer made on its own counts one. The people
+ * are those of the new offers, which are the ones that are emailed: a kept offer sends nothing and counts nothing.
  */
-export const offersCounted = (fresh: readonly { toUserId: string }[]): number => fresh.length;
+export const offersCounted = (fresh: readonly { toUserId: string }[]): number =>
+  new Set(fresh.map(({ toUserId }) => toUserId)).size;
 
 /** The documents the plan offers or keeps, which the confirmation counts as offered, in the order of the identifiers. */
 export function offeredIds(plan: ReadonlyMap<string, Outcome>): string[] {
@@ -238,9 +239,9 @@ export type TransferResult =
   | { outcome: 'nothing' }
   /** "To one person": the row is not an Editor's row on a document of this account. */
   | { outcome: 'no_such_person' }
-  /** NFR-SE-07, S24-1: more new offers than the limit allows in any hour, whatever the hour. */
+  /** NFR-SE-07, D268: more people to email than the limit of offers allows in any hour, whatever the hour. */
   | { outcome: 'over_limit'; most: number; wanted: number }
-  /** NFR-SE-07: the allowance of this hour does not cover them. */
+  /** NFR-SE-07: the allowance of this hour does not cover the people to email. */
   | { outcome: 'rate_limited'; retryAfterSeconds: number };
 
 /** The same sets, each name once. */
