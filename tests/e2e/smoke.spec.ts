@@ -52,6 +52,9 @@ test('the web application refuses to start away from localhost on a build that h
       APP_ORIGIN: 'https://app.example.test',
       // The setting itself is absent here: it is the build that is refused.
       COLLAB_PROXY_TARGET: '',
+      // Away from localhost a transport has to be named, and no test of an end-to-end run names Brevo
+      // (tests/unit/processors.test.ts). The sink is refused there too (register D270), but by a check that
+      // comes after the build's (src/instrumentation.ts), which is the refusal this test is of.
       EMAIL_TRANSPORT: 'sink',
       EMAIL_SINK_DIRECTORY: process.env.E2E_EMAIL_SINK,
       TRUSTED_PROXY_COUNT: '1',

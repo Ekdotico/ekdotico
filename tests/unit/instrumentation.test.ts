@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const startTimers = vi.fn();
 const refuseBuiltCollabRewrite = vi.fn();
+const refuseSinkAwayFromDevelopment = vi.fn();
 const ORIGIN = 'https://app.example.test';
 let exit: ReturnType<typeof vi.spyOn>;
 let stderr: ReturnType<typeof vi.spyOn>;
@@ -15,6 +16,7 @@ function modules(replaced: Record<string, () => object> = {}) {
     '../../src/lib/settings.ts': () => ({
       loadSettings: () => ({ appOrigin: ORIGIN }),
       refuseBuiltCollabRewrite,
+      refuseSinkAwayFromDevelopment,
     }),
     // No build, unless a test has one: the repository's own `.next` is not read.
     'node:fs': () => ({
@@ -40,6 +42,7 @@ beforeEach(() => {
   vi.stubEnv('NEXT_RUNTIME', 'nodejs');
   startTimers.mockClear();
   refuseBuiltCollabRewrite.mockReset();
+  refuseSinkAwayFromDevelopment.mockReset();
   exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
   stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -54,6 +57,7 @@ describe('the start of the web application', () => {
     modules();
     await register();
     expect(startTimers).toHaveBeenCalledTimes(1);
+    expect(refuseSinkAwayFromDevelopment).toHaveBeenCalledWith({ appOrigin: ORIGIN });
     expect(exit).not.toHaveBeenCalled();
   });
 
@@ -61,6 +65,7 @@ describe('the start of the web application', () => {
     modules({
       '../../src/lib/settings.ts': () => ({
         refuseBuiltCollabRewrite,
+        refuseSinkAwayFromDevelopment,
         loadSettings: () => {
           throw new Error('FOUNDING_TEAM_EMAILS is not set.');
         },
@@ -98,6 +103,7 @@ describe('the start of the web application', () => {
       '../../src/lib/settings.ts': () => ({
         loadSettings: () => ({ appOrigin: ORIGIN }),
         refuseBuiltCollabRewrite: real.refuseBuiltCollabRewrite,
+        refuseSinkAwayFromDevelopment,
       }),
     });
     await register();
@@ -127,6 +133,40 @@ describe('the start of the web application', () => {
     expect(exit).toHaveBeenCalledWith(1);
     expect(stderr).toHaveBeenCalledWith('This build passes /collab to the collaboration server itself.');
     expect(startTimers).not.toHaveBeenCalled();
+  });
+
+  // Register D270: the check itself, and not a stand-in, with the settings a process reads.
+  it('stops the process that has the sink away from localhost, naming the setting, and starts one that has Brevo or is on localhost', async () => {
+    const real =
+      await vi.importActual<typeof import('../../src/lib/settings.ts')>('../../src/lib/settings.ts');
+    const start = async (appOrigin: string, emailTransport: 'sink' | 'brevo') => {
+      vi.resetModules();
+      exit.mockClear();
+      stderr.mockClear();
+      startTimers.mockClear();
+      modules({
+        '../../src/lib/settings.ts': () => ({
+          loadSettings: () => ({ appOrigin, emailTransport }),
+          refuseBuiltCollabRewrite,
+          refuseSinkAwayFromDevelopment: real.refuseSinkAwayFromDevelopment,
+        }),
+      });
+      await register();
+    };
+    await start(ORIGIN, 'sink');
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('EMAIL_TRANSPORT=sink'));
+    expect(startTimers).not.toHaveBeenCalled();
+
+    await start(ORIGIN, 'brevo');
+    expect(exit).not.toHaveBeenCalled();
+    expect(startTimers).toHaveBeenCalledTimes(1);
+
+    for (const local of ['http://localhost:3000', 'http://127.0.0.1:3000']) {
+      await start(local, 'sink');
+      expect(exit, local).not.toHaveBeenCalled();
+      expect(startTimers, local).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('stops the process where a module cannot be loaded', async () => {

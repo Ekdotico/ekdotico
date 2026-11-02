@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { loadSettings, refuseBuiltCollabRewrite } from '../../src/lib/settings.ts';
+import {
+  loadSettings,
+  refuseBuiltCollabRewrite,
+  refuseSinkAwayFromDevelopment,
+} from '../../src/lib/settings.ts';
 
 const env = {
   FOUNDING_TEAM_EMAILS: '',
@@ -871,4 +875,46 @@ describe('the development rewrite of /collab, at the start of a process', () => 
       );
     },
   );
+});
+
+// Register D270: the sink is refused anywhere but a development machine, by the rule the other settings use for
+// one (an origin on localhost), at the start of a process (src/instrumentation.ts).
+describe('refuseSinkAwayFromDevelopment', () => {
+  const LOCAL = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://localhost'];
+  const AWAY = ['https://app.example.test', 'https://app.ekdoti.co', 'https://localhost.example.test'];
+
+  it.each(AWAY)('refuses the sink on %s, with a message that names the setting', (appOrigin) => {
+    const start = () => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'sink' });
+    expect(start).toThrow(/^EMAIL_TRANSPORT=sink is for a development machine/);
+    expect(start).toThrow(/Set EMAIL_TRANSPORT to brevo/);
+  });
+
+  it.each(AWAY)('admits Brevo on %s', (appOrigin) => {
+    expect(() => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'brevo' })).not.toThrow();
+  });
+
+  it.each(LOCAL)('admits the sink, and Brevo, on %s', (appOrigin) => {
+    expect(() => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'sink' })).not.toThrow();
+    expect(() => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'brevo' })).not.toThrow();
+  });
+
+  // The same rule, and not a copy of it: the origins that loadSettings admits without a proxy are the ones that admit the sink.
+  it.each([...LOCAL, ...AWAY])('draws the line where loadSettings does, for %s', (appOrigin) => {
+    const withoutProxy = () =>
+      loadSettings({ ...env, APP_ORIGIN: appOrigin, TRUSTED_PROXY_COUNT: undefined });
+    const sink = () => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'sink' });
+    if (LOCAL.includes(appOrigin)) {
+      expect(withoutProxy).not.toThrow();
+      expect(sink).not.toThrow();
+    } else {
+      expect(withoutProxy).toThrow(/TRUSTED_PROXY_COUNT/);
+      expect(sink).toThrow(/EMAIL_TRANSPORT=sink/);
+    }
+  });
+
+  it('refuses the settings that a process loads with the sink on an origin that is not local', () => {
+    const loaded = loadSettings(env);
+    expect(loaded.emailTransport).toBe('sink');
+    expect(() => refuseSinkAwayFromDevelopment(loaded)).toThrow(/EMAIL_TRANSPORT=sink/);
+  });
 });

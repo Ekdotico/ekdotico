@@ -615,6 +615,30 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
 }
 
 /**
+ * Refuses a start with `EMAIL_TRANSPORT=sink` anywhere but a development
+ * machine (register D270; §2.7, the files of the email sink). The sink writes
+ * each message to a file that holds an address and may hold a single-use link,
+ * and a deployment has no row of the retention schedule for those files. A
+ * development machine is the one every other rule of this file takes it to be:
+ * an origin on localhost.
+ *
+ * It is a check of the start (src/instrumentation.ts) and not of
+ * `loadSettings`, which the tests call with an origin that is not local and
+ * the sink: they start no process, and write their files to a directory of
+ * their own.
+ */
+export function refuseSinkAwayFromDevelopment({
+  appOrigin,
+  emailTransport,
+}: Pick<Settings, 'appOrigin' | 'emailTransport'>): void {
+  if (emailTransport === 'sink' && !['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) {
+    throw new Error(
+      'EMAIL_TRANSPORT=sink is for a development machine: it writes each email to a file. Set EMAIL_TRANSPORT to brevo.',
+    );
+  }
+}
+
+/**
  * Refuses a start where the application is not on localhost and the build it
  * runs holds the development rewrite of `/collab` (next.config.ts): `next
  * start` reads its rewrites from the build and never from the environment, so

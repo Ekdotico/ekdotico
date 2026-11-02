@@ -5,12 +5,14 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     try {
       // Inside the `try`: a module that fails to load stops the process as well.
-      const { loadSettings, refuseBuiltCollabRewrite } = await import('./lib/settings.ts');
+      const { loadSettings, refuseBuiltCollabRewrite, refuseSinkAwayFromDevelopment } =
+        await import('./lib/settings.ts');
       const { assertContractVersion } = await import('./lib/istorico/index.ts');
       const { startTimers } = await import('./lib/timers.ts');
       const { auth } = await import('./lib/auth/auth.ts');
       const { readFileSync } = await import('node:fs');
-      const { appOrigin, imageStorage } = loadSettings();
+      const loaded = loadSettings();
+      const { appOrigin, imageStorage } = loaded;
       // NFR-SE-18: a deployment with no object store stores no image: said once, where it can be read in the log.
       if (!imageStorage && !['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) {
         console.warn('No object store is set (IMAGE_STORAGE_*): no image can be uploaded or shown.');
@@ -24,6 +26,8 @@ export async function register() {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
       refuseBuiltCollabRewrite(appOrigin, manifest);
+      // Register D270: the sink writes a file for each email, and only a development machine may.
+      refuseSinkAwayFromDevelopment(loaded);
       assertContractVersion();
       // NFR-SE-17: a configuration the library would not take as written stops
       // the process here. The library builds it in the background, and refuses
