@@ -407,14 +407,19 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     throw new Error('COLLAB_PROXY_TARGET is for a development machine: unset it.');
   }
   const transport = env.EMAIL_TRANSPORT || (local ? 'sink' : undefined);
+  // Away from a development machine only Brevo is admitted (register D270), and the message offers only that.
   if (transport !== 'sink' && transport !== 'brevo') {
-    throw new Error('EMAIL_TRANSPORT must be set to sink or brevo.');
+    throw new Error(
+      local ? 'EMAIL_TRANSPORT must be set to sink or brevo.' : 'EMAIL_TRANSPORT must be set to brevo.',
+    );
   }
   // NFR-SE-19: each file of the sink holds an address and may hold a single-use
-  // link. A deployment says where they go; it does not get a directory under
-  // the working directory by leaving the setting out. Brevo writes no file.
+  // link, and a sink away from a development machine never gets a directory
+  // under the working directory by leaving the setting out. The refusal of D270
+  // is what such a deployment is told first, whatever else it has not set.
+  // Brevo writes no file.
   if (transport === 'sink' && !local && !env.EMAIL_SINK_DIRECTORY) {
-    throw new Error('EMAIL_SINK_DIRECTORY is not set. Set it to the directory the email sink writes to.');
+    throw new Error(SINK_REFUSED);
   }
   const emailFrom = env.EMAIL_FROM || 'Ekdotico <no-reply@localhost>';
   let sender: EmailSender | undefined;
@@ -614,6 +619,9 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
   };
 }
 
+const SINK_REFUSED =
+  'EMAIL_TRANSPORT=sink is for a development machine: it writes each email to a file. Set EMAIL_TRANSPORT to brevo.';
+
 /**
  * Refuses a start with `EMAIL_TRANSPORT=sink` anywhere but a development
  * machine (register D270; §2.7, the files of the email sink). The sink writes
@@ -622,19 +630,19 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
  * development machine is the one every other rule of this file takes it to be:
  * an origin on localhost.
  *
- * It is a check of the start (src/instrumentation.ts) and not of
- * `loadSettings`, which the tests call with an origin that is not local and
- * the sink: they start no process, and write their files to a directory of
- * their own.
+ * It is a check of the start of each process (src/instrumentation.ts, and the
+ * start of src/collab/server.ts) and not of `loadSettings`, which the tests
+ * call with an origin that is not local and the sink: they start no process,
+ * and write their files to a directory of their own. `loadSettings` itself
+ * gives the same message where the sink has no directory away from a
+ * development machine, so that this is the first thing such a deployment is told.
  */
 export function refuseSinkAwayFromDevelopment({
   appOrigin,
   emailTransport,
 }: Pick<Settings, 'appOrigin' | 'emailTransport'>): void {
   if (emailTransport === 'sink' && !['localhost', '127.0.0.1'].includes(new URL(appOrigin).hostname)) {
-    throw new Error(
-      'EMAIL_TRANSPORT=sink is for a development machine: it writes each email to a file. Set EMAIL_TRANSPORT to brevo.',
-    );
+    throw new Error(SINK_REFUSED);
   }
 }
 
