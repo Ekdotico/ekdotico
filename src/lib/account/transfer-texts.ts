@@ -114,7 +114,7 @@ export const TRANSFER_MESSAGES = {
   noSuchPerson:
     'This person is not an Editor of any document of this account. The page now shows the Editors. No offer was made.',
   overLimit: (most: number, wanted: number) =>
-    `An Owner can make at most ${most} offers of ownership in any hour, counted over the last hour, and offers made one by one from the sharing pages use the same allowance. This would make ${wanted}. No offer was made. Clear some of the documents, or offer some from their sharing pages over more than one hour, and try again.`,
+    `An Owner can make at most ${most} offers of ownership in any hour, counted over the last hour, and offers made one by one from the sharing pages use the same allowance. This would make ${wanted}, one for each person it would email. No offer was made. Offer to one person instead, clear the documents of some of the people, or offer some from their sharing pages over more than one hour, and try again.`,
   tooMany: (most: number) =>
     `A transfer names at most ${most.toLocaleString('en-GB')} documents. No offer was made.`,
 } as const;

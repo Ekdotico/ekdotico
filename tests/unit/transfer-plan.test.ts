@@ -238,7 +238,8 @@ describe('the texts', () => {
     const text = TRANSFER_MESSAGES.overLimit(20, 25);
     expect(text).toContain('at most 20 offers of ownership in any hour, counted over the last hour');
     expect(text).toContain('offers made one by one from the sharing pages use the same allowance');
-    expect(text).toContain('This would make 25.');
+    expect(text).toContain('This would make 25, one for each person it would email.');
+    expect(text).toContain('Offer to one person instead, clear the documents of some of the people');
     expect(TRANSFER_MESSAGES.changed).not.toMatch(/reload/i);
     expect(TRANSFER_MESSAGES.noSuchPerson).not.toMatch(/reload/i);
   });
