@@ -775,9 +775,9 @@ describe('the limit of offers (NFR-SE-07, D219; one for each person emailed, D26
     expect(response.status).toBe(409);
     expect(await codeOf(response)).toBe('too_many_offers');
     const message = (await json(response)).error?.message ?? '';
-    expect(message).toContain('at most 20 offers');
+    expect(message).toContain('at most 20 people');
     // 42 documents and 21 people: the refusal says 21.
-    expect(message).toContain('This would make 21, one for each person it would email.');
+    expect(message).toContain('This one would email 21.');
     expect(message).not.toContain('42');
     for (const id of ids) expect(await offersOf(id)).toHaveLength(0);
     // Nothing was counted: a single offer is still possible in full.
