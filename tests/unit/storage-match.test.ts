@@ -111,6 +111,39 @@ describe('the files of the email sink', () => {
     expect(settings.emailSinkDirectory).toBeTruthy();
     expect(section('E.')).toHaveLength(1);
   });
+
+  // Register D270: the sink is refused anywhere but a developer's own machine, and the row says so.
+  it('have the row of the schedule that says a deployment writes none', () => {
+    const [, row, note] = section('E.')[0]!;
+    expect(row).toBe('sink-files');
+    expect(note).toMatch(/refused anywhere but a developer's own machine \(D270\)/);
+    expect(note).toMatch(/refuseSinkAwayFromDevelopment/);
+    expect(section('A.').find(([key]) => key === 'sink-files')?.[2]).toMatch(/^None on a deployment/);
+  });
+});
+
+// Register D270 (R27-1): the five stores that no row of §2.7 named have one, and none is entered as a gap.
+describe('the stores that §2.7 once did not name', () => {
+  it('have rows of the schedule', () => {
+    const matched = matchedColumns();
+    expect(matched.get('Workspace')?.rows).toEqual(['workspaces']);
+    expect(matched.get('DocumentCollaborator')?.rows).toEqual(['roles']);
+    expect(matched.get('_prisma_migrations')?.rows).toEqual(['migrations']);
+    const lock = section('D.').find(([file]) => file === 'src/lib/export/lock.ts');
+    expect(lock?.[3]).toBe('export-lock');
+  });
+
+  it('leave no store without a row', () => {
+    const cells = [
+      ...[...matchedColumns().values()].flatMap(({ rows }) => rows),
+      ...section('C.').map((cells) => cells[2]!),
+      ...section('D.').map((cells) => cells[3]!),
+      ...section('E.').map((cells) => cells[1]!),
+      ...section('F.').map((cells) => cells[1]!),
+    ];
+    expect(cells.filter((cell) => !rowIsValid(cell))).toEqual([]);
+    expect(cells.filter((cell) => /^none/.test(cell))).toEqual([]);
+  });
 });
 
 function readSettings() {

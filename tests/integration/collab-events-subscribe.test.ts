@@ -130,7 +130,7 @@ it(
   async () => {
     refusing = false;
     const child = spawn('node', ['src/collab/server.ts'], {
-      env: { ...process.env, COLLAB_PORT: '0' },
+      env: { ...process.env, EMAIL_TRANSPORT: 'brevo', COLLAB_PORT: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     try {

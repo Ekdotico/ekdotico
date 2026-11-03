@@ -33,7 +33,7 @@ const open: Connection[] = [];
 
 beforeAll(async () => {
   server = spawn('node', ['src/collab/server.ts'], {
-    env: { ...process.env, COLLAB_PORT: '0' },
+    env: { ...process.env, EMAIL_TRANSPORT: 'brevo', COLLAB_PORT: '0' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   const port = await new Promise<number>((resolve, reject) => {

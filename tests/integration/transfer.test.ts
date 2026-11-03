@@ -702,22 +702,24 @@ describe('an account in deletion can neither make nor receive an offer', () => {
   });
 });
 
-describe('the limit of offers (NFR-SE-07, D219)', () => {
-  async function owning(count: number) {
+describe('the limit of offers (NFR-SE-07, D219; one for each person emailed, D268)', () => {
+  /** `count` documents of one owner, shared among `people` Editors, each document with one. */
+  async function owning(count: number, people = 1) {
     const owner = await person();
-    const ed = await person('ed');
+    const editors: Person[] = [];
+    for (let n = 0; n < people; n++) editors.push(await person('ed'));
     const ids: string[] = [];
     for (let n = 0; n < count; n++) {
       const id = await documentOf(owner.id);
-      await editorOf(id, ed);
+      await editorOf(id, editors[n % people]!);
       ids.push(id);
     }
-    return { owner, ed, ids };
+    return { owner, ids };
   }
 
-  // Mutation T23: the action counts one offer, or none.
-  it('counts each new offer: twenty are allowed in the hour, and a further one on its own is refused', async () => {
-    const { owner, ids } = await owning(20);
+  // Mutation T23: the action counts one for each document, or one for the action, or none.
+  it('counts one for each person emailed: twenty people take the whole hour, and a further offer on its own is refused', async () => {
+    const { owner, ids } = await owning(20, 20);
     expect((await post(owner.cookie, await everything(owner))).status).toBe(201);
     const extra = await documentOf(owner.id);
     const ed = await person('ed2');
@@ -726,21 +728,66 @@ describe('the limit of offers (NFR-SE-07, D219)', () => {
     expect(ids).toHaveLength(20);
   });
 
-  it('refuses a whole action that is over the figure of the limit with a 409 that states it, and offers nothing', async () => {
-    const { owner, ids } = await owning(21);
+  // Mutation T23b (D268): the count goes back to one for each document.
+  it('counts forty documents offered to one person as one, and thirty offered to three people as three', async () => {
+    const one = await owning(40);
+    expect((await post(one.owner.cookie, await everything(one.owner))).status).toBe(201);
+    for (const id of one.ids) expect(await offersOf(id)).toHaveLength(1);
+    // One of the twenty is used: nineteen more are allowed, and the twentieth is not.
+    expect((await takeLimit('OFFERS_PER_USER', one.owner.id, 19)).ok).toBe(true);
+    expect((await takeLimit('OFFERS_PER_USER', one.owner.id, 1)).ok).toBe(false);
+
+    const three = await owning(30, 3);
+    expect((await post(three.owner.cookie, await everything(three.owner))).status).toBe(201);
+    expect((await takeLimit('OFFERS_PER_USER', three.owner.id, 17)).ok).toBe(true);
+    expect((await takeLimit('OFFERS_PER_USER', three.owner.id, 1)).ok).toBe(false);
+  });
+
+  // Mutation T23c (D268): an offer made on its own counts one, and from the allowance that the action shares.
+  it('counts an offer made on its own as one, from the allowance that the action shares', async () => {
+    const { owner, ids } = await owning(4, 2);
+    const first = await db().documentCollaborator.findFirstOrThrow({ where: { documentId: ids[0]! } });
+    expect((await makeOffer(ids[0]!, owner.id, first.id)).outcome).toBe('offered');
+    expect((await takeLimit('OFFERS_PER_USER', owner.id, 17)).ok).toBe(true);
+    // Eighteen of the twenty are taken, and the action emails two people: the two that are left.
+    const response = await post(owner.cookie, await everything(owner));
+    expect(response.status).toBe(201);
+    expect(await json(response)).toEqual({ offered: 3, kept: 1, cannot: 0 });
+    expect((await takeLimit('OFFERS_PER_USER', owner.id, 1)).ok).toBe(false);
+  });
+
+  // Mutation T23d (D268): a person whose document keeps its offer, and is not emailed, is counted.
+  it('counts only the people it emails, and not a person whose document already has an offer', async () => {
+    const { owner, ids } = await owning(2, 2);
+    const first = await db().documentCollaborator.findFirstOrThrow({ where: { documentId: ids[0]! } });
+    expect((await makeOffer(ids[0]!, owner.id, first.id)).outcome).toBe('offered');
+    expect((await takeLimit('OFFERS_PER_USER', owner.id, 18)).ok).toBe(true);
+    // The first document keeps its offer, so the action emails one person, and one of the twenty is left.
+    const response = await post(owner.cookie, await everything(owner));
+    expect(response.status).toBe(201);
+    expect(await json(response)).toEqual({ offered: 1, kept: 1, cannot: 0 });
+  });
+
+  // Mutation T23e (D268): the refusal counts documents.
+  it('refuses a whole action whose people are over the figure of the limit with a 409 that counts people, and offers nothing', async () => {
+    const { owner, ids } = await owning(42, 21);
     const response = await post(owner.cookie, await everything(owner));
     expect(response.status).toBe(409);
     expect(await codeOf(response)).toBe('too_many_offers');
-    expect((await json(response)).error?.message).toContain('at most 20 offers');
+    const message = (await json(response)).error?.message ?? '';
+    expect(message).toContain('at most 20 offers');
+    // 42 documents and 21 people: the refusal says 21.
+    expect(message).toContain('This would make 21, one for each person it would email.');
+    expect(message).not.toContain('42');
     for (const id of ids) expect(await offersOf(id)).toHaveLength(0);
-    // Nothing was counted: a clearing or a single offer is still possible in full.
+    // Nothing was counted: a single offer is still possible in full.
     const row = await db().documentCollaborator.findFirstOrThrow({ where: { documentId: ids[0]! } });
     expect((await makeOffer(ids[0]!, owner.id, row.id)).outcome).toBe('offered');
   });
 
   // Mutation T24: the action is partly done where the allowance is short.
-  it('refuses the whole action with a 429 that states when to try again where the allowance is short, and offers nothing', async () => {
-    const { owner, ids } = await owning(10);
+  it('refuses the whole action with a 429 that states when to try again where the allowance is short for its people, and offers nothing', async () => {
+    const { owner, ids } = await owning(10, 6);
     expect((await takeLimit('OFFERS_PER_USER', owner.id, 15)).ok).toBe(true);
     const response = await post(owner.cookie, await everything(owner));
     expect(response.status).toBe(429);
@@ -751,14 +798,25 @@ describe('the limit of offers (NFR-SE-07, D219)', () => {
     expect((await post(owner.cookie, await everything(owner))).status).toBe(201);
   });
 
-  // Mutation T25: a kept offer is counted.
-  it('does not count an offer that is kept, so that repeating the action in the same hour still answers', async () => {
-    const { owner, ids } = await owning(20);
+  // Mutation T24b (D268): the allowance is judged by the documents.
+  it('does not refuse an action for the documents it offers where the allowance covers its people', async () => {
+    const { owner, ids } = await owning(10, 5);
+    expect((await takeLimit('OFFERS_PER_USER', owner.id, 15)).ok).toBe(true);
     expect((await post(owner.cookie, await everything(owner))).status).toBe(201);
+    for (const id of ids) expect(await offersOf(id)).toHaveLength(1);
+    expect((await takeLimit('OFFERS_PER_USER', owner.id, 1)).ok).toBe(false);
+  });
+
+  // Mutation T25: a kept offer is counted.
+  it('does not count an offer that is kept, so that repeating the action with the allowance used up still answers', async () => {
+    const { owner, ids } = await owning(4, 2);
+    expect((await post(owner.cookie, await everything(owner))).status).toBe(201);
+    // The two people it emailed are counted: the rest of the hour is used up.
+    expect((await takeLimit('OFFERS_PER_USER', owner.id, 18)).ok).toBe(true);
     const again = await post(owner.cookie, await everything(owner));
     expect(again.status).toBe(200);
-    expect(await json(again)).toEqual({ offered: 0, kept: 20, cannot: 0 });
-    expect(ids).toHaveLength(20);
+    expect(await json(again)).toEqual({ offered: 0, kept: 4, cannot: 0 });
+    expect(ids).toHaveLength(4);
   });
 
   // Mutation T25b: a kept offer is counted with the new ones.

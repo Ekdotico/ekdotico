@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { loadSettings, refuseBuiltCollabRewrite } from '../../src/lib/settings.ts';
+import {
+  loadSettings,
+  refuseBuiltCollabRewrite,
+  refuseSinkAwayFromDevelopment,
+} from '../../src/lib/settings.ts';
 
 const env = {
   FOUNDING_TEAM_EMAILS: '',
@@ -12,6 +16,11 @@ const env = {
   AUTH_SECRET: 'a-test-secret-of-at-least-thirty-two-characters',
   TRUSTED_PROXY_COUNT: '1',
 };
+
+// Register D270: the whole message, which an error with this message matches exactly.
+const SINK_REFUSED = new Error(
+  'EMAIL_TRANSPORT=sink is for a development machine: it writes each email to a file. Set EMAIL_TRANSPORT to brevo.',
+);
 
 // NFR-SE-07; the owner's decision of 8 October 2026: away from localhost a
 // process does not start without a proxy that writes the address of a client,
@@ -140,8 +149,12 @@ describe('loadSettings: what a process cannot start without', () => {
   // NFR-SE-19: the files of the sink hold addresses and links. A deployment
   // names their directory; only a development machine is given one.
   it('refuses to start away from a development machine without the directory of the sink', () => {
-    expect(() => loadSettings({ ...env, EMAIL_SINK_DIRECTORY: undefined })).toThrow(/EMAIL_SINK_DIRECTORY/);
-    expect(() => loadSettings({ ...env, EMAIL_SINK_DIRECTORY: '' })).toThrow(/EMAIL_SINK_DIRECTORY/);
+    // And what it is told first is the refusal of D270, not that a directory is missing.
+    for (const EMAIL_SINK_DIRECTORY of [undefined, '']) {
+      const start = () => loadSettings({ ...env, EMAIL_SINK_DIRECTORY });
+      expect(start).toThrow(SINK_REFUSED);
+      expect(start).not.toThrow(/EMAIL_SINK_DIRECTORY/);
+    }
     expect(loadSettings(env).emailSinkDirectory).toBe('/var/lib/ekdotico/mail');
     const local = { ...env, APP_ORIGIN: 'http://localhost:3000', EMAIL_SINK_DIRECTORY: undefined };
     expect(loadSettings(local).emailSinkDirectory).toBe('.local/mail');
@@ -189,28 +202,33 @@ describe('loadSettings: the email transport', () => {
   it('takes sink and brevo, and refuses anything else with a message that names both', () => {
     expect(loadSettings(env).emailTransport).toBe('sink');
     expect(loadSettings(brevo).emailTransport).toBe('brevo');
+    // Away from a development machine only Brevo is admitted, and the message offers only that (D270).
     for (const value of ['scaleway', 'Brevo', 'SINK', ' sink', 'smtp']) {
-      for (const origin of ['https://app.example.test', 'http://localhost:3000']) {
-        const start = () => loadSettings({ ...env, APP_ORIGIN: origin, EMAIL_TRANSPORT: value });
-        expect(start).toThrow(/^EMAIL_TRANSPORT must be set to sink or brevo\.$/);
-      }
+      const away = () => loadSettings({ ...env, EMAIL_TRANSPORT: value });
+      expect(away).toThrow(/^EMAIL_TRANSPORT must be set to brevo\.$/);
+      const here = () =>
+        loadSettings({ ...env, APP_ORIGIN: 'http://localhost:3000', EMAIL_TRANSPORT: value });
+      expect(here).toThrow(/^EMAIL_TRANSPORT must be set to sink or brevo\.$/);
     }
   });
 
   it('means the sink where it is unset on localhost, and Brevo needs a choice away from it', () => {
     const local = { ...env, APP_ORIGIN: 'http://localhost:3000', EMAIL_TRANSPORT: undefined };
     expect(loadSettings(local).emailTransport).toBe('sink');
-    expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: undefined })).toThrow(/sink or brevo/);
-    expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: '' })).toThrow(/sink or brevo/);
+    for (const EMAIL_TRANSPORT of [undefined, '']) {
+      expect(() => loadSettings({ ...env, EMAIL_TRANSPORT })).toThrow(
+        /^EMAIL_TRANSPORT must be set to brevo\.$/,
+      );
+    }
   });
 
-  it('keeps the sink as it was: still allowed away from localhost, with its directory required', () => {
+  it('loads the sink away from localhost, as the tests need, with its directory required', () => {
     expect(loadSettings(env)).toMatchObject({
       emailTransport: 'sink',
       emailSender: undefined,
       brevoApiKey: undefined,
     });
-    expect(() => loadSettings({ ...env, EMAIL_SINK_DIRECTORY: undefined })).toThrow(/EMAIL_SINK_DIRECTORY/);
+    expect(() => loadSettings({ ...env, EMAIL_SINK_DIRECTORY: undefined })).toThrow(SINK_REFUSED);
     // The sink needs neither the key nor a sender that parses.
     expect(loadSettings({ ...env, EMAIL_FROM: 'someone@localhost' }).emailFrom).toBe('someone@localhost');
   });
@@ -317,13 +335,23 @@ describe('loadSettings: the email transport', () => {
     expect(held.brevoApiKey).toBeUndefined();
     expect(() => loadSettings(without)).toThrow(/BREVO_API_KEY is not set/);
     // It still refuses a transport that is none, as before.
-    expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: 'smtp' }, false)).toThrow(/sink or brevo/);
+    expect(() => loadSettings({ ...env, EMAIL_TRANSPORT: 'smtp' }, false)).toThrow(
+      /^EMAIL_TRANSPORT must be set to brevo\.$/,
+    );
   });
 
   it('is what the collaboration server starts with: collabSettings, and nowhere else', () => {
     const entry = readFileSync('src/collab/server.ts', 'utf8');
-    expect(entry).toMatch(/createCollabServer\(collabSettings\(\)\)/);
+    expect(entry).toMatch(/const loaded = collabSettings\(\);/);
+    expect(entry).toMatch(/createCollabServer\(loaded\)/);
     expect(entry).not.toMatch(/createCollabServer\(settings\(\)\)/);
+    // Register D270: the same refusal of the sink as the web application's, before the server is made.
+    expect(entry.indexOf('refuseSinkAwayFromDevelopment(loaded)')).toBeGreaterThan(
+      entry.indexOf('collabSettings();'),
+    );
+    expect(entry.indexOf('refuseSinkAwayFromDevelopment(loaded)')).toBeLessThan(
+      entry.indexOf('createCollabServer(loaded)'),
+    );
   });
 
   it('does not require the key where the sink is chosen, and ignores one', () => {
@@ -871,4 +899,46 @@ describe('the development rewrite of /collab, at the start of a process', () => 
       );
     },
   );
+});
+
+// Register D270: the sink is refused anywhere but a development machine, by the rule the other settings use for
+// one (an origin on localhost), at the start of a process (src/instrumentation.ts).
+describe('refuseSinkAwayFromDevelopment', () => {
+  const LOCAL = ['http://localhost:3000', 'http://127.0.0.1:3000', 'https://localhost'];
+  const AWAY = ['https://app.example.test', 'https://app.ekdoti.co', 'https://localhost.example.test'];
+
+  it.each(AWAY)('refuses the sink on %s, with a message that names the setting', (appOrigin) => {
+    const start = () => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'sink' });
+    expect(start).toThrow(/^EMAIL_TRANSPORT=sink is for a development machine/);
+    expect(start).toThrow(/Set EMAIL_TRANSPORT to brevo/);
+  });
+
+  it.each(AWAY)('admits Brevo on %s', (appOrigin) => {
+    expect(() => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'brevo' })).not.toThrow();
+  });
+
+  it.each(LOCAL)('admits the sink, and Brevo, on %s', (appOrigin) => {
+    expect(() => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'sink' })).not.toThrow();
+    expect(() => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'brevo' })).not.toThrow();
+  });
+
+  // The same rule, and not a copy of it: the origins that loadSettings admits without a proxy are the ones that admit the sink.
+  it.each([...LOCAL, ...AWAY])('draws the line where loadSettings does, for %s', (appOrigin) => {
+    const withoutProxy = () =>
+      loadSettings({ ...env, APP_ORIGIN: appOrigin, TRUSTED_PROXY_COUNT: undefined });
+    const sink = () => refuseSinkAwayFromDevelopment({ appOrigin, emailTransport: 'sink' });
+    if (LOCAL.includes(appOrigin)) {
+      expect(withoutProxy).not.toThrow();
+      expect(sink).not.toThrow();
+    } else {
+      expect(withoutProxy).toThrow(/TRUSTED_PROXY_COUNT/);
+      expect(sink).toThrow(/EMAIL_TRANSPORT=sink/);
+    }
+  });
+
+  it('refuses the settings that a process loads with the sink on an origin that is not local', () => {
+    const loaded = loadSettings(env);
+    expect(loaded.emailTransport).toBe('sink');
+    expect(() => refuseSinkAwayFromDevelopment(loaded)).toThrow(/EMAIL_TRANSPORT=sink/);
+  });
 });

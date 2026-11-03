@@ -18,6 +18,9 @@ export function prepare(label: string, env: Record<string, string> = {}) {
   Object.assign(process.env, {
     FOUNDING_TEAM_EMAILS: '',
     APP_ORIGIN: ORIGIN,
+    // The origin below is not a local one, and a process would refuse the sink on it (register D270). That check
+    // is of the start of a process (src/instrumentation.ts) and not of `loadSettings`, which these tests call: they
+    // start none, and write their files to a directory of their own.
     EMAIL_TRANSPORT: 'sink',
     EMAIL_SINK_DIRECTORY: join(tmpdir(), 'ekdotico-test-mail'),
     DATABASE_URL: database.appUrl,

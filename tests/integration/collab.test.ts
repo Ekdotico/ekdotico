@@ -54,7 +54,7 @@ const written: (() => string)[] = [];
 
 async function startServer(env: Record<string, string> = {}, port = 0) {
   const child = spawn('node', ['src/collab/server.ts'], {
-    env: { ...process.env, ...env, COLLAB_PORT: String(port) },
+    env: { ...process.env, EMAIL_TRANSPORT: 'brevo', ...env, COLLAB_PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(child);
@@ -1820,6 +1820,25 @@ describe('the kill test of NFR-RE-07', () => {
     expect(clients[0]!.changes.toArray()).toEqual(clients[1]!.changes.toArray());
     await until(async () => (await stored(id))?.length === made.length, 5000);
     expect((await stored(id))!.sort()).toEqual(sorted);
+  });
+});
+
+// Register D270: the sink is refused anywhere but a developer's own machine, in this process as in the web application's.
+// The origin of this file is not a local one (identity.ts).
+describe('the sink away from a development machine', () => {
+  const refusal = 'EMAIL_TRANSPORT=sink is for a development machine: it writes each email to a file.';
+
+  it('does not start the collaboration server, with a message that names the setting', async () => {
+    await expect(startServer({ EMAIL_TRANSPORT: 'sink' })).rejects.toThrow(refusal);
+  });
+
+  it('says the same where the sink has no directory, and not that the directory is missing', async () => {
+    const fault = await startServer({ EMAIL_TRANSPORT: 'sink', EMAIL_SINK_DIRECTORY: '' }).then(
+      () => null,
+      (error: Error) => error,
+    );
+    expect(fault?.message).toContain(refusal);
+    expect(fault?.message).not.toContain('EMAIL_SINK_DIRECTORY');
   });
 });
 

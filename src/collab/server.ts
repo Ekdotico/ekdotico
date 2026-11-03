@@ -89,7 +89,7 @@ import { assertContractVersion } from '../lib/istorico/index.ts';
 import { isOwnOrigin } from '../lib/origin.ts';
 import { limitHere, logLimitReached, markKey, oncePer, takeLimit } from '../lib/rate-limit.ts';
 import { securityLog } from '../lib/security-log.ts';
-import { collabSettings, settings, type Settings } from '../lib/settings.ts';
+import { collabSettings, refuseSinkAwayFromDevelopment, settings, type Settings } from '../lib/settings.ts';
 
 export const HEALTH_PATH = '/collab/health';
 
@@ -1432,7 +1432,15 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
 if (import.meta.main) {
   assertContractVersion();
   // Refuses to start where a setting is absent or out of its bounds.
-  const collab = createCollabServer(collabSettings());
+  const loaded = collabSettings();
+  // Register D270: the sink is for a development machine, in this process as in the web application's.
+  try {
+    refuseSinkAwayFromDevelopment(loaded);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+  const collab = createCollabServer(loaded);
   let signalled = false;
   // FR-ED-40: it accepts no connection before it can be told to close one. An
   // instance that cannot reach Valkey therefore does not listen, and its

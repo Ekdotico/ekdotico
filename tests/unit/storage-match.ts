@@ -23,9 +23,9 @@ export function section(heading: string): string[][] {
 
 export const rowKeys = () => section('A.').map((cells) => cells[0]!);
 
-/** A cell of the Row column: a key of section A, `not stored`, or `none R27-1`. */
+/** A cell of the Row column: a key of section A, or `not stored`. A store with no row of §2.7 is not a state this record allows (register D270). */
 export function rowIsValid(cell: string): boolean {
-  return rowKeys().includes(cell) || cell === 'not stored' || /^none R27-\d+$/.test(cell);
+  return rowKeys().includes(cell) || cell === 'not stored';
 }
 
 /** The models of the Prisma schema with their scalar columns (relations are not columns). */
