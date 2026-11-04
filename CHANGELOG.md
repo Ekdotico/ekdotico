@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.1](https://github.com/Ekdotico/ekdotico/compare/v0.1.0...v0.1.1) (2026-11-04)
+
+
+### Features
+
+* **account:** a transfer of all documents counts one offer for each person emailed (FR-AU-92, NFR-SE-07; D268; docs-answers@b32541e) ([776f749](https://github.com/Ekdotico/ekdotico/commit/776f74913cfca6f1902e0595b71d1cc2ad37b0b7))
+* **email:** refuse EMAIL_TRANSPORT=sink anywhere but a development machine, and give the five stores their rows (D270; NFR-DP-02; docs-answers@b32541e) ([6e04e71](https://github.com/Ekdotico/ekdotico/commit/6e04e7100dc5f390ada9f50230e7cce93e2d9ba5))
+* offers count one for each person emailed (D268), and the sink is refused away from a development machine (D270) ([87760ee](https://github.com/Ekdotico/ekdotico/commit/87760eecb7858e76a77735b9d3e8d886eb64bcd1))
+
+
+### Bug Fixes
+
+* **account:** use the refusal text the owner approved for the hourly limit (P69-T1; D268; docs@12a2958) ([0f9e3c8](https://github.com/Ekdotico/ekdotico/commit/0f9e3c8e5bd4af095967eb82cb03777b05b94266))
+* **account:** use the refusal text the owner approved for the hourly limit (P69-T1) ([8d02425](https://github.com/Ekdotico/ekdotico/commit/8d024252e4a0c4e3a0263d857e9d73c6a6ac0a72))
+* **account:** word the refusal over the hourly limit as the owner approved it (P69-T1; D268; docs@12a2958) ([cb8a71b](https://github.com/Ekdotico/ekdotico/commit/cb8a71b398b1c8ecd52608e7293292cb1b69a5c0))
+* **email:** the collaboration server refuses the sink too, and the refusal is the first message a deployment meets (D270; docs-answers@b32541e) ([24436c9](https://github.com/Ekdotico/ekdotico/commit/24436c93d31d9903d87f7498070422ca1b617cab))
+
 ## 0.1.0 (2026-11-01)
 
 
