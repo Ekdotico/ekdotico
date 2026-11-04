@@ -234,12 +234,11 @@ describe('the texts', () => {
     expect(offersCounted(forty)).toBe(1);
   });
 
-  it('words the refusal over the limit with the shared allowance and the hour it is counted over', () => {
-    const text = TRANSFER_MESSAGES.overLimit(20, 25);
-    expect(text).toContain('at most 20 offers of ownership in any hour, counted over the last hour');
-    expect(text).toContain('offers made one by one from the sharing pages use the same allowance');
-    expect(text).toContain('This would make 25, one for each person it would email.');
-    expect(text).toContain('Offer to one person instead, clear the documents of some of the people');
+  // The owner's approved text of 3 November 2026 (p69-t1), verbatim.
+  it('words the refusal over the limit as the owner approved it, counting people', () => {
+    expect(TRANSFER_MESSAGES.overLimit(20, 25)).toBe(
+      'A transfer can email at most 20 people in any hour, counted over the last hour, and each offer made from a sharing page counts as one of them. This one would email 25. No offer was made. Offer the documents to one person at a time instead, or offer some from their sharing pages over more than one hour, and try again.',
+    );
     expect(TRANSFER_MESSAGES.changed).not.toMatch(/reload/i);
     expect(TRANSFER_MESSAGES.noSuchPerson).not.toMatch(/reload/i);
   });
