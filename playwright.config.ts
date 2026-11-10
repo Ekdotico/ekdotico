@@ -37,6 +37,8 @@ if (!process.env.E2E_DATABASE_URL) {
     process.env.E2E_DATABASE_URL = made.appUrl;
     // Dropped by tests/e2e/global-teardown.ts when the run ends (F-11); the name is all it needs.
     process.env.E2E_MADE_DATABASE = new URL(made.appUrl).pathname.slice(1);
+    // The teardown drops it only in the process that made it, never for a name inherited from an earlier run.
+    process.env.E2E_MADE_BY = String(process.pid);
   } else {
     process.env.E2E_DATABASE_URL = 'postgresql://ekdotico_app:local-app@localhost:5432/ekdotico';
   }

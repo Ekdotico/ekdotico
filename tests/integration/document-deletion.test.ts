@@ -490,6 +490,22 @@ describe('a rename authorised before the role, the permission or the document ch
     expect((await row(id))!.title).toBe(TITLE);
   });
 
+  it('answers 403 to an Owner whose ownership passed to another after the authorisation, and renames nothing', async () => {
+    const owner = await person();
+    const next = await person();
+    const id = await documentOf(owner.id);
+    const allowed = await authorise(owner.id, id, 'document.rename');
+    expect(allowed.outcome).toBe('allowed');
+    // The ownership passes (FR-ED-47): the former Owner is then an Editor, who may not rename by default.
+    await db().document.update({ where: { id }, data: { ownerId: next.id } });
+    await db().documentCollaborator.create({ data: { documentId: id, userId: owner.id, role: 'EDITOR' } });
+    stale.set(`${owner.id} ${id}`, allowed);
+    const response = await rename(owner.cookie, id);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe('forbidden');
+    expect((await row(id))!.title).toBe(TITLE);
+  });
+
   it('answers 404, not 409, where a clearing claimed an unshared document after the authorisation', async () => {
     const owner = await person();
     const id = await documentOf(owner.id);

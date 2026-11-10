@@ -77,7 +77,7 @@ export const PATCH = documentRoute('document.rename', async ({ request, document
     if (now.outcome !== 'allowed') return refusal(now, session.userId, document.id, 'document.rename');
     // Or the document entered a clearing since the request was authorised (FR-AU-91): the true answer is a 409.
     // (A clearing that claimed an unshared document set `deletedAt` too, so `authorise` above has already
-    // answered 404, as a fresh request would. Only a shared document in its notice period gets the 409.)
+    // answered 404, as a fresh request would. Only a document that its clearing has not yet claimed gets the 409.)
     return (
       (await refusedByClearing(document.id, 'change')) ??
       refusal({ outcome: 'not_found' }, session.userId, document.id)
