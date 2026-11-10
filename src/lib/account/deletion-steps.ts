@@ -42,7 +42,7 @@ import { forgetFailedSignIns } from '../auth/sign-in.ts';
 import { declineOffersTo } from '../documents/ownership.ts';
 import { endInvitationsOfAccount } from '../documents/sharing.ts';
 import { istorico, type IstoricoPort } from '../istorico/index.ts';
-import { securityLogIn } from '../security-log.ts';
+import { securityLogIn, securityLogManyIn } from '../security-log.ts';
 import { feedbackStep, type FeedbackOutcome } from './feedback-step.ts';
 
 type Tx = Prisma.TransactionClient;
@@ -314,10 +314,11 @@ async function stepRows(held: Held, now: () => Date): Promise<void> {
     await tx.documentCollaborator.deleteMany({ where: { userId } });
     // NFR-SE-19: "a change to a document's collaborators" has its entry, one for each document, as a
     // removal and a leave have theirs (src/lib/documents/collaborators.ts); the one who acts is the one who goes.
-    // One insert for all of them (P-11); `collaborators_changed` is a kind `securityLogIn` accepts.
-    await tx.securityLogEntry.createMany({
-      data: ended.map(({ documentId }) => ({ kind: 'collaborators_changed', userId, documentId })),
-    });
+    // One insert for all of them (P-11).
+    await securityLogManyIn(
+      tx,
+      ended.map(({ documentId }) => ({ kind: 'collaborators_changed', userId, documentId })),
+    );
     await clearAdmissionAddressOf(tx, { id: userId, email: user.email });
     // Again, now that the account is held: a request for a reset that began before the sessions
     // ended may have written its link since (d).
