@@ -533,6 +533,20 @@ describe('the upload of an image', () => {
     });
   });
 
+  // S-01 of the audit of November 2026: the proxy does not see this path (src/proxy.ts, `config`), so the route takes
+  // the limit of every API request itself.
+  it('takes the limit of API requests for each user, which the proxy takes on every other route (NFR-SE-07)', async () => {
+    const { takeLimit } = await import('../../src/lib/rate-limit.ts');
+    const { settings } = await import('../../src/lib/settings.ts');
+    const owner = await person();
+    const document = await documentOf(owner.id);
+    expect((await takeLimit('API_PER_USER', owner.id, settings().limits.API_PER_USER.max)).ok).toBe(true);
+    const limited = await send(document, owner.cookie, pngOf());
+    expect(limited.status).toBe(429);
+    expect((await bodyOf(limited)).error.code).toBe('rate_limited');
+    expect(storage.objects.size).toBe(0);
+  });
+
   describe('the limit of 30 in any 10 minutes for each user (here 6), NFR-SE-07', () => {
     it('refuses the seventh with a 429 that says when to try again, counts a file that is refused, and logs it once', async () => {
       const owner = await person();

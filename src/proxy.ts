@@ -2,9 +2,9 @@
 // Next.js 16 it is this file, and it runs on the Node.js runtime, so it can
 // read the session's row.
 //
-// It exports no `config.matcher`: it runs on every request. A path a matcher
-// left out would be a path without validation that the list below does not
-// show, and the list is what is reviewed on each deployment (NFR-SE-05).
+// It runs on every request but one, which its `config` below names: a path a
+// matcher left out would be a path without validation that the list below does
+// not show, and the list is what is reviewed on each deployment (NFR-SE-05).
 import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { FORBIDDEN, notAdmitted, tooManyRequests } from './lib/auth/route-answers.ts';
@@ -259,6 +259,22 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
   // carries the identity from here, so there is none for a client to forge.
   return withCookies(onward(request), setCookie);
 }
+
+/**
+ * The one path the proxy does not see: the upload of an image, POST
+ * /api/documents/[id]/images, whatever the method. Next.js 16.4 keeps a copy of
+ * the body of every request the proxy sees, up to one limit for all paths
+ * (`proxyClientMaxBodySize`, next.config.ts), and answers only once the body
+ * has ended; an image is up to 20 MB, and every other body a few KB (S-01 of
+ * the audit of November 2026). Its route makes every check of this file before
+ * it reads a byte: the origin, the session's row, and the founding-team gate
+ * (src/lib/documents/route.ts), and the limit of API requests for each user
+ * (src/lib/images/upload.ts). A path that comes to that route by any other
+ * spelling is seen here, and its body is cut at the limit, which refuses it.
+ */
+export const config = {
+  matcher: ['/((?!api/documents/[^/]+/images$).*)'],
+};
 
 export async function proxy(request: NextRequest): Promise<Response> {
   const progress: Progress = { stage: 'start' };
