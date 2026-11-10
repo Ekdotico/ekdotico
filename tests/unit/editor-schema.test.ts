@@ -2162,6 +2162,53 @@ describe('the tables in the cells of a table (R32)', () => {
         expect(editor.dispatched()).toBe(then);
         expect(editor.mended()).toBe(mended);
       });
+
+      // The review of pull request 74: the server takes a run of text directly in the document, which a browser
+      // that can edit takes out before the binding builds. One that cannot write left it there and built, and the
+      // building threw: the tab was shown as a document that could not be shown until it was reloaded.
+      describe('a run of text directly in the document, which this tab cannot take out yet', () => {
+        const written = () => {
+          const document = new Y.Doc();
+          document.getXmlFragment('default').push([paragraph('Written before')]);
+          return document;
+        };
+
+        it('is not built: the tab keeps its text, and takes it out once it can edit', async () => {
+          const document = written();
+          const editor = open(document, false);
+          const peer = peerOf(document);
+          peer.fragment.insert(1, [words('stray')]);
+          peer.send();
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.text().textContent).toBe('Written before');
+          expect(editor.mended()).toBe(0);
+
+          editor.setEditable(true);
+          await new Promise((done) => setTimeout(done, 0));
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.fragment.toString()).not.toContain('stray');
+          expect(editor.text().textContent).toBe('Written before');
+        });
+
+        it('is built whole once another browser has taken it out, with what came beside it', () => {
+          const document = written();
+          const editor = open(document, false);
+          const peer = peerOf(document);
+          // The stray, a paragraph with it and a change to the paragraph that was there, in one change; then
+          // the stray alone is taken out elsewhere, which changes nothing of the rest.
+          peer.fragment.doc!.transact(() => {
+            peer.fragment.insert(1, [words('stray'), paragraph('Written after')]);
+            ((peer.fragment.get(0) as Y.XmlElement).get(0) as Y.XmlText).insert(0, 'First: ');
+          });
+          peer.send();
+          peer.fragment.delete(1, 1);
+          peer.send();
+          expect(editor.unshown).not.toHaveBeenCalled();
+          expect(editor.text().childCount).toBe(2);
+          expect(editor.text().textContent).toBe('First: Written beforeWritten after');
+          expect(editor.mended()).toBe(0);
+        });
+      });
     });
   });
 });

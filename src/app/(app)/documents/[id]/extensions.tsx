@@ -1065,7 +1065,16 @@ export function holdBinding(
           // next thing this member types writes that table over the row, as
           // this member's change; and text is a fault of the building, which
           // closed the document in every tab.
-          if (unstray() && !writes()) owed = true;
+          //
+          // WHERE THIS TAB CANNOT WRITE (the connection lost, or a repair past
+          // 5 MB) what stands there stays, and the text is NOT built from it:
+          // the tab keeps the text it has, and builds once it can write (the
+          // function returned below), or at the next change once another
+          // browser has taken it out (the review of pull request 74).
+          if (unstray() && !writes()) {
+            owed = true;
+            return;
+          }
           // What the making above left out is not what the building leaves out.
           MENDED.delete(schema);
         }

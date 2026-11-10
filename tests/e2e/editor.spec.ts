@@ -3,6 +3,7 @@
 // FR-ED-41, FR-ED-43, FR-AU-08, NFR-IC-19; NFR-SE-06, A03), against the real
 // collaboration server, which this file starts and stops.
 import { randomUUID } from 'node:crypto';
+import type { WebSocketRoute } from '@playwright/test';
 import { expect, test, type Locator, type Page } from './fixtures.ts';
 import * as Y from 'yjs';
 import {
@@ -3080,6 +3081,62 @@ test('what another client puts directly in the document where it cannot stand is
   await page.reload();
   await expect(text(page)).toContainText('KEEP-THIS');
   await expect(text(page)).not.toContainText('stray');
+});
+
+// The review of pull request 74: the server takes a run of text directly in
+// the document, which a tab that can write takes out before it builds. A tab
+// that had lost its connection could not write when it came back, built the
+// text from the document as the server held it, and was shown as a document
+// that could not be shown until it was reloaded.
+test('a run of text put directly in the document while this tab was not connected is taken out when it is again, and the document stays shown', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const faults: string[] = [];
+  page.on('pageerror', (error) => faults.push(String(error)));
+  // Between the page and the collaboration server: from a moment the test
+  // chooses, the connection is cut and every new one is refused.
+  let down = false;
+  const routes: WebSocketRoute[] = [];
+  await page.routeWebSocket(/\/collab$/, (socket) => {
+    if (down) return void socket.close();
+    const server = socket.connectToServer();
+    socket.onMessage((message) => server.send(message));
+    server.onMessage((message) => socket.send(message));
+    routes.push(socket);
+  });
+  await enter(page);
+  const id = await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Written before.');
+  const hostile = await connectAs(page.context(), id);
+  // Everything typed has reached the server before the connection is cut.
+  await holds(hostile, 'Written before.');
+
+  down = true;
+  for (const route of routes.splice(0)) await route.close();
+  // Past the error state (COLLAB_ERROR_AFTER_MS): the tab cannot write.
+  await expect(status(page, /^Not connected\./)).toBeVisible({ timeout: 20_000 });
+  await expect(text(page)).toHaveAttribute('contenteditable', 'false');
+
+  // Another client, while no tab that can write is open, puts a run of text directly in the document.
+  hostile.provider.document.getXmlFragment('default').insert(1, [words('stray-text')]);
+  await expect.poll(() => hostile.provider.unsyncedChanges).toBe(0);
+  hostile.close();
+
+  down = false;
+  await expect(status(page, 'In sync')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('This document could not be shown')).toHaveCount(0);
+  await expect(text(page)).toHaveAttribute('contenteditable', 'true');
+  await expect(text(page)).toContainText('Written before.');
+  await expect(text(page)).not.toContainText('stray');
+  // The tab that could write again took it out of the shared document.
+  const after = await connectAs(page.context(), id);
+  await expect
+    .poll(() => after.provider.document.getXmlFragment('default').toString())
+    .not.toContain('stray');
+  after.close();
+  expect(faults).toEqual([]);
 });
 
 // D193: syntax colours are always shown, however long the block, by colouring
