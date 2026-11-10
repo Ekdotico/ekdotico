@@ -50,9 +50,20 @@ export function textFields<Name extends string>(
 }
 
 /**
+ * A body that ended at another length than its `Content-Length` declared. Next.js
+ * cuts a body its proxy sees at `proxyClientMaxBodySize` (next.config.ts) and
+ * ends the stream as if it were whole, so a route can be handed a part of what
+ * was sent with no error; this is how it is told. No message: the class says it
+ * all (NFR-SE-19).
+ */
+export class IncompleteBody extends Error {}
+
+/**
  * The bytes of a request's body, or null where it is longer than `maxBytes`.
  * Bounded, so that no request makes a process hold more than its route
- * expects; the reading stops at the bound.
+ * expects; the reading stops at the bound. It rejects with `IncompleteBody`
+ * where the body declared a length and ended at another: only a body sent in
+ * chunks, with no length, is taken as it ends.
  */
 export async function readBytes(request: Request, maxBytes: number): Promise<Buffer | null> {
   const chunks: Uint8Array[] = [];
@@ -70,7 +81,25 @@ export async function readBytes(request: Request, maxBytes: number): Promise<Buf
       chunks.push(value);
     }
   }
+  const declared = request.headers.get('content-length');
+  if (declared !== null && /^[0-9]+$/.test(declared) && Number(declared) !== length)
+    throw new IncompleteBody();
   return Buffer.concat(chunks);
+}
+
+/**
+ * As `readBytes`, for a route that reads JSON from the bytes itself: a body that
+ * ended short of its declared length is read as no body, which no reading of
+ * JSON accepts, so the route gives the answer of a body of the wrong shape and
+ * not a fault.
+ */
+export async function readWhole(request: Request, maxBytes: number): Promise<Buffer | null> {
+  try {
+    return await readBytes(request, maxBytes);
+  } catch (error) {
+    if (error instanceof IncompleteBody) return Buffer.alloc(0);
+    throw error;
+  }
 }
 
 /**
@@ -123,11 +152,12 @@ export function notJson(request: Request): Response | null {
 
 /**
  * The JSON of a request's body, or null where the body is not sent as
- * `application/json`, is longer than `maxBytes`, is not UTF-8, or is not JSON.
+ * `application/json`, is longer than `maxBytes`, ended short of its declared
+ * length, is not UTF-8, or is not JSON.
  */
 export async function readJson(request: Request, maxBytes: number): Promise<unknown> {
   if (!sentAsJson(request)) return null;
-  const bytes = await readBytes(request, maxBytes);
+  const bytes = await readWhole(request, maxBytes);
   if (!bytes) return null;
   try {
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));

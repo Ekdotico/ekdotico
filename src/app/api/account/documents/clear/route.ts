@@ -33,7 +33,7 @@ import {
 import { carryOutClearings } from '../../../../../lib/clearing/deletion.ts';
 import { deliverClearingEmails } from '../../../../../lib/clearing/email.ts';
 import { CLEARING_MESSAGES } from '../../../../../lib/clearing/texts.ts';
-import { errorResponse, notJson, readBytes, sentAsJson } from '../../../../../lib/http.ts';
+import { errorResponse, notJson, readWhole, sentAsJson } from '../../../../../lib/http.ts';
 import { securityLog } from '../../../../../lib/security-log.ts';
 
 export const dynamic = 'force-dynamic';
@@ -104,7 +104,7 @@ async function confirm(request: Request): Promise<Response> {
     if (unsupported) return unsupported;
     // A body over the bound names more documents than a clearing may hold: it is told in those words, and not as a
     // body of the wrong shape (review of pull request 60).
-    const bytes = await readBytes(request, MAX_BODY_BYTES);
+    const bytes = await readWhole(request, MAX_BODY_BYTES);
     if (bytes === null) {
       return errorResponse(422, 'invalid_request', CLEARING_MESSAGES.tooMany(CLEAR_MOST_DOCUMENTS));
     }

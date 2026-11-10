@@ -13,7 +13,7 @@ import { createAuthEndpoint } from 'better-auth/api';
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { faultOf } from '../fault.ts';
 import { acceptedName, NAME_REFUSAL } from '../field-text.ts';
-import { readBytes, sentAsJson } from '../http.ts';
+import { readWhole, sentAsJson } from '../http.ts';
 import { endHeldSession } from '../auth/session-end.ts';
 import { orEndSession } from '../auth/sign-in.ts';
 import { checkPassword } from '../password-rules.ts';
@@ -41,7 +41,7 @@ export type SignUpBody = { json: object } | { refused: 'too_long' | 'not_json' }
  */
 export async function readSignUpBody(request: Request): Promise<SignUpBody> {
   if (!sentAsJson(request)) return { refused: 'not_json' };
-  const bytes = await readBytes(request, MAX_BODY_BYTES);
+  const bytes = await readWhole(request, MAX_BODY_BYTES);
   if (!bytes) return { refused: 'too_long' };
   try {
     const json: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));

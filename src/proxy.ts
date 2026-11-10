@@ -283,8 +283,11 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
  * checks, and so is an identifier written with an encoded character, which
  * stays one segment. Every other spelling of the path (another case, `images`
  * with an encoded character, a suffix, another segment) is seen here, and its
- * body is cut at the limit. And the upload's answer carries none of the cookies this file
- * hands on (`setCookie`: the session's renewed expiry or its fresh signed
+ * body is cut at the limit, which Next.js hands on as if it were whole: a
+ * route refuses a cut body that declared its length (`readBytes`,
+ * src/lib/http.ts), the upload as an image not received in full, and one sent
+ * in chunks with no length only by its bound. And the upload's answer carries
+ * none of the cookies this file hands on (`setCookie`: the session's renewed expiry or its fresh signed
  * copy): the next request that passes here hands them on.
  */
 export const config = {

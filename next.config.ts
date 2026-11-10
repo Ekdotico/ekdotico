@@ -61,9 +61,13 @@ const config: NextConfig = {
     // path as for any other, and sends no answer until the body has ended (next/dist/server/body-streams.js): a client
     // with no account that withholds the last byte holds that much of the process (S-01 of the audit of November 2026).
     // The largest body a route the proxy sees reads is 256 KB (src/app/api/account/documents/{transfer,clear}). Next.js
-    // drops the whole chunk that crosses the limit, and a chunk from the socket is up to 64 KB, so 320 KB keeps more
-    // than 256 KB of a body that is longer: its route sees that it is past its bound, and refuses it. The upload of an image, of up to 20 MB (FR-ED-08, NFR-SE-18), is the one path the
-    // proxy does not see, so this limit does not cut it; its route reads its own body, to its own bound.
+    // drops the whole chunk that crosses the limit and ends the body as if it were whole, and a chunk from the socket
+    // is up to 64 KB, so 320 KB keeps more than 256 KB of a body that is longer: its route sees that it is past its
+    // bound, and refuses it. A body that declares its length is refused as well where it is cut, whatever the bounds
+    // (`readBytes`, src/lib/http.ts); one sent in chunks declares none, and nothing but this margin tells its cut. So
+    // EVERY ROUTE'S BOUND STAYS AT LEAST ONE 64 KB READ BELOW THIS LIMIT: a route that reads more raises the limit too.
+    // The upload of an image, of up to 20 MB (FR-ED-08, NFR-SE-18), is the one path the proxy does not see, so this
+    // limit does not cut it; its route reads its own body, to its own bound.
     proxyClientMaxBodySize: '320kb',
   },
   headers: async () => [

@@ -274,6 +274,24 @@ describe('the upload of an image', () => {
       expect(response.status).toBe(413);
       expect(storage.objects.size).toBe(0);
     });
+
+    // Next.js cuts a body its proxy sees at 320 KB and ends it as if whole (next.config.ts): an image that reached
+    // this route so would be stored cut. A body that ends short of the length it declared is not received in full
+    // (the second review of pull request 75, B3).
+    it('refuses an image that ends short of its declared length as not received in full, and stores nothing', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      const whole = pngOf();
+      const response = await send(document, owner.cookie, whole, {
+        'content-length': String(whole.length + 1000),
+      });
+      expect(response.status).toBe(400);
+      expect((await bodyOf(response)).error.message).toBe(
+        'The image did not arrive in full, so it was not added. Choose it again and try again.',
+      );
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+    });
   });
 
   describe('the 100 MB of a document (here 25 MB, by the setting)', () => {
