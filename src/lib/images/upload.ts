@@ -1,11 +1,11 @@
 // The upload of an image (FR-ED-08, NFR-SE-18), called by
 // POST /api/documents/[id]/images once `documentRoute` has decided the origin,
-// the session's row, the document, and `document.content.edit`. The checks, in
-// the order of docs/plan/slice-19.md, section 4:
+// the session's row, the limit of API requests for the user (which the proxy
+// takes on every other route; it does not see this one, so that Next.js does
+// not hold its body: src/proxy.ts, `config`), the document, and
+// `document.content.edit`. The checks, in the order of docs/plan/slice-19.md,
+// section 4:
 //
-//   0. the limit of API requests for the user (429), which the proxy takes on
-//      every other route: it does not see this one, so that Next.js does not
-//      hold its body (src/proxy.ts, `config`; S-01 of the audit of November 2026);
 //   1. a store to put it in (503 where there is none);
 //   2. the limit of 30 in any 10 minutes for the user (429), counted before
 //      the work, and given back only where the work FAILS BY A FAULT OF OURS
@@ -26,14 +26,14 @@
 //
 // The body is the bytes of the image and nothing else. No file name is read
 // from anywhere, and the declared `Content-Type` is not looked at.
-import { fault, tooManyRequests } from '../auth/route-answers.ts';
+import { fault } from '../auth/route-answers.ts';
 import { db } from '../db.ts';
 import { refusedByClearing } from '../clearing/answer.ts';
 import { refusal } from '../documents/access.ts';
 import type { DocumentCall } from '../documents/route.ts';
 import { faultOf } from '../fault.ts';
 import { readBytes } from '../http.ts';
-import { logLimitReached, takeLimit, takeLimitReturnable } from '../rate-limit.ts';
+import { logLimitReached, takeLimitReturnable } from '../rate-limit.ts';
 import { settings } from '../settings.ts';
 import {
   fullAnswer,
@@ -50,10 +50,6 @@ import { newObjectKey } from './storage.ts';
 import { imageStorage } from './store.ts';
 
 export async function uploadImage({ request, document, session }: DocumentCall): Promise<Response> {
-  const requests = await takeLimit('API_PER_USER', session.userId);
-  if (!requests.ok) {
-    return tooManyRequests('API_PER_USER', session.userId, requests.retryAfterSeconds, session.userId);
-  }
   const storage = imageStorage();
   if (!storage) return unavailableAnswer();
 

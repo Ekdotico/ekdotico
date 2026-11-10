@@ -2,9 +2,15 @@
 // Next.js 16 it is this file, and it runs on the Node.js runtime, so it can
 // read the session's row.
 //
-// It runs on every request but one, which its `config` below names: a path a
-// matcher left out would be a path without validation that the list below does
-// not show, and the list is what is reviewed on each deployment (NFR-SE-05).
+// It runs on every request but one: `POST /api/documents/[id]/images`, the
+// upload of an image, whatever the method, which `config` at the end of this
+// file leaves out so that Next.js does not hold its body (S-01 of the audit of
+// November 2026). That path requires a session like any other; its route makes
+// this file's checks itself before it reads a byte (src/lib/documents/route.ts,
+// with `apiLimit`), and its module holds that one handler
+// (tests/unit/routes.test.ts). Any other path a matcher left out would be a
+// path without validation that the list below does not show, and the list, with
+// this exception, is what is reviewed on each deployment (NFR-SE-05).
 import { NextResponse, type NextRequest } from 'next/server';
 import { IDENTITY_BASE_PATH } from './lib/auth/auth.ts';
 import { FORBIDDEN, notAdmitted, tooManyRequests } from './lib/auth/route-answers.ts';
@@ -265,12 +271,21 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
  * /api/documents/[id]/images, whatever the method. Next.js 16.4 keeps a copy of
  * the body of every request the proxy sees, up to one limit for all paths
  * (`proxyClientMaxBodySize`, next.config.ts), and answers only once the body
- * has ended; an image is up to 20 MB, and every other body a few KB (S-01 of
- * the audit of November 2026). Its route makes every check of this file before
- * it reads a byte: the origin, the session's row, and the founding-team gate
- * (src/lib/documents/route.ts), and the limit of API requests for each user
- * (src/lib/images/upload.ts). A path that comes to that route by any other
- * spelling is seen here, and its body is cut at the limit, which refuses it.
+ * has ended; an image is up to 20 MB, and every other body at most 256 KB
+ * (S-01 of the audit of November 2026). Its route makes every check of this
+ * file before it reads a byte, in this file's order: the origin, the session's
+ * row, the limit of API requests for each user, and the founding-team gate
+ * (src/lib/documents/route.ts, `apiLimit`).
+ *
+ * Next.js tests the matcher on the path after it has taken the data form of a
+ * page apart, so `/_next/data/<build>/api/documents/[id]/images.json` is not
+ * seen here either: it comes to the same upload route, which makes the same
+ * checks, and so is an identifier written with an encoded character, which
+ * stays one segment. Every other spelling of the path (another case, `images`
+ * with an encoded character, a suffix, another segment) is seen here, and its
+ * body is cut at the limit. And the upload's answer carries none of the cookies this file
+ * hands on (`setCookie`: the session's renewed expiry or its fresh signed
+ * copy): the next request that passes here hands them on.
  */
 export const config = {
   matcher: ['/((?!api/documents/[^/]+/images$).*)'],

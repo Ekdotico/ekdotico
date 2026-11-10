@@ -6,10 +6,11 @@
 //
 // Nothing here is of Next.js: a handler is called with a Request, and with the
 // parameters of the path as Next.js 16 hands them, a promise.
-import { fault, notAdmitted, refusedOrigin } from '../auth/route-answers.ts';
+import { fault, notAdmitted, refusedOrigin, tooManyRequests } from '../auth/route-answers.ts';
 import { validateSession, validateSessionRow, type ValidSession } from '../auth/session.ts';
 import { clearingRefusal, type Change } from '../clearing/period.ts';
 import { onlyReads } from '../http.ts';
+import { takeLimit } from '../rate-limit.ts';
 import { authorise, authoriseDeleted, refusal, type DocumentRow } from './access.ts';
 import type { DocumentRole, Permission } from './permissions.ts';
 
@@ -47,8 +48,13 @@ export type DuringClearing = 'refused' | 'allowed';
 // that nothing outside this module can mark one.
 const made = new WeakMap<
   object,
-  { permission: Permission; state: DocumentState; row: boolean; clearing: DuringClearing }
+  { permission: Permission; state: DocumentState; row: boolean; clearing: DuringClearing; apiLimit: boolean }
 >();
+
+/** Whether a handler takes the proxy's limit of API requests itself; undefined where this module did not make it. */
+export function takesApiLimit(handler: unknown): boolean | undefined {
+  return typeof handler === 'function' ? made.get(handler)?.apiLimit : undefined;
+}
 
 /** The permission a handler asks for, or undefined where this module did not make it. */
 export function permissionOf(handler: unknown): Permission | undefined {
@@ -98,6 +104,7 @@ function make(
   handler: Handler,
   row: boolean,
   clearing: DuringClearing,
+  apiLimit = false,
 ): DocumentRoute {
   const route: DocumentRoute = async (request, { params }) => {
     try {
@@ -118,6 +125,16 @@ function make(
       const validation = row
         ? await validateSessionRow(request.headers)
         : await validateSession(request.method, request.headers);
+      // NFR-SE-07, NFR-SE-19: on a path the proxy does not see (src/proxy.ts, `config`), its limit of API requests,
+      // where it takes it: for the account the session is of, the founding-team gate's too, and before every refusal
+      // below, so that the entries of the log those write are bounded as the requests are.
+      const known = validation.session ?? validation.stopped;
+      if (apiLimit && known) {
+        const limit = await takeLimit('API_PER_USER', known.userId);
+        if (!limit.ok)
+          return await tooManyRequests('API_PER_USER', known.userId, limit.retryAfterSeconds, known.userId);
+      }
+
       const { session } = validation;
       if (!session) return await notAdmitted(validation);
 
@@ -148,7 +165,7 @@ function make(
       return fault('documents', error);
     }
   };
-  made.set(route, { permission, state, row, clearing });
+  made.set(route, { permission, state, row, clearing, apiLimit });
   return route;
 }
 
@@ -157,18 +174,19 @@ function make(
  * `sessionRow` the session is validated against its row even for a GET, which is what the issue of a link
  * to an image does (NFR-SE-02, NFR-SE-17 (c)); a handler that changes state reads the row anyway. With
  * `duringClearing: 'allowed'` a handler that changes state is not refused for a document in a clearing
- * (see `DuringClearing`); without it, it is.
+ * (see `DuringClearing`); without it, it is. With `apiLimit` it takes the proxy's limit of API requests itself,
+ * which a route on a path the proxy does not see must (src/proxy.ts, `config`).
  */
 export function documentRoute(
   permission: Permission,
   handler: Handler,
-  options: { sessionRow?: boolean; duringClearing?: DuringClearing } = {},
+  options: { sessionRow?: boolean; duringClearing?: DuringClearing; apiLimit?: boolean } = {},
 ): DocumentRoute {
   // FR-AU-91, FR-ED-44 (d): the draft export is what the period grants every collaborator; it changes nothing of
   // the document (it is a POST because it makes a file), so it is open during a clearing without a word from the
   // route that asks for it. Every other permission is closed unless the route says otherwise.
   const during = options.duringClearing ?? (permission === 'document.export.draft' ? 'allowed' : 'refused');
-  return make('live', permission, handler, options.sessionRow === true, during);
+  return make('live', permission, handler, options.sessionRow === true, during, options.apiLimit === true);
 }
 
 /**

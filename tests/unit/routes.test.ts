@@ -17,6 +17,7 @@ import {
   permissionOf,
   readsSessionRow,
   stateOf,
+  takesApiLimit,
 } from '../../src/lib/documents/route.ts';
 import { routes, SESSIONLESS, withSession } from '../routes.ts';
 
@@ -94,6 +95,9 @@ const ON_A_DELETED_DOCUMENT = ['src/app/api/documents/[id]/restore/route.ts POST
 // by hand, a restore). These alone are left open, because they change who may do what and not the document, and
 // do not bring the day forward: removing a collaborator, a change of role, leaving, the permission set, an offer of
 // ownership, and revoking an invitation. A handler that only reads is never refused.
+// The handlers on a path the proxy does not see (src/proxy.ts, `config`), which take its limit of API requests.
+const UNSEEN_BY_THE_PROXY = ['src/app/api/documents/[id]/images/route.ts POST'];
+
 const OPEN_DURING_A_CLEARING = [
   'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts PATCH',
   'src/app/api/documents/[id]/collaborators/[collaboratorId]/route.ts DELETE',
@@ -178,9 +182,29 @@ describe('the route handlers of a document', () => {
         expect(duringClearingOf(handler), `${route} ${method}`).toBe(
           OPEN_DURING_A_CLEARING.includes(`${route} ${method}`) ? 'allowed' : 'refused',
         );
+        // NFR-SE-07: the proxy's limit of API requests, taken by the handler where the proxy does not see the path.
+        expect(takesApiLimit(handler), `${route} ${method}`).toBe(
+          UNSEEN_BY_THE_PROXY.includes(`${route} ${method}`),
+        );
       }
     },
   );
+
+  // S-01 of the audit of November 2026: the proxy does not see the upload's path, for any method (src/proxy.ts,
+  // `config`). A handler added beside the upload would have no proxy in front of it, so the module holds the upload
+  // and nothing else.
+  it('holds on the path the proxy does not see the upload alone, which takes the limit of API requests itself', async () => {
+    const upload = (await import('../../src/app/api/documents/[id]/images/route.ts')) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(upload).sort()).toEqual(['POST', 'dynamic']);
+    expect(upload.dynamic).toBe('force-dynamic');
+    expect(permissionOf(upload.POST)).toBe('document.content.edit');
+    expect(takesApiLimit(upload.POST)).toBe(true);
+    expect(takesApiLimit(documentRoute('document.view', () => new Response()))).toBe(false);
+    expect(takesApiLimit(async () => new Response())).toBeUndefined();
+  });
 
   it('names no handler that does not exist', async () => {
     for (const row of [

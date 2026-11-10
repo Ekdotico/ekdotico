@@ -24,12 +24,9 @@
 //      after this step is finished by the next, and an instance that finds the
 //      object gone has nothing to answer for.
 //   4. DELETE the row, only where it still holds the claim this run made.
-import * as Y from 'yjs';
-import { applyState } from '../collab/state.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { settings } from '../settings.ts';
-import { imageIdsIn } from './references.ts';
 import type { ImageStorage } from './storage.ts';
 import { imageStorage } from './store.ts';
 
@@ -100,9 +97,21 @@ export async function deleteExpiredImages(storage: ImageStorage, now: Date = new
 
 /**
  * The images the stored state of a document holds; none where the document or its state is gone. A state that
- * cannot be decoded rejects, and the image is kept (S-06 of the audit of November 2026).
+ * cannot be decoded rejects, and the image is kept (S-06 of the audit of November 2026). Every state was loaded once
+ * before it was stored (src/lib/collab/state.ts), so one that cannot be is damage to the database itself.
+ *
+ * Yjs, and the two modules that load it, are loaded here and not at the top: this module is on the load path of the timers (src/lib/timers.ts), which the
+ * web process starts, and Yjs writes a warning when it is loaded (tests/unit/auth-modules.test.ts).
+ *
+ * ponytail: the whole state of a document is decoded on the web process, up to 5 MB, once a run for each document
+ * with an image due; a decode in the collaboration server if a run ever shows in a profile.
  */
 async function imagesStoredIn(documentId: string): Promise<Set<string>> {
+  const [Y, { applyState }, { imageIdsIn }] = await Promise.all([
+    import('yjs'),
+    import('../collab/state.ts'),
+    import('./references.ts'),
+  ]);
   const row = await db().document.findUnique({ where: { id: documentId }, select: { yjsState: true } });
   const document = new Y.Doc();
   if (row?.yjsState) applyState(document, row.yjsState);

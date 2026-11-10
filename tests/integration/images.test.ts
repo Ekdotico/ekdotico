@@ -533,6 +533,40 @@ describe('the deletion of images (NFR-SE-18; NFR-RE-15: scheduled, and idempoten
     expect(storage.objects.has(shown.objectKey)).toBe(true);
   });
 
+  it('keeps an image whose document holds a state that cannot be decoded: the object, the row, and its claim', async () => {
+    const user = await owner();
+    const document = await documentOf(user);
+    const image = await out(document, user, new Date(now.getTime() - 31 * DAY));
+    const held = new Y.Doc();
+    const block = new Y.XmlElement('image');
+    block.setAttribute('id', image.id);
+    held.getXmlFragment('default').insert(0, [block]);
+    const whole = encodeState(held);
+    await db().document.update({
+      where: { id: document },
+      data: { yjsState: whole.slice(0, whole.length >> 1) },
+    });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await deleteExpiredImages(storage, now)).toBe(0);
+    expect(storage.removals).toEqual([]);
+    expect(storage.objects.has(image.objectKey)).toBe(true);
+    // The claim stays, and goes stale: the next run after an hour asks again.
+    expect((await rowOf(image.id))?.deletionClaimedAt).not.toBeNull();
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`^image deletion: image ${image.id} kept \\(`)),
+    );
+  });
+
+  it('deletes an image whose document has no stored state: nothing can show it', async () => {
+    const user = await owner();
+    const document = await documentOf(user);
+    const image = await out(document, user, new Date(now.getTime() - 31 * DAY));
+    await db().document.update({ where: { id: document }, data: { yjsState: null } });
+    expect(await deleteExpiredImages(storage, now)).toBe(1);
+    expect(storage.removals).toEqual([image.objectKey]);
+    expect(await rowOf(image.id)).toBeNull();
+  });
+
   describe('a run that does not finish', () => {
     it('leaves the claim, and no other run takes an image that is claimed for less than an hour', async () => {
       const user = await owner();
