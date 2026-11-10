@@ -12,6 +12,6 @@ const [email, title] = process.argv.slice(2);
 const user = await db().user.findUnique({ where: { email }, select: { id: true } });
 if (!user || !title) throw new Error('usage: own-document.ts <email of an account> <title>');
 const { id } = await createDocument(user.id);
-await renameDocument(id, title);
+await renameDocument(id, title, user.id);
 console.log(id);
 await db().$disconnect();

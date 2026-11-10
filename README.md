@@ -4,7 +4,7 @@ Ekdotico is a browser-based academic writing platform: a collaborative block edi
 
 This repository is the application. It does **not** contain Istorico, the Ekdotico provenance system (recording, signing, and `verify.ekdoti.co`), which is [`Ekdotico/istorico`](https://github.com/Ekdotico/istorico). The application meets Istorico only through a port, which the integration contract in the Docs defines.
 
-**Status:** pre-launch. The walking skeleton of α 0.1.0 is in place: the toolchain, the checks, the database provisioning, and a health check for each of the two processes. No feature is built yet. The repository is private until the first hosted release (NFR-IC-11); the licence is `AGPL-3.0-only`.
+**Status:** pre-launch. Most of the features of α 0.1.0 are built: admission and sign-in, documents and their sharing, the collaborative editor with images, the draft export, and the deletion of documents and of accounts. The slices still open are listed in the build handoff, and nothing is deployed. The repository is private until the first hosted release (NFR-IC-11); the licence is `AGPL-3.0-only`.
 
 ## Specification
 

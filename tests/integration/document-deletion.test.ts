@@ -398,7 +398,7 @@ describe('a deletion beside an edit (FR-ED-36: restored "as they were at deletio
     // The row as the DELETE request read it when it was authorised.
     const authorised = (await row(id))!;
     await sleep(20);
-    const answered = await renameDocument(id, 'Renamed beside the deletion');
+    const answered = await renameDocument(id, 'Renamed beside the deletion', owner.id);
     const renamed = (await row(id))!;
     // A rename is an edit: it moves the time, and answers with the row it wrote.
     expect(renamed.updatedAt.getTime()).toBeGreaterThan(authorised.updatedAt.getTime());
@@ -428,7 +428,7 @@ describe('a deletion beside an edit (FR-ED-36: restored "as they were at deletio
     const deleted = (await row(id))!;
     await sleep(20);
 
-    expect(await renameDocument(id, 'Renamed while deleted')).toBeNull();
+    expect(await renameDocument(id, 'Renamed while deleted', owner.id)).toBeNull();
     // The route: its authorisation is a moment older than the deletion.
     stale.set(`${owner.id} ${id}`, allowed);
     const refused = await seen(await rename(owner.cookie, id));

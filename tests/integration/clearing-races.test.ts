@@ -234,7 +234,7 @@ describe('the confirmation against the other things the Owner can do to the docu
     await behind('document', documentId, async (queued) => {
       await queued(async () => void (await confirmFor(owner.id)));
       await queued(async () => {
-        renamed = await renameDocument(documentId, 'After');
+        renamed = await renameDocument(documentId, 'After', owner.id);
       });
     });
     expect(renamed).toBeNull();

@@ -68,10 +68,13 @@ export const PATCH = documentRoute('document.rename', async ({ request, document
     );
   }
 
-  const renamed = await renameDocument(document.id, read.title);
+  const renamed = await renameDocument(document.id, read.title, session.userId);
   // Deleted by a request beside this one, after it was authorised: nothing
   // was renamed, and the document is gone, as to anyone (FR-ED-36).
   if (!renamed) {
+    // Or the role or the permission went since: the caller is told so, as the DELETE below tells it.
+    const now = await authorise(session.userId, document.id, 'document.rename');
+    if (now.outcome !== 'allowed') return refusal(now, session.userId, document.id, 'document.rename');
     // Or the document entered a clearing since the request was authorised (FR-AU-91): the true answer is a 409.
     return (
       (await refusedByClearing(document.id, 'change')) ??

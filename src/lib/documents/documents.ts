@@ -8,6 +8,7 @@ import { fieldText } from '../field-text.ts';
 import { istorico } from '../istorico/index.ts';
 import { ensurePersonalWorkspace } from '../workspace.ts';
 import { COLLABORATOR_ROLE, defaultPermissionSet, holds } from './permissions.ts';
+import { lockDocument } from './sharing.ts';
 
 /** FR-ED-35, verbatim: the title a document has where none is given. */
 export const DEFAULT_TITLE = 'Untitled document';
@@ -173,11 +174,31 @@ export interface ListedDocument extends DocumentSummary {
  * (src/lib/collab/state.ts). The deletion, the restore, and the claim of the
  * permanent deletion and its release are not edits, and do not name the column.
  */
-export async function renameDocument(id: string, title: string): Promise<DocumentSummary | null> {
-  const [renamed] = await db().document.updateManyAndReturn({
-    // FR-AU-91: not a document in a clearing, whose title "no one can change" for the period.
-    where: { id, deletedAt: null, clearingAt: null },
-    data: { title, updatedAt: new Date() },
+export async function renameDocument(
+  id: string,
+  title: string,
+  renamerId: string,
+): Promise<DocumentSummary | null> {
+  return db().$transaction(async (tx) => {
+    // The row is held, and the role and the permission set are read under it, as every other write with a body
+    // does: the Owner may have taken the permission away, or removed the caller, since the request was authorised.
+    if (!(await lockDocument(tx, id))) return null;
+    const found = await tx.document.findUnique({
+      where: { id },
+      select: {
+        ownerId: true,
+        permissionSet: true,
+        collaborators: { where: { userId: renamerId }, select: { role: true } },
+      },
+    });
+    const held = found?.collaborators[0]?.role;
+    const role = found?.ownerId === renamerId ? 'owner' : held ? COLLABORATOR_ROLE[held] : null;
+    if (!found || !role || !holds(found.permissionSet, role, 'document.rename')) return null;
+    const [renamed] = await tx.document.updateManyAndReturn({
+      // FR-AU-91: not a document in a clearing, whose title "no one can change" for the period.
+      where: { id, deletedAt: null, clearingAt: null },
+      data: { title, updatedAt: new Date() },
+    });
+    return renamed ? summary(renamed) : null;
   });
-  return renamed ? summary(renamed) : null;
 }

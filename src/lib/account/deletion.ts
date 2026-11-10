@@ -27,7 +27,8 @@ export interface OwnedDocuments {
 export async function ownedDocuments(userId: string): Promise<OwnedDocuments> {
   const [owned, deleted] = await Promise.all([
     db().document.count({ where: { ownerId: userId } }),
-    db().document.count({ where: { ownerId: userId, deletedAt: { not: null } } }),
+    // A document under a clearing is not in that list, though its claim sets `deletedAt` (FR-AU-91).
+    db().document.count({ where: { ownerId: userId, deletedAt: { not: null }, clearingAt: null } }),
   ]);
   return { owned, deleted };
 }

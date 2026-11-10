@@ -511,6 +511,30 @@ describe('the list of documents (FR-ED-35; API design, "Documents")', () => {
   });
 });
 
+describe('a rename is written under the role the caller holds now (audit row F1; FR-ED-39)', () => {
+  it('writes nothing for an account that lost the role or the permission after the request was authorised', async () => {
+    const owner = await person();
+    const editor = await person();
+    const id = await documentOf(owner.cookie);
+    const { renameDocument } = await import('../../src/lib/documents/documents.ts');
+    await db().documentCollaborator.create({ data: { documentId: id, userId: editor.id, role: 'EDITOR' } });
+    // The Owner gave Editors the permission, and takes it back before the write.
+    const given = defaultPermissionSet();
+    given['document.rename'].editor = true;
+    await db().document.update({ where: { id }, data: { permissionSet: given } });
+    expect(await renameDocument(id, 'By the Editor', editor.id)).toMatchObject({ title: 'By the Editor' });
+    await db().document.update({ where: { id }, data: { permissionSet: defaultPermissionSet() } });
+    expect(await renameDocument(id, 'After the permission went', editor.id)).toBeNull();
+    // Removed altogether.
+    await db().document.update({ where: { id }, data: { permissionSet: given } });
+    await db().documentCollaborator.deleteMany({ where: { documentId: id, userId: editor.id } });
+    expect(await renameDocument(id, 'After the removal', editor.id)).toBeNull();
+    expect((await row(id)).title).toBe('By the Editor');
+    // The Owner always may.
+    expect(await renameDocument(id, 'By the Owner', owner.id)).toMatchObject({ title: 'By the Owner' });
+  });
+});
+
 describe('another account’s document (NFR-SE-04, FR-ED-39; the answer to Q8)', () => {
   it('cannot be listed, read, or renamed by a second account', async () => {
     const owner = await person();
@@ -1076,7 +1100,7 @@ describe('the content of a document is in no row that did not ask for it (src/li
     expectWithout(await authorise(owner.id, id, 'document.view'), 'authorise');
     expectWithout(await documents.listDocuments(owner.id), 'listDocuments');
     expectWithout(await documents.createDocument(owner.id), 'createDocument');
-    expectWithout(await documents.renameDocument(id, 'Renamed again'), 'renameDocument');
+    expectWithout(await documents.renameDocument(id, 'Renamed again', owner.id), 'renameDocument');
     // What `documentRoute` hands a handler.
     let handed: unknown;
     const route = documentRoute('document.view', (call) => {
