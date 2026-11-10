@@ -2029,6 +2029,45 @@ describe('the sockets of a session that has ended (NFR-SE-03 (e), (f); FR-ED-40 
       await local.stop();
     }
   });
+
+  // B1 of the second review of pull request 74: past `onConnect` the library still loads the document, and
+  // makes the connection and applies what the client sent meanwhile before `connected`, whatever the session.
+  it('takes nothing from an opening the library was finishing when the session ended (B1)', async () => {
+    const local = await inProcess();
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    const socket = new WebSocket(`ws://127.0.0.1:${local.port}${COLLAB_PATH}`, {
+      headers: { cookie: owner.cookie, origin: ORIGIN },
+    } as never);
+    try {
+      await new Promise((resolve) => socket.addEventListener('open', resolve));
+      // The load of the document, which comes after `onConnect`: the session ends, and the re-check runs, while it reads.
+      const documents = db().document;
+      const real = documents.findUniqueOrThrow.bind(documents);
+      let ended = false;
+      vi.spyOn(documents, 'findUniqueOrThrow').mockImplementationOnce((async (args: never) => {
+        const state = await real(args);
+        await db().session.deleteMany({ where: { userId: owner.id } });
+        await local.recheck();
+        ended = true;
+        return state;
+      }) as never);
+      // The opening, and an update sent at once behind it, which the library holds until the connection is made.
+      socket.send(opening(id));
+      socket.send(sent(id, SYNC, UPDATE, forgedUpdate('written after the session ended')));
+      await until(() => ended);
+      await sleep(150);
+      // Before the socket is destroyed (`SOCKET_END_MS`): no connection, and nothing taken.
+      const held = local.hocuspocus.documents.get(id);
+      expect(held?.getConnections().length ?? 0).toBe(0);
+      expect(held?.getArray('changes').toArray() ?? []).toEqual([]);
+      await sleep(2500);
+      expect(await stored(id)).toBeNull();
+    } finally {
+      socket.close();
+      await local.stop();
+    }
+  });
 });
 
 describe('the order of the handshake (FR-AU-08; API design, "Collaboration connection")', () => {

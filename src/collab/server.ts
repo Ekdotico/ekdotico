@@ -131,7 +131,8 @@ export interface CollabOptions {
  * holds on its document (NFR-PE-05), which carries its slot and the name of
  * its cursor (FR-ED-17).
  */
-export type CollabContext = CollabConnection & { place: Place };
+/** `handle` names the record of the socket's handshake (`admitted`), which the end of its session forgets. */
+export type CollabContext = CollabConnection & { place: Place; handle: string };
 
 // What the write itself may take and still be inside the period.
 const STORE_WRITE_MARGIN_MS = 500;
@@ -1126,7 +1127,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       const connection = recordConnection(session, access.document, access.role);
       // (j) The library discards every update it receives on a read-only connection.
       connectionConfig.readOnly = isReadOnly(connection);
-      return { ...connection, place };
+      return { ...connection, place, handle };
     },
 
     /**
@@ -1159,6 +1160,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // Closed before this hook ran (the socket went while the document loaded): `onDisconnect`
       // gives its place back, and there is no connection to hold it for.
       if (!connection.document.hasConnection(connection)) return;
+      // The session ended after `onConnect` returned, while the library made the connection (`beforeHandleMessage`).
+      if (!admitted.has(context.handle)) {
+        connection.close({ code: 1000, reason: REFUSAL.SESSION_ENDED });
+        return;
+      }
       if (!places.hold(context.place)) {
         // Its place expired while it was made, and was taken by another: it
         // has none, and the client asks again.
@@ -1276,7 +1282,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
      * library decodes it (`AWARENESS_MAX_BYTES`). An object with no message,
      * as in `beforeSync`: what is closed with it is not the client's to read.
      */
-    async beforeHandleMessage({ update, connection }) {
+    async beforeHandleMessage({ update, connection, context }) {
+      // NFR-SE-03 (f), B1 of the second review of pull request 74: nothing more is taken on a socket whose
+      // session has ended (`endSockets`). Here, and not only in `connected`: the library made the connection
+      // after `onConnect` and applies what the client sent meanwhile before that hook, through this one.
+      if (!admitted.has(context.handle)) throw refuse(REFUSAL.SESSION_ENDED);
       if (awarenessTooLong(update)) throw {};
       // The identifiers of an awareness message are noted for `beforeHandleAwareness`, which
       // runs for this same message: the connection's messages are handled one at a time.
