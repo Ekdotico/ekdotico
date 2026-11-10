@@ -26,6 +26,7 @@ const limits = await import('../../src/lib/collab/state.ts');
 const { applyState } = limits;
 const { COLLAB_PATH, REFUSAL } = await import('../../src/lib/collab/protocol.ts');
 const { PERMISSIONS } = await import('../../src/lib/documents/permissions.ts');
+const { publishCollabEvent } = await import('../../src/lib/collab/events.ts');
 
 // What `authorise` answers, for the tests that run the server in this process
 // and need an answer no account can be given until sharing is built.
@@ -1933,6 +1934,103 @@ async function inProcess(messages = settings().limits.COLLAB_MESSAGES_PER_USER) 
   return { ...collab, port: (collab.httpServer.address() as AddressInfo).port };
 }
 
+// S-04 of the audit of November 2026, and the review of pull request 74: the end of a session ends its sockets
+// wherever it is found, and opening a document past the limit costs no reading of the session.
+describe('the sockets of a session that has ended (NFR-SE-03 (e), (f); FR-ED-40 (a), FR-ED-41)', () => {
+  it(
+    'opens a document past the limit without reading the session (A-1, B-1)',
+    { timeout: 60_000 },
+    async () => {
+      const local = await inProcess();
+      try {
+        const owner = await person();
+        const client = connect(local.port, owner.cookie);
+        const { max } = settings().limits.HANDSHAKES_PER_USER;
+        // The upgrade takes one, and each document opened takes one more.
+        for (let opened = 1; opened < max; opened += 1) {
+          expect(await client.open(randomUUID()).outcome).toEqual({ refused: REFUSAL.NO_ACCESS });
+        }
+        const read = vi.spyOn(db().session, 'findMany');
+        expect(await client.open(randomUUID()).outcome).toEqual({ refused: REFUSAL.LIMITED });
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        await local.stop();
+      }
+    },
+  );
+
+  it('is closed by the re-check, with the document it carries, and nothing more is opened on it (A-4)', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person();
+      const id = await documentOf(owner.id);
+      const client = connect(local.port, owner.cookie);
+      await client.open(id).synced;
+      let closed = false;
+      client.socket.webSocket!.addEventListener('close', () => (closed = true));
+
+      await db().session.deleteMany({ where: { userId: owner.id } });
+      await local.recheck();
+      const close = await until(() => client.framesFor(id).find((each) => each.type === CLOSE));
+      expect(close.rest).toBe(closedBecause(REFUSAL.SESSION_ENDED));
+      await until(() => closed);
+      expect(local.hocuspocus.documents.get(id)?.getConnections().length ?? 0).toBe(0);
+      await until(() => local.held().handshakes === 0 && local.held().sockets === 0);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('is closed by the event of a sign-out although it carries no document (B-2)', async () => {
+    const local = await inProcess();
+    try {
+      await local.listenForEvents();
+      const owner = await person();
+      const { closed, status } = upgradeOver(local.port, { Cookie: owner.cookie, Origin: ORIGIN });
+      await until(() => status() === 101);
+      expect(local.held().handshakes).toBe(1);
+
+      await db().session.deleteMany({ where: { userId: owner.id } });
+      await publishCollabEvent({ kind: 'session-ended', userId: owner.id });
+      await closed;
+      expect(local.held().handshakes).toBe(0);
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it('refuses a document whose opening was under way when the session ended (A-3)', async () => {
+    const local = await inProcess();
+    try {
+      const owner = await person();
+      const first = await documentOf(owner.id);
+      const second = await documentOf(owner.id);
+      const client = connect(local.port, owner.cookie);
+      await client.open(first).synced;
+
+      // The opening of the second reads the session while it stands; the session ends, and the re-check runs,
+      // before the opening goes on.
+      const sessions = db().session;
+      const real = sessions.findMany.bind(sessions);
+      vi.spyOn(sessions, 'findMany').mockImplementationOnce((async (args: never) => {
+        const rows = await real(args);
+        await sessions.deleteMany({ where: { userId: owner.id } });
+        await local.recheck();
+        return rows;
+      }) as never);
+      // `authorise` (mocked above) reads `answers` first: the opening never goes past the session.
+      const asked = vi.spyOn(answers, 'get');
+      client.open(second);
+      await until(() => local.held().handshakes === 0);
+      await sleep(300);
+      expect(asked).not.toHaveBeenCalledWith(`${owner.id} ${second}`);
+      expect(local.hocuspocus.documents.get(second)?.getConnections().length ?? 0).toBe(0);
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
 describe('the order of the handshake (FR-AU-08; API design, "Collaboration connection")', () => {
   it('checks the origin before it reads the cookie, and the session before it takes the limit', async () => {
     const local = await inProcess();
@@ -2188,15 +2286,19 @@ describe('opening documents on an accepted socket (NFR-SE-07)', () => {
       );
       await new Promise((resolve) => socket.addEventListener('open', resolve));
       const limit = vi.spyOn(valkey(), 'eval');
+      const sessions = vi.spyOn(db().session, 'findMany');
       const queries = vi.spyOn(db().document, 'findUnique');
       for (let n = 0; n < 150; n++) socket.send(opening(randomUUID()));
 
       // "Reset Connection" (@hocuspocus/common, CloseEvents.ts).
       expect(await closed).toBe(4205);
       await sleep(300);
-      // 100 were asked of the limit, and it let 29 through to the query.
+      // 100 were asked of the limit, and it let 29 through to the reading of the session. Those that
+      // finish reading after the socket has closed go no further (the review of pull request 74), so how
+      // many reach the document turns on timing, and is never more.
       expect(limit).toHaveBeenCalledTimes(100);
-      expect(queries).toHaveBeenCalledTimes(29);
+      expect(sessions).toHaveBeenCalledTimes(29);
+      expect(queries.mock.calls.length).toBeLessThanOrEqual(29);
       expect(warned).toHaveBeenCalledTimes(1);
       expect(warned.mock.calls[0]![0]).toContain('maxPendingDocuments 100');
       expect(local.hocuspocus.documents.size).toBe(0);
