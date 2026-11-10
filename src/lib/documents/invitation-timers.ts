@@ -197,28 +197,15 @@ export async function clearInvitationAddresses(now: Date = new Date()): Promise<
  * number deleted.
  */
 export async function deleteEndedInvitationNotifications(now: Date = new Date()): Promise<number> {
-  // ponytail: reads every invitation notification, a few for each person in a closed α; a join in SQL if that grows.
-  const rows = await db().notification.findMany({
-    where: { kind: { in: INVITATION_NOTIFICATIONS } },
-    select: { id: true, payload: true },
-  });
-  const named = rows.map(({ id, payload }) => ({
-    id,
-    invitationId: (payload as { invitationId?: unknown } | null)?.invitationId,
-  }));
-  const ids = named.flatMap(({ invitationId }) => (typeof invitationId === 'string' ? [invitationId] : []));
-  const live = new Set(
-    (
-      await db().documentInvitation.findMany({
-        where: { id: { in: ids }, OR: [openInvitation(now), { state: 'ACCEPTED' }] },
-        select: { id: true },
-      })
-    ).map(({ id }) => id),
-  );
-  const ended = named
-    .filter(({ invitationId }) => typeof invitationId !== 'string' || !live.has(invitationId))
-    .map(({ id }) => id);
-  if (ended.length === 0) return 0;
-  const { count } = await db().notification.deleteMany({ where: { id: { in: ended } } });
-  return count;
+  // P-09: one statement, in the database. It used to read every invitation notification into memory,
+  // then every invitation they named. A payload that names no invitation, or one that is not text,
+  // matches none, so its notification goes, as before.
+  return db().$executeRaw`
+    DELETE FROM "ekdotico"."Notification" n
+    WHERE n."kind" = ANY(${INVITATION_NOTIFICATIONS})
+      AND NOT EXISTS (
+        SELECT 1 FROM "ekdotico"."DocumentInvitation" i
+        WHERE i."id" = n."payload" ->> 'invitationId'
+          AND (i."state" = 'ACCEPTED' OR (i."state" = 'PENDING' AND i."expiresAt" > ${now}))
+      )`;
 }

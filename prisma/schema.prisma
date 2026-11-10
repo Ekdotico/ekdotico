@@ -400,6 +400,8 @@ model Notification {
   recipient User @relation(fields: [recipientId], references: [id], onDelete: Restrict)
 
   @@index([recipientId, readAt])
+  // The timers delete by kind and age (P-09).
+  @@index([kind, createdAt])
 }
 
 // ─── Transfer of ownership (FR-ED-47; Data models, "Offers of ownership") ───

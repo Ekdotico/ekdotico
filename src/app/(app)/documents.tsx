@@ -226,7 +226,9 @@ export function Documents({
       <Cluster justify="between" gap={4}>
         <PageHeading>Documents</PageHeading>
         <Cluster gap={4}>
-          <Link href={DELETED_PATH}>Deleted documents</Link>
+          <Link href={DELETED_PATH} prefetch={false}>
+            Deleted documents
+          </Link>
           <Button
             variant="primary"
             disabled={!ready}
@@ -258,7 +260,11 @@ export function Documents({
                         reordering the mark beside it. */}
                     <bdi id={`title-${document.id}`} className={styles.documentTitle}>
                       {/* The owner's decision E4 of 8 October 2026: the page of a document. */}
-                      <Link href={`/documents/${document.id}`}>{document.title}</Link>
+                      {/* No prefetch (P-01): every page is dynamic, so a prefetch renders the
+                          whole page on the server for each visible row. */}
+                      <Link href={`/documents/${document.id}`} prefetch={false}>
+                        {document.title}
+                      </Link>
                     </bdi>
                     {document.recording === 'UNRECORDED' ? (
                       <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>

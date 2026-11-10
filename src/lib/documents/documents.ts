@@ -135,13 +135,26 @@ export async function createDocument(userId: string): Promise<DocumentSummary> {
  * one instant keep one order between them, by their identifiers.
  */
 export async function listDocuments(userId: string): Promise<ListedDocument[]> {
-  const documents = await db().document.findMany({
-    where: { deletedAt: null, OR: [{ ownerId: userId }, { collaborators: { some: { userId } } }] },
-    include: { collaborators: { where: { userId }, select: { role: true } } },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-  });
-  return documents.map(({ collaborators, ...document }) => {
-    const role = document.ownerId === userId ? 'owner' : COLLABORATOR_ROLE[collaborators[0]!.role];
+  // P-04: two reads, each through an index of its own (`Document(ownerId, deletedAt)`,
+  // `DocumentCollaborator(userId)`). One read with `OR` over a sub-select made the planner scan every
+  // live document of every account and discard the rest.
+  const [owned, held] = await Promise.all([
+    db().document.findMany({ where: { ownerId: userId, deletedAt: null } }),
+    db().documentCollaborator.findMany({
+      where: { userId, document: { deletedAt: null } },
+      select: { role: true, document: true },
+    }),
+  ]);
+  const roles = new Map(held.map(({ role, document }) => [document.id, role]));
+  const documents = [
+    ...new Map([...held.map(({ document }) => document), ...owned].map((d) => [d.id, d])).values(),
+  ];
+  // Newest first, and two of one instant by their identifiers, as the database ordered them.
+  documents.sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+  );
+  return documents.map((document) => {
+    const role = document.ownerId === userId ? 'owner' : COLLABORATOR_ROLE[roles.get(document.id)!];
     // What the list offers to this account: the routes decide again (FR-ED-39).
     return {
       ...summary(document),
