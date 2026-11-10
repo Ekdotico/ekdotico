@@ -3133,6 +3133,9 @@ describe('what is recorded for a connection, and a role that cannot edit (NFR-SE
         // The place of NFR-PE-05 and the slot of the cursor (FR-ED-17), which are the server's own bookkeeping
         // and not of the record of NFR-SE-03 (a): tests/integration/presence.test.ts.
         place: { documentId: id, slot: 1, name: expect.any(String) },
+        // The server's own too: which handshake's record the connection stands on (`admitted`). A random
+        // identifier that names no one, and is no part of the record of NFR-SE-03 (a).
+        handle: expect.stringMatching(/^[0-9a-f-]{36}$/),
       });
     } finally {
       await local.stop();
