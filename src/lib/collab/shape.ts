@@ -529,31 +529,28 @@ function attributeRefused(parentName: string | null, key: string | null, content
 }
 
 /**
- * What a shared type holds as its children: elements (the root fragment), elements and runs of text (an
- * element), text (a run of text), or nothing the editor builds from (any other type, a root that is not the
- * fragment). THE ROOT IS NAMED BY ITS PLACE, never by its kind (`rootOrKind`): a document the server has only
- * loaded holds its root as a type of no kind until something asks for it as a fragment, which nothing does
- * before the first store (S-02 of the audit of November 2026).
+ * What a shared type holds as its children: elements and runs of text (an element, the root fragment), or
+ * text (a run of text), or nothing the editor builds from (any other type, a root that is not the fragment).
+ * THE ROOT IS NAMED BY ITS PLACE, never by its kind (`rootOrKind`): a document the server has only loaded
+ * holds its root as a type of no kind until something asks for it as a fragment, which nothing does before
+ * the first store (S-02 of the audit of November 2026).
  */
-type Holds = 'root' | 'element' | 'text' | null;
+type Holds = 'types' | 'text' | null;
 const holdsOfType = (type: unknown): Holds =>
-  type instanceof Y.XmlText
-    ? 'text'
-    : type instanceof Y.XmlElement
-      ? 'element'
-      : type instanceof Y.XmlFragment
-        ? 'root'
-        : null;
-/** `holdsOfType`, where the document's root fragment is the root whatever its kind. */
+  type instanceof Y.XmlText ? 'text' : type instanceof Y.XmlFragment ? 'types' : null;
+/** `holdsOfType`, where the document's root fragment holds types whatever its kind. */
 const rootOrKind = (document: Y.Doc, type: unknown): Holds =>
-  type === document.share.get(FRAGMENT_NAME) ? 'root' : holdsOfType(type);
+  type === document.share.get(FRAGMENT_NAME) ? 'types' : holdsOfType(type);
 
 /**
  * Whether content that is a child of an element, of the root fragment or of a run of text is one the editor
- * cannot build a document from. The root holds elements, and an element holds elements and runs of text,
- * and nothing else: which shared type, and not only whether it is one (S-03 of the audit of November 2026),
- * for the binding throws on a child of the root that is no element and on a child of an element that is
- * neither, so a map, an array, a plain text, a hook or a fragment is refused as a value is. A raw string,
+ * cannot build a document from. An element and the root hold elements and runs of text, and no other shared
+ * type: which type, and not only whether it is one (S-03 of the audit of November 2026), for the binding
+ * throws on a child of an element that is neither, so a map, an array, a plain text, a hook or a fragment
+ * is refused as a value is. A run of text where the schema takes none, directly in the document among
+ * them, is no value: it is what the schema leaves out, which a browser that can edit takes out and a reader's
+ * copy leaves out before either builds anything (`strays` and `leftOut` of
+ * src/app/(app)/documents/[id]/extensions.tsx; FR-ED-16), and the export reads past it. A raw string,
  * binary data, an object, JSON or an embed put among its children is stored by Yjs as a value, and the
  * binding that builds the document from the shared one throws on it, in every browser and in the reader's
  * view, so that the document cannot be opened. A run of text holds text and its formats. A deleted item
@@ -565,7 +562,7 @@ function rawRefused(holds: Holds, content: unknown): boolean {
   if (holds === 'text') return !(content instanceof Y.ContentString || content instanceof Y.ContentFormat);
   if (!(content instanceof Y.ContentType)) return true;
   const { type } = content;
-  return !(type instanceof Y.XmlElement || (holds === 'element' && type instanceof Y.XmlText));
+  return !(type instanceof Y.XmlElement || type instanceof Y.XmlText);
 }
 
 /**
@@ -832,7 +829,7 @@ export function withoutCopy(
       const holds =
         typeof parent === 'string'
           ? parent === FRAGMENT_NAME
-            ? 'root'
+            ? 'types'
             : null
           : parent instanceof Y.Item
             ? parent.content instanceof Y.ContentType

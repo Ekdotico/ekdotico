@@ -12,7 +12,7 @@ import { Node as PMNode } from '@tiptap/pm/model';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { countsOf } from '../../src/app/(app)/documents/[id]/block-limits.ts';
-import { extensions } from '../../src/app/(app)/documents/[id]/extensions.tsx';
+import { extensions, shownOf } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import { shapeOf, withCopy, withoutCopy, type Shape } from '../../src/lib/collab/shape.ts';
 
 const schema = getSchema(extensions(new Y.Doc()));
@@ -539,8 +539,9 @@ describe('a raw value at the root of a document the server has only loaded is re
 });
 
 // S-03 of the audit of November 2026: the rule asked only whether a child was a shared type, not which one. The
-// binding throws on a root child that is no element, and on a child of an element that is neither an element
-// nor a run of text, so that the document cannot be opened.
+// binding throws on a child of an element that is neither an element nor a run of text, so that the document
+// cannot be opened. A run of text directly in the document is no such child: what the schema leaves out there
+// is the browser's to take out (FR-ED-16), and tests/e2e/editor.spec.ts shows a browser doing so.
 describe('a shared type that is no element and no run of text is refused among the children (S-03)', () => {
   const typed = () => opened(doc(p(text('x')), p(text('y'))));
   const untyped = () => {
@@ -550,7 +551,6 @@ describe('a shared type that is no element and no run of text is refused among t
   };
   const AT_THE_ROOT = [
     ['a map', () => new Y.Map()],
-    ['a run of text', () => new Y.XmlText('raw')],
     ['an array', () => new Y.Array()],
     ['a plain text', () => new Y.Text('raw')],
     ['a hook', () => new Y.XmlHook('raw')],
@@ -608,6 +608,20 @@ describe('a shared type that is no element and no run of text is refused among t
       });
       expect(answer(base, update)).toBeNull();
       expect(withoutCopy(base, Y.decodeUpdate(update))).toBeNull();
+    });
+
+    it('takes a run of text directly in the document, which a browser leaves out before it builds anything', () => {
+      for (const at of [0, 1, 2]) {
+        const base = server();
+        const update = sent(base, (fragment) => fragment.insert(at, [new Y.XmlText('stray')]));
+        expect(withoutCopy(base, Y.decodeUpdate(update))).toBeNull();
+        expect(answer(base, update)).toBeNull();
+        // What the reader's copy shows, as an editor shows it once it has mended: the two paragraphs alone.
+        Y.applyUpdate(base, update);
+        const shown = shownOf(base, schema);
+        expect(shown.childCount).toBe(2);
+        expect(shown.textContent).toBe('xy');
+      }
     });
   });
 });
