@@ -1066,12 +1066,23 @@ export function holdBinding(
           // this member's change; and text is a fault of the building, which
           // closed the document in every tab.
           //
-          // WHERE THIS TAB CANNOT WRITE (the connection lost, or a repair past
-          // 5 MB) what stands there stays, and the text is NOT built from it:
-          // the tab keeps the text it has, and builds once it can write (the
-          // function returned below), or at the next change once another
-          // browser has taken it out (the review of pull request 74).
+          // WHERE THIS TAB CANNOT WRITE what stands there stays, and the text
+          // is NOT built from it, for any stray: the library would build an
+          // element there and could delete it from the shared document, a
+          // write from a tab that may not write (the review of pull request 74).
+          // Where the connection was lost, the tab keeps the text it has, and
+          // builds once it can write (the function returned below), or at the
+          // next change once another browser has taken it out. Where a repair
+          // past 5 MB made it read-only for good, it would show a text that no
+          // longer changes and say nothing: it is a document this browser
+          // cannot show without a repair it may not write, which is not shown
+          // (FR-ED-16; the second review of pull request 74).
           if (unstray() && !writes()) {
+            if (unrepaired) {
+              failed = true;
+              unshown();
+              return;
+            }
             owed = true;
             return;
           }

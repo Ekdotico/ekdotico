@@ -1943,6 +1943,29 @@ describe('the tables in the cells of a table (R32)', () => {
         editor.binding._prosemirrorChanged(view.state.doc);
         expect(editor.fragment.toString()).not.toContain('typed');
       });
+
+      // B2 of the second review of pull request 74: such a tab can never take out what stands directly in the
+      // document where it cannot, so it built nothing more, and showed a text that no longer changed, saying
+      // nothing. FR-ED-16: a document a browser "cannot show without a repair that it may not write, is not shown".
+      it.each([
+        ['a run of text', () => words('stray')],
+        ['a row', () => element('tableRow', {}, [element('tableCell', {}, [paragraph('stray')])])],
+      ])(
+        'is not shown once %s stands directly in the document, which it may not take out',
+        (_what, stray) => {
+          const document = emptyCells(2000);
+          const editor = open(document);
+          expect(editor.unrepairable).toHaveBeenCalledTimes(1);
+          // As the editor makes such a tab read-only.
+          editor.setEditable(false);
+          const peer = peerOf(document);
+          peer.fragment.insert(1, [stray()]);
+          peer.send();
+          expect(editor.unshown).toHaveBeenCalledTimes(1);
+          expect(editor.mended()).toBe(0);
+          expect(editor.fragment.toString()).toContain('stray');
+        },
+      );
     });
 
     // The review of pull request 42: a client empties an element in a document at a limit, which the
