@@ -154,8 +154,8 @@ export async function securityLogIn(
  * and the fields are named one by one.
  */
 export async function securityLogManyIn(
-  transaction: Pick<ReturnType<typeof db>, 'securityLogEntry'> & { $disconnect?: never },
-  entries: { kind: ChangeKind; userId?: string; documentId?: string }[],
+  transaction: Parameters<typeof securityLogIn>[0],
+  entries: Parameters<typeof securityLogIn>[1][],
 ): Promise<void> {
   if (entries.some((entry) => !KINDS.includes(entry.kind))) throw new Error('security log: unknown kind');
   if (entries.length === 0) return;
