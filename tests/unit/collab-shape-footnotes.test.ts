@@ -495,6 +495,123 @@ describe('a raw value among the children is refused wherever the children stand 
   });
 });
 
+// S-02 of the audit of November 2026: the server loads the stored state into a document of its own and asks
+// nothing of its root until the first store, so that the root is a type of no kind until then. The fast path
+// found the parent through the item beside, or by its key, and asked the kind of that type: none, so no rule.
+describe('a raw value at the root of a document the server has only loaded is refused (S-02)', () => {
+  /** The server's copy as a load leaves it: the stored state applied to a document, and nothing asked of it. */
+  const loaded = (json: Json = doc(p(text('x')), p(text('y')))) => {
+    const server = new Y.Doc();
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(opened(json)));
+    return server;
+  };
+
+  it.each([
+    ['after the first paragraph', 1],
+    ['at the start', 0],
+    ['at the end', 2],
+  ] as const)('refuses a string put in %s', (_where, at) => {
+    const server = loaded();
+    const update = sent(server, (fragment) => fragment.insert(at, ['raw'] as never));
+    expect(withoutCopy(server, Y.decodeUpdate(update))).toBe('raw');
+    expect(answer(server, update)).toBe('raw');
+    // Asking did not give the root a kind: the answer stands on what a load leaves.
+    expect(server.share.get('default')).not.toBeInstanceOf(Y.XmlFragment);
+  });
+
+  it('refuses a string put into a root whose children were all deleted, which names the root by its key', () => {
+    const base = loaded();
+    Y.applyUpdate(
+      base,
+      sent(base, (fragment) => fragment.delete(0, 2)),
+    );
+    const server = new Y.Doc();
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(base));
+    const update = sent(server, (fragment) => fragment.insert(0, ['raw'] as never));
+    expect(withoutCopy(server, Y.decodeUpdate(update))).toBe('raw');
+    expect(answer(server, update)).toBe('raw');
+  });
+
+  it('takes what the editor writes there', () => {
+    const server = loaded();
+    expect(answer(server, edited(server, doc(p(text('x')), p(text('z')), p(text('y')))))).toBeNull();
+  });
+});
+
+// S-03 of the audit of November 2026: the rule asked only whether a child was a shared type, not which one. The
+// binding throws on a root child that is no element, and on a child of an element that is neither an element
+// nor a run of text, so that the document cannot be opened.
+describe('a shared type that is no element and no run of text is refused among the children (S-03)', () => {
+  const typed = () => opened(doc(p(text('x')), p(text('y'))));
+  const untyped = () => {
+    const server = new Y.Doc();
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(typed()));
+    return server;
+  };
+  const AT_THE_ROOT = [
+    ['a map', () => new Y.Map()],
+    ['a run of text', () => new Y.XmlText('raw')],
+    ['an array', () => new Y.Array()],
+    ['a plain text', () => new Y.Text('raw')],
+    ['a hook', () => new Y.XmlHook('raw')],
+    ['a fragment', () => new Y.XmlFragment()],
+  ] as const;
+  const IN_A_PARAGRAPH = [
+    ['a map', () => new Y.Map()],
+    ['an array', () => new Y.Array()],
+    ['a plain text', () => new Y.Text('raw')],
+    ['a hook', () => new Y.XmlHook('raw')],
+    ['a fragment', () => new Y.XmlFragment()],
+  ] as const;
+
+  describe.each([
+    ['a root that has its kind', typed],
+    ['a root the server has only loaded', untyped],
+  ] as const)('on %s', (_root, server) => {
+    it.each(AT_THE_ROOT)('refuses %s at the root, without the copy and on it', (_what, make) => {
+      for (const at of [0, 1, 2]) {
+        const base = server();
+        const update = sent(base, (fragment) => fragment.insert(at, [make() as never]));
+        expect(withoutCopy(base, Y.decodeUpdate(update))).toBe('raw');
+        expect(withCopy(base, update)).toBe('raw');
+      }
+    });
+
+    it.each(IN_A_PARAGRAPH)('refuses %s inside a paragraph, without the copy and on it', (_what, make) => {
+      for (const at of [0, 1]) {
+        const base = server();
+        const update = sent(base, (fragment) =>
+          (fragment.get(0) as Y.XmlElement).insert(at, [make() as never]),
+        );
+        expect(withoutCopy(base, Y.decodeUpdate(update))).toBe('raw');
+        expect(withCopy(base, update)).toBe('raw');
+      }
+    });
+
+    it('refuses a map inside a paragraph the update makes', () => {
+      const base = server();
+      const update = sent(base, (fragment) => {
+        const made = new Y.XmlElement('paragraph');
+        made.insert(0, [new Y.XmlText('a'), new Y.Map() as never]);
+        fragment.insert(1, [made]);
+      });
+      expect(withoutCopy(base, Y.decodeUpdate(update))).toBe('raw');
+      expect(withCopy(base, update)).toBe('raw');
+    });
+
+    it('takes an element at the root and a run of text inside an element', () => {
+      const base = server();
+      const update = sent(base, (fragment) => {
+        const made = new Y.XmlElement('paragraph');
+        made.insert(0, [new Y.XmlText('a')]);
+        fragment.insert(1, [made]);
+      });
+      expect(answer(base, update)).toBeNull();
+      expect(withoutCopy(base, Y.decodeUpdate(update))).toBeNull();
+    });
+  });
+});
+
 describe('an entry is one block of the 5,000 (register row S20-2)', () => {
   const blocksOf = (server: Y.Doc) =>
     countsOf(yXmlFragmentToProseMirrorRootNode(server.getXmlFragment('default'), schema)).blocks;

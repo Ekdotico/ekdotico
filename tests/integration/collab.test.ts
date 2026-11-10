@@ -689,6 +689,33 @@ describe('a document the account may not see (FR-AU-08, FR-ED-39; the answer to 
   });
 });
 
+// S-04 of the audit of November 2026: the record of the handshake kept the session for the socket's life, and
+// opening a document never read the row again, so a socket outlived a sign-out or a change of the password.
+describe('a socket whose session has ended (NFR-SE-03 (e), (f))', () => {
+  it('opens no further document, and is closed', async () => {
+    const owner = await person();
+    const first = await documentOf(owner.id);
+    const second = await documentOf(owner.id);
+    const client = connect(server.port, owner.cookie);
+    await client.open(first).synced;
+    let closed = false;
+    client.socket.webSocket!.addEventListener('close', () => (closed = true));
+
+    // The session ends as a sign-out ends it: its row is deleted.
+    expect((await db().session.deleteMany({ where: { userId: owner.id } })).count).toBe(1);
+    const later = client.open(second);
+    expect(await later.outcome).toEqual({ refused: REFUSAL.SESSION_ENDED });
+    await until(() => closed);
+    expect(client.framesFor(second).map(({ type, rest }) => ({ type, rest }))).toEqual([
+      { type: AUTH, rest: denied(REFUSAL.SESSION_ENDED) },
+    ]);
+    // What the client writes to it reaches nothing: longer than the 2 seconds of a store.
+    later.changes.push(['written after the session ended']);
+    await sleep(2500);
+    expect(await stored(second)).toBeNull();
+  });
+});
+
 // ── Storing ─────────────────────────────────────────────────────────────────
 
 describe('storing a document’s state (NFR-RE-07; register P14)', () => {
@@ -1236,6 +1263,46 @@ describe('the limits of a document (src/lib/collab/state.ts)', () => {
         ),
         element('tableCaption'),
       ]);
+
+    // S-02 of the audit of November 2026: a document this process has only loaded holds its root as a type of
+    // no kind until its first store asks for it as a fragment, and the fast path of the shape asked its kind.
+    it(
+      'refuses a string at the root of a document the server has only loaded, before its first store (S-02)',
+      { timeout: 60_000 },
+      async () => {
+        const owner = await person();
+        const id = await documentOf(owner.id);
+        // Written and stored through the other process, so that this one only loads it.
+        const writer = connect(team.port, owner.cookie).open(id);
+        await writer.synced;
+        writer.provider.document
+          .getXmlFragment('default')
+          .push([element('paragraph', [new Y.XmlText('first')])]);
+        await until(async () => {
+          const row = await db().document.findUnique({ where: { id }, select: { yjsState: true } });
+          return row?.yjsState;
+        }, 3000);
+        writer.provider.destroy();
+
+        const client = connect(server.port, await owner.signedIn());
+        const { provider, synced } = client.open(id);
+        await synced;
+        provider.document.getXmlFragment('default').insert(1, ['raw'] as never);
+        const closed = await until(() => client.framesFor(id).find((each) => each.type === CLOSE), 20_000);
+        expect(closed.rest).toBe(closedBecause(REFUSAL.RAW_CONTENT));
+        // Longer than the 2 seconds of a store: what is stored is the paragraph alone.
+        await sleep(2500);
+        const row = await db().document.findUniqueOrThrow({ where: { id }, select: { yjsState: true } });
+        const document = new Y.Doc();
+        applyState(document, row.yjsState!);
+        expect(
+          document
+            .getXmlFragment('default')
+            .toArray()
+            .map((child) => child.constructor.name),
+        ).toEqual(['YXmlElement']);
+      },
+    );
 
     it('refuses an update that creates a table without a row', { timeout: 60_000 }, async () => {
       await expectRefusedUpdate(
