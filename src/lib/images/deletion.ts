@@ -17,13 +17,19 @@
 //      claim on the store of a document no longer brings the image back
 //      (src/lib/images/references.ts), so the object is never deleted from
 //      under a block that was shown it. Two instances claim a row once.
-//   2. REMOVE the object. One that is not there is success: a run that died
+//   2. ASK the document. The row's time is written after the state, by a step
+//      that may fail (src/lib/collab/state.ts), so the stored state is read:
+//      an image it still holds is released, marked as in, and kept.
+//   3. REMOVE the object. One that is not there is success: a run that died
 //      after this step is finished by the next, and an instance that finds the
 //      object gone has nothing to answer for.
-//   3. DELETE the row, only where it still holds the claim this run made.
+//   4. DELETE the row, only where it still holds the claim this run made.
+import * as Y from 'yjs';
+import { applyState } from '../collab/state.ts';
 import { db } from '../db.ts';
 import { faultOf } from '../fault.ts';
 import { settings } from '../settings.ts';
+import { imageIdsIn } from './references.ts';
 import type { ImageStorage } from './storage.ts';
 import { imageStorage } from './store.ts';
 
@@ -55,8 +61,10 @@ export async function deleteExpiredImages(storage: ImageStorage, now: Date = new
       unreferencedAt: { lte: unreferenced },
       OR: [{ deletionClaimedAt: null }, { deletionClaimedAt: { lt: stale } }],
     },
-    select: { id: true, objectKey: true },
+    select: { id: true, documentId: true, objectKey: true },
   });
+  // What each document's stored state holds, decoded once a run however many of its images are due.
+  const held = new Map<string, Set<string>>();
   let deleted = 0;
   for (const image of due) {
     try {
@@ -70,6 +78,14 @@ export async function deleteExpiredImages(storage: ImageStorage, now: Date = new
         data: { deletionClaimedAt: claimedAt },
       });
       if (claimed.count !== 1) continue;
+      if (!held.has(image.documentId)) held.set(image.documentId, await imagesStoredIn(image.documentId));
+      if (held.get(image.documentId)!.has(image.id)) {
+        await db().documentImage.updateMany({
+          where: { id: image.id, deletionClaimedAt: claimedAt },
+          data: { unreferencedAt: null, deletionClaimedAt: null },
+        });
+        continue;
+      }
       await storage.remove(image.objectKey);
       const gone = await db().documentImage.deleteMany({
         where: { id: image.id, deletionClaimedAt: claimedAt },
@@ -80,6 +96,17 @@ export async function deleteExpiredImages(storage: ImageStorage, now: Date = new
     }
   }
   return deleted;
+}
+
+/**
+ * The images the stored state of a document holds; none where the document or its state is gone. A state that
+ * cannot be decoded rejects, and the image is kept (S-06 of the audit of November 2026).
+ */
+async function imagesStoredIn(documentId: string): Promise<Set<string>> {
+  const row = await db().document.findUnique({ where: { id: documentId }, select: { yjsState: true } });
+  const document = new Y.Doc();
+  if (row?.yjsState) applyState(document, row.yjsState);
+  return imageIdsIn(document);
 }
 
 /**
