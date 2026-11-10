@@ -347,8 +347,6 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     }
   }
 
-  /** A session's row as `readSessions` reads it: what `sessionStands` asks, and the account's name and address. */
-  type SessionRead = SessionRow & { name: string | null; email: string | null };
   const sessionMaxMs = () => (store.sessionMaxSeconds ?? settings().sessionMaxSeconds) * 1000;
 
   /**
@@ -356,7 +354,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
    * query that is given up after `ms`. Read from the table and never through the identity library,
    * whose `getSession` answers from the signed copy in the cookie (NFR-SE-17 (c)).
    */
-  async function readSessions(ids: string[], ms: number): Promise<Map<string, SessionRead>> {
+  async function readSessions(ids: string[], ms: number): Promise<Map<string, SessionRow>> {
     const rows = await within(
       ms,
       db().session.findMany({
@@ -370,21 +368,17 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
           // its deletion, which is the row of `deletion`, every connection of the account is
           // closed (FR-ED-40 (d)); the tombstone has no address, and that is the same fact once
           // the personal fields are cleared.
-          // The name and the address are the cursor's (FR-ED-17), read here so that opening a document
-          // reads one row and not two (the review of pull request 74).
-          user: { select: { name: true, email: true, deletion: { select: { id: true } } } },
+          user: { select: { email: true, deletion: { select: { id: true } } } },
         },
       }),
     );
-    const sessions = new Map<string, SessionRead>();
+    const sessions = new Map<string, SessionRow>();
     for (const { id, userId, createdAt, expiresAt, user } of rows) {
       sessions.set(id, {
         userId,
         createdAt,
         expiresAt,
         accountStands: user.email !== null && user.deletion === null,
-        name: user.name,
-        email: user.email,
       });
     }
     return sessions;
@@ -1068,7 +1062,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // pull request 74): an open costs a client a few bytes on a socket it holds, not a new connection,
       // so an open past the limit must cost no query. A session that has ended spends one unit, once:
       // its socket is ended with it.
-      let row: SessionRead | undefined;
+      let row: SessionRow | undefined;
       try {
         row = (await readSessions([session.sessionId], RECHECK_READ_MS)).get(session.sessionId);
       } catch (error) {
@@ -1076,7 +1070,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         fault('session', error);
         throw refuse(REFUSAL.UNAVAILABLE);
       }
-      if (!row || !sessionStands(row, session.userId, Date.now(), sessionMaxMs())) {
+      if (!sessionStands(row, session.userId, Date.now(), sessionMaxMs())) {
         endSockets(session.sessionId);
         throw refuse(REFUSAL.SESSION_ENDED);
       }
@@ -1107,13 +1101,27 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // step with nothing awaited between: handshakes that run side by side
       // cannot pass the limit between them. `access.document.id` is the name,
       // which `authorise` admits only where it is a document's own identifier.
-      // Nothing is awaited from here to the return: the record is asked once more, after `authorise`.
       stands();
       const place = places.reserve(access.document.id);
       if (!place) throw refuse(REFUSAL.CAPACITY);
-      // FR-ED-17: the name of the cursor is the account's, read with the session's row above and never
-      // taken from the client.
-      place.name = displayNameOf({ name: row.name, email: row.email });
+      try {
+        // FR-ED-17: the name of the cursor is the account's, read here and
+        // never taken from the client.
+        const account = await db().user.findUnique({
+          where: { id: session.userId },
+          select: { name: true, email: true },
+        });
+        place.name = displayNameOf({ name: account?.name ?? null, email: account?.email ?? null });
+      } catch (error) {
+        places.release(place);
+        fault('account', error);
+        throw refuse(REFUSAL.UNAVAILABLE);
+      }
+      // The record is asked once more, after the last await: nothing is awaited from here to the return.
+      if (!admitted.has(handle)) {
+        places.release(place);
+        throw refuse(REFUSAL.SESSION_ENDED);
+      }
       // (i) NFR-SE-03 (a): what is recorded for the connection.
       const connection = recordConnection(session, access.document, access.role);
       // (j) The library discards every update it receives on a read-only connection.
