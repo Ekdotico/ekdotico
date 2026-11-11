@@ -25,7 +25,7 @@ import {
 } from '../../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../../lib/auth/session.ts';
 import { DOCUMENT_ID } from '../../../../../lib/clearing/clearing.ts';
-import { errorResponse, notJson, readBytes, sentAsJson } from '../../../../../lib/http.ts';
+import { errorResponse, notJson, readWhole, sentAsJson } from '../../../../../lib/http.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -70,7 +70,7 @@ async function transfer(request: Request): Promise<Response> {
     // R28: a body that is not sent as JSON is a 415, after the session and before anything is read.
     const unsupported = notJson(request);
     if (unsupported) return unsupported;
-    const bytes = await readBytes(request, MAX_BODY_BYTES);
+    const bytes = await readWhole(request, MAX_BODY_BYTES);
     if (bytes === null) {
       return errorResponse(422, 'invalid_request', TRANSFER_MESSAGES.tooMany(TRANSFER_MOST_DOCUMENTS));
     }

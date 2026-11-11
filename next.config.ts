@@ -57,11 +57,18 @@ const config: NextConfig = {
   // The development server would write an AGENTS.md of its own into the repository.
   agentRules: false,
   experimental: {
-    // The request of an upload passes the proxy (src/proxy.ts) before its route, and Next.js keeps only the first 10 MB
-    // of a body for the route unless told more: an image of 12 MB would arrive cut and be refused as no image. An image is
-    // 20 MB at most (FR-ED-08, NFR-SE-18); 21 MB leaves the route to see that a body is past it, which it refuses
-    // (src/lib/images/upload.ts), and a body past 21 MB is cut there and is past 20 MB still.
-    proxyClientMaxBodySize: '21mb',
+    // Next.js 16.4 keeps a copy of the body of every request the proxy (src/proxy.ts) sees, up to this limit, for one
+    // path as for any other, and sends no answer until the body has ended (next/dist/server/body-streams.js): a client
+    // with no account that withholds the last byte holds that much of the process (S-01 of the audit of November 2026).
+    // The largest body a route the proxy sees reads is 256 KB (src/app/api/account/documents/{transfer,clear}). Next.js
+    // drops the whole chunk that crosses the limit and ends the body as if it were whole, and a chunk from the socket
+    // is up to 64 KB, so 320 KB keeps more than 256 KB of a body that is longer: its route sees that it is past its
+    // bound, and refuses it. A body that declares its length is refused as well where it is cut, whatever the bounds
+    // (`readBytes`, src/lib/http.ts); one sent in chunks declares none, and nothing but this margin tells its cut. So
+    // EVERY ROUTE'S BOUND STAYS AT LEAST ONE 64 KB READ BELOW THIS LIMIT: a route that reads more raises the limit too.
+    // The upload of an image, of up to 20 MB (FR-ED-08, NFR-SE-18), is the one path the proxy does not see, so this
+    // limit does not cut it; its route reads its own body, to its own bound.
+    proxyClientMaxBodySize: '320kb',
   },
   headers: async () => [
     // Every response, the proxy's own answers and those it never saw among

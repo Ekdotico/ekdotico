@@ -24,7 +24,7 @@ const { forgetReferences, imageIdsIn, recordReferences, trackReferences } =
   await import('../../src/lib/images/references.ts');
 const { IMAGE_CLAIM_STALE_MS, deleteExpiredImages, deleteImagesOfDocument } =
   await import('../../src/lib/images/deletion.ts');
-const { storeState } = await import('../../src/lib/collab/state.ts');
+const { encodeState, storeState } = await import('../../src/lib/collab/state.ts');
 const { useImageStorage } = await import('../../src/lib/images/store.ts');
 
 afterAll(async () => {
@@ -512,6 +512,59 @@ describe('the deletion of images (NFR-SE-18; NFR-RE-15: scheduled, and idempoten
     await deleteExpiredImages(storage, now);
     expect(storage.removals).toEqual([due.objectKey]);
     expect(await rowOf(kept.id)).not.toBeNull();
+  });
+
+  // S-06 of the audit of November 2026: the store wrote the state and then failed to write the references, so
+  // the row says the image is out although the stored document holds it. The deletion asks the document itself.
+  it('keeps an image that its stored document still holds, whatever its row says, and marks it as in again', async () => {
+    const user = await owner();
+    const document = await documentOf(user);
+    const shown = await out(document, user, new Date(now.getTime() - 31 * DAY));
+    const gone = await out(document, user, new Date(now.getTime() - 31 * DAY));
+    const held = new Y.Doc();
+    const block = new Y.XmlElement('image');
+    block.setAttribute('id', shown.id);
+    held.getXmlFragment('default').insert(0, [block]);
+    // Written as the store writes it, without the references that a fault left unwritten.
+    await db().document.update({ where: { id: document }, data: { yjsState: encodeState(held) } });
+    expect(await deleteExpiredImages(storage, now)).toBe(1);
+    expect(storage.removals).toEqual([gone.objectKey]);
+    expect(await rowOf(shown.id)).toMatchObject({ unreferencedAt: null, deletionClaimedAt: null });
+    expect(storage.objects.has(shown.objectKey)).toBe(true);
+  });
+
+  it('keeps an image whose document holds a state that cannot be decoded: the object, the row, and its claim', async () => {
+    const user = await owner();
+    const document = await documentOf(user);
+    const image = await out(document, user, new Date(now.getTime() - 31 * DAY));
+    const held = new Y.Doc();
+    const block = new Y.XmlElement('image');
+    block.setAttribute('id', image.id);
+    held.getXmlFragment('default').insert(0, [block]);
+    const whole = encodeState(held);
+    await db().document.update({
+      where: { id: document },
+      data: { yjsState: whole.slice(0, whole.length >> 1) },
+    });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await deleteExpiredImages(storage, now)).toBe(0);
+    expect(storage.removals).toEqual([]);
+    expect(storage.objects.has(image.objectKey)).toBe(true);
+    // The claim stays, and goes stale: the next run after an hour asks again.
+    expect((await rowOf(image.id))?.deletionClaimedAt).not.toBeNull();
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`^image deletion: image ${image.id} kept \\(`)),
+    );
+  });
+
+  it('deletes an image whose document has no stored state: nothing can show it', async () => {
+    const user = await owner();
+    const document = await documentOf(user);
+    const image = await out(document, user, new Date(now.getTime() - 31 * DAY));
+    await db().document.update({ where: { id: document }, data: { yjsState: null } });
+    expect(await deleteExpiredImages(storage, now)).toBe(1);
+    expect(storage.removals).toEqual([image.objectKey]);
+    expect(await rowOf(image.id)).toBeNull();
   });
 
   describe('a run that does not finish', () => {

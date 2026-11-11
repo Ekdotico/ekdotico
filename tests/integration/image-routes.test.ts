@@ -19,10 +19,13 @@ import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './ident
 import { MemoryStorage } from './image-storage.ts';
 
 const MB = 1024 * 1024;
+// An account of the founding team without two-factor authentication: the gate of FR-AU-83 stops it.
+const FOUNDER = 'image-founder@example.com';
 // Room for one image of 20 MB and a little more, and 6 uploads in 10 minutes, so that the limit is reached with few.
 const database = prepare('imageroutes', {
   IMAGE_DOCUMENT_MEGABYTES: '25',
   RATE_LIMIT_IMAGE_UPLOADS_PER_USER: '6/600',
+  FOUNDING_TEAM_EMAILS: FOUNDER,
 });
 const { auth, db, valkey } = await load();
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
@@ -270,6 +273,24 @@ describe('the upload of an image', () => {
       });
       expect(response.status).toBe(413);
       expect(storage.objects.size).toBe(0);
+    });
+
+    // Next.js cuts a body its proxy sees at 320 KB and ends it as if whole (next.config.ts): an image that reached
+    // this route so would be stored cut. A body that ends short of the length it declared is not received in full
+    // (the second review of pull request 75, B3).
+    it('refuses an image that ends short of its declared length as not received in full, and stores nothing', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      const whole = pngOf();
+      const response = await send(document, owner.cookie, whole, {
+        'content-length': String(whole.length + 1000),
+      });
+      expect(response.status).toBe(400);
+      expect((await bodyOf(response)).error.message).toBe(
+        'The image did not arrive in full, so it was not added. Choose it again and try again.',
+      );
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
     });
   });
 
@@ -530,6 +551,60 @@ describe('the upload of an image', () => {
       const response = await sendChanging(document, editor.cookie, async () => undefined);
       expect(response.status).toBe(201);
       expect(storage.objects.size).toBe(1);
+    });
+  });
+
+  // S-01 of the audit of November 2026: the proxy does not see this path (src/proxy.ts, `config`), so the route takes
+  // the limit of every API request itself, where the proxy would: straight after the session, before any refusal that
+  // writes to the security log, so that those entries are bounded as the requests are (NFR-SE-07, NFR-SE-19). The
+  // weakening that fails these: the limit taken in the handler, after the gate and the permission.
+  describe('the limit of API requests for each user, which the proxy takes on every other route', () => {
+    /** Spends what is left of the user's limit, `spent` requests having been counted already. */
+    const fill = async (userId: string, spent = 0) => {
+      const { takeLimit } = await import('../../src/lib/rate-limit.ts');
+      const { settings } = await import('../../src/lib/settings.ts');
+      expect((await takeLimit('API_PER_USER', userId, settings().limits.API_PER_USER.max - spent)).ok).toBe(
+        true,
+      );
+    };
+    const entries = (userId: string, kind: string) =>
+      db().securityLogEntry.count({ where: { userId, kind } });
+
+    it('is taken from an Owner: past it the upload is a 429 and nothing is stored', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      await fill(owner.id);
+      const limited = await send(document, owner.cookie, pngOf());
+      expect(limited.status).toBe(429);
+      expect((await bodyOf(limited)).error.code).toBe('rate_limited');
+      expect(storage.objects.size).toBe(0);
+    });
+
+    it('is taken before the permission: a Viewer past it is a 429, and its 403s stop writing to the log', async () => {
+      const owner = await person();
+      const viewer = await person();
+      const document = await documentOf(owner.id);
+      await share(document, viewer.id, 'viewer');
+      expect((await send(document, viewer.cookie, pngOf())).status).toBe(403);
+      expect(await entries(viewer.id, 'forbidden')).toBe(1);
+      await fill(viewer.id, 1);
+      for (let each = 0; each < 3; each += 1)
+        expect((await send(document, viewer.cookie, pngOf())).status).toBe(429);
+      expect(await entries(viewer.id, 'forbidden')).toBe(1);
+      expect(await entries(viewer.id, 'rate_limit_reached')).toBe(1);
+    });
+
+    it('is taken before the founding-team gate: an account it stops is a 429 past it, and writes no more entries', async () => {
+      const id = await createAccount(auth, FOUNDER);
+      const cookie = cookiesOf(await signIn(auth, FOUNDER));
+      const document = await documentOf(id);
+      expect((await send(document, cookie, pngOf())).status).toBe(403);
+      expect(await entries(id, 'forbidden')).toBe(1);
+      await fill(id, 1);
+      for (let each = 0; each < 3; each += 1)
+        expect((await send(document, cookie, pngOf())).status).toBe(429);
+      expect(await entries(id, 'forbidden')).toBe(1);
+      expect(await entries(id, 'rate_limit_reached')).toBe(1);
     });
   });
 

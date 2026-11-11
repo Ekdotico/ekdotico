@@ -1,7 +1,10 @@
 // The upload of an image (FR-ED-08, NFR-SE-18), called by
 // POST /api/documents/[id]/images once `documentRoute` has decided the origin,
-// the session's row, the document, and `document.content.edit`. The checks, in
-// the order of docs/plan/slice-19.md, section 4:
+// the session's row, the limit of API requests for the user (which the proxy
+// takes on every other route; it does not see this one, so that Next.js does
+// not hold its body: src/proxy.ts, `config`), the document, and
+// `document.content.edit`. The checks, in the order of docs/plan/slice-19.md,
+// section 4:
 //
 //   1. a store to put it in (503 where there is none);
 //   2. the limit of 30 in any 10 minutes for the user (429), counted before

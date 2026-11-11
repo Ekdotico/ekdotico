@@ -1,8 +1,12 @@
 // The list of paths without a session (NFR-SE-05), as the proxy reads it. The
 // proxy's behaviour on each kind of path is tested against a database and
 // Valkey in tests/integration/proxy.test.ts.
+import type { IncomingMessage } from 'node:http';
+import { PassThrough } from 'node:stream';
+import { getCloneableBody } from 'next/dist/server/body-streams.js';
 import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import nextConfig from '../../next.config.ts';
 import { IDENTITY_BASE_PATH, IDENTITY_ENDPOINTS } from '../../src/lib/auth/auth.ts';
 import { returnPath } from '../../src/lib/http.ts';
 import * as proxyModule from '../../src/proxy.ts';
@@ -58,10 +62,55 @@ describe('the list of paths without a session', () => {
     }
   });
 
-  it('runs on every request: no matcher leaves a path out', () => {
-    expect('config' in proxyModule).toBe(false);
-    for (const url of ['/', '/api/documents', '/_next/image', '/favicon.ico', '/_next/data/x/y.json']) {
-      expect(unstable_doesMiddlewareMatch({ config: {}, url })).toBe(true);
+  // S-01 of the audit of November 2026: Next.js holds every body the proxy sees, up to one limit for every path
+  // (next.config.ts), until it has ended. The upload of an image is the one path whose body is large, so it is the one
+  // path the proxy does not see; its route makes every check the proxy would before it reads a byte
+  // (src/lib/documents/route.ts, src/lib/images/upload.ts).
+  it('is handed at most 320 KB of any body, and holds no more than that while the body is held', async () => {
+    expect(nextConfig.experimental?.proxyClientMaxBodySize).toBe('320kb');
+    const limit = 320 * 1024;
+    // What Next.js 16.4 keeps of a body for the proxy and the route (next/dist/server/body-streams.js): 2 MB is sent
+    // in chunks of 64 KB, the most a socket hands over at once, and the copy it holds stops at the limit, still past
+    // 256 KB, the largest body a route other than the upload reads (src/app/api/account/documents/{transfer,clear}),
+    // so that the route sees a body past its bound and refuses it.
+    // It warns of the cut through the console Next.js patches, which needs a request to run in.
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sent = new PassThrough();
+    const cloneable = getCloneableBody(sent as unknown as IncomingMessage, limit);
+    cloneable.cloneBodyStream().resume();
+    for (let each = 0; each < 32; each += 1) sent.write(Buffer.alloc(64 * 1024));
+    sent.end();
+    await cloneable.finalize();
+    let kept = 0;
+    for await (const chunk of sent as AsyncIterable<Buffer>) kept += chunk.length;
+    expect(kept).toBeLessThanOrEqual(limit);
+    expect(kept).toBeGreaterThan(256 * 1024);
+    expect(warned).toHaveBeenCalledTimes(1);
+    warned.mockRestore();
+  });
+
+  it('runs on every request but the upload of an image', () => {
+    const { config } = proxyModule;
+    const upload = '/api/documents/3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b/images';
+    expect(unstable_doesMiddlewareMatch({ config, url: upload })).toBe(false);
+    for (const url of [
+      '/',
+      '/api/documents',
+      '/_next/image',
+      '/favicon.ico',
+      '/_next/data/x/y.json',
+      '/sign-in',
+      '/api/auth/sign-in/email',
+      '/api/documents/x/invitations',
+      `${upload}/c${'a'.repeat(24)}`,
+      `${upload}/`,
+      `${upload}x`,
+      `/x${upload}`,
+      '/api/documents/x/y/images',
+      '/api/documents//images',
+      '/API/documents/x/images',
+    ]) {
+      expect(unstable_doesMiddlewareMatch({ config, url }), url).toBe(true);
     }
   });
 });

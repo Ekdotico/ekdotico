@@ -224,9 +224,9 @@ test('puts the block where the file was dropped, though the text above it change
   expect(order[1]).toBe('P:second');
 });
 
-// FR-ED-08: "The maximum upload size per image shall be 20 MB". The request passes the proxy of the
-// application before the route (src/proxy.ts), which Next.js keeps the first 10 MB of unless it is told
-// more (next.config.ts, `proxyClientMaxBodySize`): an image of 15 MB arrives whole, and one of 21 MB is told its size.
+// FR-ED-08: "The maximum upload size per image shall be 20 MB". The proxy of the application does not see
+// the upload (src/proxy.ts, `config`), so Next.js cuts no body of it at `proxyClientMaxBodySize`, which is
+// 320 KB (next.config.ts): an image of 15 MB arrives whole, and one of 21 MB is told its size.
 test('takes an image of 15 MB whole, and refuses one of 21 MB with its size', async ({ page }) => {
   test.slow();
   await enter(page);
