@@ -52,11 +52,11 @@ export function ShellHeader() {
   return (
     <>
       <header className={styles.header}>
-        <Link href="/" className={styles.home}>
+        <Link href="/" prefetch={false} className={styles.home}>
           <Logo />
         </Link>
         <Cluster gap={4} align="center">
-          <Link href="/notifications">
+          <Link href="/notifications" prefetch={false}>
             Notifications
             {unread > 0 ? (
               <>
@@ -65,7 +65,9 @@ export function ShellHeader() {
               </>
             ) : null}
           </Link>
-          <Link href="/settings">Account settings</Link>
+          <Link href="/settings" prefetch={false}>
+            Account settings
+          </Link>
           <SignOutButton variant="quiet" onFault={setFault} />
         </Cluster>
       </header>

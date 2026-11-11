@@ -40,9 +40,9 @@ import { clearAdmissionAddressOf } from '../admission/invitations.ts';
 import { pendingChange } from '../auth/address-links.ts';
 import { forgetFailedSignIns } from '../auth/sign-in.ts';
 import { declineOffersTo } from '../documents/ownership.ts';
-import { endInvitationsOfAccount, lockDocument } from '../documents/sharing.ts';
+import { endInvitationsOfAccount } from '../documents/sharing.ts';
 import { istorico, type IstoricoPort } from '../istorico/index.ts';
-import { securityLogIn } from '../security-log.ts';
+import { securityLogIn, securityLogManyIn } from '../security-log.ts';
 import { feedbackStep, type FeedbackOutcome } from './feedback-step.ts';
 
 type Tx = Prisma.TransactionClient;
@@ -294,7 +294,16 @@ async function stepRows(held: Held, now: () => Date): Promise<void> {
     const documentIds = [
       ...new Set([...roles, ...offers, ...invited].map(({ documentId }) => documentId)),
     ].sort();
-    for (const documentId of documentIds) await lockDocument(tx, documentId);
+    // P-11: one statement for all of them (a query for each document passed the transaction's time with
+    // some thousands of roles). `ORDER BY` fixes the order in which the rows are locked, as the sort did.
+    // Same condition as `lockDocument`: a deleted document is not held.
+    if (documentIds.length > 0) {
+      await tx.$queryRaw`
+        SELECT "id" FROM "ekdotico"."Document"
+        WHERE "id" = ANY(${documentIds}::uuid[]) AND "deletedAt" IS NULL
+        ORDER BY "id"
+        FOR UPDATE`;
+    }
 
     await declineOffersTo(tx, userId, at);
     // The invitations before the roles: an acceptance that was on its way has committed by now, because its
@@ -305,9 +314,11 @@ async function stepRows(held: Held, now: () => Date): Promise<void> {
     await tx.documentCollaborator.deleteMany({ where: { userId } });
     // NFR-SE-19: "a change to a document's collaborators" has its entry, one for each document, as a
     // removal and a leave have theirs (src/lib/documents/collaborators.ts); the one who acts is the one who goes.
-    for (const { documentId } of ended) {
-      await securityLogIn(tx, { kind: 'collaborators_changed', userId, documentId });
-    }
+    // One insert for all of them (P-11).
+    await securityLogManyIn(
+      tx,
+      ended.map(({ documentId }) => ({ kind: 'collaborators_changed', userId, documentId })),
+    );
     await clearAdmissionAddressOf(tx, { id: userId, email: user.email });
     // Again, now that the account is held: a request for a reset that began before the sessions
     // ended may have written its link since (d).

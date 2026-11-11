@@ -148,6 +148,22 @@ export async function securityLogIn(
   });
 }
 
+/**
+ * Many entries of one change, in one statement and in the transaction of the change (P-11). The rules
+ * are those of `securityLogIn`: it rejects, a kind outside the list throws before anything is written,
+ * and the fields are named one by one.
+ */
+export async function securityLogManyIn(
+  transaction: Parameters<typeof securityLogIn>[0],
+  entries: Parameters<typeof securityLogIn>[1][],
+): Promise<void> {
+  if (entries.some((entry) => !KINDS.includes(entry.kind))) throw new Error('security log: unknown kind');
+  if (entries.length === 0) return;
+  await transaction.securityLogEntry.createMany({
+    data: entries.map((entry) => ({ kind: entry.kind, userId: entry.userId, documentId: entry.documentId })),
+  });
+}
+
 /** Deletes the entries older than the retention period; returns how many. */
 export async function deleteExpiredSecurityLog(now: Date = new Date()): Promise<number> {
   const before = new Date(now.getTime() - settings().securityLogRetentionDays * DAY_MS);
