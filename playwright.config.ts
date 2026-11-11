@@ -32,13 +32,21 @@ process.env.E2E_FOUNDER ??= `E2E-Founder-${randomBytes(6).toString('hex')}@examp
 // in CI, which has no such database, the run makes one of its own, as the
 // integration tests do.
 if (!process.env.E2E_DATABASE_URL) {
-  process.env.E2E_DATABASE_URL = process.env.ADMIN_DATABASE_URL
-    ? (await import('./tests/integration/database.ts')).createDatabase('e2e').appUrl
-    : 'postgresql://ekdotico_app:local-app@localhost:5432/ekdotico';
+  if (process.env.ADMIN_DATABASE_URL) {
+    const made = (await import('./tests/integration/database.ts')).createDatabase('e2e');
+    process.env.E2E_DATABASE_URL = made.appUrl;
+    // Dropped by tests/e2e/global-teardown.ts when the run ends (F-11); the name is all it needs.
+    process.env.E2E_MADE_DATABASE = new URL(made.appUrl).pathname.slice(1);
+    // The teardown drops it only in the process that made it, never for a name inherited from an earlier run.
+    process.env.E2E_MADE_BY = String(process.pid);
+  } else {
+    process.env.E2E_DATABASE_URL = 'postgresql://ekdotico_app:local-app@localhost:5432/ekdotico';
+  }
 }
 
 export default defineConfig({
   testDir: 'tests/e2e',
+  globalTeardown: './tests/e2e/global-teardown.ts',
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
   use: { baseURL: APP_ORIGIN },

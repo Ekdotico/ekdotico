@@ -36,6 +36,7 @@ const { authorise, authoriseDeleted } = await import('../../src/lib/documents/ac
 const { createDocument, renameDocument } = await import('../../src/lib/documents/documents.ts');
 const { CLAIM_STALE_MS, deleteDocument, deleteExpiredDocuments, listDeletedDocuments, restoreDocument } =
   await import('../../src/lib/documents/deletion.ts');
+const { defaultPermissionSet } = await import('../../src/lib/documents/permissions.ts');
 const { istorico } = await import('../../src/lib/istorico/index.ts');
 const { deleteExpiredSecurityLog, securityLogIn } = await import('../../src/lib/security-log.ts');
 const { applyState } = await import('../../src/lib/collab/state.ts');
@@ -398,7 +399,7 @@ describe('a deletion beside an edit (FR-ED-36: restored "as they were at deletio
     // The row as the DELETE request read it when it was authorised.
     const authorised = (await row(id))!;
     await sleep(20);
-    const answered = await renameDocument(id, 'Renamed beside the deletion');
+    const answered = await renameDocument(id, 'Renamed beside the deletion', owner.id);
     const renamed = (await row(id))!;
     // A rename is an edit: it moves the time, and answers with the row it wrote.
     expect(renamed.updatedAt.getTime()).toBeGreaterThan(authorised.updatedAt.getTime());
@@ -428,7 +429,7 @@ describe('a deletion beside an edit (FR-ED-36: restored "as they were at deletio
     const deleted = (await row(id))!;
     await sleep(20);
 
-    expect(await renameDocument(id, 'Renamed while deleted')).toBeNull();
+    expect(await renameDocument(id, 'Renamed while deleted', owner.id)).toBeNull();
     // The route: its authorisation is a moment older than the deletion.
     stale.set(`${owner.id} ${id}`, allowed);
     const refused = await seen(await rename(owner.cookie, id));
@@ -446,6 +447,78 @@ describe('a deletion beside an edit (FR-ED-36: restored "as they were at deletio
     const edited = (await row(id))!;
     expect(edited.title).toBe('Another');
     expect(edited.updatedAt.getTime()).toBeGreaterThan(deleted.updatedAt.getTime());
+  });
+});
+
+describe('a rename authorised before the role, the permission or the document changed (audit row F1)', () => {
+  /** An Editor who holds `document.rename` on a new document of an Owner, and an authorisation of it. */
+  async function editorWhoMayRename() {
+    const owner = await person();
+    const editor = await person();
+    const id = await documentOf(owner.id);
+    const given = defaultPermissionSet();
+    given['document.rename'].editor = true;
+    await db().document.update({ where: { id }, data: { permissionSet: given } });
+    await db().documentCollaborator.create({ data: { documentId: id, userId: editor.id, role: 'EDITOR' } });
+    const allowed = await authorise(editor.id, id, 'document.rename');
+    expect(allowed.outcome).toBe('allowed');
+    return { owner, editor, id, allowed };
+  }
+  const refusals = (id: string) =>
+    logged().then((entries) =>
+      entries.filter((entry) => entry.kind === 'forbidden' && entry.documentId === id),
+    );
+
+  it('answers 403 and logs it where the permission was taken back, and renames nothing', async () => {
+    const { editor, id, allowed } = await editorWhoMayRename();
+    await db().document.update({ where: { id }, data: { permissionSet: defaultPermissionSet() } });
+    stale.set(`${editor.id} ${id}`, allowed);
+    const response = await rename(editor.cookie, id);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe('forbidden');
+    expect(await refusals(id)).toEqual([{ kind: 'forbidden', userId: editor.id, documentId: id }]);
+    expect((await row(id))!.title).toBe(TITLE);
+  });
+
+  it('answers 404 where the Editor was removed, and renames nothing', async () => {
+    const { editor, id, allowed } = await editorWhoMayRename();
+    await db().documentCollaborator.deleteMany({ where: { documentId: id, userId: editor.id } });
+    stale.set(`${editor.id} ${id}`, allowed);
+    const response = await rename(editor.cookie, id);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe('not_found');
+    expect((await row(id))!.title).toBe(TITLE);
+  });
+
+  it('answers 403 to an Owner whose ownership passed to another after the authorisation, and renames nothing', async () => {
+    const owner = await person();
+    const next = await person();
+    const id = await documentOf(owner.id);
+    const allowed = await authorise(owner.id, id, 'document.rename');
+    expect(allowed.outcome).toBe('allowed');
+    // The ownership passes (FR-ED-47): the former Owner is then an Editor, who may not rename by default.
+    await db().document.update({ where: { id }, data: { ownerId: next.id } });
+    await db().documentCollaborator.create({ data: { documentId: id, userId: owner.id, role: 'EDITOR' } });
+    stale.set(`${owner.id} ${id}`, allowed);
+    const response = await rename(owner.cookie, id);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe('forbidden');
+    expect((await row(id))!.title).toBe(TITLE);
+  });
+
+  it('answers 404, not 409, where a clearing claimed an unshared document after the authorisation', async () => {
+    const owner = await person();
+    const id = await documentOf(owner.id);
+    const allowed = await authorise(owner.id, id, 'document.rename');
+    expect(allowed.outcome).toBe('allowed');
+    // A claim sets both, as src/lib/clearing/deletion.ts does.
+    const now = new Date();
+    await db().document.update({ where: { id }, data: { deletedAt: now, clearingAt: now } });
+    stale.set(`${owner.id} ${id}`, allowed);
+    const response = await rename(owner.cookie, id);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe('not_found');
+    expect((await row(id))!.title).toBe(TITLE);
   });
 });
 

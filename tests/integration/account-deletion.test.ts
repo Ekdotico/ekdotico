@@ -252,6 +252,18 @@ describe('the refusal while the account owns a document (FR-AU-58)', () => {
     expect((await validateSessionRow(new Headers({ cookie: who.cookie }))).session).not.toBeNull();
   });
 
+  it('does not count a document claimed by a clearing as one in the list of deleted documents (audit F-09)', async () => {
+    const who = await person();
+    const cleared = await createDocument(who.id);
+    await createDocument(who.id);
+    // What the clearing's claim leaves: `deletedAt` set beside `clearingAt`.
+    await db().document.update({
+      where: { id: cleared.id },
+      data: { deletedAt: new Date(), clearingAt: new Date() },
+    });
+    expect(await ownedDocuments(who.id)).toEqual({ owned: 2, deleted: 0 });
+  });
+
   it('counts every document owned, a deleted one within its retention included', async () => {
     const who = await person();
     const live = await createDocument(who.id);
