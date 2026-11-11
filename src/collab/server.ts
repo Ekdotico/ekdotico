@@ -131,7 +131,8 @@ export interface CollabOptions {
  * holds on its document (NFR-PE-05), which carries its slot and the name of
  * its cursor (FR-ED-17).
  */
-export type CollabContext = CollabConnection & { place: Place };
+/** `handle` names the record of the socket's handshake (`admitted`), which the end of its session forgets. */
+export type CollabContext = CollabConnection & { place: Place; handle: string };
 
 // What the write itself may take and still be inside the period.
 const STORE_WRITE_MARGIN_MS = 500;
@@ -167,6 +168,9 @@ const FINAL_STORE_MS = 2500;
 // What each read of the re-check may take: the database client bounds a query
 // at 5 seconds (src/lib/db.ts), and this is the same bound for the whole read.
 const RECHECK_READ_MS = 5000;
+// How long a socket whose session has ended is given to close after it was ended, before it is destroyed
+// (`endSockets`).
+const SOCKET_END_MS = 1000;
 /**
  * How long a switch of a connection between editable and read-only waits for
  * the messages the connection has already received (F14-2; register row PR-7).
@@ -285,9 +289,9 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
   // The messages each user has sent this instance (see `beforeSync`).
   const takeMessage = limitHere(messages);
   const messageLogDueHere = oncePerHere(messages.windowSeconds);
-  // The session each accepted handshake presented, by its handle, for as long
-  // as its socket lives.
-  const admitted = new Map<string, ValidSession>();
+  // The session each accepted handshake presented, and its socket, by its handle, for as long
+  // as its socket lives or until its session is found ended (`endSockets`).
+  const admitted = new Map<string, { session: ValidSession; socket: Duplex }>();
   const sockets = new Set<Duplex>();
   // The documents whose store failed and is being tried again (see `retryStore`).
   const retrying = new Map<string, { skipped: boolean }>();
@@ -341,6 +345,73 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     for (const [each, at] of ended) {
       if (now - at <= ENDED_MEMORY_MS && ended.size <= ENDED_MEMORY_MAX) break;
       ended.delete(each);
+    }
+  }
+
+  const sessionMaxMs = () => (store.sessionMaxSeconds ?? settings().sessionMaxSeconds) * 1000;
+
+  /**
+   * FR-ED-41: the rows of these sessions, with the one fact of each account that matters, by one
+   * query that is given up after `ms`. Read from the table and never through the identity library,
+   * whose `getSession` answers from the signed copy in the cookie (NFR-SE-17 (c)).
+   */
+  async function readSessions(ids: string[], ms: number): Promise<Map<string, SessionRow>> {
+    const rows = await within(
+      ms,
+      db().session.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          userId: true,
+          createdAt: true,
+          expiresAt: true,
+          // FR-ED-41: "an account that is not deleted". FR-AU-58 (a): from the confirmation of
+          // its deletion, which is the row of `deletion`, every connection of the account is
+          // closed (FR-ED-40 (d)); the tombstone has no address, and that is the same fact once
+          // the personal fields are cleared.
+          user: { select: { email: true, deletion: { select: { id: true } } } },
+        },
+      }),
+    );
+    const sessions = new Map<string, SessionRow>();
+    for (const { id, userId, createdAt, expiresAt, user } of rows) {
+      sessions.set(id, {
+        userId,
+        createdAt,
+        expiresAt,
+        accountStands: user.email !== null && user.deletion === null,
+      });
+    }
+    return sessions;
+  }
+
+  /**
+   * NFR-SE-03 (f), S-04 of the audit of November 2026: every socket accepted under a session that has
+   * ended is ended, and its record forgotten at once, so that nothing more is opened on it. The library
+   * closes a document's connection and leaves the WebSocket open, and the record of the handshake would
+   * admit the next document the socket asks for.
+   *
+   * Ended on the next turn and not now, so that what is being written to it (the close of a document's
+   * connection, or the refusal the library sends for a hook that threw) goes before it: `end` sends what
+   * is buffered and then closes, and a socket whose client does not close it in turn is destroyed.
+   */
+  function endSockets(sessionId: string): void {
+    // Every document the session holds open is closed first, on every socket: `end` closes only the
+    // server's side, and a client that does not close its own could write to them until the destroy.
+    for (const document of server.hocuspocus.documents.values()) {
+      for (const connection of document.getConnections()) {
+        if (connection.context.sessionId === sessionId) {
+          connection.close({ code: 1000, reason: REFUSAL.SESSION_ENDED });
+        }
+      }
+    }
+    for (const [handle, { session, socket }] of admitted) {
+      if (session.sessionId !== sessionId) continue;
+      admitted.delete(handle);
+      setImmediate(() => {
+        socket.end();
+        setTimeout(() => socket.destroy(), SOCKET_END_MS).unref();
+      });
     }
   }
 
@@ -401,45 +472,30 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         open.push({ document, connection });
       }
     }
-    if (open.length === 0) return;
+    // The sessions to read, with the user each was opened by: those of the open connections, and those of
+    // the accepted sockets the scope names, whether or not they carry a document (the review of pull
+    // request 74): a socket that carries none, or whose only document is still being opened, would
+    // otherwise outlive the end of its session until the next run of the timer.
+    const held = new Map<string, string>();
+    for (const { session } of admitted.values()) {
+      if (!scope || scope.has(session.userId)) held.set(session.sessionId, session.userId);
+    }
+    for (const { connection } of open) held.set(connection.context.sessionId, connection.context.userId);
+    if (held.size === 0) return;
     const readMs = scope ? NOTICE_READ_MS : RECHECK_READ_MS;
     const attempts = scope ? 1 : 2;
     const unreadable = (entries: typeof open) => {
       for (const { connection } of entries) connection.close({ code: 1000, reason: REFUSAL.UNAVAILABLE });
     };
 
-    const sessions = new Map<string, SessionRow>();
-    const ids = [...new Set(open.map(({ connection }) => connection.context.sessionId))];
+    let sessions: Map<string, SessionRow>;
+    const ids = [...held.keys()];
     // Read twice at most before every connection of the run is given up: one query that fails is
     // no reason to drop them all, and an outage fails the second as it failed the first.
     // (Once for an event, which has 5 seconds.)
     for (let attempt = 1; ; attempt++) {
       try {
-        const rows = await within(
-          readMs,
-          db().session.findMany({
-            where: { id: { in: ids } },
-            select: {
-              id: true,
-              userId: true,
-              createdAt: true,
-              expiresAt: true,
-              // FR-ED-41: "an account that is not deleted". FR-AU-58 (a): from the confirmation of
-              // its deletion, which is the row of `deletion`, every connection of the account is
-              // closed (FR-ED-40 (d)); the tombstone has no address, and that is the same fact once
-              // the personal fields are cleared.
-              user: { select: { email: true, deletion: { select: { id: true } } } },
-            },
-          }),
-        );
-        for (const { id, userId, createdAt, expiresAt, user } of rows) {
-          sessions.set(id, {
-            userId,
-            createdAt,
-            expiresAt,
-            accountStands: user.email !== null && user.deletion === null,
-          });
-        }
+        sessions = await readSessions(ids, readMs);
         break;
       } catch (error) {
         console.error(`collab: re-check not read for sessions (${faultOf(error)})`);
@@ -450,16 +506,16 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     // The same user in several tabs of one document is one reading, with the number it was taken under.
     const access = new Map<string, { read: Access | null; reading: number }>();
     const now = Date.now();
-    const maxMs = (store.sessionMaxSeconds ?? settings().sessionMaxSeconds) * 1000;
+    const maxMs = sessionMaxMs();
     // What `decide` is given where the session ended, which it answers before it looks at this.
     const NOT_READ: Access = { outcome: 'not_found' };
     // A session that ended closes its connections before any access is read: the readings below are one
     // after another, and a close that waits behind another pair's reading could pass the 5 seconds.
-    for (const { connection } of open) {
-      const { userId, sessionId } = connection.context;
-      if (!sessionStands(sessions.get(sessionId), userId, now, maxMs)) {
-        connection.close({ code: 1000, reason: REFUSAL.SESSION_ENDED });
-      }
+    // `endSockets` closes them, every one the session holds, and its sockets (S-04 of the audit of
+    // November 2026): a socket outlives the connections it carries, and would open the next document it
+    // is asked for.
+    for (const [sessionId, userId] of held) {
+      if (!sessionStands(sessions.get(sessionId), userId, now, maxMs)) endSockets(sessionId);
     }
     const switches: Promise<void>[] = [];
     for (const entry of open) {
@@ -948,7 +1004,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // (f) Accepted: the library makes the WebSocket when this returns.
       const handle = randomUUID();
       request.headers[HANDLE_HEADER] = handle;
-      admitted.set(handle, outcome);
+      admitted.set(handle, { session: outcome, socket });
       sockets.add(socket);
       socket.once('close', () => {
         admitted.delete(handle);
@@ -963,9 +1019,15 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
      * handshake. What it returns becomes the context of the connection.
      */
     async onConnect({ documentName, requestHeaders, connectionConfig }) {
-      const session = admitted.get(requestHeaders.get(HANDLE_HEADER) ?? '');
+      const handle = requestHeaders.get(HANDLE_HEADER) ?? '';
+      const session = admitted.get(handle)?.session;
       // No record of a handshake, or the process is stopping: nothing is opened.
       if (!session || stopping) throw refuse(REFUSAL.UNAVAILABLE);
+      // Whether the record still stands after an await: the end of the session, found by the re-check or
+      // an event while this ran, forgets it (`endSockets`), and nothing is then opened on the socket.
+      const stands = () => {
+        if (!admitted.has(handle)) throw refuse(REFUSAL.SESSION_ENDED);
+      };
 
       // NFR-SE-07, "Collaboration handshakes, for each authenticated user":
       // opening a document is the handshake of that document, and costs what
@@ -993,6 +1055,28 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       }
       if (!limit.ok) throw refuse(REFUSAL.LIMITED);
 
+      // NFR-SE-03 (e), (f), S-04 of the audit of November 2026: the session is read from its row again,
+      // as at the upgrade, for every document. The record of the handshake says only which session the
+      // socket was accepted under, not that it stands: it may have been signed out, revoked by a change
+      // of the password, or have expired since. Where it has ended every socket accepted under it is
+      // ended, and nothing more is opened on them. AFTER THE LIMIT, unlike the upgrade (the review of
+      // pull request 74): an open costs a client a few bytes on a socket it holds, not a new connection,
+      // so an open past the limit must cost no query. A session that has ended spends one unit, once:
+      // its socket is ended with it.
+      let row: SessionRow | undefined;
+      try {
+        row = (await readSessions([session.sessionId], RECHECK_READ_MS)).get(session.sessionId);
+      } catch (error) {
+        // NFR-SE-06, A10: without the database nothing is opened.
+        fault('session', error);
+        throw refuse(REFUSAL.UNAVAILABLE);
+      }
+      if (!sessionStands(row, session.userId, Date.now(), sessionMaxMs())) {
+        endSockets(session.sessionId);
+        throw refuse(REFUSAL.SESSION_ENDED);
+      }
+      stands();
+
       let access;
       try {
         // (g) NFR-SE-04, FR-ED-39: the one function every route asks.
@@ -1018,6 +1102,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // step with nothing awaited between: handshakes that run side by side
       // cannot pass the limit between them. `access.document.id` is the name,
       // which `authorise` admits only where it is a document's own identifier.
+      stands();
       const place = places.reserve(access.document.id);
       if (!place) throw refuse(REFUSAL.CAPACITY);
       try {
@@ -1033,11 +1118,16 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         fault('account', error);
         throw refuse(REFUSAL.UNAVAILABLE);
       }
+      // The record is asked once more, after the last await: nothing is awaited from here to the return.
+      if (!admitted.has(handle)) {
+        places.release(place);
+        throw refuse(REFUSAL.SESSION_ENDED);
+      }
       // (i) NFR-SE-03 (a): what is recorded for the connection.
       const connection = recordConnection(session, access.document, access.role);
       // (j) The library discards every update it receives on a read-only connection.
       connectionConfig.readOnly = isReadOnly(connection);
-      return { ...connection, place };
+      return { ...connection, place, handle };
     },
 
     /**
@@ -1070,6 +1160,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
       // Closed before this hook ran (the socket went while the document loaded): `onDisconnect`
       // gives its place back, and there is no connection to hold it for.
       if (!connection.document.hasConnection(connection)) return;
+      // The session ended after `onConnect` returned, while the library made the connection (`beforeHandleMessage`).
+      if (!admitted.has(context.handle)) {
+        connection.close({ code: 1000, reason: REFUSAL.SESSION_ENDED });
+        return;
+      }
       if (!places.hold(context.place)) {
         // Its place expired while it was made, and was taken by another: it
         // has none, and the client asks again.
@@ -1187,7 +1282,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
      * library decodes it (`AWARENESS_MAX_BYTES`). An object with no message,
      * as in `beforeSync`: what is closed with it is not the client's to read.
      */
-    async beforeHandleMessage({ update, connection }) {
+    async beforeHandleMessage({ update, connection, context }) {
+      // NFR-SE-03 (f), B1 of the second review of pull request 74: nothing more is taken on a socket whose
+      // session has ended (`endSockets`). Here, and not only in `connected`: the library made the connection
+      // after `onConnect` and applies what the client sent meanwhile before that hook, through this one.
+      if (!admitted.has(context.handle)) throw refuse(REFUSAL.SESSION_ENDED);
       if (awarenessTooLong(update)) throw {};
       // The identifiers of an awareness message are noted for `beforeHandleAwareness`, which
       // runs for this same message: the connection's messages are handled one at a time.

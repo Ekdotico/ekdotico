@@ -529,16 +529,28 @@ function attributeRefused(parentName: string | null, key: string | null, content
 }
 
 /**
- * What a shared type holds as its children: other shared types (an element, the root fragment), or text
- * (a run of text), or nothing the editor builds from (any other type, a root that is not the fragment).
+ * What a shared type holds as its children: elements and runs of text (an element, the root fragment), or
+ * text (a run of text), or nothing the editor builds from (any other type, a root that is not the fragment).
+ * THE ROOT IS NAMED BY ITS PLACE, never by its kind (`rootOrKind`): a document the server has only loaded
+ * holds its root as a type of no kind until something asks for it as a fragment, which nothing does before
+ * the first store (S-02 of the audit of November 2026).
  */
 type Holds = 'types' | 'text' | null;
 const holdsOfType = (type: unknown): Holds =>
   type instanceof Y.XmlText ? 'text' : type instanceof Y.XmlFragment ? 'types' : null;
+/** `holdsOfType`, where the document's root fragment holds types whatever its kind. */
+const rootOrKind = (document: Y.Doc, type: unknown): Holds =>
+  type === document.share.get(FRAGMENT_NAME) ? 'types' : holdsOfType(type);
 
 /**
  * Whether content that is a child of an element, of the root fragment or of a run of text is one the editor
- * cannot build a document from. An element holds elements and runs of text and nothing else: a raw string,
+ * cannot build a document from. An element and the root hold elements and runs of text, and no other shared
+ * type: which type, and not only whether it is one (S-03 of the audit of November 2026), for the binding
+ * throws on a child of an element that is neither, so a map, an array, a plain text, a hook or a fragment
+ * is refused as a value is. A run of text where the schema takes none, directly in the document among
+ * them, is no value: it is what the schema leaves out, which a browser that can edit takes out and a reader's
+ * copy leaves out before either builds anything (`strays` and `leftOut` of
+ * src/app/(app)/documents/[id]/extensions.tsx; FR-ED-16), and the export reads past it. A raw string,
  * binary data, an object, JSON or an embed put among its children is stored by Yjs as a value, and the
  * binding that builds the document from the shared one throws on it, in every browser and in the reader's
  * view, so that the document cannot be opened. A run of text holds text and its formats. A deleted item
@@ -547,8 +559,10 @@ const holdsOfType = (type: unknown): Holds =>
  */
 function rawRefused(holds: Holds, content: unknown): boolean {
   if (holds === null || content instanceof Y.ContentDeleted) return false;
-  if (holds === 'types') return !(content instanceof Y.ContentType);
-  return !(content instanceof Y.ContentString || content instanceof Y.ContentFormat);
+  if (holds === 'text') return !(content instanceof Y.ContentString || content instanceof Y.ContentFormat);
+  if (!(content instanceof Y.ContentType)) return true;
+  const { type } = content;
+  return !(type instanceof Y.XmlElement || type instanceof Y.XmlText);
 }
 
 /**
@@ -607,7 +621,7 @@ export function withCopy(document: Y.Doc, update: Uint8Array): Shape | null {
         }
         // A value among the children of an element or of a run of text (`rawRefused`).
         // The root of the copy is a type of no kind until something asks for one, so it is named by its place.
-        const holds = item.parent === after.share.get(FRAGMENT_NAME) ? 'types' : holdsOfType(item.parent);
+        const holds = rootOrKind(after, item.parent);
         if (item.parentSub === null && rawRefused(holds, item.content)) return 'raw';
         // An element or text inside a block that holds nothing (`LEAVES`).
         if (
@@ -810,6 +824,8 @@ export function withoutCopy(
     }
     // A value among the children of an element or of a run of text (`rawRefused`), where it stands after the update.
     if (alive.get(item) && key === null && parent !== null) {
+      // The root is named by its place, as on the copy: found through the item beside it or by its key, it is
+      // a type of no kind until the server asks for it as a fragment (S-02).
       const holds =
         typeof parent === 'string'
           ? parent === FRAGMENT_NAME
@@ -819,7 +835,7 @@ export function withoutCopy(
             ? parent.content instanceof Y.ContentType
               ? holdsOfType(parent.content.type)
               : null
-            : holdsOfType(parent);
+            : rootOrKind(document, parent);
       if (rawRefused(holds, item.content)) return 'raw';
     }
     // An element or text inside a block that holds nothing (`LEAVES`), where it stands after the update.
