@@ -41,6 +41,7 @@ import {
   notAcceptedAnswer,
   notReceivedAnswer,
   tooLargeAnswer,
+  tooManyPixelsAnswer,
   unavailableAnswer,
 } from './answers.ts';
 import { IMAGE_MOST_BYTES } from './node.ts';
@@ -79,7 +80,10 @@ export async function uploadImage({ request, document, session }: DocumentCall):
   let objectKey: string | null = null;
   try {
     const prepared = prepareImage(body);
-    if (!prepared.ok) return prepared.reason === 'too_large' ? tooLargeAnswer() : notAcceptedAnswer();
+    if (!prepared.ok) {
+      if (prepared.reason === 'too_large') return tooLargeAnswer();
+      return prepared.reason === 'too_many_pixels' ? tooManyPixelsAnswer() : notAcceptedAnswer();
+    }
 
     objectKey = newObjectKey(document.id);
     const reservation = await reserveImage({

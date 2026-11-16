@@ -5,12 +5,15 @@
 // (the owner's answer to Q6). The statuses are the owner's answer to Q8: 415
 // for a type that is not accepted, 413 for the two sizes.
 import { errorResponse } from '../http.ts';
+import { IMAGE_MOST_PIXELS, IMAGE_MOST_SIDE } from './dimensions.ts';
 
 export const IMAGE_MESSAGES = {
   notAccepted:
     'That file is not a PNG, JPEG, GIF, or WebP image, so it was not added. Choose an image in one of those formats.',
   tooLarge:
     'That image is larger than 20 MB, so it was not added. Choose a smaller image, or reduce its size first.',
+  // NFR-SE-18, D301, Q80: the bound on the pixels. For the owner's approval.
+  tooManyPixels: `That image is more than ${IMAGE_MOST_SIDE.toLocaleString('en-GB')} pixels wide or high, or more than ${(IMAGE_MOST_PIXELS / 1_000_000).toLocaleString('en-GB')} megapixels in all, so it was not added. Choose a smaller image, or reduce its size first.`,
   // NFR-SE-18: "refused with a statement of the limit". Every stored object counts toward it (the owner's answer to Q14),
   // so the words say that an image taken out of the document does not free the room at once.
   full: (limit: string, days: number) =>
@@ -31,6 +34,8 @@ export const megabytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))
 export const notAcceptedAnswer = () =>
   errorResponse(415, 'image_type_not_accepted', IMAGE_MESSAGES.notAccepted);
 export const tooLargeAnswer = () => errorResponse(413, 'image_too_large', IMAGE_MESSAGES.tooLarge);
+export const tooManyPixelsAnswer = () =>
+  errorResponse(413, 'image_dimensions_too_large', IMAGE_MESSAGES.tooManyPixels);
 export const fullAnswer = (limitBytes: number, days: number) =>
   errorResponse(413, 'image_document_full', IMAGE_MESSAGES.full(megabytes(limitBytes), days));
 export const notReceivedAnswer = () => errorResponse(400, 'invalid_request', IMAGE_MESSAGES.notReceived);

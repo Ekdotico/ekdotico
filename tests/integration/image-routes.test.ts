@@ -216,6 +216,39 @@ describe('the upload of an image', () => {
       expect(await db().documentImage.count({ where: { documentId: document } })).toBe(1);
     });
 
+    // NFR-SE-18, D301, Q80: a small file cannot be a very large picture. Weakening: no check, or the check after the
+    // removal of metadata (these files parse to their end).
+    it('refuses a small file that declares over 12,000 pixels on a side or 50 megapixels in all, with a 413 that states it, and stores nothing', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      const header = (width: number, height: number) => {
+        const data = Buffer.alloc(13);
+        data.writeUInt32BE(width, 0);
+        data.writeUInt32BE(height, 4);
+        data[8] = 8;
+        data[9] = 2;
+        return pngChunk('IHDR', data);
+      };
+      for (const [width, height] of [
+        [12_001, 1],
+        [1, 12_001],
+        [10_000, 5_001],
+      ] as const) {
+        const response = await send(document, owner.cookie, png({ ihdr: header(width, height) }));
+        expect(response.status, `${width} by ${height}`).toBe(413);
+        const { error } = await bodyOf(response);
+        expect(error.code).toBe('image_dimensions_too_large');
+        // Text for the owner's approval, pinned whole.
+        expect(error.message).toBe(
+          'That image is more than 12,000 pixels wide or high, or more than 50 megapixels in all, so it was not added. Choose a smaller image, or reduce its size first.',
+        );
+      }
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+      // At the bound it is taken.
+      expect((await send(document, owner.cookie, png({ ihdr: header(10_000, 5_000) }))).status).toBe(201);
+    });
+
     // A length that is declared over the limit is refused as it is: the body is never read.
     it('refuses a declared length over 20 MB before one byte of the body is read', async () => {
       const owner = await person();
