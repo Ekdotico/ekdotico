@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { until } from './channel.ts';
-import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
+import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, prepare, signIn } from './identity.ts';
 
 const later = vi.hoisted(() => [] as (() => unknown)[]);
 vi.mock('next/server', async (original) => ({
@@ -63,7 +63,7 @@ const at = <T extends Record<string, string>>(params: T) => ({ params: Promise.r
 
 const offer = (cookie: string, id: string, collaboratorId: unknown) =>
   offering.POST(
-    request('POST', `/api/documents/${id}/ownership-offer`, cookie, { collaboratorId }),
+    request('POST', `/api/documents/${id}/ownership-offer`, cookie, { collaboratorId, password: PASSWORD }),
     at({ id }),
   );
 const withdraw = (cookie: string, id: string) =>

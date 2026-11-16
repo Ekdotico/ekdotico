@@ -7,6 +7,12 @@
 
 export const OFFER_TITLE = 'Offer of ownership';
 
+/** The sentence of the dialog that asks for the prompt of FR-ED-47 (D285), after the statement of what the offer does. For the owner's approval. */
+export const OFFER_PROMPT = {
+  password: 'Enter your current password to offer ownership.',
+  passwordAndCode: 'Enter your current password and a code to offer ownership.',
+};
+
 export const OFFER_STATEMENTS = {
   // The neutral statement of an offer that is not this account's, or does not exist (docs/plan/slice-17.md, S13-3's rule).
   notOpenToAccount:
@@ -22,6 +28,9 @@ export const OFFER_MESSAGES = {
   offered: (name: string) => `Ownership offered to ${name}.`,
   withdrawn: (name: string) => `Offer of ownership to ${name} withdrawn.`,
   invalid: 'No offer was made. Choose an Editor.',
+  // FR-ED-47, D285; register Q82 point 6. For the owner's approval.
+  password: 'No offer was made. Enter your current password to offer ownership.',
+  passwordAndCode: 'No offer was made. Enter your current password and a code to offer ownership.',
   notAnEditor:
     'No offer was made. Ownership can be offered only to a collaborator who holds the Editor role.',
   pending:

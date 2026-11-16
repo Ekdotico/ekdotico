@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DAY_MS, json, MAIL, world } from './clearing.ts';
 import { MemoryStorage } from './image-storage.ts';
-import { load, prepare } from './identity.ts';
+import { load, PASSWORD, prepare } from './identity.ts';
 
 const later = vi.hoisted(() => [] as (() => unknown)[]);
 vi.mock('next/server', async (original) => ({
@@ -107,7 +107,9 @@ async function behind<T>(
 }
 
 const post = (cookie: string, body: unknown) =>
-  transferRoute.POST(request('POST', '/api/account/documents/transfer', cookie, body));
+  transferRoute.POST(
+    request('POST', '/api/account/documents/transfer', cookie, { ...(body as object), password: PASSWORD }),
+  );
 const editorOf = (documentId: string, user: Person, since = 1) =>
   db().documentCollaborator.create({
     data: {

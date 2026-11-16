@@ -14,7 +14,7 @@ import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/pro
 import { Redis } from 'ioredis';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from './channel.ts';
-import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
+import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, prepare, signIn } from './identity.ts';
 
 // What a route leaves for after its response (the email of an offer) is not run here.
 vi.mock('next/server', async (original) => ({
@@ -150,7 +150,10 @@ async function offered(local: Local) {
     await until(() => client.notices.length === 1);
   }
   const made = await offering.POST(
-    request('POST', `/api/documents/${id}/ownership-offer`, owner.cookie, { collaboratorId: row }),
+    request('POST', `/api/documents/${id}/ownership-offer`, owner.cookie, {
+      collaboratorId: row,
+      password: PASSWORD,
+    }),
     at({ id }),
   );
   expect(made.status).toBe(201);

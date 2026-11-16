@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { codeOf, DAY_MS, json, MAIL, TITLE, world } from './clearing.ts';
 import { MemoryStorage } from './image-storage.ts';
-import { cookiesOf, load, prepare, sunk } from './identity.ts';
+import { cookiesOf, load, PASSWORD, prepare, sunk } from './identity.ts';
 
 // What a route leaves for after its response is collected here and run by the test when it wants it.
 const later = vi.hoisted(() => [] as (() => unknown)[]);
@@ -51,8 +51,11 @@ afterEach(() => {
 
 type Person = Awaited<ReturnType<typeof person>>;
 
+/** FR-AU-92, D285: the request holds the password beside its own fields. */
+const prompted = (body: unknown) =>
+  typeof body === 'object' && body !== null && !Array.isArray(body) ? { ...body, password: PASSWORD } : body;
 const post = (cookie: string | undefined, body: unknown, headers: Record<string, string> = {}) =>
-  transferRoute.POST(request('POST', '/api/account/documents/transfer', cookie, body, headers));
+  transferRoute.POST(request('POST', '/api/account/documents/transfer', cookie, prompted(body), headers));
 const getDeletion = (cookie: string) => deletionRoute.GET(request('GET', '/api/account/deletion', cookie));
 
 // One instant for every time the rule of (a) reads, so that two Editors "held it equally long" exactly.

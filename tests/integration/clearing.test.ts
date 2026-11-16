@@ -818,6 +818,7 @@ describe('the period: read-only for everyone, and what it leaves open (FR-AU-91,
     const offered = await r.offer.POST(
       w.request('POST', `/api/documents/${documentId}/ownership-offer`, owner.cookie, {
         collaboratorId: editorRow.id,
+        password: PASSWORD,
       }),
       context(documentId),
     );

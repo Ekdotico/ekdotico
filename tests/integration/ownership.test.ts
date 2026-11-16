@@ -11,7 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { until } from './channel.ts';
-import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn, sunk } from './identity.ts';
+import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, prepare, signIn, sunk } from './identity.ts';
 
 // `after` of Next.js exists only inside a request of the framework: what a route leaves for after its
 // response is collected here and run by the test when it wants it, so that "after" can be told from "before".
@@ -80,7 +80,7 @@ const at = <T extends Record<string, string>>(params: T) => ({ params: Promise.r
 
 const offer = (cookie: string, id: string, collaboratorId: unknown) =>
   offering.POST(
-    request('POST', `/api/documents/${id}/ownership-offer`, cookie, { collaboratorId }),
+    request('POST', `/api/documents/${id}/ownership-offer`, cookie, { collaboratorId, password: PASSWORD }),
     at({ id }),
   );
 const withdraw = (cookie: string, id: string) =>
@@ -335,22 +335,27 @@ describe('offering ownership (FR-ED-47)', () => {
 
   it('refuses a body that is not exactly the identifier of a row, and a body that is not JSON', async () => {
     const { owner, id, row } = await pair();
-    const refuse = async (body: unknown) => {
+    // The password is asked for first (FR-ED-47, D285): with it, a body of the wrong shape is told so.
+    const refuse = async (body: unknown, words = 'No offer was made. Choose an Editor.') => {
       const response = await offering.POST(
         request('POST', `/api/documents/${id}/ownership-offer`, owner.cookie, body),
         at({ id }),
       );
       expect(response.status, JSON.stringify(body)).toBe(422);
       expect(await code(response)).toBe('invalid_request');
-      expect(await message(response)).toBe('No offer was made. Choose an Editor.');
+      expect(await message(response)).toBe(words);
     };
-    await refuse({});
-    await refuse([]);
-    await refuse({ collaboratorId: 7 });
-    await refuse({ collaboratorId: null });
-    await refuse({ collaboratorId: row, userId: 'someone-else' });
-    await refuse({ userId: 'someone-else' });
-    await refuse('text');
+    const word = (body: object) => ({ ...body, password: PASSWORD });
+    await refuse(word({}));
+    await refuse(word({ collaboratorId: 7 }));
+    await refuse(word({ collaboratorId: null }));
+    await refuse(word({ collaboratorId: row, userId: 'someone-else' }));
+    await refuse(word({ userId: 'someone-else' }));
+    // Without the password, or not an object, it is the password that is asked for.
+    const ASKED = 'No offer was made. Enter your current password to offer ownership.';
+    await refuse({ collaboratorId: row }, ASKED);
+    await refuse([], ASKED);
+    await refuse('text', ASKED);
     const text = await offering.POST(
       new Request(`${ORIGIN}/api/documents/${id}/ownership-offer`, {
         method: 'POST',

@@ -25,6 +25,7 @@ import { holdSession, type ValidSession } from '../auth/session.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { db } from '../db.ts';
 import { createOffer, settleMany, transferable, type Tx } from '../documents/ownership.ts';
+import { guardRefusal, guardSpend, type Guard, type GuardRefusal } from './guard.ts';
 import { takeLimitReturnable } from '../rate-limit.ts';
 import { settings } from '../settings.ts';
 import { DELETED_ACCOUNT } from './deleted-account.ts';
@@ -242,7 +243,9 @@ export type TransferResult =
   /** NFR-SE-07, D268: more people to email than the limit of offers allows in any hour, whatever the hour. */
   | { outcome: 'over_limit'; most: number; wanted: number }
   /** NFR-SE-07: the allowance of this hour does not cover the people to email. */
-  | { outcome: 'rate_limited'; retryAfterSeconds: number };
+  | { outcome: 'rate_limited'; retryAfterSeconds: number }
+  /** FR-AU-92, D285: the password or session of the prompt no longer stands, or the recovery code is spent. */
+  | GuardRefusal;
 
 /** The same sets, each name once. */
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
@@ -264,6 +267,7 @@ export async function confirmTransfer(
   session: ValidSession,
   request: TransferRequest,
   given?: Date,
+  guard?: Guard,
 ): Promise<TransferResult> {
   const userId = session.userId;
   // NFR-SE-07: counted in the transaction, after every refusal, and given back where it then fails.
@@ -271,6 +275,9 @@ export async function confirmTransfer(
   try {
     return await db().$transaction(async (tx): Promise<TransferResult> => {
       if (!(await holdSession(tx, session))) return { outcome: 'ended' };
+      // FR-AU-92, D285: the password asked for before the action still stands.
+      const outrun = await guardRefusal(tx, guard);
+      if (outrun) return outrun;
       // The documents of the account, in every state, in the order of their identifiers.
       const locked = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "ekdotico"."Document" WHERE "ownerId" = ${userId} ORDER BY "id" FOR UPDATE`;
@@ -327,6 +334,9 @@ export async function confirmTransfer(
       const offered = offeredIds(plan);
       if (!sameSet(offered, request.documentIds)) return { outcome: 'changed' };
       if (offered.length === 0) return { outcome: 'nothing' };
+      // Every refusal of the action is behind us: a recovery code is spent only by a transfer that is made.
+      const gone = await guardSpend(tx, guard);
+      if (gone) return gone;
 
       const fresh = [...plan].flatMap(([documentId, outcome]) =>
         outcome.kind === 'offer' ? [{ documentId, toUserId: outcome.toUserId }] : [],
