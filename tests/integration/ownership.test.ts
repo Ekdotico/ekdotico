@@ -546,6 +546,9 @@ describe('accepting an offer (FR-ED-47, FR-AU-13, FR-ED-19)', () => {
     // What FR-ED-47 says stays as it was: the permission set (changed from the default), a pending invitation, the content, the title.
     const set = defaultPermissionSet();
     set['document.rename'].editor = true;
+    // D300: the former Owner's pending invitation survives only where an Editor may invite (the other case is in
+    // invitation-revocation.test.ts).
+    set['document.collaborators.invite'].editor = true;
     await db().document.update({
       where: { id },
       data: { permissionSet: set, yjsState: Buffer.from([1, 2, 3]), title: 'A title' },

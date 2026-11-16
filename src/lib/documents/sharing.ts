@@ -373,6 +373,48 @@ export async function endInvitationsOf(
 }
 
 /**
+ * FR-ED-37, D300 (docs@da33e58; register Q82 point 5): where the sender of a pending invitation no longer
+ * holds the permission to invite (FR-ED-44 (a)) or the role that carries it, each of its invitations still
+ * pending is revoked, and the notifications of those invitations go, as for any revocation (FR-ED-42).
+ *
+ * It judges what is stored NOW, whatever the cause, so that every change that can end the right calls this
+ * one function in its own transaction: the change of a role, the removal or leaving of the sender, the change
+ * of the permission set (FR-ED-45), and the transfer of the document (the former Owner becomes an Editor).
+ * The caller holds the document's row (`lockDocument`), as the acceptance of an invitation does, so the
+ * acceptance reads the state this leaves. The deletion of the sender's account is `endInvitationsOfAccount`,
+ * in the transaction of its own step.
+ */
+export async function revokeInvitationsOfLostRight(
+  tx: Prisma.TransactionClient,
+  documentId: string,
+  now: Date,
+): Promise<void> {
+  const pending = await tx.documentInvitation.findMany({
+    where: { documentId, state: 'PENDING' },
+    select: { id: true, invitedById: true },
+  });
+  if (pending.length === 0) return;
+  const document = await tx.document.findUnique({
+    where: { id: documentId },
+    select: { ownerId: true, permissionSet: true, collaborators: { select: { userId: true, role: true } } },
+  });
+  if (!document) return;
+  const roles = new Map(document.collaborators.map(({ userId, role }) => [userId, COLLABORATOR_ROLE[role]]));
+  const ids = pending
+    .filter(({ invitedById }) => {
+      const role = invitedById === document.ownerId ? 'owner' : roles.get(invitedById);
+      return !role || !holds(document.permissionSet, role, 'document.collaborators.invite');
+    })
+    .map(({ id }) => id);
+  if (ids.length === 0) return;
+  await tx.documentInvitation.updateMany({
+    where: { id: { in: ids }, state: 'PENDING' },
+    data: { state: 'REVOKED', respondedAt: now },
+  });
+  await tx.notification.deleteMany({ where: notificationsOf(ids) });
+}
+
+/**
  * FR-AU-58 (f): what the deletion of an account does to the invitations it sent and was sent, in the
  * transaction of the step that ends its roles. Found by the account's identifier and by its address,
  * which is why this runs before the address is cleared from the row of the account.

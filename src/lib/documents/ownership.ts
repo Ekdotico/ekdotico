@@ -38,7 +38,7 @@ import {
   OFFER_NOTIFICATION,
   type OfferEnd,
 } from './ownership-notifications.ts';
-import { lockDocument } from './sharing.ts';
+import { lockDocument, revokeInvitationsOfLostRight } from './sharing.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -697,6 +697,8 @@ export async function answerOffer(
       });
       // S17-5: the notices of ended offers say "You are still its Owner"; the former Owner is not, from here.
       await endOfferEndedNotifications(tx, offer.fromUserId, documentId);
+      // FR-ED-37, D300: the former Owner is an Editor now and keeps its pending invitations only where an Editor may invite.
+      await revokeInvitationsOfLostRight(tx, documentId, now);
       await securityLogIn(tx, { kind: 'owner_changed', userId, documentId });
       // FR-AU-91: "its acceptance takes the document out of the clearing, since the account no longer owns it".
       // Under the document's row, which this transaction holds, and after the roles are rewritten, so that the
