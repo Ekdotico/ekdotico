@@ -3,6 +3,7 @@
 // the right. Each test names the weakening that makes it fail: a cause that does not call
 // `revokeInvitationsOfLostRight` leaves the invitation pending, and a revocation that ignores the permission
 // set revokes the invitation of a sender who still holds the right (the last test).
+import { HELD } from './guard.ts';
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it } from 'vitest';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
@@ -38,7 +39,9 @@ async function setting() {
   const set = defaultPermissionSet();
   set['document.collaborators.invite'].editor = true;
   await db().document.update({ where: { id }, data: { permissionSet: set } });
-  const row = await db().documentCollaborator.create({ data: { documentId: id, userId: editor.id, role: 'EDITOR' } });
+  const row = await db().documentCollaborator.create({
+    data: { documentId: id, userId: editor.id, role: 'EDITOR' },
+  });
   return { owner, editor, id, row: row.id };
 }
 
@@ -60,9 +63,12 @@ async function pendingFrom(documentId: string, sender: Person) {
   });
   return invitation.id;
 }
-const stateOf = async (id: string) => (await db().documentInvitation.findUniqueOrThrow({ where: { id } })).state;
+const stateOf = async (id: string) =>
+  (await db().documentInvitation.findUniqueOrThrow({ where: { id } })).state;
 const notified = (id: string) =>
-  db().notification.count({ where: { kind: 'document_invitation', payload: { path: ['invitationId'], equals: id } } });
+  db().notification.count({
+    where: { kind: 'document_invitation', payload: { path: ['invitationId'], equals: id } },
+  });
 
 describe('the loss of the right to invite revokes the sender’s pending invitations (FR-ED-37, D300)', () => {
   it('revokes them when the sender’s role is lowered to one without the permission', async () => {
@@ -104,7 +110,7 @@ describe('the loss of the right to invite revokes the sender’s pending invitat
     const { owner, editor, id, row } = await setting();
     await db().document.update({ where: { id }, data: { permissionSet: defaultPermissionSet() } });
     const theirs = await pendingFrom(id, owner);
-    const offered = await makeOffer(id, owner.id, row);
+    const offered = await makeOffer(id, owner.id, row, undefined, HELD);
     if (offered.outcome !== 'offered') throw new Error(`not offered: ${offered.outcome}`);
     expect((await answerOffer(editor.id, offered.offer.id, 'accept')).outcome).toBe('accepted');
     expect(await stateOf(theirs)).toBe('REVOKED');
@@ -123,7 +129,7 @@ describe('the loss of the right to invite revokes the sender’s pending invitat
     expect(await stateOf(theirs)).toBe('PENDING');
     // The transfer keeps the former Owner's where Editors may invite.
     const ownersOwn = await pendingFrom(id, owner);
-    const offered = await makeOffer(id, owner.id, row);
+    const offered = await makeOffer(id, owner.id, row, undefined, HELD);
     if (offered.outcome !== 'offered') throw new Error(`not offered: ${offered.outcome}`);
     await answerOffer(editor.id, offered.offer.id, 'accept');
     expect(await stateOf(ownersOwn)).toBe('PENDING');

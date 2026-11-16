@@ -5,6 +5,7 @@
 // account) in a transaction of the test while the requests queue behind it, in the order the test starts them; the
 // database lets them through one after another, and the test reads what the first left. A weakening that removes
 // the lock, the condition or the re-read fails the test of its race.
+import { HELD } from './guard.ts';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -321,7 +322,7 @@ describe('the confirmation against the other things the Owner can do to the docu
     const documentId = await documentOf(owner.id);
     await share(documentId, editor.id, 'EDITOR');
     const collaborator = await db().documentCollaborator.findFirstOrThrow({ where: { documentId } });
-    expect((await makeOffer(documentId, owner.id, collaborator.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, collaborator.id, undefined, HELD)).outcome).toBe('offered');
     const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId } });
     let answer: Awaited<ReturnType<typeof answerOffer>> | undefined;
     await behind('document', documentId, async (queued) => {
@@ -347,7 +348,7 @@ describe('a timer’s claim against a cancellation and an acceptance (NFR-RE-15)
     const documentId = await documentOf(owner.id);
     await share(documentId, editor.id, 'EDITOR');
     const collaborator = await db().documentCollaborator.findFirstOrThrow({ where: { documentId } });
-    expect((await makeOffer(documentId, owner.id, collaborator.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, collaborator.id, undefined, HELD)).outcome).toBe('offered');
     const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId } });
     // Recorded only now: a recorded document cannot be offered (FR-ED-47), and this one is asked of Istorico.
     await db().document.update({ where: { id: documentId }, data: { recording: 'RECORDED' } });
@@ -459,7 +460,8 @@ describe('something that commits between the timer’s read of what is due and i
       where: { documentId, userId: editor.id },
     });
     expect(
-      (await makeOffer(documentId, owner.id, collaborator.id, new Date(day.getTime() - 60_000))).outcome,
+      (await makeOffer(documentId, owner.id, collaborator.id, new Date(day.getTime() - 60_000), HELD))
+        .outcome,
     ).toBe('offered');
     const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId, state: 'PENDING' } });
     const run = await inTheWindow(

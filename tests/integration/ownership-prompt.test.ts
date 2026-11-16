@@ -27,6 +27,8 @@ const database = prepare('ownershipprompt', {
   TRUSTED_PROXY_COUNT: '1',
   EMAIL_SINK_DIRECTORY: `/tmp/ekdotico-ownership-prompt-${randomUUID()}`,
   RATE_LIMIT_INVITATIONS_PER_USER: '1000/3600',
+  // Two offers in an hour, so that a third is a 429 (review of PR 80, item 1).
+  RATE_LIMIT_OFFERS_PER_USER: '2/3600',
   RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL: `${MOST}/3600`,
   RATE_LIMIT_FAILED_SIGN_IN_PER_EMAIL_AND_ADDRESS: '500/900',
 });
@@ -35,7 +37,10 @@ const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { SIGN_IN_REFUSED } = await import('../../src/lib/auth/sign-in.ts');
 const offering = await import('../../src/app/api/documents/[id]/ownership-offer/route.ts');
 const transferring = await import('../../src/app/api/account/documents/transfer/route.ts');
-const { transferScreen } = await import('../../src/lib/account/transfer.ts');
+const { transferScreen, confirmTransfer } = await import('../../src/lib/account/transfer.ts');
+const { makeOffer } = await import('../../src/lib/documents/ownership.ts');
+const { guardAnswer } = await import('../../src/lib/account/prompt.ts');
+const { standingAs } = await import('./guard.ts');
 
 afterAll(async () => {
   await db().$disconnect();
@@ -222,4 +227,95 @@ describe('the transfer of all documents asks for the password (FR-AU-92, D285)',
     const right = await transfer(who.cookie, { ...second, password: PASSWORD, code: nextCode(who.secret) });
     expect(right.status).toBe(201);
   });
+});
+
+describe('a recovery code is spent only by an action that is carried out (review of PR 80, item 1)', () => {
+  const codesOf = async (userId: string) =>
+    (await db().twoFactor.findUniqueOrThrow({ where: { userId } })).backupCodes;
+
+  // Weakening: the code is spent before the limit is taken, so that a 429 uses it up.
+  it('leaves the code where the offer is refused for the limit, with a 429', async () => {
+    const who = await enrolled();
+    const [first, second, third] = [await document(who), await document(who), await document(who)];
+    for (const each of [first, second]) {
+      const made = await offer(each.id, who.cookie, {
+        collaboratorId: each.row,
+        password: PASSWORD,
+        code: nextCode(who.secret),
+      });
+      expect(made.status).toBe(201);
+    }
+    const before = await codesOf(who.id);
+    const limited = await offer(third.id, who.cookie, {
+      collaboratorId: third.row,
+      password: PASSWORD,
+      code: who.recoveryCodes[0]!,
+    });
+    expect(limited.status).toBe(429);
+    expect(await codesOf(who.id)).toBe(before);
+    expect(await offers(third.id)).toBe(0);
+  });
+
+  // Weakening: the code is spent before the over-limit refusal of the transfer.
+  it('leaves the code where the transfer would email more people than the limit allows, with a 409', async () => {
+    const who = await enrolled();
+    for (let each = 0; each < 3; each += 1) await document(who);
+    const { longest } = await transferScreen(who.id);
+    const before = await codesOf(who.id);
+    const refused = await transfer(who.cookie, {
+      mode: 'longest',
+      documentIds: longest.documentIds,
+      password: PASSWORD,
+      code: who.recoveryCodes[0]!,
+    });
+    expect(refused.status).toBe(409);
+    expect(await code(refused)).toBe('too_many_offers');
+    expect(await codesOf(who.id)).toBe(before);
+    expect(await db().ownershipOffer.count({ where: { fromUserId: who.id } })).toBe(0);
+  });
+});
+
+describe('the action asks again whether the password and the session stand (review of PR 80, item 3)', () => {
+  // Weakening: `guardRefusal` is not asked in the transaction of the action.
+  it.each([
+    ['outrun', 'password_refused', 403],
+    ['ended', 'unauthenticated', 401],
+  ] as const)(
+    'refuses an offer when the check finds %s, offers nothing and spends no code',
+    async (found, answer, status) => {
+      const owner = await person();
+      const { id, row } = await document(owner);
+      const spend = vi.fn(async () => true);
+      const result = await makeOffer(id, owner.id, row, undefined, standingAs(found, spend));
+      expect(result).toEqual({ outcome: found });
+      expect(await offers(id)).toBe(0);
+      expect(spend).not.toHaveBeenCalled();
+      const response = await guardAnswer(owner.id, { outcome: found });
+      expect(response.status).toBe(status);
+      expect(await code(response)).toBe(answer);
+    },
+  );
+
+  it.each(['outrun', 'ended'] as const)(
+    'refuses a transfer when the check finds %s, offers nothing and spends no code',
+    async (found) => {
+      const owner = await person();
+      const body = await (async () => {
+        await document(owner);
+        const { longest } = await transferScreen(owner.id);
+        return { mode: 'longest' as const, documentIds: longest.documentIds };
+      })();
+      const stored = await db().session.findFirstOrThrow({ where: { userId: owner.id } });
+      const spend = vi.fn(async () => true);
+      const result = await confirmTransfer(
+        { userId: owner.id, sessionId: stored.id } as never,
+        body,
+        undefined,
+        standingAs(found, spend),
+      );
+      expect(result.outcome).toBe(found);
+      expect(await db().ownershipOffer.count({ where: { fromUserId: owner.id } })).toBe(0);
+      expect(spend).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -18,20 +18,13 @@ export interface Guard {
 export type GuardRefusal = { outcome: 'ended' } | { outcome: 'outrun' } | { outcome: 'code_gone' };
 
 /** Asks the guard at the start of the action's transaction: null where the action may go on. */
-export async function guardRefusal(
-  tx: Prisma.TransactionClient,
-  guard: Guard | undefined,
-): Promise<GuardRefusal | null> {
-  if (!guard) return null;
+export async function guardRefusal(tx: Prisma.TransactionClient, guard: Guard): Promise<GuardRefusal | null> {
   const held = await guard.standing(tx);
   return held === 'held' ? null : { outcome: held };
 }
 
 /** Spends the recovery code that was entered, where one was; null where the action may go on. */
-export async function guardSpend(
-  tx: Prisma.TransactionClient,
-  guard: Guard | undefined,
-): Promise<GuardRefusal | null> {
-  if (guard?.spend && !(await guard.spend(tx))) return { outcome: 'code_gone' };
+export async function guardSpend(tx: Prisma.TransactionClient, guard: Guard): Promise<GuardRefusal | null> {
+  if (guard.spend && !(await guard.spend(tx))) return { outcome: 'code_gone' };
   return null;
 }

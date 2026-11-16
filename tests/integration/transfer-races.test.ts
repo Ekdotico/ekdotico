@@ -6,6 +6,7 @@
 // requests queue behind it, in the order the test starts them; the database lets them through one after another, and
 // the test reads what the first left. A weakening that removes the lock, the re-read or the order fails the test of
 // its race (the mutations of the pull request, section 9 of the plan).
+import { HELD } from './guard.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DAY_MS, json, MAIL, world } from './clearing.ts';
@@ -186,7 +187,9 @@ describe('the action against other offers', () => {
     const single: unknown[] = [];
     await behind('document', second, async (queued) => {
       await queued(async () => void (response = await post(owner.cookie, await everything(owner))));
-      await queued(async () => void single.push(await makeOffer(second, owner.id, secondRow.id)));
+      await queued(
+        async () => void single.push(await makeOffer(second, owner.id, secondRow.id, undefined, HELD)),
+      );
     });
     expect(response.status).toBe(201);
     expect(single).toMatchObject([{ outcome: 'pending' }]);
@@ -450,7 +453,7 @@ describe('the action against a clearing', () => {
       await editorOf(await documentOf(other.id), owner, 2);
       const accepted = await documentOf(owner.id);
       const acceptedRow = await editorOf(accepted, staying, 3);
-      expect((await makeOffer(accepted, owner.id, acceptedRow.id)).outcome).toBe('offered');
+      expect((await makeOffer(accepted, owner.id, acceptedRow.id, undefined, HELD)).outcome).toBe('offered');
       const pending = (await offersOf(accepted))[0]!;
       const results = await Promise.race([
         Promise.allSettled([

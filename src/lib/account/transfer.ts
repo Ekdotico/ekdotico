@@ -266,8 +266,8 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 export async function confirmTransfer(
   session: ValidSession,
   request: TransferRequest,
-  given?: Date,
-  guard?: Guard,
+  given: Date | undefined,
+  guard: Guard,
 ): Promise<TransferResult> {
   const userId = session.userId;
   // NFR-SE-07: counted in the transaction, after every refusal, and given back where it then fails.
@@ -334,10 +334,6 @@ export async function confirmTransfer(
       const offered = offeredIds(plan);
       if (!sameSet(offered, request.documentIds)) return { outcome: 'changed' };
       if (offered.length === 0) return { outcome: 'nothing' };
-      // Every refusal of the action is behind us: a recovery code is spent only by a transfer that is made.
-      const gone = await guardSpend(tx, guard);
-      if (gone) return gone;
-
       const fresh = [...plan].flatMap(([documentId, outcome]) =>
         outcome.kind === 'offer' ? [{ documentId, toUserId: outcome.toUserId }] : [],
       );
@@ -348,6 +344,14 @@ export async function confirmTransfer(
         const limit = await takeLimitReturnable('OFFERS_PER_USER', userId, wanted);
         if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
         giveBack = limit.giveBack;
+      }
+      // Every refusal of the action, the limit included, is behind us: a recovery code is spent only by a transfer
+      // that is made (review of PR 80, item 1). Where it was spent already, the count is given back.
+      const gone = await guardSpend(tx, guard);
+      if (gone) {
+        await giveBack?.();
+        giveBack = undefined;
+        return gone;
       }
 
       const batchId = randomUUID();

@@ -3,6 +3,7 @@
 // is confirmed, the rules (a) and (b), the states, the exclusions, the accounts in deletion, the limit, the email and
 // what is logged, against a provisioned database, with the routes as Next.js calls them. The races are in
 // transfer-races.test.ts. Each test of a rule names the weakening that makes it fail (section 9 of the plan).
+import { HELD } from './guard.ts';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { codeOf, DAY_MS, json, MAIL, TITLE, world } from './clearing.ts';
@@ -147,6 +148,8 @@ describe('authorisation', () => {
     const result = await confirmTransfer(
       { userId: owner.id, sessionId: session.id },
       { mode: 'longest', documentIds: body.documentIds },
+      undefined,
+      HELD,
     );
     expect(result.outcome).toBe('ended');
     expect(await offersOf(documentId)).toHaveLength(0);
@@ -317,7 +320,7 @@ describe('the rules (a) and (b), each offer being an offer of FR-ED-47', () => {
     const documentId = await documentOf(first.id);
     const mine = await editorOf(documentId, next);
     await editorOf(documentId, long, 30, 30);
-    const made = await makeOffer(documentId, first.id, mine.id);
+    const made = await makeOffer(documentId, first.id, mine.id, undefined, HELD);
     expect(made.outcome).toBe('offered');
     const [offer] = await offersOf(documentId);
     expect((await answerOffer(next.id, offer!.id, 'accept')).outcome).toBe('accepted');
@@ -402,7 +405,7 @@ describe('the rules (a) and (b), each offer being an offer of FR-ED-47', () => {
     await editorOf(documentId, better, 100);
     const fresh = await documentOf(owner.id);
     await editorOf(fresh, better);
-    expect((await makeOffer(documentId, owner.id, keptRow.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, keptRow.id, undefined, HELD)).outcome).toBe('offered');
     const response = await post(owner.cookie, await everything(owner));
     expect(await json(response)).toEqual({ offered: 1, kept: 1, cannot: 0 });
     const offers = await offersOf(documentId);
@@ -423,7 +426,7 @@ describe('the rules (a) and (b), each offer being an offer of FR-ED-47', () => {
     const ed = await person('ed');
     const documentId = await documentOf(owner.id);
     const edRow = await editorOf(documentId, ed);
-    expect((await makeOffer(documentId, owner.id, edRow.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, edRow.id, undefined, HELD)).outcome).toBe('offered');
     const body = await everything(owner);
     expect(body.documentIds).toEqual([documentId]);
     // The role is lowered by a write that does not end the offer: the stored offer is pending, and wrong.
@@ -496,9 +499,9 @@ describe('the state of each document', () => {
     })) {
       rows[name] = { id, row: await editorOf(id, ed) };
     }
-    await makeOffer(offered, owner.id, rows.offered!.row.id);
-    await makeOffer(declined, owner.id, rows.declined!.row.id);
-    await makeOffer(expired, owner.id, rows.expired!.row.id);
+    await makeOffer(offered, owner.id, rows.offered!.row.id, undefined, HELD);
+    await makeOffer(declined, owner.id, rows.declined!.row.id, undefined, HELD);
+    await makeOffer(expired, owner.id, rows.expired!.row.id, undefined, HELD);
     const [dec] = await offersOf(declined);
     await answerOffer(ed.id, dec!.id, 'decline');
     await db().ownershipOffer.updateMany({
@@ -557,7 +560,7 @@ describe('the state of each document', () => {
     const theirs = await documentOf(other.id);
     const edRow = await editorOf(mine, ed);
     await editorOf(theirs, ed);
-    await makeOffer(mine, owner.id, edRow.id);
+    await makeOffer(mine, owner.id, edRow.id, undefined, HELD);
     const response = await getDeletion(owner.cookie);
     expect(response.status).toBe(200);
     const text = await response.clone().text();
@@ -699,6 +702,8 @@ describe('an account in deletion can neither make nor receive an offer', () => {
     const result = await confirmTransfer(
       { userId: owner.id, sessionId: session.id },
       { mode: 'longest', documentIds: body.documentIds },
+      undefined,
+      HELD,
     );
     expect(result.outcome).toBe('not_found');
     expect(await offersOf(documentId)).toHaveLength(0);
@@ -727,7 +732,7 @@ describe('the limit of offers (NFR-SE-07, D219; one for each person emailed, D26
     const extra = await documentOf(owner.id);
     const ed = await person('ed2');
     const edRow = await editorOf(extra, ed);
-    expect((await makeOffer(extra, owner.id, edRow.id)).outcome).toBe('rate_limited');
+    expect((await makeOffer(extra, owner.id, edRow.id, undefined, HELD)).outcome).toBe('rate_limited');
     expect(ids).toHaveLength(20);
   });
 
@@ -750,7 +755,7 @@ describe('the limit of offers (NFR-SE-07, D219; one for each person emailed, D26
   it('counts an offer made on its own as one, from the allowance that the action shares', async () => {
     const { owner, ids } = await owning(4, 2);
     const first = await db().documentCollaborator.findFirstOrThrow({ where: { documentId: ids[0]! } });
-    expect((await makeOffer(ids[0]!, owner.id, first.id)).outcome).toBe('offered');
+    expect((await makeOffer(ids[0]!, owner.id, first.id, undefined, HELD)).outcome).toBe('offered');
     expect((await takeLimit('OFFERS_PER_USER', owner.id, 17)).ok).toBe(true);
     // Eighteen of the twenty are taken, and the action emails two people: the two that are left.
     const response = await post(owner.cookie, await everything(owner));
@@ -763,7 +768,7 @@ describe('the limit of offers (NFR-SE-07, D219; one for each person emailed, D26
   it('counts only the people it emails, and not a person whose document already has an offer', async () => {
     const { owner, ids } = await owning(2, 2);
     const first = await db().documentCollaborator.findFirstOrThrow({ where: { documentId: ids[0]! } });
-    expect((await makeOffer(ids[0]!, owner.id, first.id)).outcome).toBe('offered');
+    expect((await makeOffer(ids[0]!, owner.id, first.id, undefined, HELD)).outcome).toBe('offered');
     expect((await takeLimit('OFFERS_PER_USER', owner.id, 18)).ok).toBe(true);
     // The first document keeps its offer, so the action emails one person, and one of the twenty is left.
     const response = await post(owner.cookie, await everything(owner));
@@ -785,7 +790,7 @@ describe('the limit of offers (NFR-SE-07, D219; one for each person emailed, D26
     for (const id of ids) expect(await offersOf(id)).toHaveLength(0);
     // Nothing was counted: a single offer is still possible in full.
     const row = await db().documentCollaborator.findFirstOrThrow({ where: { documentId: ids[0]! } });
-    expect((await makeOffer(ids[0]!, owner.id, row.id)).outcome).toBe('offered');
+    expect((await makeOffer(ids[0]!, owner.id, row.id, undefined, HELD)).outcome).toBe('offered');
   });
 
   // Mutation T24: the action is partly done where the allowance is short.
@@ -827,7 +832,7 @@ describe('the limit of offers (NFR-SE-07, D219; one for each person emailed, D26
     const { owner, ids } = await owning(20);
     for (const id of ids.slice(0, 19)) {
       const found = await db().documentCollaborator.findFirstOrThrow({ where: { documentId: id } });
-      expect((await makeOffer(id, owner.id, found.id)).outcome).toBe('offered');
+      expect((await makeOffer(id, owner.id, found.id, undefined, HELD)).outcome).toBe('offered');
     }
     const response = await post(owner.cookie, await everything(owner));
     expect(response.status).toBe(201);
@@ -1039,11 +1044,11 @@ describe('review of pull request 64', () => {
     const ed = await person('ed');
     const documentId = await documentOf(owner.id);
     const edRow = await editorOf(documentId, ed);
-    expect((await makeOffer(documentId, owner.id, edRow.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, edRow.id, undefined, HELD)).outcome).toBe('offered');
     await answerOffer(ed.id, (await offersOf(documentId))[0]!.id, 'decline');
     expect((await transferScreen(owner.id)).documents[0]?.state).toEqual({ kind: 'no_other_editor' });
     // Offered once more on its own, withdrawn: it is not "Not offered yet" for a rule that passes the Editor over.
-    expect((await makeOffer(documentId, owner.id, edRow.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, edRow.id, undefined, HELD)).outcome).toBe('offered');
     await withdrawOffer(documentId, owner.id);
     const screen = await transferScreen(owner.id);
     expect(screen.documents[0]?.state).toEqual({ kind: 'no_other_editor' });
@@ -1061,7 +1066,7 @@ describe('review of pull request 64', () => {
     for (let n = 0; n < 3; n++) {
       const id = await documentOf(owner.id);
       const aliceRow = await editorOf(id, alice, 5);
-      await makeOffer(id, owner.id, aliceRow.id);
+      await makeOffer(id, owner.id, aliceRow.id, undefined, HELD);
       kept.push(id);
     }
     const bobs = await documentOf(owner.id);

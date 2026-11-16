@@ -355,7 +355,7 @@ export async function makeOffer(
   callerId: string,
   collaboratorId: unknown,
   now: Date = new Date(),
-  guard?: Guard,
+  guard: Guard,
 ): Promise<OfferResult> {
   // NFR-SE-07, S17-7: as the invitations of `createInvitations`, an offer is counted inside the transaction,
   // after every refusal, and given back where the transaction then fails, so that only an offer made counts.
@@ -390,12 +390,17 @@ export async function makeOffer(
       ) {
         return { outcome: 'pending' };
       }
-      // Every refusal of the action is behind us: a recovery code is spent only by an offer that is made.
-      const gone = await guardSpend(tx, guard);
-      if (gone) return gone;
       const limit = await takeLimitReturnable('OFFERS_PER_USER', callerId);
       if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
       giveBack = limit.giveBack;
+      // Every refusal of the action, the limit included, is behind us: a recovery code is spent only by an offer
+      // that is made (review of PR 80, item 1). Where it was spent already, the count is given back.
+      const gone = await guardSpend(tx, guard);
+      if (gone) {
+        await giveBack();
+        giveBack = undefined;
+        return gone;
+      }
       const { id, expiresAt } = await createOffer(tx, {
         documentId,
         fromUserId: callerId,
