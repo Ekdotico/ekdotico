@@ -20,6 +20,7 @@
 // leaves this module once, inside the email.
 import { Prisma, type DocumentRole as StoredRole } from '../../generated/prisma/client.ts';
 import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
+import { listTwoFactorOffers, type TwoFactorOfferView } from '../auth/enrolment-offer.ts';
 import { listClearingNotifications, type ClearingNotificationView } from '../clearing/notices.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
@@ -832,7 +833,8 @@ export type ListedNotification =
   | AccessNotificationView
   | OfferNotificationView
   | OfferEndedNotificationView
-  | ClearingNotificationView;
+  | ClearingNotificationView
+  | TwoFactorOfferView;
 
 /**
  * The account's notifications whose subject still exists, newest first, with
@@ -943,6 +945,8 @@ export async function listNotifications(
     ...(await listOfferEndedNotifications(userId, now)),
     // FR-ED-42, FR-AU-91: the notices of a clearing: that a document will be deleted, that it will not, that it was.
     ...(await listClearingNotifications(userId, now)),
+    // NFR-SE-17 (e), D302: the offer of enrolment to an account that lost its second factor in a forced re-enrolment.
+    ...(await listTwoFactorOffers(userId)),
   ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   return { unread: notifications.filter(({ read }) => !read).length, notifications };
 }

@@ -64,13 +64,45 @@ unset OLD_AUTH_SECRET NEW_AUTH_SECRET DATABASE_URL
 
 It opens each `TwoFactor.secret` and `TwoFactor.backupCodes` with the old value, seals it with the new one, and deletes every `Session` row, in one transaction. It prints counts and no value. A row that opens under neither value stops it with nothing changed; the owner then decides what becomes of that account (the library's own way to rotate without loss, `BETTER_AUTH_SECRETS`, is refused by `settings.ts` and is register row R27-3). A run that is repeated finds the rows already under the new value and re-seals none; it still ends any session made since the run before. `tests/integration/rotate-auth-secret.test.ts` shows each of these.
 
+## 3a. When the database and `AUTH_SECRET` are both exposed
+
+NFR-SE-17 (e), register D302 and Q82 points 1 to 3 (docs@da33e58). Step 3 protects nothing in this case: whoever holds the database and the old `AUTH_SECRET` opens every sealed value, and the password hashes are in the same database. So nothing is re-sealed. Every account that had a second factor loses it, every password ends, and each account comes back through a reset link.
+
+`--exposed` does, in ONE transaction, all of it or none of it:
+
+- deletes every second factor (`TwoFactor`) and turns two-factor authentication off in every row of `User`;
+- ends every password: the stored hash is replaced by that of a random password nobody has, on every credential account, so that nobody signs in with a password from the database, and each account sets a new one through a reset link emailed to its verified address (FR-AU-03, FR-AU-86). The first step after that is the second factor, below;
+- ends every session, and deletes every open link and second step (`Verification`);
+- writes one notification (FR-ED-42) to each account that had a second factor and is not of the founding team, which offers it enrolment and which it may leave; turning two-factor authentication on in the settings ends the offer. An account of the founding team is written nothing, and **cannot sign in until it enrols** (FR-AU-83): after its reset it reaches no page but the enrolment.
+
+The new secret is installed **in the same step**. The script refuses a new secret under 32 characters or equal to the old one, and prints counts; the deployment does the rest in this order, and nothing runs between the lines:
+
+- [ ] Agree the time and take a copy of the database (as step 2). Make the new value: `node scripts/dev-secret.mjs`.
+- [ ] Stop both processes (the application and the collaboration server). A process that runs with the exposed value after the run would seal a new second factor under it.
+- [ ] Dry run, then apply. `NEW_AUTH_SECRET`, `DATABASE_URL` and `FOUNDING_TEAM_EMAILS` (the same list the processes hold) are read from the keyboard as in step 3; `OLD_AUTH_SECRET` is not needed:
+
+```bash
+read -rs NEW_AUTH_SECRET && export NEW_AUTH_SECRET
+read -rs DATABASE_URL && export DATABASE_URL
+read -r FOUNDING_TEAM_EMAILS && export FOUNDING_TEAM_EMAILS
+node scripts/rotate-auth-secret.ts --exposed            # a dry run
+node scripts/rotate-auth-secret.ts --exposed --apply
+unset NEW_AUTH_SECRET DATABASE_URL FOUNDING_TEAM_EMAILS
+```
+
+- [ ] Set `AUTH_SECRET` to the new value in both processes, and start them. They must hold the same value, and a different one from every other secret (`settings.ts`).
+- [ ] Prove it: a sign-in with an old password is refused; a reset link sets a new password; a member of the founding team who signs in after it is asked to enrol and reaches nothing else until it has; another account sees the offer in its notifications; a session cookie from before is refused (401).
+- [ ] Rotate every other secret of step 1 that the same exposure reached, and record (step 4) that the case was this one, with the counts the script printed.
+
+`tests/integration/rotate-exposed.test.ts` shows each of these, and that a fault at any write leaves every second factor, password and session as it was.
+
 ## 4. The record
 
 `docs/records/runs/secret-rotation/<date>-<release>.md` holds, for each rotation: the date; who; which secret; why; the steps above ticked; what was proved; and that nothing was printed or committed. It holds no value, no part of a value and no hash of one.
 
 ## 5. If a secret is lost or published
 
-Treat it as seen: rotate it at once, then read the security log for the days it was exposed (`SecurityLogEntry`), and tell the owner. A published `AUTH_SECRET` lets its holder forge a session cookie, so after the rotation every session the deployment has made is gone and every founding-team account is asked for its second factor again.
+Treat it as seen: rotate it at once, then read the security log for the days it was exposed (`SecurityLogEntry`), and tell the owner. A published `AUTH_SECRET` lets its holder forge a session cookie, so after the rotation every session the deployment has made is gone and every founding-team account is asked for its second factor again. Where the database was exposed with it, the rotation of step 3 is not enough: do step 3a, which ends every second factor and every password.
 
 ## 6. The key of the copies
 
