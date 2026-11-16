@@ -30,7 +30,7 @@ export function batchOfferEmail(
   return {
     to,
     subject: `An offer of ownership of ${documents} documents in Ekdotico`,
-    text: `${ownerName} has offered you ownership of ${documents} documents that you edit in Ekdotico. To accept or decline each one, open your notifications in Ekdotico: ${link}. The offers are open until ${dateText(expiresAt, 'utc')}. For each one you accept, you become the Owner of the document and ${ownerName} becomes an Editor.`,
+    text: `${ownerName} has offered you ownership of ${documents} documents that you edit in Ekdotico. To accept or decline each one, open your notifications in Ekdotico:\n${link}\nThe offers are open until ${dateText(expiresAt, 'utc')}. For each one you accept, you become the Owner of the document and ${ownerName} becomes an Editor.`,
   };
 }
 

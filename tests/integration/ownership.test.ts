@@ -255,7 +255,7 @@ describe('offering ownership (FR-ED-47)', () => {
     expect(written[0]!.subject).toBe('An offer of ownership of a document in Ekdotico');
     const expires = (await offerOf(id)).expiresAt;
     expect(written[0]!.text).toBe(
-      `Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico: ${ORIGIN}/notifications. The offer is open until ${expires.getUTCDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][expires.getUTCMonth()]} ${expires.getUTCFullYear()}, ${String(expires.getUTCHours()).padStart(2, '0')}:${String(expires.getUTCMinutes()).padStart(2, '0')} UTC. If you accept, you become the Owner of the document and Ada Owner becomes an Editor.`,
+      `Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico:\n${ORIGIN}/notifications\nThe offer is open until ${expires.getUTCDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][expires.getUTCMonth()]} ${expires.getUTCFullYear()}, ${String(expires.getUTCHours()).padStart(2, '0')}:${String(expires.getUTCMinutes()).padStart(2, '0')} UTC. If you accept, you become the Owner of the document and Ada Owner becomes an Editor.`,
     );
     expect(JSON.stringify(written)).not.toContain('Zebra');
     expect((await offerOf(id)).emailClaimedAt).not.toBeNull();

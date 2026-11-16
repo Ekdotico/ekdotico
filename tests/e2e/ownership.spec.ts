@@ -117,7 +117,8 @@ test('the Owner offers ownership from the sharing settings, the Editor declines,
   expect(text).toContain(
     'Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico: ',
   );
-  expect(text).toContain('/notifications. The offer is open until ');
+  // D307: the link stands on a line of its own.
+  expect(text).toMatch(/Ekdotico:\n[^\s]+\/notifications\nThe offer is open until /);
   expect(text).toContain(
     'If you accept, you become the Owner of the document and Ada Owner becomes an Editor.',
   );

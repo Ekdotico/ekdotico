@@ -476,7 +476,7 @@ export function offerEmail(to: string, ownerName: string, expiresAt: Date): Emai
   return {
     to,
     subject: 'An offer of ownership of a document in Ekdotico',
-    text: `${ownerName} has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico: ${link}. The offer is open until ${dateText(expiresAt, 'utc')}. If you accept, you become the Owner of the document and ${ownerName} becomes an Editor.`,
+    text: `${ownerName} has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico:\n${link}\nThe offer is open until ${dateText(expiresAt, 'utc')}. If you accept, you become the Owner of the document and ${ownerName} becomes an Editor.`,
   };
 }
 
