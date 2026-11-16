@@ -8,10 +8,11 @@
 //      loses sends nothing. A row is never held across the attempt, so that no fault of the application, a crash
 //      among them, sends an email twice: what is lost then is one email, and the invitee can be invited again.
 //   2. the email is made again from the rows the row names, and only while they still say it is wanted: the
-//      invitation or the offer is still pending, the clearing has not run, the address is still the account's
-//      verified one, and FR-AU-58 (a) is read again, since a retry is a new attempt (D267).
+//      invitation or the offer is still pending, the clearing has not run, FR-AU-58 (a) is read again, since a retry is a new attempt (D267).
 //   3. it is handed over. Where the service again certainly did not take it, the row is written again, to wait for
 //      the next run. Any other outcome ends it: a success, an unknown outcome, or a refusal of the message.
+// Only the invitation and its reminder (to the address entered) are made again for an address that is still the
+// account's verified one and for an account that holds no role yet; the others go to the account's address now.
 // Nothing is written to the Notification list: it was written once, when the email was first claimed.
 //
 // NFR-SE-19: a line names the kind and the identifier of the subject, and the class and code of the fault. Never
@@ -151,9 +152,17 @@ export async function retryEmails(
       // invitation that has expired since it began (the run's `now` is a parameter for the tests).
       message = await messageOf(ref, new Date(Math.max(now.getTime(), Date.now())));
     } catch (error) {
-      // Nothing was handed over: a fault of the database. The row waits again.
+      // Nothing was handed over: a fault of the database. The row is written again, and the line says so only
+      // where that worked.
       console.error(`email retry ${which}: not made (${faultOf(error)})`);
-      await queueRetry(ref).catch(() => {});
+      const kept = await queueRetry(ref).then(
+        () => true,
+        (cause) => {
+          console.error(`email retry ${which}: not kept, the email is lost (${faultOf(cause)})`);
+          return false;
+        },
+      );
+      if (kept) console.error(`email retry ${which}: waits again`);
       continue;
     }
     if (!message) continue;
@@ -163,8 +172,11 @@ export async function retryEmails(
       if (certainlyNotTaken(error)) {
         console.error(`email retry ${which}: not taken, will try again (${faultOf(error)})`);
         await queueRetry(ref).catch((cause) =>
-          console.error(`email retry ${which}: not kept (${faultOf(cause)})`),
+          console.error(`email retry ${which}: not kept, the email is lost (${faultOf(cause)})`),
         );
+        // The service refuses all of us for now (a key, credits, a limit, no connection): the rows not yet
+        // tried stay as they are for the next run, and are not sent into the same refusal.
+        break;
       } else {
         // An unknown outcome, or a message the service refuses: not tried again (FR-ED-21).
         console.error(`email retry ${which}: not delivered (${faultOf(error)})`);

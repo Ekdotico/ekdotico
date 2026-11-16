@@ -19,6 +19,9 @@ CREATE TABLE "EmailRetry" (
 CREATE INDEX "EmailRetry_createdAt_idx" ON "EmailRetry"("createdAt");
 
 -- CreateIndex
+CREATE INDEX "EmailRetry_userId_idx" ON "EmailRetry"("userId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "EmailRetry_kind_subjectId_userId_key" ON "EmailRetry"("kind", "subjectId", "userId");
 
 -- AddForeignKey

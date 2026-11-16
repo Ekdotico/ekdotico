@@ -5,6 +5,7 @@
 // NFR-SE-19: nothing here logs.
 import type { EmailRetryKind } from '../../generated/prisma/client.ts';
 import { db } from '../db.ts';
+import { faultOf } from '../fault.ts';
 import { certainlyNotTaken, type EmailMessage } from './index.ts';
 
 export type RetryRef = { kind: EmailRetryKind; subjectId: string; userId: string };
@@ -28,7 +29,13 @@ export async function sendOrQueue(
   try {
     await send(message);
   } catch (error) {
-    if (certainlyNotTaken(error)) await queueRetry(ref);
+    // The send's own fault is what the caller gets, whether or not the row could be written (NFR-SE-19: the
+    // line names the kind and the subject, never the address).
+    if (certainlyNotTaken(error)) {
+      await queueRetry(ref).catch((cause) =>
+        console.error(`email ${ref.kind.toLowerCase()} ${ref.subjectId}: retry not kept (${faultOf(cause)})`),
+      );
+    }
     throw error;
   }
 }

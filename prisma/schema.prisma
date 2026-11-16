@@ -455,6 +455,8 @@ model EmailRetry {
 
   @@unique([kind, subjectId, userId])
   @@index([createdAt])
+  // The cascade from User reads by account.
+  @@index([userId])
 }
 
 enum EmailRetryKind {

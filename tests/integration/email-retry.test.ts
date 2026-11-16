@@ -320,6 +320,53 @@ describe('which faults wait', () => {
   });
 });
 
+describe('review of pull request 77', () => {
+  it('the first fault of certain refusal ends the run: rows not yet tried stay as they are', async () => {
+    for (let each = 0; each < 3; each++) await invitation(failing(NOT_TAKEN));
+    const before = (await rows()).map((row) => row.id).sort();
+    const send = vi.fn(failing(() => fault('429')));
+    await retryEmails(send);
+    expect(send).toHaveBeenCalledTimes(1);
+    const after = await rows();
+    expect(after).toHaveLength(3);
+    // Two rows were never touched.
+    expect(after.filter((row) => before.includes(row.id))).toHaveLength(2);
+  });
+
+  it('a retry that cannot be kept says so, and never says it waits again', async () => {
+    const { guest } = await invitation(failing(NOT_TAKEN));
+    vi.spyOn(db().emailRetry, 'createMany').mockRejectedValue(fault('P1001'));
+    vi.spyOn(db().user, 'findUnique').mockRejectedValueOnce(fault('P1001'));
+    await retryEmails(collecting().send);
+    const lines = logged.flatMap((spy) => spy.mock.calls.map((call: unknown[]) => String(call[0])));
+    expect(lines.some((line) => /not kept, the email is lost \(Error P1001\)$/.test(line))).toBe(true);
+    expect(lines.some((line) => line.includes('waits again'))).toBe(false);
+    expect(guest.id).toBeTruthy();
+  });
+
+  it("where the row cannot be written, the caller still gets the send's own fault, and a line says it was not kept", async () => {
+    const owner = await person();
+    const to = await person();
+    const made = await offer(owner, to);
+    vi.spyOn(db().emailRetry, 'createMany').mockRejectedValue(fault('P1001'));
+    await expect(
+      sendOrQueue(
+        failing(() => fault('402')),
+        { to: to.email, subject: 's', text: 't' },
+        { kind: 'OFFER', subjectId: made.id, userId: to.id },
+      ),
+    ).rejects.toMatchObject({ code: '402' });
+    const lines = logged.flatMap((spy) => spy.mock.calls.map((call: unknown[]) => String(call[0])));
+    expect(lines).toContain(`email offer ${made.id}: retry not kept (Error P1001)`);
+  });
+
+  it('an index leads with the account', async () => {
+    const found = await db().$queryRaw<{ indexdef: string }[]>`
+      SELECT indexdef FROM pg_indexes WHERE tablename = 'EmailRetry' AND indexname = 'EmailRetry_userId_idx'`;
+    expect(found).toHaveLength(1);
+  });
+});
+
 // ── No second send ──────────────────────────────────────────────────────────
 
 describe('no email is sent twice', () => {
