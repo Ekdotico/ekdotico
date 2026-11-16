@@ -77,7 +77,7 @@ The caller signs the bytes it sends. The application verifies against the bytes 
 5. The limit of NFR-SE-07 is applied: a verified request over it receives `429` with `Retry-After` in seconds, and is not processed. A request that was rejected above, a replay among them, does not count toward the limit, so that nobody without the secret can use it up, and a copy of a request that was seen can not.
 6. Only then is the body read as JSON and the request processed.
 
-A rejected request receives `401` with the error body of the application and nothing that says which check failed, a replay included. It is written to the security log as a bad signature (NFR-SE-19). Since only a verified request can receive a `429`, the two answers do not conflict. A caller that sends a request again after an answer it did not receive makes a new nonce and a new signature; the `requestId` of a create request keeps the repeat from creating a second invitation (FR-AU-89 (a)).
+A rejected request receives `401` with the error body of the application and nothing that says which check failed, a replay included. It is written to the security log as a bad signature (NFR-SE-19). Since only a verified request can receive a `429`, the two answers do not conflict. A nonce is spent as soon as the request is accepted at step 4, even where the request then fails (a 429, a 422 or a fault): a retry is a new request with a new nonce and a new signature, never the same bytes again. A caller that sends a request again after an answer it did not receive makes a new nonce and a new signature; the `requestId` of a create request keeps the repeat from creating a second invitation (FR-AU-89 (a)).
 
 ### The three requests
 
