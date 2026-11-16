@@ -203,6 +203,19 @@ model AdmissionInvitation {
   @@index([email])
 }
 
+// The nonce of a signed admission request that was accepted (FR-AU-89; register D299, Q82 point 4): inserted once
+// the signature and the time verify, under the primary key, so that of two copies of a request exactly one is
+// accepted, and kept until the signed time is more than 5 minutes in the past (`expiresAt`), when the hourly
+// clearing of admission addresses deletes it (src/lib/admission/nonce.ts). The nonce is a random value of at
+// least 128 bits that the caller makes for the request, and it holds no personal field. Not on the Data models
+// page, which is owed the row.
+model AdmissionNonce {
+  nonce     String   @id
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
 enum AdmissionState {
   PENDING
   ACCEPTED
