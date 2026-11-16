@@ -10,7 +10,17 @@ import {
   withinBound,
 } from '../../src/lib/images/dimensions.ts';
 import { prepareImage } from '../../src/lib/images/prepare.ts';
-import { gif, jpeg, jpegSegment, png, pngChunk, webp, webpChunk, WEBP_PICTURE } from './image-fixtures.ts';
+import {
+  gif,
+  JPEG_SCAN,
+  jpeg,
+  jpegSegment,
+  png,
+  pngChunk,
+  webp,
+  webpChunk,
+  WEBP_PICTURE,
+} from './image-fixtures.ts';
 
 const ihdr = (width: number, height: number) => {
   const data = Buffer.alloc(13);
@@ -135,6 +145,21 @@ describe('an upload past the bound is refused before it is parsed (NFR-SE-18)', 
     expect(prepareImage(pngOf(10, 10).subarray(0, 40))).toEqual({ ok: false, reason: 'not_accepted' });
   });
 
+  // Review of PR 80, round 2: a side of 0 is an unreadable header, a 415, and not a 413. Weakening: it is left to the bound.
+  it.each([
+    ['a height of 0', 10, 0],
+    ['a width of 0', 0, 10],
+  ])('refuses a JPEG with %s as an unreadable header (D308)', (_name, width, height) => {
+    const only = Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      sof(0xc0, width, height),
+      JPEG_SCAN,
+      Buffer.from([0xff, 0xd9]),
+    ]);
+    expect(declaredSize(only, 'jpeg')).toEqual({ width, height });
+    expect(prepareImage(only)).toEqual({ ok: false, reason: 'not_accepted' });
+  });
+
   it('refuses an image whose header gives no size as not an image of the three types (D308)', () => {
     const noHeader = png({ ihdr: pngChunk('IDAT', Buffer.alloc(13)) });
     expect(prepareImage(noHeader)).toEqual({ ok: false, reason: 'not_accepted' });
@@ -169,7 +194,11 @@ describe('every GIF is refused, and an animated WebP or PNG (D309, D310)', () =>
   it('refuses an animated PNG, by an acTL chunk before the first IDAT, without reading a pixel', () => {
     expect(prepareImage(png({ before: [control(3)] }))).toEqual({ ok: false, reason: 'animated' });
     // After the data, no decoder reads it, and the image is still.
-    expect(prepareImage(png({ after: [control(3)] })).ok).toBe(true);
+    const still = prepareImage(png({ after: [control(3), pngChunk('fcTL', Buffer.alloc(26))] }));
+    expect(still.ok).toBe(true);
+    // Accepted, and stored without a control or a frame chunk: the stripper removes them wherever they stand.
+    if (still.ok)
+      for (const type of ['acTL', 'fcTL', 'fdAT']) expect(still.bytes.includes(type), type).toBe(false);
     expect(isAnimated(png({ before: [control(2)] }), 'png')).toBe(true);
     expect(isAnimated(png(), 'png')).toBe(false);
   });

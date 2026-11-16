@@ -36,7 +36,8 @@ export function prepareImage(bytes: Uint8Array, policy: RemovalPolicy = REMOVAL_
   // metadata and before anything decodes a picture; a header that cannot be read is refused. The removal below is
   // held to the same limit by being asked only after it.
   const size = declaredSize(bytes, format);
-  if (!size) return { ok: false, reason: 'not_accepted' };
+  // A header that gives a side of 0 gives no size that a picture has: it is as unreadable as no header (D308).
+  if (!size || size.width < 1 || size.height < 1) return { ok: false, reason: 'not_accepted' };
   if (!withinBound(size)) return { ok: false, reason: 'too_many_pixels' };
   // D309, D310: an animated WebP or PNG, from its chunks and no pixel.
   if (isAnimated(bytes, format)) return { ok: false, reason: 'animated' };

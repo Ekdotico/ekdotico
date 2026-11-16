@@ -169,20 +169,32 @@ describe('a PNG file', () => {
     ).toEqual(['IHDR', 'IDAT', 'IEND']);
   });
 
-  it('keeps the chunks of an animation and of a palette and of transparency', () => {
-    // Of the lengths the format gives them: a palette of one entry, one colour for transparency (the image is
-    // truecolour), and the two controls of an animation.
-    const picture = [
-      pngChunk('PLTE', Buffer.alloc(3, 1)),
-      pngChunk('tRNS', Buffer.alloc(6, 1)),
+  it('keeps the chunks of a palette and of transparency', () => {
+    // Of the lengths the format gives them: a palette of one entry, and one colour for transparency (the image is
+    // truecolour).
+    const picture = [pngChunk('PLTE', Buffer.alloc(3, 1)), pngChunk('tRNS', Buffer.alloc(6, 1))];
+    expect(pngTypes(removePngMetadata(png({ before: picture }), NONE)!)).toEqual([
+      'IHDR',
+      'PLTE',
+      'tRNS',
+      'IDAT',
+      'IEND',
+    ]);
+  });
+
+  // Review of PR 80 (round 2), D309, D310: an animated PNG is refused before this runs; a control chunk that is left
+  // over (an acTL after the picture is no animation) is dropped, wherever it stands. Weakening: they are on the list
+  // of what is kept.
+  it('drops acTL, fcTL and fdAT wherever they appear', () => {
+    const controls = [
       pngChunk('acTL', Buffer.alloc(8, 1)),
       pngChunk('fcTL', Buffer.alloc(26, 1)),
+      pngChunk('fdAT', Buffer.from([0, 0, 0, 1, 9])),
     ];
-    const output = removePngMetadata(
-      png({ before: picture, after: [pngChunk('fdAT', Buffer.from([0, 0, 0, 1, 9]))] }),
-      NONE,
-    )!;
-    expect(pngTypes(output)).toEqual(['IHDR', 'PLTE', 'tRNS', 'acTL', 'fcTL', 'IDAT', 'fdAT', 'IEND']);
+    for (const where of ['before', 'after'] as const) {
+      const types = pngTypes(removePngMetadata(png({ [where]: controls }), NONE)!);
+      expect(types, where).toEqual(['IHDR', 'IDAT', 'IEND']);
+    }
   });
 
   // The review of pull request 52 (S4): a part whose length the format fixes keeps no more than that, and a
@@ -251,9 +263,12 @@ describe('a PNG file', () => {
       for (const colourType of [4, 6]) expect(kept(colourType, 6), `type ${colourType}`).toBe(false);
     });
 
-    it('refuses the controls of an animation that are not their length, and drops a colour chunk that is not', () => {
-      expect(removePngMetadata(png({ before: [pngChunk('acTL', HIDDEN)] }), NONE)).toBeNull();
-      expect(removePngMetadata(png({ before: [pngChunk('fcTL', HIDDEN)] }), NONE)).toBeNull();
+    it('drops a colour chunk that is not its length, and the controls of an animation whatever their length', () => {
+      for (const type of ['acTL', 'fcTL']) {
+        const output = removePngMetadata(png({ before: [pngChunk(type, HIDDEN)] }), NONE)!;
+        expect(hides(output), type).toBe(false);
+        expect(pngTypes(output), type).not.toContain(type);
+      }
       for (const type of ['gAMA', 'cHRM', 'sRGB', 'cICP']) {
         const output = removePngMetadata(png({ before: [pngChunk(type, HIDDEN)] }), KEEP_BOTH)!;
         expect(hides(output), type).toBe(false);

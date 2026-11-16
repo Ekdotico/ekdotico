@@ -238,6 +238,37 @@ describe('the upload of an image', () => {
     expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
   });
 
+  // Review of PR 80, round 2. An acTL after the picture is no animation (no decoder reads it), so the image is taken;
+  // and it is stored without it. Weakening: the stripper keeps the controls of an animation.
+  it('takes a PNG with an acTL after its picture and stores it without acTL, fcTL or fdAT', async () => {
+    const owner = await person();
+    const document = await documentOf(owner.id);
+    const sent = png({
+      after: [
+        pngChunk('acTL', Buffer.alloc(8, 1)),
+        pngChunk('fcTL', Buffer.alloc(26, 1)),
+        pngChunk('fdAT', Buffer.from([0, 0, 0, 1, 9])),
+      ],
+    });
+    const response = await send(document, owner.cookie, sent);
+    expect(response.status).toBe(201);
+    const [stored] = [...storage.objects.values()];
+    for (const type of ['acTL', 'fcTL', 'fdAT']) {
+      expect(Buffer.from(stored!.bytes).includes(type), type).toBe(false);
+    }
+  });
+
+  // A side of 0 is an unreadable header (D308): a 415, and not the 413 of the bound. Weakening: left to the bound.
+  it('refuses a JPEG whose header gives a height of 0 with a 415, and stores nothing', async () => {
+    const owner = await person();
+    const document = await documentOf(owner.id);
+    const flat = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 0, 0, 10, 1, 1, 0x11, 0, 0xff, 0xd9]);
+    const response = await send(document, owner.cookie, flat, { 'content-type': 'image/jpeg' });
+    expect(response.status).toBe(415);
+    expect((await bodyOf(response)).error.code).toBe('image_type_not_accepted');
+    expect(storage.objects.size).toBe(0);
+  });
+
   describe('its size (NFR-SE-18, FR-ED-08)', () => {
     it('takes an image of exactly 20 MB, and refuses one of a byte more with a 413', async () => {
       const owner = await person();
