@@ -837,6 +837,38 @@ describe('a signed request is single-use (FR-AU-89; D299; register Q82 point 4)'
     expect(await nonces()).toEqual([]);
   });
 
+  // D312: "kept 5 minutes past the signed time of the request". A request signed ahead of the server's clock is accepted
+  // for as long as the clock stays within 300 s of its time, which is up to 599 s after it was accepted; its nonce is
+  // kept that long, from the signed time and not from the server's clock. Weakening: the row's end taken from the
+  // server's clock when the request arrives, so that a request signed 299 s ahead could be replayed once it is cleared.
+  it('keeps the nonce of a request signed 299 s ahead for as long as its time check passes, and refuses its replay for as long', async () => {
+    const at = Date.now() + 299_000;
+    const headers = signedHeaders(SECRET, 'GET', PATH, undefined, at, NONCE);
+    expect((await send(signed('GET', PATH, undefined, headers))).status).toBe(200);
+    const signedAt = Math.floor(at / 1000);
+    const [row] = await nonces();
+    // The end is the signed time plus 5 minutes and the second the whole-second clock accepts, whatever the clock says.
+    expect(row!.expiresAt.getTime()).toBe((signedAt + 301) * 1000);
+
+    // The last moment the time check passes: the application's clock, in whole seconds, is 300 s past the signed time.
+    const last = (signedAt + 300) * 1000 + 999;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(last);
+    try {
+      const { clearAdmissionAddresses } = await import('../../src/lib/admission/invitations.ts');
+      await clearAdmissionAddresses(new Date(last));
+      expect(await nonces()).toHaveLength(1);
+      const replay = await send(signed('GET', PATH, undefined, headers));
+      await expectError(replay, 401, 'unauthorised');
+      expect(await nonces()).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+
+    // A millisecond later the time check itself refuses it, and the nonce may go.
+    const { deleteExpiredNonces } = await import('../../src/lib/admission/nonce.ts');
+    expect(await deleteExpiredNonces(row!.expiresAt)).toBe(1);
+  });
+
   it('is cleared by the hourly run that clears admission addresses, and the command makes a nonce of its own for each request', async () => {
     await db().admissionNonce.createMany({
       data: [
