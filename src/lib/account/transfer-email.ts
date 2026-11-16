@@ -11,6 +11,7 @@ import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
+import { sendOrQueue } from '../email/queue.ts';
 import { faultOf } from '../fault.ts';
 import { offerEmail, open } from '../documents/ownership.ts';
 import { settings } from '../settings.ts';
@@ -62,10 +63,12 @@ export async function deliverBatch(
     if (await inDeletion(toUserId)) return;
     const expiresAt = new Date(Math.min(...claimed.map(({ expiresAt: at }) => at.getTime())));
     const ownerName = displayNameOf(from);
-    await send(
+    await sendOrQueue(
+      send,
       claimed.length === 1
         ? offerEmail(to.email, ownerName, expiresAt)
         : batchOfferEmail(to.email, ownerName, claimed.length, expiresAt),
+      { kind: 'OFFER_BATCH', subjectId: batchId, userId: toUserId },
     );
   } catch (error) {
     console.error(`ownership offers ${batchId}: email not delivered (${faultOf(error)})`);

@@ -12,8 +12,10 @@
 //
 // There are no retries here. `handOver` retries the email of an account (FR-AU-87:
 // "one sent twice does no harm"). The email of a document invitation marks its row
-// before it calls this and is never tried again (FR-ED-21), so a timeout, where
-// the outcome is unknown, cannot send it twice.
+// before it calls this and is not tried again where the outcome is unknown
+// (FR-ED-21), so a timeout cannot send it twice. Where the service CERTAINLY did
+// not take it (`certainlyNotTaken`), src/lib/email/queue.ts keeps it for a later
+// attempt (D263).
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -91,6 +93,34 @@ const fault = (message: string, code?: string) => Object.assign(new Error(messag
 function codeOf(error: unknown): string | undefined {
   if (error instanceof Error && error.name === 'TimeoutError') return 'Timeout';
   return printableCode((error as { cause?: { code?: unknown } } | null)?.cause?.code);
+}
+
+// D263, NFR-RE-15: the service certainly did not take the message where it answered 401, 402, 403 or 429, or a
+// 400 for its credits, its key, or its domain, or where no connection was made. The codes are those the sender
+// puts on its faults, and nothing else is certain: a timeout (`Timeout`, `UND_ERR_CONNECT_TIMEOUT`), a broken
+// connection, a 5xx, any other 400, and a fault that has no code are an unknown outcome, and a message that the
+// service refuses for itself (`MessageRefused`) is not tried again.
+const NOT_TAKEN = new Set([
+  '401',
+  '402',
+  '403',
+  '429',
+  '400_CREDITS',
+  '400_KEY',
+  '400_DOMAIN',
+  // No connection was made: refused, no such host, no resolver, no route.
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+]);
+
+/** Whether the fault of `sendEmail` says the service certainly did not take the message (D263). */
+export function certainlyNotTaken(error: unknown): boolean {
+  if (error instanceof MessageRefused || error instanceof MessageSentAlready) return false;
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && NOT_TAKEN.has(code);
 }
 
 // The `code` of a 400 that Brevo's reference lists, and the label of ours that stands for it. A code that is

@@ -27,6 +27,7 @@ import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
+import { sendOrQueue } from '../email/queue.ts';
 import { faultOf } from '../fault.ts';
 import { takeLimitReturnable } from '../rate-limit.ts';
 import { securityLogIn } from '../security-log.ts';
@@ -492,7 +493,11 @@ export async function deliverOffer(
     if (!offer?.to.email) return;
     // FR-AU-58 (a): the email of an offer reaches no account whose deletion is confirmed.
     if (await inDeletion(offer.toUserId)) return;
-    await send(offerEmail(offer.to.email, displayNameOf(offer.from), offer.expiresAt));
+    await sendOrQueue(send, offerEmail(offer.to.email, displayNameOf(offer.from), offer.expiresAt), {
+      kind: 'OFFER',
+      subjectId: offerId,
+      userId: offer.toUserId,
+    });
   } catch (error) {
     console.error(`ownership offer ${offerId}: email not delivered (${faultOf(error)})`);
   }
