@@ -115,7 +115,7 @@ test('the Owner offers ownership from the sharing settings, the Editor declines,
   // The email: the fixed text, with the notification list as its link, and no title.
   const { text } = await mailFor(bea.email, /An offer of ownership of a document in Ekdotico/);
   expect(text).toContain(
-    'Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico: ',
+    'Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico:\n',
   );
   // D307: the link stands on a line of its own.
   expect(text).toMatch(/Ekdotico:\n[^\s]+\/notifications\nThe offer is open until /);
