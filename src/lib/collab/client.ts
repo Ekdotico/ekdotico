@@ -19,6 +19,7 @@ import {
   FRAGMENT_NAME,
   LIMIT_REFUSAL,
   readPeopleNotice,
+  readStoreNotice,
   readPermissionsNotice,
   readRoleNotice,
   REFUSAL,
@@ -112,6 +113,12 @@ export interface ConnectionState {
   canEdit?: boolean;
   /** Changes the server has not acknowledged, which are lost if the tab is closed (FR-ED-18). */
   unsent: boolean;
+  /**
+   * FR-ED-23, NFR-RE-07 (D294): the server holds a change it received and a store of it has failed. Told by the
+   * server when the store fails and at every connection made while it still does, and taken away when a store has
+   * succeeded and when the socket is lost (the next connection is told again where it still holds).
+   */
+  unstored?: boolean;
   /**
    * F14-2: the role of this connection became one that cannot edit while the tab
    * held changes the server had not acknowledged. The server does not take them
@@ -419,6 +426,11 @@ export class DocumentConnection {
       });
       return;
     }
+    const store = readStoreNotice(payload);
+    if (store) {
+      this.set({ unstored: !store.stored });
+      return;
+    }
     const people = readPeopleNotice(payload);
     if (people) {
       // FR-ED-17: who has the document open. The server's list replaces the last.
@@ -559,7 +571,9 @@ export class DocumentConnection {
   private dropped(): void {
     if (this.over()) return;
     clearTimeout(this.retryTimer);
-    if (this.state.phase !== 'lost') this.set({ phase: 'restoring' });
+    // What the server said of its store is of a connection that is gone: the next one is told again.
+    if (this.state.phase !== 'lost') this.set({ phase: 'restoring', unstored: false });
+    else if (this.state.unstored) this.set({ unstored: false });
     this.expectConnection();
     // FOR THE SLICE THAT BUILDS SHARING (slice 13): the socket that the library
     // opens next carries whatever session cookie the browser holds then. Once a
@@ -649,6 +663,8 @@ export class DocumentConnection {
 // under the Expression Guidelines (system feedback) and approved by the owner
 // with the pull request (the answer to Q6 of the plan).
 const UNSENT = 'Changes that are not yet sent are lost if this tab is closed.';
+// D294: written by the build session for the owner's approval.
+const NOT_SAVED = 'This document is not yet saved. Ekdotico keeps trying to save it.';
 
 /**
  * FR-ED-23, and the owner's decision E3 of 8 October 2026: one of the three
@@ -658,13 +674,16 @@ const UNSENT = 'Changes that are not yet sent are lost if this tab is closed.';
  * are lost if the tab is closed (FR-ED-18). `capacity`, `ended` and `held` are
  * shown by a statement and not by the indicator.
  */
-export function syncStatus({ phase, unsent }: ConnectionState): {
+export function syncStatus({ phase, unsent, unstored }: ConnectionState): {
   state: 'synced' | 'syncing' | 'error';
   label: string;
 } {
   const tail = unsent ? ` ${UNSENT}` : '';
   switch (phase) {
     case 'connected':
+      // D294: the server holds a change that a failed store has not saved; "In sync" would be untrue. The
+      // sentence is new text, proposed to the owner (Expression Guidelines, system feedback).
+      if (unstored) return { state: 'syncing', label: `Syncing. ${NOT_SAVED}${tail}` };
       return unsent
         ? { state: 'syncing', label: `Syncing. ${UNSENT}` }
         : { state: 'synced', label: 'In sync' };

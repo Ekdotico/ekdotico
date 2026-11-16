@@ -443,6 +443,49 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     expect(await db().$queryRaw`SHOW statement_timeout`).toEqual([{ statement_timeout: '5s' }]);
   });
 
+  // D293 (the audit's row R-11): the statement is written out here, not taken from the code under test.
+  const STATEMENT =
+    'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.';
+
+  /** A page request refused: a page of HTML that a person can read, with the one statement and nothing else. */
+  async function expectClosedPage(response: Response, errors: ReturnType<typeof quiet>, ...lines: string[]) {
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const body = await response.text();
+    expect(body).toContain('<h1>Page not shown</h1>');
+    expect(body).toContain(`<p role="alert">${STATEMENT}</p>`);
+    // Nothing a script, a style or a link would load, and nothing of the fault.
+    expect(body).not.toMatch(/<script|<style|<link|<a |<img|<form|<iframe/i);
+    expect(body).not.toMatch(/ECONN|secret|Error/);
+    expect(errors.mock.calls).toEqual(lines.map((line) => [line]));
+  }
+
+  // Mutation H01: the proxy answers a page with the JSON of the error body, as it did.
+  it('answers a page request with a page, and an API request or a request that changes state with JSON', async () => {
+    const signedIn = await person();
+    const errors = quiet();
+    vi.spyOn(valkey(), 'eval').mockRejectedValue(new Error('down'));
+    await expectClosedPage(
+      await call('GET', '/sign-in', address()),
+      errors,
+      'proxy: request refused at limit (Error)',
+    );
+    errors.mockClear();
+    const head = await call('HEAD', '/sign-in', address());
+    expect(head.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    errors.mockClear();
+    // An API route, and a request that changes state, keep the JSON.
+    for (const [method, path] of [
+      ['POST', '/api/documents'],
+      ['GET', '/api/documents'],
+    ] as const) {
+      const answer = await call(method, path, { ...address(), ...signedIn.cookie, origin: ORIGIN });
+      expect(answer.headers.get('content-type')).toContain('application/json');
+      expect(answer.status).toBe(500);
+    }
+  });
+
   it('refuses where the limiter cannot answer, with a session and without one', async () => {
     const { cookie } = await person();
     const errors = quiet();
@@ -451,7 +494,7 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     });
     vi.spyOn(valkey(), 'eval').mockRejectedValue(fault);
     const line = 'proxy: request refused at limit (Error ECONNREFUSED)';
-    await expectClosed(await call('GET', '/sign-in', address()), errors, line);
+    await expectClosedPage(await call('GET', '/sign-in', address()), errors, line);
     errors.mockClear();
     await expectClosed(await call('GET', '/api/documents', cookie), errors, line);
   });
@@ -461,7 +504,7 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     for (let n = 0; n < 5; n++) expect(passed(await call('GET', '/sign-in', from))).toBe(true);
     const errors = quiet();
     vi.spyOn(valkey(), 'set').mockRejectedValue(new Error(`no room for ${from['x-forwarded-for']}`));
-    await expectClosed(
+    await expectClosedPage(
       await call('GET', '/sign-in', from),
       errors,
       'proxy: request refused at log mark (Error)',

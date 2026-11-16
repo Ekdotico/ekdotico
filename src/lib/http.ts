@@ -17,6 +17,40 @@ export const INTERNAL_FAULT =
   'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.';
 
 /**
+ * NFR-SE-06, A10, register D293 (the audit's row R-11): the answer to a PAGE request that the proxy refuses
+ * because a dependency is down. A minimal page of HTML, with the heading of the page of a fault
+ * (src/app/error.tsx) and the one fixed statement, and no reference, since the proxy has none. It holds no
+ * script, no style, no link and nothing of the fault, so it needs nothing the application serves and the
+ * policy of every response is stricter than it needs to be.
+ */
+export function faultPage(): Response {
+  const page = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page not shown | Ekdotico</title>
+</head>
+<body>
+<main>
+<h1>Page not shown</h1>
+<p role="alert">${INTERNAL_FAULT}</p>
+</main>
+</body>
+</html>
+`;
+  return new Response(page, {
+    status: 500,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy':
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    },
+  });
+}
+
+/**
  * The one body of an error, `{ "error": { "code", "message" } }` (the owner's
  * answer to Q8 of the plan). The message is text for a person. NFR-SE-06, A10:
  * neither field ever carries a stack trace, an internal identifier, or a secret.

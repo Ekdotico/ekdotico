@@ -559,6 +559,21 @@ describe('the role of an open connection changes (FR-ED-40 (b), FR-ED-41)', () =
   });
 });
 
+describe('what the server says of its store (D294)', () => {
+  it('is held from the notice, taken away by a notice that it stored, and by a lost socket', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(JSON.stringify({ kind: 'store', stored: false })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unstored).toBe(true);
+    expect(syncStatus(connection.getState()).state).toBe('syncing');
+    socket.receive(stateless(JSON.stringify({ kind: 'store', stored: true })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unstored).toBe(false);
+    expect(syncStatus(connection.getState())).toEqual({ state: 'synced', label: 'In sync' });
+    connection.stop();
+  });
+});
+
 /** A paragraph of the document as the editor's binding writes one. */
 function paragraphOf(text: string): Y.XmlElement {
   const element = new Y.XmlElement('paragraph');
