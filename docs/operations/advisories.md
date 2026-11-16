@@ -12,6 +12,8 @@ Read each row again when its package, or the package it arrives by, is updated; 
 | ------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GHSA-g3hv-75wg-m249 | 2026-11-02 | `minimatch` 10.2.6, by `eslint-config-next` > `typescript-eslint` > `@typescript-eslint/typescript-estree` (^10.2.2) | The fix is in `minimatch` 11.0.1, a major version beyond what `@typescript-eslint/typescript-estree` asks for, so no override was tried. The package is installed only for the lint run, is in no build and no running process, and matches only the patterns of this repository's lint settings, never text from a request, so its fault can at most stop a lint run. Approved by the owner on 2 November 2026. |
 
+Read again on 16 November 2026, after the update of the dependencies to their latest releases within the same major versions: `pnpm audit` still reports this one finding, still ignored, by the same path (`minimatch` 10.2.6). The ignore stays.
+
 ## Fixed by an override
 
 An override holds a package that another package asks for at a version with an advisory. Remove one when the package that asks for it asks for a fixed version itself.
