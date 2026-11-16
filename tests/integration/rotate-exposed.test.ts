@@ -113,7 +113,7 @@ describe('the forced re-enrolment (NFR-SE-17 (e), D302)', () => {
     expect(await state()).toEqual(before);
   });
 
-  it('as a command prints counts and no secret, and is refused without the list of the founding team', () => {
+  it('as a command prints counts and no secret, and is refused without the list of the founding team', async () => {
     const env: NodeJS.ProcessEnv = {
       NODE_ENV: 'test',
       PATH: process.env.PATH!,
@@ -127,6 +127,15 @@ describe('the forced re-enrolment (NFR-SE-17 (e), D302)', () => {
       /^rotate: dry run, nothing changed, exposed: 2 second factors deleted, 3 passwords ended, \d+ sessions ended, \d+ links ended, 1 accounts offered enrolment\n$/,
     );
     expect(ran.stdout + ran.stderr).not.toContain(NEW);
+    // Review of PR 80, item 2. Weakening: the run applies without the statement that the processes are stopped.
+    const before = await state();
+    const unstated = spawnSync('node', ['scripts/rotate-auth-secret.ts', '--exposed', '--apply'], {
+      env,
+      encoding: 'utf8',
+    });
+    expect(unstated.status).toBe(2);
+    expect(unstated.stderr).toContain('--processes-stopped');
+    expect(await state()).toEqual(before);
     const without = { ...env };
     delete without.FOUNDING_TEAM_EMAILS;
     const refused = spawnSync('node', ['scripts/rotate-auth-secret.ts', '--exposed'], {

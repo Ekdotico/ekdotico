@@ -174,6 +174,14 @@ if (import.meta.main) {
     process.exit(2);
   }
   const apply = process.argv.includes('--apply');
+  // Review of PR 80, item 2: the cookie cache is on (NFR-SE-17 (c)), so a process that still holds the exposed
+  // AUTH_SECRET honours a cached or forged cookie after the run. The operator says, in a flag, that both are stopped.
+  if (exposed && apply && !process.argv.includes('--processes-stopped')) {
+    console.error(
+      'rotate: refused: --exposed --apply needs --processes-stopped, which states that the application and the collaboration server are both stopped. Nothing was changed.',
+    );
+    process.exit(2);
+  }
   const db = new PrismaClient({
     adapter: new PrismaPg({ connectionString: DATABASE_URL }, { schema: 'ekdotico' }),
   });

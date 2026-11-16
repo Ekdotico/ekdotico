@@ -71,14 +71,14 @@ NFR-SE-17 (e), register D302 and Q82 points 1 to 3 (docs@da33e58). Step 3 protec
 `--exposed` does, in ONE transaction, all of it or none of it:
 
 - deletes every second factor (`TwoFactor`) and turns two-factor authentication off in every row of `User`;
-- ends every password: the stored hash is replaced by that of a random password nobody has, on every credential account, so that nobody signs in with a password from the database, and each account sets a new one through a reset link emailed to its verified address (FR-AU-03, FR-AU-86). The first step after that is the second factor, below;
+- ends every password: the stored hash is replaced by that of a random password nobody has, on every credential account, so that nobody signs in with a password from the database, and each account sets a new one through a reset link emailed to its verified address (FR-AU-03, FR-AU-86). The first step after that is the second factor, below. An account whose address is not verified cannot use a reset link: it could not sign in before either (`requireEmailVerification`), so it confirms its address first and then resets;
 - ends every session, and deletes every open link and second step (`Verification`);
 - writes one notification (FR-ED-42) to each account that had a second factor and is not of the founding team, which offers it enrolment and which it may leave; turning two-factor authentication on in the settings ends the offer. An account of the founding team is written nothing, and **cannot sign in until it enrols** (FR-AU-83): after its reset it reaches no page but the enrolment.
 
 The new secret is installed **in the same step**. The script refuses a new secret under 32 characters or equal to the old one, and prints counts; the deployment does the rest in this order, and nothing runs between the lines:
 
 - [ ] Agree the time and take a copy of the database (as step 2). Make the new value: `node scripts/dev-secret.mjs`.
-- [ ] Stop both processes (the application and the collaboration server). A process that runs with the exposed value after the run would seal a new second factor under it.
+- [ ] Stop both processes (the application and the collaboration server). A process that runs with the exposed value after the run would seal a new second factor under it, and, since the session cookie cache is on for 1 minute (NFR-SE-17 (c)), would honour a cached or forged cookie for as long as it ran. So `--exposed --apply` refuses to run unless `--processes-stopped` is given, which is the operator's statement that both are stopped; a dry run needs no flag.
 - [ ] Dry run, then apply. `NEW_AUTH_SECRET`, `DATABASE_URL` and `FOUNDING_TEAM_EMAILS` (the same list the processes hold) are read from the keyboard as in step 3; `OLD_AUTH_SECRET` is not needed:
 
 ```bash
@@ -86,7 +86,7 @@ read -rs NEW_AUTH_SECRET && export NEW_AUTH_SECRET
 read -rs DATABASE_URL && export DATABASE_URL
 read -r FOUNDING_TEAM_EMAILS && export FOUNDING_TEAM_EMAILS
 node scripts/rotate-auth-secret.ts --exposed            # a dry run
-node scripts/rotate-auth-secret.ts --exposed --apply
+node scripts/rotate-auth-secret.ts --exposed --apply --processes-stopped
 unset NEW_AUTH_SECRET DATABASE_URL FOUNDING_TEAM_EMAILS
 ```
 
