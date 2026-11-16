@@ -48,12 +48,6 @@ function pngSize(bytes: Uint8Array): Dimensions | null {
   return { width: be32(bytes, 16), height: be32(bytes, 20) };
 }
 
-/** GIF: the logical screen descriptor, right after the six bytes of the signature. */
-function gifSize(bytes: Uint8Array): Dimensions | null {
-  if (bytes.length < 10) return null;
-  return { width: le16(bytes, 6), height: le16(bytes, 8) };
-}
-
 /**
  * JPEG: the frame header (SOF0 to SOF15 but DHT, JPG and DAC), which comes before the first scan. Segments are walked
  * by their lengths, so the markers inside a thumbnail of an APP segment are never met. The largest of each side is taken.
@@ -128,11 +122,44 @@ function webpSize(bytes: Uint8Array): Dimensions | null {
 const READERS: Record<ImageFormat, (bytes: Uint8Array) => Dimensions | null> = {
   png: pngSize,
   jpeg: jpegSize,
-  gif: gifSize,
   webp: webpSize,
 };
 
 /** The size an image of this format declares in its header, or null where the header does not give one. */
 export function declaredSize(bytes: Uint8Array, format: ImageFormat): Dimensions | null {
   return READERS[format](bytes);
+}
+
+/**
+ * Whether the image is animated (D309, D310: "refuse animated WebP and animated PNG"), found from the chunks and no
+ * pixel: a PNG with an `acTL` chunk before its first `IDAT` (the control chunk of an APNG; after the data it is
+ * ignored by every decoder and so is no animation), and a WebP whose extended header sets the animation flag or that
+ * holds an `ANIM` or `ANMF` chunk. A JPEG has no animation. Chunks are walked by their lengths and no further than
+ * the file goes.
+ */
+export function isAnimated(bytes: Uint8Array, format: ImageFormat): boolean {
+  if (format === 'png') {
+    let at = 8;
+    while (at + 8 <= bytes.length) {
+      // A PNG chunk is its length (4 bytes), its type (4), its data and its checksum (4).
+      const type = tag(bytes, at + 4);
+      if (type === 'acTL') return true;
+      if (type === 'IDAT' || type === 'IEND') return false;
+      at += 12 + be32(bytes, at);
+    }
+    return false;
+  }
+  if (format === 'webp') {
+    let at = 12;
+    while (at + 8 <= bytes.length) {
+      const type = tag(bytes, at);
+      const length = le32(bytes, at + 4);
+      const data = at + 8;
+      if (type === 'ANIM' || type === 'ANMF') return true;
+      // The animation flag is bit 1 of the first byte of the extended header.
+      if (type === 'VP8X' && data < bytes.length && (bytes[data]! & 0x02) !== 0) return true;
+      at = data + length + (length % 2);
+    }
+  }
+  return false;
 }

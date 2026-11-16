@@ -14,6 +14,8 @@ import {
   png,
   pngChunk,
   webp,
+  webpChunk,
+  WEBP_PICTURE,
 } from '../unit/image-fixtures.ts';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 import { MemoryStorage } from './image-storage.ts';
@@ -145,7 +147,6 @@ describe('the upload of an image', () => {
 
   it.each([
     ['JPEG', () => jpeg({ first: [exifSegment(exifTiff(null))] }), 'image/jpeg'],
-    ['GIF', () => gif(), 'image/gif'],
     ['WebP', () => webp(), 'image/webp'],
   ])('takes a %s, stored as what it is', async (_name, make, contentType) => {
     const owner = await person();
@@ -192,7 +193,6 @@ describe('the upload of an image', () => {
     ['a PDF', '%PDF-1.7 ...'],
     ['nothing', ''],
     ['a PNG that is cut', pngOf().subarray(0, 30)],
-    ['a GIF signature over an SVG', 'GIF89a<svg xmlns="http://www.w3.org/2000/svg"/>'],
   ])('refuses %s with a 415, and stores nothing', async (_name, content) => {
     const owner = await person();
     const document = await documentOf(owner.id);
@@ -200,7 +200,40 @@ describe('the upload of an image', () => {
     expect(response.status).toBe(415);
     const { error } = await bodyOf(response);
     expect(error.code).toBe('image_type_not_accepted');
-    expect(error.message).toContain('PNG, JPEG, GIF, or WebP');
+    expect(error.message).toContain('PNG, JPEG, or WebP');
+    expect(storage.objects.size).toBe(0);
+    expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+  });
+
+  // D309, D310: every GIF, by its first bytes whatever the name or the declared type, and an animated PNG or WebP.
+  // Weakening: a still GIF is taken, the declared type is believed, or the animation is looked for in the pixels.
+  it.each([
+    ['a still GIF declared as a GIF', () => gif(), 'image/gif', 'image_gif_refused'],
+    ['a still GIF declared as a PNG', () => gif(), 'image/png', 'image_gif_refused'],
+    [
+      'a GIF signature over an SVG',
+      () => Buffer.from('GIF89a<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      'image/png',
+      'image_gif_refused',
+    ],
+    [
+      'an animated PNG declared as a PNG',
+      () => png({ before: [pngChunk('acTL', Buffer.alloc(8))] }),
+      'image/png',
+      'image_animated_refused',
+    ],
+    [
+      'an animated WebP declared as a WebP',
+      () => webp([webpChunk('VP8X', Buffer.from([0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0])), WEBP_PICTURE]),
+      'image/webp',
+      'image_animated_refused',
+    ],
+  ])('refuses %s with a 415, and stores nothing', async (_name, make, declared, refusal) => {
+    const owner = await person();
+    const document = await documentOf(owner.id);
+    const response = await send(document, owner.cookie, make(), { 'content-type': declared });
+    expect(response.status).toBe(415);
+    expect((await bodyOf(response)).error.code).toBe(refusal);
     expect(storage.objects.size).toBe(0);
     expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
   });

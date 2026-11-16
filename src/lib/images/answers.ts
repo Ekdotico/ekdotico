@@ -9,7 +9,12 @@ import { IMAGE_MOST_PIXELS, IMAGE_MOST_SIDE } from './dimensions.ts';
 
 export const IMAGE_MESSAGES = {
   notAccepted:
-    'That file is not a PNG, JPEG, GIF, or WebP image, so it was not added. Choose an image in one of those formats.',
+    'That file is not a PNG, JPEG, or WebP image, so it was not added. Choose an image in one of those formats.',
+  // D310: every GIF is refused, the still ones too. Provisional, for the owner's approval.
+  gif: 'That file is a GIF, and Ekdotico does not accept GIF images, so it was not added. Choose a PNG, JPEG, or WebP image.',
+  // D309, D310: an animated WebP or PNG. Provisional, for the owner's approval.
+  animated:
+    'That image is animated, and Ekdotico does not accept animated images, so it was not added. Choose a still PNG, JPEG, or WebP image.',
   tooLarge:
     'That image is larger than 20 MB, so it was not added. Choose a smaller image, or reduce its size first.',
   // NFR-SE-18, D301, Q80: the bound on the pixels. For the owner's approval.
@@ -36,6 +41,8 @@ export const notAcceptedAnswer = () =>
 export const tooLargeAnswer = () => errorResponse(413, 'image_too_large', IMAGE_MESSAGES.tooLarge);
 export const tooManyPixelsAnswer = () =>
   errorResponse(413, 'image_dimensions_too_large', IMAGE_MESSAGES.tooManyPixels);
+export const gifAnswer = () => errorResponse(415, 'image_gif_refused', IMAGE_MESSAGES.gif);
+export const animatedAnswer = () => errorResponse(415, 'image_animated_refused', IMAGE_MESSAGES.animated);
 export const fullAnswer = (limitBytes: number, days: number) =>
   errorResponse(413, 'image_document_full', IMAGE_MESSAGES.full(megabytes(limitBytes), days));
 export const notReceivedAnswer = () => errorResponse(400, 'invalid_request', IMAGE_MESSAGES.notReceived);

@@ -40,6 +40,8 @@ import {
   limitedAnswer,
   notAcceptedAnswer,
   notReceivedAnswer,
+  animatedAnswer,
+  gifAnswer,
   tooLargeAnswer,
   tooManyPixelsAnswer,
   unavailableAnswer,
@@ -82,6 +84,8 @@ export async function uploadImage({ request, document, session }: DocumentCall):
     const prepared = prepareImage(body);
     if (!prepared.ok) {
       if (prepared.reason === 'too_large') return tooLargeAnswer();
+      if (prepared.reason === 'gif') return gifAnswer();
+      if (prepared.reason === 'animated') return animatedAnswer();
       return prepared.reason === 'too_many_pixels' ? tooManyPixelsAnswer() : notAcceptedAnswer();
     }
 

@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   declaredSize,
+  isAnimated,
   IMAGE_MOST_PIXELS,
   IMAGE_MOST_SIDE,
   withinBound,
@@ -20,13 +21,6 @@ const ihdr = (width: number, height: number) => {
   return pngChunk('IHDR', data);
 };
 const pngOf = (width: number, height: number) => png({ ihdr: ihdr(width, height) });
-
-const gifOf = (width: number, height: number) => {
-  const bytes = Buffer.from(gif());
-  bytes.writeUInt16LE(width, 6);
-  bytes.writeUInt16LE(height, 8);
-  return bytes;
-};
 
 const sof = (marker: number, width: number, height: number) =>
   jpegSegment(marker, Buffer.from([8, height >> 8, height & 0xff, width >> 8, width & 0xff, 1, 1, 0x11, 0]));
@@ -55,7 +49,6 @@ const vp8 = (width: number, height: number) => {
 describe('the size an image declares is read from its header', () => {
   it.each([
     ['png', pngOf(300, 200), 'png'],
-    ['gif', gifOf(300, 200), 'gif'],
     ['jpeg', jpegOf(300, 200), 'jpeg'],
     ['webp lossless', webp([vp8l(300, 200)]), 'webp'],
     ['webp lossy', webp([vp8(300, 200)]), 'webp'],
@@ -117,7 +110,6 @@ describe('an upload past the bound is refused before it is parsed (NFR-SE-18)', 
     ['png', pngOf(12_001, 1)],
     ['png', pngOf(1, 12_001)],
     ['png, in pixels', pngOf(10_000, 5_001)],
-    ['gif', gifOf(12_001, 1)],
     ['jpeg', jpegOf(12_001, 1)],
     ['jpeg, in pixels', jpegOf(8_000, 8_000)],
     ['webp lossless', webp([vp8l(12_001, 1)])],
@@ -128,25 +120,91 @@ describe('an upload past the bound is refused before it is parsed (NFR-SE-18)', 
   });
 
   it('accepts images at the bound', () => {
-    for (const bytes of [
-      pngOf(12_000, 4_000),
-      pngOf(10_000, 5_000),
-      gifOf(12_000, 4_000),
-      jpegOf(12_000, 4_000),
-    ]) {
+    for (const bytes of [pngOf(12_000, 4_000), pngOf(10_000, 5_000), jpegOf(12_000, 4_000)]) {
       expect(prepareImage(bytes).ok).toBe(true);
     }
   });
 
-  it('tells a file that is not an image of its type as one, whatever its header says of its size', () => {
+  // D308: "read from the header before any decoding", and the removal of metadata is held to the same limit.
+  // Weakening: the size is read after the container is parsed to its end.
+  it('reads the header first: a file that would not parse is told by its size where the size is past the bound', () => {
     expect(prepareImage(pngOf(20_000, 20_000).subarray(0, 40))).toEqual({
       ok: false,
-      reason: 'not_accepted',
+      reason: 'too_many_pixels',
+    });
+    expect(prepareImage(pngOf(10, 10).subarray(0, 40))).toEqual({ ok: false, reason: 'not_accepted' });
+  });
+
+  it('refuses an image whose header gives no size as not an image of the three types (D308)', () => {
+    const noHeader = png({ ihdr: pngChunk('IDAT', Buffer.alloc(13)) });
+    expect(prepareImage(noHeader)).toEqual({ ok: false, reason: 'not_accepted' });
+  });
+});
+
+describe('every GIF is refused, and an animated WebP or PNG (D309, D310)', () => {
+  const control = (frames: number) => {
+    const data = Buffer.alloc(8);
+    data.writeUInt32BE(frames, 0);
+    return pngChunk('acTL', data);
+  };
+  const extended = (flags: number) => {
+    const data = Buffer.alloc(10);
+    data[0] = flags;
+    return webpChunk('VP8X', data);
+  };
+
+  // Weakening: a still GIF is accepted, or a GIF is told by its name or its declared type (the function has neither).
+  it('refuses every GIF, a still one and a one-frame one too, by its first six bytes', () => {
+    expect(prepareImage(gif())).toEqual({ ok: false, reason: 'gif' });
+    expect(prepareImage(Buffer.from('GIF87a'))).toEqual({ ok: false, reason: 'gif' });
+    expect(prepareImage(Buffer.from('GIF89a'))).toEqual({ ok: false, reason: 'gif' });
+    // Not parsed: a GIF that is nothing but its signature is still a GIF.
+    expect(prepareImage(Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(64, 0xff)]))).toEqual({
+      ok: false,
+      reason: 'gif',
     });
   });
 
-  it('refuses an image whose header gives no size as not an image of the four types', () => {
-    const noHeader = png({ ihdr: pngChunk('IDAT', Buffer.alloc(13)) });
-    expect(prepareImage(noHeader)).toEqual({ ok: false, reason: 'not_accepted' });
+  // Weakening: acTL is looked for after the picture, or not at all.
+  it('refuses an animated PNG, by an acTL chunk before the first IDAT, without reading a pixel', () => {
+    expect(prepareImage(png({ before: [control(3)] }))).toEqual({ ok: false, reason: 'animated' });
+    // After the data, no decoder reads it, and the image is still.
+    expect(prepareImage(png({ after: [control(3)] })).ok).toBe(true);
+    expect(isAnimated(png({ before: [control(2)] }), 'png')).toBe(true);
+    expect(isAnimated(png(), 'png')).toBe(false);
+  });
+
+  // Weakening: only the flag is read, or only the chunks.
+  it.each([
+    ['the animation flag of the extended header', webp([extended(0x02), WEBP_PICTURE])],
+    ['an ANIM chunk', webp([extended(0x00), webpChunk('ANIM', Buffer.alloc(6)), WEBP_PICTURE])],
+    ['an ANMF chunk', webp([extended(0x00), webpChunk('ANMF', Buffer.alloc(16)), WEBP_PICTURE])],
+    [
+      'the flag and the chunks of a real animation',
+      webp([extended(0x12), webpChunk('ANIM', Buffer.alloc(6)), webpChunk('ANMF', Buffer.alloc(16))]),
+    ],
+  ])('refuses a WebP with %s', (_name, bytes) => {
+    expect(prepareImage(bytes)).toEqual({ ok: false, reason: 'animated' });
+  });
+
+  it('accepts a still WebP, with or without an extended header, and a JPEG', () => {
+    expect(prepareImage(webp()).ok).toBe(true);
+    expect(prepareImage(webp([extended(0x10), WEBP_PICTURE])).ok).toBe(true);
+    expect(prepareImage(jpeg()).ok).toBe(true);
+    expect(isAnimated(jpeg(), 'jpeg')).toBe(false);
+  });
+
+  // The two refusals are provisional and pinned whole; they do not ship until the owner approves them.
+  it('has the words, for the owner’s approval', async () => {
+    const { IMAGE_MESSAGES } = await import('../../src/lib/images/answers.ts');
+    expect(IMAGE_MESSAGES.gif).toBe(
+      'That file is a GIF, and Ekdotico does not accept GIF images, so it was not added. Choose a PNG, JPEG, or WebP image.',
+    );
+    expect(IMAGE_MESSAGES.animated).toBe(
+      'That image is animated, and Ekdotico does not accept animated images, so it was not added. Choose a still PNG, JPEG, or WebP image.',
+    );
+    expect(IMAGE_MESSAGES.notAccepted).toBe(
+      'That file is not a PNG, JPEG, or WebP image, so it was not added. Choose an image in one of those formats.',
+    );
   });
 });
