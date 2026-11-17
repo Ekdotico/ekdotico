@@ -221,6 +221,8 @@ export function SharingSettings({
           <form onSubmit={(event) => void invite(event)} noValidate>
             <Stack gap={4}>
               <h2 className={styles.heading}>Invite</h2>
+              {/* UI audit F02: said before the form, and of no address (FR-ED-21's answer stays neutral). */}
+              <p className={styles.text}>The person you invite needs an Ekdotico account first.</p>
               <TextArea
                 id="invite-emails"
                 name="emails"
