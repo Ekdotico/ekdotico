@@ -276,7 +276,7 @@ test('a browser signed in to another account is shown the link as one that is no
   await page.getByRole('button', { name: 'Confirm new address' }).click();
   await expect(page.getByText(DONE(next))).toBeVisible();
   // Its own session stands, and its signed copy is the new one at once.
-  await page.getByRole('link', { name: 'Documents', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Documents' }).click();
   await expect(page.getByRole('heading', firstScreen)).toBeVisible();
   await page.goto('/settings');
   await expect(
