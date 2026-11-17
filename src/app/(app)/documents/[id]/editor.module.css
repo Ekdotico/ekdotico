@@ -18,6 +18,33 @@
   transform: translateY(calc(-100% - var(--sp-2)));
 }
 
+/* The margin that keeps the Insert control clear of the text, for a person who may edit: the control is
+   absolute in it, so that it moves nothing as the cursor moves. */
+.writable {
+  padding-inline-end: var(--sp-8);
+}
+
+/* The Insert control: on the right of the cursor's line, faint until it is hovered, or has the focus, and
+   always solid where there is no hover (a touch screen). It changes at once, with no motion to reduce. */
+.insert {
+  position: absolute;
+  inset-inline-end: 0;
+  z-index: 1;
+  transform: translateY(-50%);
+  opacity: 0.55;
+}
+
+.insert:hover,
+.insert:focus-within {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .insert {
+    opacity: 1;
+  }
+}
+
 /* The controls of a block, inside the block and clear of its text. */
 .controls {
   margin-block: var(--sp-2);

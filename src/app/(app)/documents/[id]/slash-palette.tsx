@@ -295,6 +295,34 @@ export function closeSlashPalette(editor: Editor): void {
 }
 
 /**
+ * The "Insert" control's way to the palette (ui-dc-insert): it types, for the writer, the `/` that opens
+ * it, where the cursor stands, and so it is the same palette with the same rules (FR-ED-10), the same
+ * list, and the same choice. The `/` goes where a typed one may: alone in an empty block, or after a
+ * space, which is added where the cursor follows a character that is not one. Where the rules would not
+ * open the palette there (a block that holds text, the cursor at its start), nothing is left behind and
+ * false is returned.
+ */
+export function openSlashPalette(editor: Editor): boolean {
+  if (!editor.isEditable) return false;
+  editor.commands.focus();
+  const { state } = editor;
+  const at = state.selection.to;
+  const $at = state.doc.resolve(at);
+  if (!$at.parent.isTextblock || $at.parent.type.spec.code) return false;
+  const before = $at.parent.textBetween(Math.max(0, $at.parentOffset - 1), $at.parentOffset);
+  const spaced = $at.parentOffset === 0 || /\s/u.test(before);
+  const typed = spaced ? '/' : ' /';
+  // A step of its own for the `/`, as a typed one is (`typesSlash`).
+  const tr = state.tr;
+  if (!spaced) tr.insertText(' ', at);
+  tr.insertText('/', at + (spaced ? 0 : 1));
+  editor.view.dispatch(tr);
+  if (slashPalette(editor.state).open) return true;
+  editor.view.dispatch(editor.state.tr.delete(at, at + typed.length));
+  return false;
+}
+
+/**
  * Puts the block of a row where its command stands, in place of exactly the
  * `/` and what was typed after it, as one step of undo (the owner's decision
  * of 9 October 2026). Only a row that is listed is chosen.
