@@ -10,6 +10,7 @@ import { inDeletion } from '../account/in-deletion.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
+import { sendOrQueue } from '../email/queue.ts';
 import { faultOf } from '../fault.ts';
 import { settings } from '../settings.ts';
 import { CLEARING_NOTICE } from './notices.ts';
@@ -66,7 +67,11 @@ export async function deliverClearingEmails(
         const user = await db().user.findUnique({ where: { id: recipientId }, select: { email: true } });
         // FR-AU-58 (a): no email reaches an account whose deletion is confirmed, or a tombstone.
         if (!user?.email || (await inDeletion(recipientId))) continue;
-        await send(clearingEmail(user.email, documents, clearing.deleteSharedAt));
+        await sendOrQueue(send, clearingEmail(user.email, documents, clearing.deleteSharedAt), {
+          kind: 'CLEARING',
+          subjectId: clearingId,
+          userId: recipientId,
+        });
       } catch (error) {
         console.error(`clearing ${clearingId}: an email was not delivered (${faultOf(error)})`);
       }

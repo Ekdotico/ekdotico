@@ -53,6 +53,11 @@ vi.mock('../../src/lib/clearing/deletion.ts', () => ({ carryOutClearings }));
 const deliverUnsentClearingEmails = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('../../src/lib/clearing/email.ts', () => ({ deliverUnsentClearingEmails }));
 
+// D263: the retry of the emails of a document, every 15 minutes (tests/integration/email-retry.test.ts runs it
+// against a database).
+const retryEmails = vi.hoisted(() => vi.fn<() => Promise<number>>(async () => 0));
+vi.mock('../../src/lib/email/retry.ts', () => ({ retryEmails, EMAIL_RETRY_INTERVAL_MS: 15 * 60 * 1000 }));
+
 const HOUR_MS = 60 * 60 * 1000;
 let stdout: ReturnType<typeof vi.spyOn>;
 let stderr: ReturnType<typeof vi.spyOn>;
@@ -207,4 +212,25 @@ it('says "cleared", and not "deleted", of an address a clearing emptied from a r
   startTimers();
   await vi.advanceTimersByTimeAsync(0);
   expect(stdout.mock.calls).toEqual([['timer ran: invitation-address-clearing (4 cleared)']]);
+});
+
+it('tries the emails of a document again at start and every 15 minutes; a fault is one line, its class and code (D263)', async () => {
+  vi.resetModules();
+  deleteExpiredSecurityLog.mockResolvedValue(0);
+  deleteExpiredDocuments.mockResolvedValue({ deleted: 0, kept: 0 });
+  retryEmails.mockClear();
+  const { startTimers } = await import('../../src/lib/timers.ts');
+  startTimers();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(retryEmails).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(15 * 60 * 1000 - 1);
+  expect(retryEmails).toHaveBeenCalledTimes(1);
+  retryEmails.mockRejectedValueOnce(
+    Object.assign(new Error('connect ECONNREFUSED db.example.test'), { code: 'ECONNREFUSED' }),
+  );
+  await vi.advanceTimersByTimeAsync(1);
+  expect(retryEmails).toHaveBeenCalledTimes(2);
+  expect(stderr.mock.calls).toEqual([['timer failed: email-retry (Error ECONNREFUSED)']]);
+  await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+  expect(retryEmails).toHaveBeenCalledTimes(3);
 });

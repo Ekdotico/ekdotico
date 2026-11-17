@@ -64,6 +64,8 @@ model User {
   collaborations    DocumentCollaborator[]
   invitationsMade   DocumentInvitation[]   @relation("InvitedBy")
   notifications     Notification[]
+  // D263: emails waiting to be tried again for this account.
+  emailRetries      EmailRetry[]
   // FR-ED-47: the offers of ownership the account made and received.
   offersMade        OwnershipOffer[]       @relation("OfferedBy")
   offersReceived    OwnershipOffer[]       @relation("OfferedTo")
@@ -449,6 +451,33 @@ model OwnershipOffer {
 
   @@index([documentId, state])
   @@index([toUserId, state])
+}
+
+// D263, NFR-RE-15: an email that the service certainly did not take, waiting to be tried again. The kind, the
+// subject, and the account, and nothing else: no address, no link, no content. The email is made again from the
+// rows it names when it is tried.
+model EmailRetry {
+  id        String         @id @default(cuid())
+  kind      EmailRetryKind
+  // The invitation, the offer, the batch of offers, or the clearing that the kind names.
+  subjectId String
+  userId    String
+  createdAt DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, subjectId, userId])
+  @@index([createdAt])
+  // The cascade from User reads by account.
+  @@index([userId])
+}
+
+enum EmailRetryKind {
+  INVITATION
+  REMINDER
+  OFFER
+  OFFER_BATCH
+  CLEARING
 }
 
 enum OwnershipOfferState {

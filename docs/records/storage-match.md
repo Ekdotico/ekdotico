@@ -28,6 +28,7 @@ Matched against the Docs at `origin/main` `5ad3a94` (pinned `f4ec614`) and the d
 | roles           | Who holds which role on a document                                             | The document's lifetime; deleted with the document, and when the account is deleted (FR-AU-58 (f))                                                                                  |
 | migrations      | The database's record of its migrations                                        | As long as the database; it belongs to no account and no document, and holds no personal field                                                                                      |
 | export-lock     | The short-lived lock that allows one draft                                     | Held while an export is under way and released when it ends; expires by itself at twice the idle period (FR-EX-36)                                                                  |
+| email-retry     | Emails of a document waiting to be tried again | Removed before each attempt and written again only where the service certainly did not take it; gone once the invitation or offer is no longer pending, or the clearing has run; deleted with the account |
 | sink-files      | The files of the email sink                                                    | None on a deployment, since the sink is refused anywhere but a developer's own machine (D270); on a developer's machine until the developer deletes them                            |
 
 ## B. Tables and columns of the `ekdotico` schema
@@ -64,6 +65,7 @@ Every column of every table is named, in the one row it belongs to; there is no 
 | DocumentImage        | id, documentId, objectKey, contentType, byteSize, uploadedById, createdAt, unreferencedAt, deletionClaimedAt                                | images          | The row of an object in storage; `objectKey` names its document                                                                                                                                                                                                              |
 | AccountDeletion      | id, userId, requestedAt, istoricoDoneAt, feedbackDoneAt, feedbackSkippedAt, credentialsDoneAt, rowsDoneAt, completedAt, claimedAt           | deletion-record | The identifier of the user and the times of the steps                                                                                                                                                                                                                        |
 | DocumentClearing     | id, userId, scope, documentIds, sharedDocumentIds, cancelledDocumentIds, requestedAt, deleteSharedAt, completedAt, emailsClaimedAt          | deletion-record | An account identifier and document identifiers and no personal field. The row names "and of a clearing of an account's documents"                                                                                                                                            |
+| EmailRetry           | id, kind, subjectId, userId, createdAt                                                                                                      | email-retry     | The kind, the identifier of the subject and the account identifier, and no address, link or content (D263, D311). Deleted with the account |
 | \_prisma_migrations  | id, checksum, finished_at, migration_name, logs, rolled_back_at, started_at, applied_steps_count                                            | migrations      | The name and checksum of each migration (NFR-IC-16)                                                                                                                                                                                                                          |
 
 ## C. Object storage
@@ -95,23 +97,24 @@ The test takes every file under `src` that imports `valkey.ts` (`settings.ts` an
 
 The test takes the names from `src/lib/timers.ts`.
 
-| Timer                           | Row             | What it enforces                                                       |
-| ------------------------------- | --------------- | ---------------------------------------------------------------------- |
-| security-log-deletion           | security-log    | The 30 days                                                            |
-| ended-session-removal           | sessions        | The row of an ended session removed within 24 hours                    |
-| expired-token-removal           | tokens          | Removed within 24 hours of expiry                                      |
-| admission-address-clearing      | admission       | The address cleared 30 days after the invitation is revoked or expires |
-| invitation-reminder             | invitations     | Deletes nothing: the one reminder                                      |
-| invitation-address-clearing     | invitations     | The address cleared 30 days after the invitation ended                 |
-| invitation-notification-removal | notifications   | The notification of an invitation that is no longer open               |
-| ownership-offer-expiry          | offers          | An offer expires after 14 days                                         |
-| ownership-offer-email           | offers          | Deletes nothing: the email of an offer                                 |
-| removed-notification-removal    | notifications   | The notification of a removal, 30 days                                 |
-| image-deletion                  | images          | An image out of its document, 30 days                                  |
-| account-deletion-steps          | deletion-record | The steps of an account deletion                                       |
-| clearing-deletion               | document        | The documents of a clearing, at once or after the notice period        |
-| clearing-email                  | deletion-record | Deletes nothing: the notice to the collaborators of a cleared document |
-| document-deletion               | deleted         | Permanent deletion 30 days after deletion                              |
+| Timer                           | Row             | What it enforces                                                                                                                                                                               |
+| ------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| security-log-deletion           | security-log    | The 30 days                                                                                                                                                                                    |
+| ended-session-removal           | sessions        | The row of an ended session removed within 24 hours                                                                                                                                            |
+| expired-token-removal           | tokens          | Removed within 24 hours of expiry                                                                                                                                                              |
+| admission-address-clearing      | admission       | The address cleared 30 days after the invitation is revoked or expires                                                                                                                         |
+| invitation-reminder             | invitations     | Deletes nothing: the one reminder                                                                                                                                                              |
+| invitation-address-clearing     | invitations     | The address cleared 30 days after the invitation ended                                                                                                                                         |
+| invitation-notification-removal | notifications   | The notification of an invitation that is no longer open                                                                                                                                       |
+| ownership-offer-expiry          | offers          | An offer expires after 14 days                                                                                                                                                                 |
+| ownership-offer-email           | offers          | Deletes nothing: the email of an offer                                                                                                                                                         |
+| removed-notification-removal    | notifications   | The notification of a removal, 30 days                                                                                                                                                         |
+| image-deletion                  | images          | An image out of its document, 30 days                                                                                                                                                          |
+| account-deletion-steps          | deletion-record | The steps of an account deletion                                                                                                                                                               |
+| clearing-deletion               | document        | The documents of a clearing, at once or after the notice period                                                                                                                                |
+| clearing-email                  | deletion-record | Deletes nothing: the notice to the collaborators of a cleared document                                                                                                                         |
+| email-retry                     | email-retry     | The row removed before each attempt and written again only where the service certainly did not take it; gone once the invitation or offer is no longer pending, or the clearing has run (D311) |
+| document-deletion               | deleted         | Permanent deletion 30 days after deletion                                                                                                                                                      |
 
 ## G. Periods that are settings
 

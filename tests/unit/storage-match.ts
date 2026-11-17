@@ -89,5 +89,10 @@ export function valkeyFiles(): string[] {
 export function timerNames(): string[] {
   const text = readFileSync('src/lib/timers.ts', 'utf8');
   const listed = [...text.matchAll(/^ {2}'([a-z0-9-]+)':/gm)].map((match) => match[1]!);
-  return [...listed, ...(text.includes('timer ran: document-deletion') ? ['document-deletion'] : [])].sort();
+  // Two timers run beside the table: the deletion of documents, and the retry of emails (every 15 minutes, D263).
+  return [
+    ...listed,
+    ...(text.includes('timer ran: document-deletion') ? ['document-deletion'] : []),
+    ...(text.includes('timer failed: email-retry') ? ['email-retry'] : []),
+  ].sort();
 }
