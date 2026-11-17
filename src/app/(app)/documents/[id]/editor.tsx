@@ -107,6 +107,11 @@ const HELD: Record<Held, string> = {
     Object.entries(LIMIT_REFUSAL).map(([limit, reason]) => [reason, heldTitle(limit as Limit)]),
   ) as Record<(typeof LIMIT_REFUSAL)[Limit], string>),
 };
+// F10 (ui-audit 2026-11-17): where a browser that cannot edit would show the keys of a writer, one
+// neutral line says that the text is for reading and names the role. For the owner's approval; the
+// role's name is the one `ROLE_NAME` writes.
+const READER_LINE = (role: DocumentRole) =>
+  `You can read this document. Your role on it is ${ROLE_NAME[role]}.`;
 // FR-ED-40 (b): the role of this connection changed and it stays open, and the
 // editor "states the new role". No words are given; for the owner's approval
 // (docs/plan/slice-14.md, section 6). The role's name is the one `ROLE_NAME` writes.
@@ -187,6 +192,7 @@ function Text({
   awareness,
   editable,
   reads,
+  role,
   onEditor,
   onUnshown,
   onUnrepairable,
@@ -201,6 +207,8 @@ function Text({
   editable: boolean;
   /** This browser cannot edit the document, whatever the connection: it shows what the schema can show and writes nothing. */
   reads: boolean;
+  /** The role of the account on the document now, named to a reader (F10). */
+  role: DocumentRole;
   /** Told that the document cannot be built here: the text goes, and the page says so. */
   onUnshown: () => void;
   /** Told that a repair was not written because it would pass 5 MB: the text is read-only (D180). */
@@ -326,7 +334,9 @@ function Text({
 
   return (
     <Editable.Provider value={editable}>
-      {reads ? null : (
+      {reads ? (
+        <p className={pageStyles.meta}>{READER_LINE(role)}</p>
+      ) : (
         <p id={keys} className={pageStyles.meta}>
           {KEYS}
         </p>
@@ -477,6 +487,7 @@ function Unsaved({ text, because = UNSAVED }: { text: string; because?: string }
 
 function OpenDocument({
   connection,
+  role: openedAs,
   canEdit,
   documentId,
   imageDays,
@@ -484,6 +495,7 @@ function OpenDocument({
   alreadyDeleted,
 }: {
   connection: DocumentConnection;
+  role: DocumentRole;
   canEdit: boolean;
   documentId: string;
   imageDays: number;
@@ -618,6 +630,7 @@ function OpenDocument({
           awareness={connection.awareness}
           editable={mayEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
           reads={!mayEdit}
+          role={state.notice?.role ?? state.permissions?.role ?? openedAs}
           onEditor={keep}
           onUnshown={fail}
           onUnrepairable={unrepairable}
@@ -639,6 +652,7 @@ function OpenDocument({
 
 export default function Editor({
   documentId,
+  role,
   canEdit,
   errorAfterMs,
   imageDays,
@@ -646,6 +660,7 @@ export default function Editor({
   alreadyDeleted,
 }: {
   documentId: string;
+  role: DocumentRole;
   canEdit: boolean;
   errorAfterMs: number;
   imageDays: number;
@@ -681,6 +696,7 @@ export default function Editor({
   return (
     <OpenDocument
       connection={connection}
+      role={role}
       canEdit={canEdit}
       documentId={documentId}
       imageDays={imageDays}

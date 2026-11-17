@@ -294,6 +294,16 @@ test('an Editor and a Viewer are told in words the role they hold and what it ma
   await accept(theirs, bea.email, id);
   await accept(his, cy.email, id);
 
+  // F10: a reader is told in one line, where the keys of a writer stand, that the text is for reading, and
+  // the role; a writer is not.
+  const READER_LINE = 'You can read this document. Your role on it is Viewer.';
+  await his.goto(`/documents/${id}`);
+  await expect(his.getByText(READER_LINE, { exact: true })).toBeVisible();
+  await expect(his.getByRole('textbox', { name: 'Document text' })).not.toHaveAttribute('aria-describedby');
+  await theirs.goto(`/documents/${id}`);
+  await expect(theirs.getByRole('textbox', { name: 'Document text' })).toBeVisible();
+  await expect(theirs.getByText('You can read this document.')).toHaveCount(0);
+
   await theirs.goto(`/documents/${id}/sharing`);
   await expect(theirs.getByRole('heading', { level: 2, name: 'Your role' })).toBeVisible();
   await expect(theirs.getByText('Your role on this document is Editor.')).toBeVisible();
