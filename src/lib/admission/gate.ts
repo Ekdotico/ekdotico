@@ -10,6 +10,7 @@ import { errorResponse } from '../http.ts';
 import { securityLog } from '../security-log.ts';
 import { oncePer, takeLimit } from '../rate-limit.ts';
 import { settings } from '../settings.ts';
+import { claimNonce } from './nonce.ts';
 import { verifyRequest } from './signature.ts';
 
 // Text for the person who runs the command (the owner's answer to Q6 of the
@@ -55,12 +56,17 @@ export async function admission(
   handle: (body: Uint8Array) => Promise<Response>,
 ): Promise<Response> {
   try {
-    const body = await verifyRequest(request, settings().admissionSecret);
-    if (!body) {
+    const verified = await verifyRequest(request, settings().admissionSecret);
+    // FR-AU-89, D299, Q82 point 4: "a request is single-use". The nonce is recorded only once the signature and the
+    // time have verified, by one insert under a unique constraint, and a request whose nonce is held is rejected as
+    // one whose signature does not verify is: the same answer, the same entry, before any processing and before the
+    // limit, so that nothing says which check failed and a replay uses none of the allowance.
+    if (!verified || !(await claimNonce(verified.nonce, verified.signedAt))) {
       if (await once('signature_invalid', LOG_PERIOD_SECONDS))
         await securityLog({ kind: 'signature_invalid' });
       return errorResponse(401, 'unauthorised', MESSAGES.unauthorised);
     }
+    const { body } = verified;
     // 60 in any minute, in all: one counter for the three endpoints. A request
     // rejected above never reaches it, so nobody without the secret can use it up.
     const limit = await takeLimit('ADMISSION', 'all');
