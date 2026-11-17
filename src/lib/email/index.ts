@@ -21,6 +21,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { printableCode } from '../fault.ts';
 import { settings, type EmailSender } from '../settings.ts';
+import { isAccountFault, recordHandOver } from './health.ts';
 
 const BREVO_URL = 'https://api.brevo.com/v3/smtp/email';
 const BREVO_TIMEOUT_MS = 10_000;
@@ -183,21 +184,26 @@ async function sendThroughBrevo(key: string, sender: EmailSender, message: Email
   const label = response.status === 400 ? await labelOf(response) : undefined;
   void response.body?.cancel().catch(() => {});
   // 201 sent, 202 scheduled.
-  if (response.status === 201 || response.status === 202) return;
+  // D320: what Brevo answered is what the check-in of email health reads (./health.ts).
+  if (response.status === 201 || response.status === 202) return recordHandOver('ok');
   if (response.status === 400) {
     // A message that Brevo refuses will be refused each time: not tried again.
     if (label && REFUSED.has(label)) {
+      recordHandOver('ok');
       throw Object.assign(new MessageRefused('Brevo refused the message (status 400).'), { code: label });
     }
     // It has seen it already: it very likely arrived, and a second send would be a second email.
     if (label === 'DUPLICATE') {
+      recordHandOver('ok');
       throw Object.assign(new MessageSentAlready('Brevo has seen the message already (status 400).'), {
         code: label,
       });
     }
     // Any other 400 (no credits, an unverified sender or domain, a key it does not know) is a fault of the
     // account and not of the message, and is tried again once it is mended.
+    recordHandOver('account-fault');
     throw fault('Brevo answered with status 400.', label ? `400_${label}` : '400');
   }
+  if (isAccountFault(String(response.status))) recordHandOver('account-fault');
   throw fault(`Brevo answered with status ${response.status}.`, String(response.status));
 }

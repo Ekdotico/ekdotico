@@ -632,6 +632,10 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     }
     expect(message).toContain('HEALTHCHECK_TIMERS_URL');
     expect(message).not.toContain('evil.example');
+    // D320: the check of email health is the same, under its own name.
+    expect(settings.healthcheckEmailUrl).toBeUndefined();
+    expect(loadSettings({ ...env, HEALTHCHECK_EMAIL_URL: ping }).healthcheckEmailUrl).toBe(ping);
+    expect(() => loadSettings({ ...env, HEALTHCHECK_EMAIL_URL: wrong })).toThrow(/HEALTHCHECK_EMAIL_URL/);
   });
 
   // FR-ED-41: "at least once every 60 seconds": a setting may make it more often and never less.

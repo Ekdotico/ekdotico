@@ -17,6 +17,8 @@ import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
 import { EMAIL_RETRY_INTERVAL_MS, retryEmails } from './email/retry.ts';
 import { faultOf } from './fault.ts';
+import { db } from './db.ts';
+import { emailHealthy } from './email/health.ts';
 import { checkIn } from './healthcheck.ts';
 import { settings } from './settings.ts';
 import { deleteExpiredImagesNow } from './images/deletion.ts';
@@ -124,12 +126,31 @@ function deleteDocuments(): void {
 // NFR-RE-15, D263: the emails of a document that the service certainly did not take are tried again every 15
 // minutes, not each hour, so it has its own interval. Each attempt removes its row first (src/lib/email/retry.ts),
 // so two instances do not send one twice.
+/**
+ * D274, D320: while email is healthy (src/lib/email/health.ts) this run checks in at HEALTHCHECK_EMAIL_URL, and
+ * while it is not it stays silent, so that the service emails the owner. Never rejects; it counts nothing and
+ * calls nothing where the address is not set.
+ */
+export async function checkInEmail(): Promise<void> {
+  const url = settings().healthcheckEmailUrl;
+  if (!url) return;
+  try {
+    if (emailHealthy(await db().emailRetry.count())) await checkIn(url);
+  } catch (error) {
+    // Without a count nothing is known, so nothing checks in.
+    console.error(`timer failed: email-health (${faultOf(error)})`);
+  }
+}
+
 function retryDocumentEmails(): void {
   retryEmails().then(
     // D275, "the application's timers": a run of this timer that reached the database and ended without
     // a fault checks in. Nothing is called where HEALTHCHECK_TIMERS_URL is not set, and a check-in never
     // fails the run. It is this timer's run because it is the shortest, so the grace of the check is short.
-    () => void checkIn(settings().healthcheckTimersUrl),
+    () => {
+      void checkIn(settings().healthcheckTimersUrl);
+      void checkInEmail();
+    },
     (error) => console.error(`timer failed: email-retry (${faultOf(error)})`),
   );
 }

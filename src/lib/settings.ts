@@ -192,6 +192,8 @@ export interface Settings {
   exportNameMaxChars: number;
   /** D275: the ping address of the check of the application's timers. Absent: nothing is called. */
   healthcheckTimersUrl: string | undefined;
+  /** D274, D320: the ping address of the check of email health. Absent: nothing is called. */
+  healthcheckEmailUrl: string | undefined;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -619,6 +621,7 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     exportIdleSeconds: wholeNumber(env, 'EXPORT_IDLE_SECONDS', 30, 1),
     exportNameMaxChars: exportNameMaxChars(env),
     healthcheckTimersUrl: checkInUrl(env, 'HEALTHCHECK_TIMERS_URL'),
+    healthcheckEmailUrl: checkInUrl(env, 'HEALTHCHECK_EMAIL_URL'),
     limits,
   };
 }
