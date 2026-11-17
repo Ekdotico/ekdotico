@@ -19,14 +19,14 @@ it('words the hint under the Name field as the owner chose', () => {
   );
 });
 
-it.each([
-  'src/app/(auth)/sign-up/[token]/sign-up-form.tsx',
-  'src/app/(app)/settings/name-form.tsx',
-])('has %s take the hint from the one constant, and word none of its own', (file) => {
-  const source = readFileSync(file, 'utf8');
-  expect(source).toContain('hint={NAME_HINT}');
-  expect(source).not.toMatch(/1 to 100 characters|can be seen/);
-});
+it.each(['src/app/(auth)/sign-up/[token]/sign-up-form.tsx', 'src/app/(app)/settings/name-form.tsx'])(
+  'has %s take the hint from the one constant, and word none of its own',
+  (file) => {
+    const source = readFileSync(file, 'utf8');
+    expect(source).toContain('hint={NAME_HINT}');
+    expect(source).not.toMatch(/1 to 100 characters|can be seen/);
+  },
+);
 
 const ZWNJ = '\u{200c}';
 const ZWJ = '\u{200d}';
