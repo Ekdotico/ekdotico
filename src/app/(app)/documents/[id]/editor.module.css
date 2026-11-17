@@ -32,6 +32,8 @@
 /* What the toolbar on the selection is placed in. */
 .surface {
   position: relative;
+  /* The space between the lines above the text (the reader line, or the hint and the picker) and the text. */
+  margin-block-start: var(--sp-4);
 }
 
 /* Where the toolbar goes is the application's (the package's contract): over
