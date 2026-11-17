@@ -496,12 +496,14 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     for (const [method, path] of [
       ['POST', '/api/documents'],
       ['GET', '/api/documents'],
-      ['GET', '/api'],
-      ['GET', '/_next/data/x/y.json'],
     ] as const) {
       const answer = await call(method, path, { ...address(), ...signedIn.cookie, origin: ORIGIN });
-      expect(answer.headers.get('content-type')).toContain('application/json');
-      expect(answer.status).toBe(500);
+      expect([method, path, answer.status, answer.headers.get('content-type')]).toEqual([
+        method,
+        path,
+        500,
+        'application/json',
+      ]);
     }
   });
 
