@@ -819,7 +819,8 @@ describe('who has the document open (FR-ED-17)', () => {
 
   it('is kept as the server last said it, and the next list replaces it', async () => {
     const { connection, socket } = await opened();
-    expect(connection.getState().people).toBeUndefined();
+    // `opened()` delivers the empty list the server sends first.
+    expect(connection.getState().people).toEqual([]);
     socket.receive(stateless(list([{ slot: 1, name: 'Ada Owner', role: 'owner', you: true }])));
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.getState().people).toEqual([{ slot: 1, name: 'Ada Owner', role: 'owner', you: true }]);
