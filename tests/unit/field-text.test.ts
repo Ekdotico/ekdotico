@@ -2,6 +2,7 @@
 // address (FR-AU-02, FR-AU-03, FR-AU-89), as the owner decided them on
 // 9 October 2026. Every character that matters is written by its code point,
 // so that no editor and no formatter can change what is tested.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   acceptedAddress,
@@ -11,12 +12,21 @@ import {
   NAME_HINT,
 } from '../../src/lib/field-text.ts';
 
-// F11 (ui-t4-name): the hint under the Name field at sign-up, pinned whole.
+// F11 (ui-t4-name): the hint under the Name field, pinned whole, and used by each form that renders one.
 it('words the hint under the Name field as the owner chose', () => {
   expect(NAME_HINT).toBe(
     '1 to 100 characters. It needs at least one character that shows; spaces alone are not a name.',
   );
 });
+
+it.each(['src/app/(auth)/sign-up/[token]/sign-up-form.tsx', 'src/app/(app)/settings/name-form.tsx'])(
+  'has %s take the hint from the one constant, and word none of its own',
+  (file) => {
+    const source = readFileSync(file, 'utf8');
+    expect(source).toContain('hint={NAME_HINT}');
+    expect(source).not.toMatch(/1 to 100 characters|can be seen/);
+  },
+);
 
 const ZWNJ = '\u{200c}';
 const ZWJ = '\u{200d}';

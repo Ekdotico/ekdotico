@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, FormFault, Stack, TextField } from '@ekdotico/domico/components';
 import { useReady } from '../../../components/ready.ts';
+import { NAME_HINT } from '../../../lib/field-text.ts';
 import { send, type Fault } from '../../../components/send.ts';
 import styles from '../../pages.module.css';
 
@@ -56,7 +57,7 @@ export function NameForm({ name }: { name: string }) {
           id="name"
           name="name"
           label="Name"
-          hint="The name that collaborators see beside this account. It has 1 to 100 characters. At least one of them can be seen."
+          hint={NAME_HINT}
           autoComplete="name"
           defaultValue={name}
           required
