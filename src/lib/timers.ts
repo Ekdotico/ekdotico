@@ -17,6 +17,8 @@ import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
 import { EMAIL_RETRY_INTERVAL_MS, retryEmails } from './email/retry.ts';
 import { faultOf } from './fault.ts';
+import { checkIn } from './healthcheck.ts';
+import { settings } from './settings.ts';
 import { deleteExpiredImagesNow } from './images/deletion.ts';
 import { deleteExpiredSecurityLog } from './security-log.ts';
 
@@ -124,7 +126,10 @@ function deleteDocuments(): void {
 // so two instances do not send one twice.
 function retryDocumentEmails(): void {
   retryEmails().then(
-    () => {},
+    // D275, "the application's timers": a run of this timer that reached the database and ended without
+    // a fault checks in. Nothing is called where HEALTHCHECK_TIMERS_URL is not set, and a check-in never
+    // fails the run. It is this timer's run because it is the shortest, so the grace of the check is short.
+    () => void checkIn(settings().healthcheckTimersUrl),
     (error) => console.error(`timer failed: email-retry (${faultOf(error)})`),
   );
 }

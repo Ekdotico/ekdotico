@@ -2,6 +2,7 @@
 // and the collaboration server both load them through this one module
 // (NFR-SE-17 (f)). Every secret is read here and nowhere else (NFR-SE-19).
 import { acceptedAddress } from './field-text.ts';
+import { checkInUrl } from './healthcheck.ts';
 
 /** A limit of NFR-SE-07: at most `max` in any `windowSeconds`. */
 export interface Limit {
@@ -189,6 +190,8 @@ export interface Settings {
   exportIdleSeconds: number;
   /** FR-EX-36: a name derived from a title "is cut to 100 characters (an initial value)". */
   exportNameMaxChars: number;
+  /** D275: the ping address of the check of the application's timers. Absent: nothing is called. */
+  healthcheckTimersUrl: string | undefined;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -615,6 +618,7 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     // At least 1: an idle period of 0 would abort every export before its first byte.
     exportIdleSeconds: wholeNumber(env, 'EXPORT_IDLE_SECONDS', 30, 1),
     exportNameMaxChars: exportNameMaxChars(env),
+    healthcheckTimersUrl: checkInUrl(env, 'HEALTHCHECK_TIMERS_URL'),
     limits,
   };
 }
