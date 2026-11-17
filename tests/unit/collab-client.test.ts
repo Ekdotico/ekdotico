@@ -600,6 +600,32 @@ describe('what the server says of its store (D294)', () => {
     expect(labels).not.toContain('In sync');
     connection.stop();
   });
+
+  // The order of the real server: its notices (the people last) come before the library reports the
+  // synchronisation. Mutation S03: `connected` took the notices for not yet heard, and "In sync" never came.
+  it('shows "In sync" once the document has synchronised when the notices came before it', async () => {
+    const connection = new DocumentConnection({
+      url: 'ws://example.invalid/collab',
+      documentId: ID,
+      errorAfterMs: 60_000,
+      probe: async () => 200,
+      WebSocketPolyfill: Socket,
+    });
+    connection.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const socket = Socket.all.at(-1)!;
+    socket.receive(new Uint8Array([9]).buffer);
+    socket.receive(authenticated('read-write'));
+    socket.receive(stateless(JSON.stringify({ kind: 'people', people: [] })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncStatus(connection.getState()).label).not.toBe('In sync');
+    socket.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
+    socket.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().phase).toBe('connected');
+    expect(syncStatus(connection.getState())).toEqual({ state: 'synced', label: 'In sync' });
+    connection.stop();
+  });
 });
 
 /** A paragraph of the document as the editor's binding writes one. */

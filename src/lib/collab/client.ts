@@ -119,7 +119,7 @@ export interface ConnectionState {
    * succeeded and when the socket is lost (the next connection is told again where it still holds).
    */
   unstored?: boolean;
-  /** False from the synchronisation until the server's notices of the connection (its list of people is the last) have arrived: "In sync" is not shown before, since a failed store is told in them (D294). */
+  /** False from the start, and again whenever the socket is lost, until the server's notices of the connection (its list of people is the last) have arrived: "In sync" is not shown before, since a failed store is told in them (D294). They may arrive before the synchronisation is reported. */
   heard?: boolean;
   /**
    * F14-2: the role of this connection became one that cannot edit while the tab
@@ -263,7 +263,7 @@ export class DocumentConnection {
     if (this.started) return;
     this.started = true;
     const { options } = this;
-    this.state = { phase: 'opening', opened: this.state.opened, unsent: false };
+    this.state = { phase: 'opening', opened: this.state.opened, unsent: false, heard: false };
     this.shown = undefined;
     this.waiting = false;
     this.socket = new HocuspocusProviderWebsocket({
@@ -537,7 +537,9 @@ export class DocumentConnection {
   private connected(): void {
     this.clearTimers();
     this.refusals = 0;
-    this.set({ phase: 'connected', opened: true, heard: false });
+    // `heard` is not touched: the server's notices come before the library reports the synchronisation, so
+    // the list of people may already have arrived, and it is false again only when the socket is lost.
+    this.set({ phase: 'connected', opened: true });
   }
 
   /** The server refused this document, or closed its connection, with a reason. */
@@ -574,8 +576,9 @@ export class DocumentConnection {
     if (this.over()) return;
     clearTimeout(this.retryTimer);
     // What the server said of its store is of a connection that is gone: the next one is told again.
-    if (this.state.phase !== 'lost') this.set({ phase: 'restoring', unstored: false });
-    else if (this.state.unstored) this.set({ unstored: false });
+    // Nor did it hear anything on the next one yet: "In sync" waits for that connection's own notices.
+    if (this.state.phase !== 'lost') this.set({ phase: 'restoring', unstored: false, heard: false });
+    else this.set({ unstored: false, heard: false });
     this.expectConnection();
     // FOR THE SLICE THAT BUILDS SHARING (slice 13): the socket that the library
     // opens next carries whatever session cookie the browser holds then. Once a
