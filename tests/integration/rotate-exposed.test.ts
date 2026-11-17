@@ -196,9 +196,9 @@ describe('the forced re-enrolment (NFR-SE-17 (e), D302)', () => {
     expect(admitted.session).not.toBeNull();
     const { notifications } = await listNotifications(accounts.member.id);
     expect(notifications.map(({ kind }) => kind)).toEqual(['two_factor_offer']);
-    // The words, whole, for the owner's approval.
+    // The words, whole, as the owner approved them.
     expect(TWO_FACTOR_OFFER_TEXT).toBe(
-      'Ekdotico reset every sign-in, so two-factor authentication is off on your account. You can turn it on again in the settings, or leave it off.',
+      'For security, Ekdotico reset every sign-in, so two-factor authentication is off on your account. You can turn it on again in the settings, or leave it off.',
     );
     // Nothing is offered to the team or to the account that had no factor.
     for (const { id } of [accounts.team, accounts.plain]) {

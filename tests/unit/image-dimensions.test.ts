@@ -223,8 +223,8 @@ describe('every GIF is refused, and an animated WebP or PNG (D309, D310)', () =>
     expect(isAnimated(jpeg(), 'jpeg')).toBe(false);
   });
 
-  // The two refusals are provisional and pinned whole; they do not ship until the owner approves them.
-  it('has the words, for the owner’s approval', async () => {
+  // The refusals are approved by the owner and pinned whole.
+  it('has the approved words', async () => {
     const { IMAGE_MESSAGES } = await import('../../src/lib/images/answers.ts');
     expect(IMAGE_MESSAGES.gif).toBe(
       'That file is a GIF, and Ekdotico does not accept GIF images, so it was not added. Choose a PNG, JPEG, or WebP image.',
