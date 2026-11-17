@@ -331,6 +331,7 @@ function Text({
 
   return (
     <Editable.Provider value={editable}>
+      <div className={styles.sheet}>
       {reads ? (
         <p className={pageStyles.meta}>{readerLine(role)}</p>
       ) : (
@@ -381,6 +382,7 @@ function Text({
         {editor ? <SlashPaletteList editor={editor} /> : null}
         {/* After the text in the Tab order: Tab from the text reaches it. Not for a person who can only read. */}
         {editor && editable && !reads ? <InsertButton editor={editor} surface={surface} /> : null}
+      </div>
       </div>
     </Editable.Provider>
   );
