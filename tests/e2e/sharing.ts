@@ -25,7 +25,6 @@ export const INVITATION_LINK = /https?:\/\/[^\s]+\/invitations\/[A-Za-z0-9_-]{43
 /** From the list of documents: a new document, and its sharing settings open. Resolves with its identifier. */
 export async function shareNew(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'New document' }).click();
-  await page.getByRole('link', { name: 'Untitled document' }).first().click();
   await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
   const id = /\/documents\/([0-9a-f-]{36})$/.exec(page.url())![1]!;
   await page.getByRole('link', { name: 'Sharing' }).click();

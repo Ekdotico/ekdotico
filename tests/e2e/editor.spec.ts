@@ -44,7 +44,7 @@ async function enter(page: Page, person: Person = newPerson()) {
 /** Creates a document from the list and opens its page. Resolves with its identifier. */
 async function openNew(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'New document' }).click();
-  await page.getByRole('link', { name: 'Untitled document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
   await expect(text(page)).toBeVisible();
   await expect(status(page, 'In sync')).toBeVisible();
   return /\/documents\/([0-9a-f-]{36})$/.exec(page.url())![1]!;
@@ -4141,6 +4141,10 @@ test('a Viewer reads what the Owner writes, in an editor that does not write', a
   await expect(page.getByText('2 of 10 people')).toBeVisible();
   const { found: link } = await mailFor(viewer.email, INVITATION_LINK);
   await theirs.goto(new URL(link).pathname);
+  // F28: Accept is the primary action, so it is filled and Decline is not.
+  const fill = (name: string) =>
+    theirs.getByRole('button', { name }).evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await fill('Accept')).not.toBe(await fill('Decline'));
   await theirs.getByRole('button', { name: 'Accept' }).click();
   await theirs.waitForURL(`**/documents/${id}`);
 

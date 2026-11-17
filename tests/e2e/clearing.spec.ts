@@ -68,6 +68,8 @@ test('an account whose documents are not shared clears them at once: the control
   const elsewhere = watchOrigins(page);
   const person = await enter(page);
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   await expect(page.getByRole('listitem')).toHaveCount(1);
   await screen(page);
 

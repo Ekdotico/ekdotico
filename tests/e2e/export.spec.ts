@@ -45,7 +45,7 @@ async function enter(page: Page, person: Person = newPerson()) {
 }
 async function openNew(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'New document' }).click();
-  await page.getByRole('link', { name: 'Untitled document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
   await expect(text(page)).toBeVisible();
   await inSync(page);
   return /\/documents\/([0-9a-f-]{36})$/.exec(page.url())![1]!;
