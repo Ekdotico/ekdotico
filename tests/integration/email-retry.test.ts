@@ -141,7 +141,7 @@ describe('an email that the service certainly did not take is tried again, and d
     expect(mail.to).toBe(guest.email);
     expect(mail.subject).toBe('You have been invited to a document | Ekdotico');
     // Its own link is stored only as a hash: the link is the notification list, as the reminder's is.
-    expect(mail.text).toContain(`open this link: ${ORIGIN}/notifications.`);
+    expect(mail.text).toContain(`open this link:\n${ORIGIN}/notifications\nThe link works once`);
     expect(mail.text).not.toContain('/invitations/');
     expect(mail.text).not.toContain(one.token);
     expect(await rows()).toHaveLength(0);

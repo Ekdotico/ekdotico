@@ -172,7 +172,7 @@ test('the one reminder 3 days before the expiry, by email and in the list, once'
   expect(reminder.text).toContain(
     `${owner.name} (${owner.email}) invited you to a document in Ekdotico as Editor. The invitation expires on `,
   );
-  expect(reminder.text).toMatch(/open your notifications in Ekdotico: https?:\/\/[^\s]+\/notifications\./);
+  expect(reminder.text).toMatch(/open your notifications in Ekdotico:\nhttps?:\/\/[^\s]+\/notifications$/);
 
   await theirs.goto('/notifications');
   await expect(
