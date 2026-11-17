@@ -5,7 +5,7 @@ import { isIP } from 'node:net';
 import { acceptedAddress } from './field-text.ts';
 
 /** `COLLAB_HOST`: an IP address, 127.0.0.1 where unset. A name is refused: it could resolve to every interface. */
-function collabHost(env: NodeJS.ProcessEnv): string {
+function collabHost(env: Record<string, string | undefined>): string {
   const host = env.COLLAB_HOST || '127.0.0.1';
   if (!isIP(host)) throw new Error('COLLAB_HOST must be an IP address, such as 127.0.0.1.');
   return host;
