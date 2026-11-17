@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { Badge, Cluster, FormFault, Logo } from '@ekdotico/domico/components';
+import { AppearanceMenu } from '@ekdotico/domico/theme';
 import type { Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { NOTIFICATIONS_CHANGED } from './notifications/changed.ts';
@@ -58,26 +59,30 @@ export function ShellHeader() {
         <Link href="/" prefetch={false} className={styles.home}>
           <Logo />
         </Link>
-        <nav aria-label="Main">
-          <Cluster gap={4} align="center">
-            <Link href="/" prefetch={false} aria-current={pathname === '/' ? 'page' : undefined}>
-              Documents
-            </Link>
-            <Link href="/notifications" prefetch={false} aria-current={current('/notifications')}>
-              Notifications
-              {unread > 0 ? (
-                <>
-                  {' '}
-                  <Badge variant="new">{`${unread} unread`}</Badge>
-                </>
-              ) : null}
-            </Link>
-            <Link href="/settings" prefetch={false} aria-current={current('/settings')}>
-              Account settings
-            </Link>
-            <SignOutButton variant="quiet" onFault={setFault} />
-          </Cluster>
-        </nav>
+        {/* UI audit F15: the design system's one appearance control, top right, with no props and no styling of ours. */}
+        <Cluster gap={4} align="center">
+          <nav aria-label="Main">
+            <Cluster gap={4} align="center">
+              <Link href="/" prefetch={false} aria-current={pathname === '/' ? 'page' : undefined}>
+                Documents
+              </Link>
+              <Link href="/notifications" prefetch={false} aria-current={current('/notifications')}>
+                Notifications
+                {unread > 0 ? (
+                  <>
+                    {' '}
+                    <Badge variant="new">{`${unread} unread`}</Badge>
+                  </>
+                ) : null}
+              </Link>
+              <Link href="/settings" prefetch={false} aria-current={current('/settings')}>
+                Account settings
+              </Link>
+              <SignOutButton variant="quiet" onFault={setFault} />
+            </Cluster>
+          </nav>
+          <AppearanceMenu />
+        </Cluster>
       </header>
       {fault ? (
         <div className={styles.fault}>
