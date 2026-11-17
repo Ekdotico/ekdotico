@@ -36,6 +36,10 @@ describe('the notice of a store', () => {
 describe('the sync status after a failed store', () => {
   // Mutation S02: the indicator says "In sync" while the server holds what it could not store.
   it('shows the syncing state with the sentence, and not "In sync"', () => {
+    // txt-notsaved, approved by the owner on 17 November 2026: the whole text, written out.
+    expect(syncStatus(state({ unstored: true })).label).toBe(
+      'Syncing. This document is not yet saved. Ekdotico keeps trying to save it.',
+    );
     expect(syncStatus(state({ unstored: true }))).toEqual({
       state: 'syncing',
       label: `Syncing. ${NOT_SAVED}`,

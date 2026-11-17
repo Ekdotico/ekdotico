@@ -665,7 +665,7 @@ export class DocumentConnection {
 // under the Expression Guidelines (system feedback) and approved by the owner
 // with the pull request (the answer to Q6 of the plan).
 const UNSENT = 'Changes that are not yet sent are lost if this tab is closed.';
-// D294: written by the build session for the owner's approval.
+// D294: the owner approved this text on 17 November 2026 (Open Questions answer txt-notsaved).
 const NOT_SAVED = 'This document is not yet saved. Ekdotico keeps trying to save it.';
 
 /**
@@ -684,7 +684,7 @@ export function syncStatus({ phase, unsent, unstored, heard }: ConnectionState):
   switch (phase) {
     case 'connected':
       // D294: the server holds a change that a failed store has not saved; "In sync" would be untrue. The
-      // sentence is new text, proposed to the owner (Expression Guidelines, system feedback).
+      // sentence is the text of txt-notsaved.
       if (unstored) return { state: 'syncing', label: `Syncing. ${NOT_SAVED}${tail}` };
       // Not "In sync" until the server's notices of this connection have arrived (they tell a failed store).
       if (heard === false) return { state: 'syncing', label: 'Opening the document' };
