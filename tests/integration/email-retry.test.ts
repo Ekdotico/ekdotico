@@ -128,7 +128,7 @@ async function clearing(owner: Person, to: Person) {
 describe('an email that the service certainly did not take is tried again, and delivered once', () => {
   // Mutation R01: the row is not written where the service certainly did not take the email.
   it('the invitation: a row of kind, subject and account, and then one email, to the notification list', async () => {
-    const { guest, one } = await invitation(failing(NOT_TAKEN));
+    const { owner, guest, one } = await invitation(failing(NOT_TAKEN));
     const waiting = await rows();
     expect(waiting).toHaveLength(1);
     expect(waiting[0]).toMatchObject({ kind: 'INVITATION', subjectId: one.id, userId: guest.id });
