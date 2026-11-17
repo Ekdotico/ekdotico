@@ -13,6 +13,7 @@ import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
+import { sendOrQueue } from '../email/queue.ts';
 import { faultOf } from '../fault.ts';
 import { settings } from '../settings.ts';
 import { COLLABORATOR_ROLE, ROLE_NAME } from './permissions.ts';
@@ -58,7 +59,7 @@ export function reminderEmail(
  * A process that was down catches up at its first run, while the invitation is
  * still open. Answers 0, since a timer says what it deleted and this deletes
  * nothing; a failure is one line naming the invitation, and an email is never
- * tried again (S18-7).
+ * tried again, unless the service certainly did not take it (D263; S18-7).
  */
 export async function remindInvitations(
   send: (message: EmailMessage) => Promise<void> = sendEmail,
@@ -99,7 +100,7 @@ async function remind(
   // The claim reads the clock itself, never earlier than the run's: a run that is slow does not claim an
   // invitation that has expired since it began (the run's `now` is a parameter for the tests).
   const claimAt = new Date(Math.max(now.getTime(), Date.now()));
-  const message = await db().$transaction(async (tx) => {
+  const claimed = await db().$transaction(async (tx) => {
     const { count } = await tx.documentInvitation.updateMany({
       where: {
         id: invitationId,
@@ -138,14 +139,23 @@ async function remind(
     await tx.notification.create({
       data: { recipientId: account.id, kind: REMINDER_NOTIFICATION, payload: { invitationId } },
     });
-    return reminderEmail(
-      invitation.email,
-      { name: displayNameOf(invitation.invitedBy), email: invitation.invitedBy.email },
-      ROLE_NAME[COLLABORATOR_ROLE[invitation.role]],
-      invitation.expiresAt,
-    );
+    return {
+      userId: account.id,
+      message: reminderEmail(
+        invitation.email,
+        { name: displayNameOf(invitation.invitedBy), email: invitation.invitedBy.email },
+        ROLE_NAME[COLLABORATOR_ROLE[invitation.role]],
+        invitation.expiresAt,
+      ),
+    };
   });
-  if (message) await send(message);
+  if (claimed) {
+    await sendOrQueue(send, claimed.message, {
+      kind: 'REMINDER',
+      subjectId: invitationId,
+      userId: claimed.userId,
+    });
+  }
 }
 
 // ── The clearing of the invited address (FR-ED-37, §2.7) ────────────────────
