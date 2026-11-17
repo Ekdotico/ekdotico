@@ -18,20 +18,31 @@
   transform: translateY(calc(-100% - var(--sp-2)));
 }
 
-/* The margin that keeps the Insert control clear of the text, for a person who may edit: the control is
-   absolute in it, so that it moves nothing as the cursor moves. */
+/* The margin that keeps the Insert control inside the surface where the cursor is at the end of a full line,
+   for a person who may edit: the control is absolute, so that it moves nothing as the cursor moves. */
 .writable {
   padding-inline-end: var(--sp-8);
 }
 
-/* The Insert control: on the right of the cursor's line, faint until it is hovered, or has the focus, and
-   always solid where there is no hover (a touch screen). It changes at once, with no motion to reduce. */
+/* The Insert control: immediately to the right of the cursor, a step of space after it, centred on the
+   cursor's line (the owner's sketch). It glides to the cursor's next place by the package's motion tokens, and
+   not at all where motion is reduced, nor on the first placement (data-settled). Faint at rest, solid when
+   hovered or focused, and always solid where there is no hover (a touch screen), where more contrast is
+   asked for, and in forced colours. */
 .insert {
   position: absolute;
-  inset-inline-end: 0;
   z-index: 1;
+  margin-inline-start: var(--sp-2);
   transform: translateY(-50%);
-  opacity: 0.55;
+  opacity: 0.6;
+  transition:
+    left var(--dur-fast) var(--ease-soft),
+    top var(--dur-fast) var(--ease-soft),
+    opacity var(--dur-fast) var(--ease-soft);
+}
+
+.insert[data-settled='false'] {
+  transition: none;
 }
 
 .insert:hover,
@@ -39,9 +50,15 @@
   opacity: 1;
 }
 
-@media (hover: none) {
+@media (hover: none), (prefers-contrast: more), (forced-colors: active) {
   .insert {
     opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .insert {
+    transition: none;
   }
 }
 
