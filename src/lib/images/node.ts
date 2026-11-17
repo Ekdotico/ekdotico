@@ -11,7 +11,6 @@ export const IMAGE_MOST_BYTES = 20 * 1024 * 1024;
 export const IMAGE_TYPES = {
   png: 'image/png',
   jpeg: 'image/jpeg',
-  gif: 'image/gif',
   webp: 'image/webp',
 } as const;
 export type ImageFormat = keyof typeof IMAGE_TYPES;

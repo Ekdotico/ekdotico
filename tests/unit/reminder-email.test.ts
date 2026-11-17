@@ -32,7 +32,7 @@ describe('the email of the reminder of an invitation', () => {
     expect(to).toBe('invitee@example.com');
     expect(subject).toBe('Your invitation to a document in Ekdotico expires soon');
     expect(text).toBe(
-      `Ada Owner (ada@example.com) invited you to a document in Ekdotico as Editor. The invitation expires on 2 Oct 2026, 14:05 UTC. To accept or decline it, open your notifications in Ekdotico: ${ORIGIN}/notifications.`,
+      `Ada Owner (ada@example.com) invited you to a document in Ekdotico as Editor. The invitation expires on 2 Oct 2026, 14:05 UTC. To accept or decline it, open your notifications in Ekdotico:\n${ORIGIN}/notifications`,
     );
   });
 

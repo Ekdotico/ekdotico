@@ -6,6 +6,7 @@
 //
 // What an open connection does when the record is made is in
 // collab-account-deletion.test.ts.
+import { HELD } from './guard.ts';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1784,7 +1785,7 @@ describe('nothing reaches an account whose deletion is confirmed (FR-AU-58 (a))'
     const { id } = await createDocument(owner.id);
     const row = await grant(id, editor);
     await confirm(editor.id);
-    expect(await makeOffer(id, owner.id, row.id)).toEqual({ outcome: 'not_an_editor' });
+    expect(await makeOffer(id, owner.id, row.id, undefined, HELD)).toEqual({ outcome: 'not_an_editor' });
     expect(await db().ownershipOffer.count({ where: { documentId: id } })).toBe(0);
     expect(await db().notification.count({ where: { recipientId: editor.id } })).toBe(0);
   });
