@@ -28,10 +28,11 @@ permissions:
   packages: read
 
 # A push cancels the earlier runs of pushes to the same ref and nothing else. A run started by a label has a
-# group of its own per label, so that neither a later push nor another label cancels a 30-minute suite
-# that someone asked for; only adding the same label again does.
+# group of its own per label, and a manual run one of its own per ref, so that neither a later push nor
+# another label cancels a 30-minute suite that someone asked for; only the same label added again, or
+# another manual run on the same ref, does.
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event.action == 'labeled' && format('label-{0}', github.event.label.name) || 'push' }}
+  group: ci-${{ github.ref }}-${{ github.event.action == 'labeled' && format('label-{0}', github.event.label.name) || github.event_name == 'workflow_dispatch' && 'dispatch' || 'push' }}
   cancel-in-progress: true
 
 jobs:
