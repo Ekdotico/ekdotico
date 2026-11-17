@@ -236,7 +236,8 @@ describe('every other path, without a session (FR-AU-07)', () => {
     expect(location.origin + location.pathname).toBe(`${ORIGIN}/sign-in`);
     expect([...location.searchParams.keys()]).toEqual(['return']);
     expect(location.searchParams.get('return')).toBe('/documents/1?tab=sharing&q=a%2Fb');
-    expect((await call('HEAD', '/')).status).toBe(307);
+    // `/` is the one page a visitor is not sent away from (FR-AU-93): see the next block.
+    expect((await call('HEAD', '/documents')).status).toBe(307);
   });
 
   it('never names another origin as the place to return to, nor as the place to sign in', async () => {
@@ -264,6 +265,72 @@ describe('every other path, without a session (FR-AU-07)', () => {
 
   it('answers a request that changes state on a page with a 401, not with a redirect', async () => {
     await expectError(await call('POST', '/documents/1', { origin: ORIGIN }), 401, 'unauthenticated');
+  });
+});
+
+describe('the root, for a visitor and for a person signed in (FR-AU-93; register D327)', () => {
+  const rewrittenTo = (response: Response) => response.headers.get('x-middleware-rewrite');
+
+  it.each(['GET', 'HEAD'])('rewrites a %s without a session to the page of visitors, and does not redirect', async (method) => {
+    const response = await call(method, '/', address());
+    expect(response.status).toBe(200);
+    expect(response.headers.get('location')).toBeNull();
+    expect(new URL(rewrittenTo(response)!).pathname).toBe('/visitors-page');
+    // The page is a page: the policy with a nonce made for this request, as any page has.
+    expect(response.headers.get('content-security-policy')).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/]{22}=='/);
+    // It sets no cookie.
+    expect(response.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('gives the same answer to a cookie that is no session, and carries nothing of the query', async () => {
+    const response = await call('GET', '/?return=https%3A%2F%2Fevil.example&x=1', {
+      ...address(),
+      cookie: 'better-auth.session_token=not-a-session',
+    });
+    const target = new URL(rewrittenTo(response)!);
+    expect(target.pathname).toBe('/visitors-page');
+    expect(target.search).toBe('');
+    expect(response.headers.get('location')).toBeNull();
+  });
+
+  it('counts a visitor against the limit of the address, and answers 429 past it (NFR-SE-07)', async () => {
+    const from = address();
+    for (let n = 0; n < 5; n++) expect(rewrittenTo(await call('GET', '/', from))).not.toBeNull();
+    await expectError(await call('GET', '/', from), 429, 'rate_limited');
+  });
+
+  it('does not count a person signed in against it, and does not rewrite for them', async () => {
+    const { cookie } = await person();
+    const from = address();
+    for (let n = 0; n < 8; n++) {
+      const response = await call('GET', '/', { ...cookie, ...from });
+      expect(passed(response)).toBe(true);
+      expect(rewrittenTo(response)).toBeNull();
+    }
+    // The address has all five of its counts left for visitors.
+    for (let n = 0; n < 5; n++) expect(rewrittenTo(await call('GET', '/', from))).not.toBeNull();
+  });
+
+  it('answers a request that changes state on the root with a 401, as on any page', async () => {
+    await expectError(await call('POST', '/', { origin: ORIGIN }), 401, 'unauthenticated');
+  });
+
+  it('answers 404 to a request that names the internal page, with a session and without', async () => {
+    const { cookie } = await person();
+    for (const method of ['GET', 'HEAD', 'POST']) {
+      for (const headers of [{}, cookie]) {
+        const response = await call(method, '/visitors-page', { ...headers, origin: ORIGIN });
+        expect(passed(response)).toBe(false);
+        expect(rewrittenTo(response)).toBeNull();
+        expect(response.status).toBe(404);
+      }
+    }
+  });
+
+  it('leaves every other address a visitor asks for as it was: sent to sign in', async () => {
+    const response = await call('GET', '/documents', address());
+    expect(response.status).toBe(307);
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/sign-in');
   });
 });
 

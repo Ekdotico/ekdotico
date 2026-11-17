@@ -22,6 +22,7 @@ import { errorResponse, faultPage, INTERNAL_FAULT, onlyReads, returnPath } from 
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
+import { VISITORS_PATH } from './lib/visitors.ts';
 import { settings } from './lib/settings.ts';
 
 /** Where a visitor without a session is sent (FR-AU-07; API design, "Sign-in and identity"). */
@@ -115,6 +116,7 @@ const MESSAGES = {
   unauthenticated: 'This request needs a signed-in session. Sign in and try again.',
   forbidden: FORBIDDEN,
   internal: INTERNAL_FAULT,
+  notFound: 'There is nothing at this address.',
 };
 
 /**
@@ -125,7 +127,7 @@ const MESSAGES = {
  * and a file of the build, keeps the policy every response has, which admits
  * nothing (next.config.ts), and so does every answer this file makes itself.
  */
-function onward(request: NextRequest): NextResponse {
+function onward(request: NextRequest, rewriteTo?: string): NextResponse {
   const { pathname } = request.nextUrl;
   // Under `/_next/` nothing is a page, whether or not it is a file of the
   // build. A route is handed the request as it came, and nothing with it
@@ -143,7 +145,16 @@ function onward(request: NextRequest): NextResponse {
   const headers = new Headers(request.headers);
   headers.set(NONCE_HEADER, nonce);
   headers.set('Content-Security-Policy', policy);
-  const response = NextResponse.next({ request: { headers } });
+  // A rewrite keeps the request's own origin and drops its query: the page it
+  // names reads nothing of the request (FR-AU-93).
+  const target = request.nextUrl.clone();
+  if (rewriteTo) {
+    target.pathname = rewriteTo;
+    target.search = '';
+  }
+  const response = rewriteTo
+    ? NextResponse.rewrite(target, { request: { headers } })
+    : NextResponse.next({ request: { headers } });
   response.headers.set('Content-Security-Policy', policy);
   return response;
 }
@@ -169,6 +180,10 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
   const { pathname, search } = request.nextUrl;
   const changesState = !onlyReads(method);
   const group = classify(method, pathname);
+
+  // FR-AU-93: the page of a visitor is reached by `/` alone, rewritten below.
+  // Named in a request it is no page, for a visitor and for a person signed in.
+  if (pathname === VISITORS_PATH) return errorResponse(404, 'not_found', MESSAGES.notFound);
 
   // (c) The health check is exempt from every limit (NFR-SE-07), and static
   // assets are not among the rows of its table.
@@ -222,6 +237,24 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
     // page that is read sends its visitor to sign in, with the place to return to.
     if (changesState || api) {
       return withCookies(errorResponse(401, 'unauthenticated', MESSAGES.unauthenticated), setCookie);
+    }
+    // FR-AU-93, D327: `GET /` and `HEAD /` of a visitor are answered with the
+    // page of visitors, rewritten and not redirected, so the address stays
+    // `/`. Counted as the pages of group (a) are, and only here: a request of a
+    // person signed in does not reach this line, so it spends none of the
+    // address's count (NFR-SE-07).
+    if (pathname === '/') {
+      const address = addressBucket(headers);
+      progress.stage = 'limit';
+      const limit = await takeLimit('SESSIONLESS_PER_ADDRESS', address);
+      if (!limit.ok) {
+        progress.stage = 'log mark';
+        return withCookies(
+          await tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds),
+          setCookie,
+        );
+      }
+      return withCookies(onward(request, VISITORS_PATH), setCookie);
     }
     const signIn = new URL(SIGN_IN_PATH, settings().appOrigin);
     signIn.searchParams.set(RETURN_PARAMETER, returnPath(pathname + search));
