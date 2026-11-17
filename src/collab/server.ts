@@ -1550,7 +1550,8 @@ if (import.meta.main) {
     collab.httpServer.listen(Number(process.env.COLLAB_PORT ?? 1234), loaded.collabHost, () => {
       const address = collab.httpServer.address();
       console.log(
-        `collaboration server listening on ${typeof address === 'object' ? address?.port : address}`,
+        // The address it bound to and the port, so that the log shows the bind (deployment.md, item 8).
+        `collaboration server listening on ${typeof address === 'object' && address ? `${address.address}:${address.port}` : address}`,
       );
     });
   });

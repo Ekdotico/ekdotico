@@ -4,10 +4,17 @@
 import { isIP } from 'node:net';
 import { acceptedAddress } from './field-text.ts';
 
-/** `COLLAB_HOST`: an IP address, 127.0.0.1 where unset. A name is refused: it could resolve to every interface. */
+/**
+ * `COLLAB_HOST`: a specific IP address, 127.0.0.1 where unset or empty. A name is refused, since it could resolve
+ * to every interface, and so are the unspecified addresses, which are every interface.
+ */
 function collabHost(env: Record<string, string | undefined>): string {
   const host = env.COLLAB_HOST || '127.0.0.1';
-  if (!isIP(host)) throw new Error('COLLAB_HOST must be an IP address, such as 127.0.0.1.');
+  if (!isIP(host) || host === '0.0.0.0' || /^[0:]+$/.test(host)) {
+    throw new Error(
+      'COLLAB_HOST must be a specific IP address, such as 127.0.0.1; a name, 0.0.0.0 and :: would listen on every interface.',
+    );
+  }
   return host;
 }
 
