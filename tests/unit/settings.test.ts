@@ -592,6 +592,15 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(changed).toMatchObject({ collabStoreDelayMs: 1000, collabStoreMaxMs: 3000 });
   });
 
+  // deployment.md, item 8: the collaboration server is reached through the proxy alone, so it listens on the loopback.
+  it('has the collaboration server listen on 127.0.0.1 unless COLLAB_HOST is an IP address', () => {
+    expect(settings.collabHost).toBe('127.0.0.1');
+    expect(loadSettings({ ...env, COLLAB_HOST: '10.0.0.5' }).collabHost).toBe('10.0.0.5');
+    expect(loadSettings({ ...env, COLLAB_HOST: '::1' }).collabHost).toBe('::1');
+    for (const bad of ['localhost', 'example.com', '10.0.0', '0.0.0.0/0'])
+      expect(() => loadSettings({ ...env, COLLAB_HOST: bad })).toThrow(/COLLAB_HOST/);
+  });
+
   // FR-ED-23: "30 seconds (an initial value)".
   it('shows the error state of the editor after 30 seconds without a connection', () => {
     expect(settings.collabErrorAfterMs).toBe(30000);

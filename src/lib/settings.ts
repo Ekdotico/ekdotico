@@ -1,7 +1,15 @@
 // Settings read from the environment when a process starts. The web application
 // and the collaboration server both load them through this one module
 // (NFR-SE-17 (f)). Every secret is read here and nowhere else (NFR-SE-19).
+import { isIP } from 'node:net';
 import { acceptedAddress } from './field-text.ts';
+
+/** `COLLAB_HOST`: an IP address, 127.0.0.1 where unset. A name is refused: it could resolve to every interface. */
+function collabHost(env: NodeJS.ProcessEnv): string {
+  const host = env.COLLAB_HOST || '127.0.0.1';
+  if (!isIP(host)) throw new Error('COLLAB_HOST must be an IP address, such as 127.0.0.1.');
+  return host;
+}
 
 /** A limit of NFR-SE-07: at most `max` in any `windowSeconds`. */
 export interface Limit {
@@ -176,6 +184,11 @@ export interface Settings {
    * value is 30 seconds. The page hands it to the editor.
    */
   collabErrorAfterMs: number;
+  /**
+   * The address the collaboration server listens on (docs/operations/deployment.md, item 8: it is reached only
+   * through the proxy). The loopback address unless `COLLAB_HOST` names another, which must be an IP address.
+   */
+  collabHost: string;
   /**
    * FR-ED-41: how often the collaboration server reads again the session and
    * the access of every open connection, "at least once every 60 seconds".
@@ -611,6 +624,7 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     collabStoreDelayMs,
     collabStoreMaxMs,
     collabErrorAfterMs: wholeNumber(env, 'COLLAB_ERROR_AFTER_MS', 30000, 1),
+    collabHost: collabHost(env),
     collabRecheckMs,
     // At least 1: an idle period of 0 would abort every export before its first byte.
     exportIdleSeconds: wholeNumber(env, 'EXPORT_IDLE_SECONDS', 30, 1),

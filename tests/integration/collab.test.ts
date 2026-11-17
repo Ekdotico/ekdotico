@@ -10,6 +10,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect as tcp, type AddressInfo } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -521,6 +522,19 @@ describe('the founding-team gate at the handshake (FR-AU-83; register D114, A102
     expect((await handshake(team.port, { cookie: founder.cookie })).status).toBe(101);
     await db().user.update({ where: { id: founder.id }, data: { twoFactorEnabled: false } });
     await expectRefused(team.port, { cookie: founder.cookie }, 403);
+  });
+});
+
+// docs/operations/deployment.md, item 8: the process is reached only through the proxy, so it listens on the loopback
+// address and on no other. Weakening: the host argument of `listen` is dropped.
+const elsewhere = Object.values(networkInterfaces())
+  .flat()
+  .find((each) => each?.family === 'IPv4' && !each.internal)?.address;
+describe('the address the collaboration server listens on', () => {
+  it.skipIf(!elsewhere)('is the loopback address alone, not the other addresses of the machine', async () => {
+    const instance = await startServer();
+    expect((await fetch(`http://127.0.0.1:${instance.port}/collab/health`)).status).toBe(200);
+    await expect(fetch(`http://${elsewhere}:${instance.port}/collab/health`)).rejects.toThrow();
   });
 });
 
