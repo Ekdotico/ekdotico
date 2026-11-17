@@ -3,10 +3,10 @@
 // (the owner's decision R50 of 12 October 2026). The account is the session's and never the request's.
 //
 // In this order (the owner's answer to Q8, "authorisation before validation"): the origin (403), the session (401, or
-// the 403 of the founding-team gate), the body (415, 422), and the action (src/lib/account/transfer.ts), which
-// compares the identifiers with the documents it would offer under the locks of their rows (409). No password and no
-// code: FR-AU-58 asks for them at the confirmation of the deletion and of a clearing, and the API design page gives
-// this route the auth `A` alone.
+// the 403 of the founding-team gate), the body (415, 422), the password and, where two-factor authentication is on, the
+// code (422 where absent, 403 where wrong; FR-AU-92, D285; register Q82 point 6), and the action
+// (src/lib/account/transfer.ts), which compares the identifiers with the documents it would offer under the locks of
+// their rows (409) and asks again whether the password and the session stand.
 import { after } from 'next/server';
 import {
   confirmTransfer,
@@ -15,6 +15,7 @@ import {
 } from '../../../../../lib/account/transfer.ts';
 import { deliverBatch } from '../../../../../lib/account/transfer-email.ts';
 import { TRANSFER_MESSAGES } from '../../../../../lib/account/transfer-texts.ts';
+import { askPrompt, guardAnswer } from '../../../../../lib/account/prompt.ts';
 import { afterResponse, collecting } from '../../../../../lib/after-response.ts';
 import {
   fault,
@@ -31,7 +32,8 @@ export const dynamic = 'force-dynamic';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 // The body that holds the most documents one transfer names: 6,000 identifiers of 36 characters with their quotes and
-// commas, and the fields around them (the same bound as a clearing; docs/plan/slice-23.md, S23-7).
+// commas, and the fields around them, the password and the code included (the same bound as a clearing;
+// docs/plan/slice-23.md, S23-7).
 const MAX_BODY_BYTES = 256 * 1024;
 
 /** The request as exactly its named fields, or null. */
@@ -80,7 +82,15 @@ async function transfer(request: Request): Promise<Response> {
     } catch {
       body = null;
     }
-    const read = readRequest(body);
+    // FR-AU-92, D285; register Q82 point 6: the password, and the code where two-factor authentication is on, are
+    // asked for here, immediately before the action and every time; a request without them is refused whatever
+    // its session. A wrong one counts as a failed sign-in (src/lib/account/prompt.ts).
+    const prompt = await askPrompt(request, session, body, {
+      password: TRANSFER_MESSAGES.password,
+      passwordAndCode: TRANSFER_MESSAGES.passwordAndCode,
+    });
+    if (!prompt.ok) return prompt.response;
+    const read = readRequest(prompt.rest);
     if (!read.ok) {
       return errorResponse(
         422,
@@ -91,8 +101,11 @@ async function transfer(request: Request): Promise<Response> {
       );
     }
 
-    const result = await confirmTransfer(session, read);
+    const result = await confirmTransfer(session, read, undefined, prompt.guard);
     switch (result.outcome) {
+      case 'outrun':
+      case 'code_gone':
+        return await guardAnswer(session.userId, result);
       case 'ended':
       case 'not_found':
         return unauthenticated();
