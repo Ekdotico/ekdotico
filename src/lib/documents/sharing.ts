@@ -490,7 +490,7 @@ export function invitationEmail(
   return {
     to,
     subject: 'You have been invited to a document | Ekdotico',
-    text: `${sender} invited you to a document in Ekdotico as ${ROLE_NAME[role]}.${hidden} To accept or decline, open this link: ${link}. The link works once, and the invitation is open until ${dateText(expiresAt, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
+    text: `${sender} invited you to a document in Ekdotico as ${ROLE_NAME[role]}.${hidden} To accept or decline, open this link:\n${link}\nThe link works once, and the invitation is open until ${dateText(expiresAt, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
   };
 }
 
