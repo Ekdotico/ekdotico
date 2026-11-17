@@ -25,6 +25,7 @@ import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
 import { db } from '../db.ts';
 import { sendEmail, type EmailMessage } from '../email/index.ts';
+import { sendOrQueue } from '../email/queue.ts';
 import { faultOf } from '../fault.ts';
 import { takeLimitReturnable } from '../rate-limit.ts';
 import { securityLogIn } from '../security-log.ts';
@@ -430,11 +431,14 @@ export function invitationEmail(
   to: string,
   inviter: { name: string; email: string | null },
   role: OfferedRole,
-  token: string,
+  token: string | null,
   expiresAt: Date,
   pseudonym: string | null = null,
 ): EmailMessage {
-  const link = `${settings().appOrigin}/invitations/${token}`;
+  // D263: an invitation tried again has no token (it is stored only as a hash) and carries the link of its
+  // reminder, to the notification list.
+  const link =
+    token === null ? `${settings().appOrigin}/notifications` : `${settings().appOrigin}/invitations/${token}`;
   const sender = inviter.email ? `${inviter.name} (${inviter.email})` : inviter.name;
   const hidden =
     pseudonym === null
@@ -514,7 +518,8 @@ async function deliver(
     where: { id: inviterId },
     select: { name: true, email: true },
   });
-  await send(
+  await sendOrQueue(
+    send,
     invitationEmail(
       invitation.email,
       { name: inviter ? displayNameOf(inviter) : '', email: inviter?.email ?? null },
@@ -523,6 +528,7 @@ async function deliver(
       invitation.expiresAt,
       invitation.pseudonym,
     ),
+    { kind: 'INVITATION', subjectId: invitation.id, userId: account.id },
   );
 }
 

@@ -15,6 +15,7 @@ import { deliverUnsentBatches } from './account/transfer-email.ts';
 import { deliverUnsentOffers, expireOffers } from './documents/ownership.ts';
 import { deleteExpiredTokens } from './auth/password.ts';
 import { deleteEndedSessions } from './auth/session-list.ts';
+import { EMAIL_RETRY_INTERVAL_MS, retryEmails } from './email/retry.ts';
 import { faultOf } from './fault.ts';
 import { deleteExpiredImagesNow } from './images/deletion.ts';
 import { deleteExpiredSecurityLog } from './security-log.ts';
@@ -118,12 +119,26 @@ function deleteDocuments(): void {
   );
 }
 
+// NFR-RE-15, D263: the emails of a document that the service certainly did not take are tried again every 15
+// minutes, not each hour, so it has its own interval. Each attempt removes its row first (src/lib/email/retry.ts),
+// so two instances do not send one twice.
+function retryDocumentEmails(): void {
+  retryEmails().then(
+    () => {},
+    (error) => console.error(`timer failed: email-retry (${faultOf(error)})`),
+  );
+}
+
 export function startTimers(): void {
   if (started) return;
   started = true;
-  for (const run of [runTimers, deleteDocuments]) {
+  for (const [run, every] of [
+    [runTimers, HOUR_MS],
+    [deleteDocuments, HOUR_MS],
+    [retryDocumentEmails, EMAIL_RETRY_INTERVAL_MS],
+  ] as const) {
     run();
     // unref: a timer never keeps a stopping process alive.
-    setInterval(run, HOUR_MS).unref();
+    setInterval(run, every).unref();
   }
 }
