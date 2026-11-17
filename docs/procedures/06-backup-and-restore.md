@@ -5,7 +5,7 @@ Criterion: point-in-time recovery is switched on and a restore to a new cluster 
 ## Before you start
 
 - [ ] The release tested: ____ . The commit: ____ . Next repeat due (three months): ____ .
-- [ ] The choice for the image objects (NFR-RE-10, "the choice is recorded"): object versioning on the bucket, or a daily copy to a second bucket in FRA1: ____ . If versioning: the lifecycle rule that expires old versions after ____ days (deployment.md).
+- [ ] The choice for the image objects (NFR-RE-10, "the choice is recorded"): object versioning on the bucket, or a daily copy to a second bucket in AMS3: ____ . If versioning: the lifecycle rule that expires old versions after ____ days (deployment.md).
 - [ ] The bucket of the copies at Scaleway: region ____ (an EEA region); admits no public read and no listing: ____ ; versioning ____ ; the rule that expires copies after 4 weeks, versions included: ____ ; what Scaleway's documentation says about a credential that adds and cannot delete or overwrite (register row R27-2): ____ .
 - [ ] The key pair of the copies was made on a machine that is not a host of the deployment; the public file is on the host; the private file and its passphrase are held offline, in ____ places, by ____ .
 

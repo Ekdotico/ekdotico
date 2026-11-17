@@ -42,7 +42,7 @@ NODE_AUTH_TOKEN="$(gh auth token)" pnpm install
 
 ## Local services
 
-Development runs against local equivalents of the production services. Production is DigitalOcean Frankfurt and is provisioned by the owner.
+Development runs against local equivalents of the production services. Production is DigitalOcean in AMS3 (register D313) and is provisioned by the owner.
 
 Start PostgreSQL 17, Valkey, and the local object store of the images (SeaweedFS, a store of the S3 protocol; production is DigitalOcean Spaces, which the owner provisions):
 
