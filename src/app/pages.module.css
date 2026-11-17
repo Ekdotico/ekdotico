@@ -24,7 +24,7 @@
   padding: var(--sp-9) var(--gutter);
 }
 
-/* The rule runs the width of the screen; the row inside it is capped at the page's width and centred
+/* The rule runs the width of the screen; the row inside it is capped at the width of the page under it (the formula of .page, so the logo lines up with the content) and centred
    (modernisation A3). One row of the bar's height at every width: below the breakpoint of the package's
    drawer trigger (920px, which the package sets) the links are in the drawer. */
 .header {
@@ -37,7 +37,7 @@
   justify-content: space-between;
   gap: var(--sp-3);
   box-sizing: border-box;
-  max-inline-size: var(--page-w);
+  max-inline-size: calc(var(--content-w) + 2 * var(--gutter));
   min-block-size: var(--topbar-h);
   margin-inline: auto;
   padding-inline: var(--gutter);
@@ -69,7 +69,14 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--sp-4);
+  gap: var(--sp-2);
+  padding: var(--sp-9) var(--sp-2) var(--sp-4);
+}
+
+/* The package leaves the navigation inside its drawer to the application. A link takes the horizontal
+   padding of the package's button, so that Sign out and the links start at one edge. */
+.drawerNav a {
+  padding: var(--sp-2) var(--sp-4);
 }
 
 .fault {
