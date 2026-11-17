@@ -304,7 +304,9 @@ export function closeSlashPalette(editor: Editor): void {
  */
 export function openSlashPalette(editor: Editor): boolean {
   if (!editor.isEditable) return false;
-  editor.commands.focus();
+  // At once, and not by the library's `focus` command, which gives the focus a frame later (it waits for
+  // `requestAnimationFrame`) and scrolls: the palette is opened on this same turn, as a typed `/` opens it.
+  editor.view.focus();
   const { state } = editor;
   const at = state.selection.to;
   const $at = state.doc.resolve(at);
