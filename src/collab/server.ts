@@ -1201,9 +1201,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
           ...(context.deletedOn === null ? {} : { deletedOn: context.deletedOn }),
         }),
       );
+      // And who is present, the new connection among them (FR-ED-17). Last of the notices of the connection:
+      // the client shows "In sync" only once it has arrived.
       // D294: a connection made while the store of this document is failing is told so, as the others were.
+      // Checked after the connection is listed and confirmed, so that a store that failed meanwhile is told.
       if (retrying.has(documentName)) connection.sendStateless(storeNotice(false));
-      // And who is present, the new connection among them (FR-ED-17).
       tellPeople(connection.document);
       const at = ended.get(documentName);
       if (at === undefined || Date.now() - at > ENDED_MEMORY_MS) return;

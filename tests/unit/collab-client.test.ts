@@ -81,6 +81,7 @@ async function opened() {
   socket.receive(authenticated('read-write')); // the scope of the handshake (an Editor's)
   socket.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
   socket.receive(toFrame(8, 1)); // the acknowledgement of our second step
+  socket.receive(stateless(JSON.stringify({ kind: 'people', people: [] }))); // the last notice of a connection
   await vi.advanceTimersByTimeAsync(0);
   expect(connection.getState()).toMatchObject({ phase: 'connected', unsent: false });
   // The first step of the opening cost a token; the bucket is full again.
@@ -570,6 +571,33 @@ describe('what the server says of its store (D294)', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.getState().unstored).toBe(false);
     expect(syncStatus(connection.getState())).toEqual({ state: 'synced', label: 'In sync' });
+    connection.stop();
+  });
+
+  // Mutation S03: "In sync" shows between the synchronisation and the server's notices of the connection.
+  it('never shows "In sync" on a reconnection while the store is failing', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(JSON.stringify({ kind: 'store', stored: false })));
+    await vi.advanceTimersByTimeAsync(0);
+    socket.close();
+    await vi.advanceTimersByTimeAsync(0);
+    const labels: string[] = [];
+    connection.subscribe(() => labels.push(syncStatus(connection.getState()).label));
+    await vi.advanceTimersByTimeAsync(30_000);
+    const next = Socket.all.at(-1)!;
+    next.receive(new Uint8Array([9]).buffer);
+    next.receive(authenticated('read-write'));
+    next.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
+    next.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().phase).toBe('connected');
+    expect(syncStatus(connection.getState()).label).not.toBe('In sync');
+    // The server's notices of the connection: the store first, the people last.
+    next.receive(stateless(JSON.stringify({ kind: 'store', stored: false })));
+    next.receive(stateless(JSON.stringify({ kind: 'people', people: [] })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncStatus(connection.getState()).label).toContain('not yet saved');
+    expect(labels).not.toContain('In sync');
     connection.stop();
   });
 });

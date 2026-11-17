@@ -119,6 +119,8 @@ export interface ConnectionState {
    * succeeded and when the socket is lost (the next connection is told again where it still holds).
    */
   unstored?: boolean;
+  /** False from the synchronisation until the server's notices of the connection (its list of people is the last) have arrived: "In sync" is not shown before, since a failed store is told in them (D294). */
+  heard?: boolean;
   /**
    * F14-2: the role of this connection became one that cannot edit while the tab
    * held changes the server had not acknowledged. The server does not take them
@@ -434,7 +436,7 @@ export class DocumentConnection {
     const people = readPeopleNotice(payload);
     if (people) {
       // FR-ED-17: who has the document open. The server's list replaces the last.
-      this.set({ people });
+      this.set({ people, heard: true });
       return;
     }
     const notice = readRoleNotice(payload);
@@ -535,7 +537,7 @@ export class DocumentConnection {
   private connected(): void {
     this.clearTimers();
     this.refusals = 0;
-    this.set({ phase: 'connected', opened: true });
+    this.set({ phase: 'connected', opened: true, heard: false });
   }
 
   /** The server refused this document, or closed its connection, with a reason. */
@@ -674,7 +676,7 @@ const NOT_SAVED = 'This document is not yet saved. Ekdotico keeps trying to save
  * are lost if the tab is closed (FR-ED-18). `capacity`, `ended` and `held` are
  * shown by a statement and not by the indicator.
  */
-export function syncStatus({ phase, unsent, unstored }: ConnectionState): {
+export function syncStatus({ phase, unsent, unstored, heard }: ConnectionState): {
   state: 'synced' | 'syncing' | 'error';
   label: string;
 } {
@@ -684,6 +686,8 @@ export function syncStatus({ phase, unsent, unstored }: ConnectionState): {
       // D294: the server holds a change that a failed store has not saved; "In sync" would be untrue. The
       // sentence is new text, proposed to the owner (Expression Guidelines, system feedback).
       if (unstored) return { state: 'syncing', label: `Syncing. ${NOT_SAVED}${tail}` };
+      // Not "In sync" until the server's notices of this connection have arrived (they tell a failed store).
+      if (heard === false) return { state: 'syncing', label: 'Opening the document' };
       return unsent
         ? { state: 'syncing', label: `Syncing. ${UNSENT}` }
         : { state: 'synced', label: 'In sync' };

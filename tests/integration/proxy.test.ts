@@ -452,9 +452,26 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('content-security-policy')).toBe(
+      "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    );
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     const body = await response.text();
-    expect(body).toContain('<h1>Page not shown</h1>');
-    expect(body).toContain(`<p role="alert">${STATEMENT}</p>`);
+    expect(body).toBe(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page not shown | Ekdotico</title>
+</head>
+<body>
+<main>
+<h1>Page not shown</h1>
+<p role="alert">${STATEMENT}</p>
+</main>
+</body>
+</html>
+`);
     // Nothing a script, a style or a link would load, and nothing of the fault.
     expect(body).not.toMatch(/<script|<style|<link|<a |<img|<form|<iframe/i);
     expect(body).not.toMatch(/ECONN|secret|Error/);
@@ -479,6 +496,8 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
     for (const [method, path] of [
       ['POST', '/api/documents'],
       ['GET', '/api/documents'],
+      ['GET', '/api'],
+      ['GET', '/_next/data/x/y.json'],
     ] as const) {
       const answer = await call(method, path, { ...address(), ...signedIn.cookie, origin: ORIGIN });
       expect(answer.headers.get('content-type')).toContain('application/json');
