@@ -9,6 +9,7 @@ import { createAccount, load, ORIGIN, prepare } from './identity.ts';
 
 const database = prepare('emailretry');
 const { auth, db, valkey } = await load();
+const { dateText } = await import('../../src/lib/date-text.ts');
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
 const { createInvitations, deliverInvitations } = await import('../../src/lib/documents/sharing.ts');
 const { remindInvitations } = await import('../../src/lib/documents/invitation-timers.ts');
@@ -141,7 +142,10 @@ describe('an email that the service certainly did not take is tried again, and d
     expect(mail.to).toBe(guest.email);
     expect(mail.subject).toBe('You have been invited to a document | Ekdotico');
     // Its own link is stored only as a hash: the link is the notification list, as the reminder's is.
-    expect(mail.text).toContain(`open this link:\n${ORIGIN}/notifications\nThe link works once`);
+    const expiry = (await db().documentInvitation.findUniqueOrThrow({ where: { id: one.id } })).expiresAt;
+    expect(mail.text).toBe(
+      `A Person (${owner.email}) invited you to a document in Ekdotico as Editor. To accept or decline, open this link:\n${ORIGIN}/notifications\nThe link works once, and the invitation is open until ${dateText(expiry, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
+    );
     expect(mail.text).not.toContain('/invitations/');
     expect(mail.text).not.toContain(one.token);
     expect(await rows()).toHaveLength(0);
