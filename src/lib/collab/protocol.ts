@@ -256,6 +256,30 @@ export function readRoleNotice(payload: string): RoleNotice | null {
   return { role: role as DocumentRole, canEdit, deletedOn };
 }
 
+/**
+ * FR-ED-23, NFR-RE-07 (register D294): whether the collaboration server holds a change it received and could
+ * not store. `stored: false` is told when a store fails and to a connection made while it still does;
+ * `stored: true` when a store has succeeded. A stateless message from the server alone, as the notices above.
+ */
+export function storeNotice(stored: boolean): string {
+  return JSON.stringify({ kind: 'store', stored });
+}
+
+/** The notice of `storeNotice`, or null for anything else, read field by field. */
+export function readStoreNotice(payload: string): { stored: boolean } | null {
+  let read: unknown;
+  try {
+    read = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (typeof read !== 'object' || read === null || Array.isArray(read)) return null;
+  const { kind, stored, ...rest } = read as Record<string, unknown>;
+  return kind === 'store' && Object.keys(rest).length === 0 && typeof stored === 'boolean'
+    ? { stored }
+    : null;
+}
+
 /** The step of a synchronisation a message carries (y-protocols `sync`): 0, 1 and 2. */
 export type SyncKind = 'step1' | 'step2' | 'update';
 

@@ -18,7 +18,7 @@ import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { newNonce, NONCE_HEADER, pagePolicy } from './lib/csp.ts';
 import { faultOf } from './lib/fault.ts';
-import { errorResponse, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
+import { errorResponse, faultPage, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
@@ -304,6 +304,14 @@ export async function proxy(request: NextRequest): Promise<Response> {
     // of the fault. The log holds the stage it was at, and the class and code
     // of the fault, and nothing else (NFR-SE-19).
     console.error(`proxy: request refused at ${progress.stage} (${faultOf(error)})`);
-    return errorResponse(500, 'internal', MESSAGES.internal);
+    // D293: a request for a page that only reads is answered with a page, which a person can read, and every
+    // other request, an API route and a file of the build among them, with the JSON of the one error body.
+    const { pathname } = request.nextUrl;
+    const page =
+      onlyReads(request.method) &&
+      !pathname.startsWith('/api/') &&
+      pathname !== '/api' &&
+      !pathname.startsWith('/_next/');
+    return page ? faultPage() : errorResponse(500, 'internal', MESSAGES.internal);
   }
 }

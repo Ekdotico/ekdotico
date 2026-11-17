@@ -21,7 +21,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ALL_PERMISSIONS, changeable, heldByDefault, ROLE_AT, symbolOf } from '../permission-table.ts';
-import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
+import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, prepare, signIn } from './identity.ts';
 
 // `after` of Next.js exists only inside a request of the framework. The invitation routes leave
 // their email to it; nothing it is given runs here, and so no email is written.
@@ -255,7 +255,10 @@ const ROUTES: {
         where: { documentId: id, userId: people4.editor.id },
       });
       return ownership.POST(
-        request('POST', `/api/documents/${id}/ownership-offer`, cookie, { collaboratorId: editor.id }),
+        request('POST', `/api/documents/${id}/ownership-offer`, cookie, {
+          collaboratorId: editor.id,
+          password: PASSWORD,
+        }),
         at({ id }),
       );
     },

@@ -66,6 +66,7 @@ import {
   permissionsNotice,
   REFUSAL,
   roleNotice,
+  storeNotice,
   type Person,
   type Refusal,
 } from '../lib/collab/protocol.ts';
@@ -685,6 +686,18 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
     }
   }
 
+  /**
+   * FR-ED-23, NFR-RE-07 (D294): tells every open connection of the document whether the server's store of it
+   * has failed (`storeNotice`). Never throws: a notice that cannot be sent changes nothing that is stored.
+   */
+  function tellStore(document: Document, stored: boolean): void {
+    try {
+      for (const to of document.getConnections()) to.sendStateless(storeNotice(stored));
+    } catch (error) {
+      console.error(`collab: store state not told (${faultOf(error)})`);
+    }
+  }
+
   let rechecking = false;
   /**
    * One run at a time: where a run outlasts its period (a slow database), the
@@ -1188,7 +1201,11 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
           ...(context.deletedOn === null ? {} : { deletedOn: context.deletedOn }),
         }),
       );
-      // And who is present, the new connection among them (FR-ED-17).
+      // And who is present, the new connection among them (FR-ED-17). Last of the notices of the connection:
+      // the client shows "In sync" only once it has arrived.
+      // D294: a connection made while the store of this document is failing is told so, as the others were.
+      // Checked after the connection is listed and confirmed, so that a store that failed meanwhile is told.
+      if (retrying.has(documentName)) connection.sendStateless(storeNotice(false));
       tellPeople(connection.document);
       const at = ended.get(documentName);
       if (at === undefined || Date.now() - at > ENDED_MEMORY_MS) return;
@@ -1422,6 +1439,8 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
         fault('store', error);
         const state = { skipped: false };
         retrying.set(documentName, state);
+        // D294: the writers are told that what the server holds is not yet stored.
+        tellStore(document, false);
         void retryStore(documentName, document, state);
       }
     },
@@ -1457,6 +1476,7 @@ export function createCollabServer(store: ServerSettings, options: CollabOptions
           await storeNow(storeState, documentName, document);
         } while (state.skipped);
         console.error('collab: store recovered');
+        tellStore(document, true);
         break;
       } catch {
         if (stopping) whileStopping++;
