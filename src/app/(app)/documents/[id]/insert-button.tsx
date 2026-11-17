@@ -8,7 +8,7 @@
 // text block, empty or not, as the sketch has it. Elsewhere it is hidden with `visibility`, never removed from
 // the page.
 
-import { useEffect, useLayoutEffect, useState, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 import { useEditorState, type Editor } from '@tiptap/react';
 import { Button, Tooltip } from '@ekdotico/domico/components';
 import { PlusIcon } from '@ekdotico/domico/icons';
@@ -42,39 +42,41 @@ export function InsertButton({
       };
     },
   });
-  const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
-  // Whether it has been placed before, so that it glides from one place to the next and does not fly in from
-  // wherever it last was after being hidden.
-  const [settled, setSettled] = useState(false);
+  const control = useRef<HTMLDivElement>(null);
 
-  // The right edge of the cursor and the middle of its line, in the surface's own coordinates. The control is
-  // absolute, so nothing moves with it.
+  // The right edge of the cursor and the middle of its line, in the surface's own coordinates, written to
+  // the element itself: it is a position that follows an external system (the editor's layout), and a state
+  // would render it twice. The control is absolute, so nothing moves with it. `data-settled` is false until
+  // it has been placed once since it was hidden, so that it glides from one place to the next and does not
+  // fly in from wherever it last was.
   useLayoutEffect(() => {
+    const element = control.current;
+    if (!element) return;
     if (!cursor.atEnd) {
-      setPlace(null);
+      element.style.visibility = 'hidden';
+      element.dataset.settled = 'false';
       return;
     }
     const put = () => {
       if (!surface.current) return;
       const line = editor.view.coordsAtPos(Math.min(cursor.head, editor.state.doc.content.size));
       const box = surface.current.getBoundingClientRect();
-      setPlace({ left: line.right - box.left, top: (line.top + line.bottom) / 2 - box.top });
+      element.style.left = `${line.right - box.left}px`;
+      element.style.top = `${(line.top + line.bottom) / 2 - box.top}px`;
+      element.style.visibility = 'visible';
     };
     put();
+    const settle = requestAnimationFrame(() => (element.dataset.settled = 'true'));
     // The text wraps anew at another width, and the line moves with it.
     window.addEventListener('resize', put);
-    return () => window.removeEventListener('resize', put);
+    return () => {
+      cancelAnimationFrame(settle);
+      window.removeEventListener('resize', put);
+    };
   }, [editor, surface, cursor.atEnd, cursor.head, cursor.size]);
 
-  const placed = place !== null;
-  useEffect(() => setSettled(placed), [placed]);
-
   return (
-    <div
-      className={styles.insert}
-      data-settled={settled}
-      style={place ? { left: place.left, top: place.top } : { visibility: 'hidden' }}
-    >
+    <div ref={control} className={styles.insert} data-settled="false" style={{ visibility: 'hidden' }}>
       <Tooltip content={INSERT_NAME} placement="top">
         <Button
           variant="secondary"
