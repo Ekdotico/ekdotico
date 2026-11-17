@@ -3,7 +3,20 @@
 // 9 October 2026. Every character that matters is written by its code point,
 // so that no editor and no formatter can change what is tested.
 import { describe, expect, it } from 'vitest';
-import { acceptedAddress, acceptedName, addressSpelling, enteredAddress } from '../../src/lib/field-text.ts';
+import {
+  acceptedAddress,
+  acceptedName,
+  addressSpelling,
+  enteredAddress,
+  NAME_HINT,
+} from '../../src/lib/field-text.ts';
+
+// F11 (ui-t4-name): the hint under the Name field at sign-up, pinned whole.
+it('words the hint under the Name field as the owner chose', () => {
+  expect(NAME_HINT).toBe(
+    '1 to 100 characters. It needs at least one character that shows; spaces alone are not a name.',
+  );
+});
 
 const ZWNJ = '\u{200c}';
 const ZWJ = '\u{200d}';

@@ -26,6 +26,7 @@ import { ROLE_NAME, type DocumentRole } from '../../../../lib/documents/permissi
 import pageStyles from '../../../pages.module.css';
 import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
 import styles from './editor.module.css';
+import { readerLine } from './reader-line.ts';
 import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { IMAGE_TEXT } from './images.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
@@ -107,11 +108,6 @@ const HELD: Record<Held, string> = {
     Object.entries(LIMIT_REFUSAL).map(([limit, reason]) => [reason, heldTitle(limit as Limit)]),
   ) as Record<(typeof LIMIT_REFUSAL)[Limit], string>),
 };
-// F10 (ui-audit 2026-11-17): where a browser that cannot edit would show the keys of a writer, one
-// neutral line says that the text is for reading and names the role. For the owner's approval; the
-// role's name is the one `ROLE_NAME` writes.
-const READER_LINE = (role: DocumentRole) =>
-  `You can read this document. Your role on it is ${ROLE_NAME[role]}.`;
 // FR-ED-40 (b): the role of this connection changed and it stays open, and the
 // editor "states the new role". No words are given; for the owner's approval
 // (docs/plan/slice-14.md, section 6). The role's name is the one `ROLE_NAME` writes.
@@ -335,7 +331,7 @@ function Text({
   return (
     <Editable.Provider value={editable}>
       {reads ? (
-        <p className={pageStyles.meta}>{READER_LINE(role)}</p>
+        <p className={pageStyles.meta}>{readerLine(role)}</p>
       ) : (
         <p id={keys} className={pageStyles.meta}>
           {KEYS}
