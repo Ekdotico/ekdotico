@@ -10,9 +10,13 @@ import { acceptedAddress } from './field-text.ts';
  */
 function collabHost(env: Record<string, string | undefined>): string {
   const host = env.COLLAB_HOST || '127.0.0.1';
-  if (!isIP(host) || host === '0.0.0.0' || /^[0:]+$/.test(host)) {
+  // An IPv6 address in its one canonical form, whatever its spelling: `::`, `0:0:0:0:0:0:0:0`, and the
+  // IPv4-mapped `::ffff:0.0.0.0` (which is `::ffff:0:0`) are all the unspecified address. A zone (`%eth0`) is dropped.
+  const bare = host.split('%')[0]!;
+  const canonical = isIP(bare) === 6 ? new URL(`http://[${bare}]`).hostname : bare;
+  if (!isIP(bare) || ['0.0.0.0', '[::]', '[::ffff:0:0]'].includes(canonical)) {
     throw new Error(
-      'COLLAB_HOST must be a specific IP address, such as 127.0.0.1; a name, 0.0.0.0 and :: would listen on every interface.',
+      'COLLAB_HOST must be a specific IP address, such as 127.0.0.1; a name, 0.0.0.0, :: and ::ffff:0.0.0.0 would listen on every interface. The web application and the collaboration server both read it, so a bad value stops both.',
     );
   }
   return host;

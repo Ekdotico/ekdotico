@@ -599,7 +599,22 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(loadSettings({ ...env, COLLAB_HOST: '::1' }).collabHost).toBe('::1');
     expect(loadSettings({ ...env, COLLAB_HOST: '' }).collabHost).toBe('127.0.0.1');
     // 0.0.0.0 and :: are every interface: one line of configuration would bring the exposure back.
-    for (const bad of ['localhost', 'example.com', '10.0.0', '0.0.0.0/0', '0.0.0.0', '::', '0:0:0:0:0:0:0:0'])
+    for (const bad of [
+      'localhost',
+      'example.com',
+      '10.0.0',
+      '0.0.0.0/0',
+      '0.0.0.0',
+      '::',
+      '0:0:0:0:0:0:0:0',
+      '::0',
+      '::%lo0',
+      '::ffff:0.0.0.0',
+      '::FFFF:0.0.0.0',
+      '::ffff:0:0',
+      '0:0:0:0:0:ffff:0:0',
+      '0000:0000:0000:0000:0000:ffff:0000:0000',
+    ])
       expect(() => loadSettings({ ...env, COLLAB_HOST: bad })).toThrow(/COLLAB_HOST/);
   });
 
