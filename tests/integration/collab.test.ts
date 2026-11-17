@@ -3002,6 +3002,11 @@ describe('a store that fails, tried again (NFR-RE-07)', () => {
         const id = await documentOf(owner.id);
         const client = connect(local.port, owner.cookie);
         const { synced, changes, provider } = client.open(id);
+        const told: unknown[] = [];
+        provider.on('stateless', ({ payload }: { payload: string }) => {
+          const notice = JSON.parse(payload) as { kind: string };
+          if (notice.kind === 'store') told.push(notice);
+        });
         await synced;
 
         const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -3034,6 +3039,9 @@ describe('a store that fails, tried again (NFR-RE-07)', () => {
         expect(gaps[1]).toBeLessThan(2600);
         expect(errors.mock.calls).toEqual([['collab: store failed (Error)']]);
 
+        // D294: the writer was told that the store failed (FR-ED-23), once.
+        expect(told).toEqual([{ kind: 'store', stored: false }]);
+
         // The last client leaves: the document stays in memory, since nothing else holds its changes.
         await until(() => provider.unsyncedChanges === 0);
         client.socket.destroy();
@@ -3042,12 +3050,28 @@ describe('a store that fails, tried again (NFR-RE-07)', () => {
         expect(local.hocuspocus.documents.has(id)).toBe(true);
         expect(await stored(id)).toBeNull();
 
+        // D294: a connection made while the store still fails is told so as it joins, and is told when a store succeeds.
+        const second = connect(local.port, owner.cookie);
+        const joining = second.open(id);
+        const joined: unknown[] = [];
+        joining.provider.on('stateless', ({ payload }: { payload: string }) => {
+          const notice = JSON.parse(payload) as { kind: string };
+          if (notice.kind === 'store') joined.push(notice);
+        });
+        await joining.synced;
+        await until(() => joined.length === 1);
+        expect(joined).toEqual([{ kind: 'store', stored: false }]);
+
         // The database answers again: the next attempt stores the state as it is now, says so, and the document is let go.
         failing = false;
         await until(() => errors.mock.calls.length === 2, 6000);
         expect(errors.mock.calls[1]).toEqual(['collab: store recovered']);
+        await until(() => joined.length === 2);
+        expect(joined[1]).toEqual({ kind: 'store', stored: true });
         expect(attempts[3]! - attempts[2]!).toBeGreaterThanOrEqual(3950);
         expect(await stored(id)).toHaveLength(made);
+        // Let go once nobody holds it.
+        second.socket.destroy();
         await until(() => !local.hocuspocus.documents.has(id));
       } finally {
         await local.stop();

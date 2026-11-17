@@ -5,6 +5,7 @@
 // is `sharingOf`'s, by the caller's role, and which controls it offers are the
 // rules of FR-ED-44 (b), which the routes ask again.
 import { notFound } from 'next/navigation';
+import { promptAccount } from '../../../../../lib/account/prompt.ts';
 import { authorise } from '../../../../../lib/documents/access.ts';
 import { mayAct, refusalOn } from '../../../../../lib/documents/collaborator-rules.ts';
 import { openOfferOf } from '../../../../../lib/documents/ownership.ts';
@@ -61,9 +62,14 @@ export default async function Sharing({ params }: { params: Promise<{ id: string
   // FR-ED-47: the Owner alone is offered the transfer (`document.ownership.transfer` is fixed to the
   // Owner); the server asks again, under the lock. The Editors are those the people list holds.
   const open = role === 'owner' ? await reading(() => openOfferOf(document.id)) : null;
+  // FR-ED-47, D285: the offer asks for the password, and for a code where two-factor authentication is on; the
+  // route reads the account again and refuses a request that does not match.
+  const prompt = role === 'owner' ? await reading(() => promptAccount(userId)) : null;
   const transfer =
-    role === 'owner' ? (
+    role === 'owner' && prompt ? (
       <TransferOwnership
+        email={prompt.email}
+        secondFactor={prompt.secondFactor}
         documentId={document.id}
         editors={sharing.collaborators.filter(({ role: held }) => held === 'editor')}
         offer={open ? { toName: open.toName, expiresAt: open.expiresAt.toISOString() } : null}

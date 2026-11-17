@@ -24,7 +24,7 @@ const RESET_REQUESTED =
 // FR-AU-87 (c), around the link, and (d).
 const RESET_EMAIL = (link: string) =>
   `Subject: Set a new password for Ekdotico\n` +
-  `[^]*\n\nYou asked to set a new password for your Ekdotico account. To set it, open this link: ${link}. The link works once and is valid for 1 hour. If you did not ask for this, you can ignore this email, and your password stays as it is.$`;
+  `[^]*\n\nYou asked to set a new password for your Ekdotico account. To set it, open this link:\n${link}\nThe link works once and is valid for 1 hour. If you did not ask for this, you can ignore this email, and your password stays as it is.$`;
 const NOTICE_EMAIL =
   /Subject: The password of your Ekdotico account was changed\n[^]*\n\nThe password of your Ekdotico account was changed\. If you did not change it, set a new password from the sign-in page\.$/;
 // The application's own words (the owner's answer to Q6 of the plan).

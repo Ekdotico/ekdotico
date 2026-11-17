@@ -26,7 +26,7 @@ async function enter(page: Page, person: Person = newPerson()) {
 
 /** The Owner's document with an Editor and a Viewer, each in a context of their own, all signed in and accepted. */
 async function shared(page: Page, browser: import('@playwright/test').Browser) {
-  await enter(page, { ...newPerson(), name: 'Ada Owner' });
+  const ada = await enter(page, { ...newPerson(), name: 'Ada Owner' });
   const id = await shareNew(page);
   const bea = { ...newPerson(), name: 'Bea Editor' };
   const cy = { ...newPerson(), name: 'Cy Viewer' };
@@ -42,13 +42,14 @@ async function shared(page: Page, browser: import('@playwright/test').Browser) {
   await accept(his, cy.email, id);
   await page.reload();
   await expect(page.getByText('3 of 10 people')).toBeVisible();
-  return { id, theirs, his, bea, cy, contexts: [beaContext, cyContext] };
+  return { id, theirs, his, bea, cy, ada, contexts: [beaContext, cyContext] };
 }
 
-/** The Owner chooses the Editor and confirms the offer in its dialog. */
-async function offerFromTheScreen(page: Page) {
+/** The Owner chooses the Editor and confirms the offer in its dialog, with the password it asks for (FR-ED-47, D285). */
+async function offerFromTheScreen(page: Page, owner: Person) {
   await page.getByRole('button', { name: 'Offer ownership' }).click();
   const dialog = page.getByRole('dialog', { name: 'Offer ownership' });
+  await dialog.getByLabel('Current password').fill(owner.password);
   await dialog.getByRole('button', { name: 'Offer ownership' }).click();
   await expect(dialog).toBeHidden();
 }
@@ -62,7 +63,7 @@ test('the Owner offers ownership from the sharing settings, the Editor declines,
   browser,
 }) => {
   test.slow();
-  const { id, theirs, his, bea, contexts } = await shared(page, browser);
+  const { id, theirs, his, bea, ada, contexts } = await shared(page, browser);
 
   // The section, to the Owner: the sentence, the Editors alone to choose from, and the control.
   await expect(section(page)).toBeVisible();
@@ -92,7 +93,7 @@ test('the Owner offers ownership from the sharing settings, the Editor declines,
   await expect(theirs.getByText(OFFERED)).toHaveCount(0);
 
   // Offered: said, with focus on what was said (WCAG 2.4.3), and the open offer in place of the form.
-  await offerFromTheScreen(page);
+  await offerFromTheScreen(page, ada);
   await expect(said(page, 'Ownership offered to Bea Editor.')).toBeFocused();
   await expect(page.getByText('Ownership of this document is offered to Bea Editor.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Withdraw offer' })).toBeVisible();
@@ -114,9 +115,10 @@ test('the Owner offers ownership from the sharing settings, the Editor declines,
   // The email: the fixed text, with the notification list as its link, and no title.
   const { text } = await mailFor(bea.email, /An offer of ownership of a document in Ekdotico/);
   expect(text).toContain(
-    'Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico: ',
+    'Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico:\n',
   );
-  expect(text).toContain('/notifications. The offer is open until ');
+  // D307: the link stands on a line of its own.
+  expect(text).toMatch(/Ekdotico:\n[^\s]+\/notifications\nThe offer is open until /);
   expect(text).toContain(
     'If you accept, you become the Owner of the document and Ada Owner becomes an Editor.',
   );
@@ -151,7 +153,7 @@ test('the Owner offers ownership from the sharing settings, the Editor declines,
   await expect(page.getByText('Withdraw offer')).toHaveCount(0);
 
   // Offered again, and accepted from the notification: the document is the Editor's, and goes to its page.
-  await offerFromTheScreen(page);
+  await offerFromTheScreen(page, ada);
   await expect(said(page, 'Ownership offered to Bea Editor.')).toBeVisible();
   await theirs.goto('/notifications');
   const secondPath = (await theirs.getByRole('link', { name: 'Open the offer' }).getAttribute('href'))!;
@@ -195,8 +197,8 @@ test('the Owner withdraws the offer, and the Editor’s link and notification ar
   browser,
 }) => {
   test.slow();
-  const { theirs, contexts } = await shared(page, browser);
-  await offerFromTheScreen(page);
+  const { theirs, ada, contexts } = await shared(page, browser);
+  await offerFromTheScreen(page, ada);
   await expect(said(page, 'Ownership offered to Bea Editor.')).toBeVisible();
   await theirs.goto('/notifications');
   const offerPath = (await theirs.getByRole('link', { name: 'Open the offer' }).getAttribute('href'))!;
@@ -225,8 +227,8 @@ test('an Editor who is made a Viewer is offered nothing, and the offer is over',
   browser,
 }) => {
   test.slow();
-  const { id, theirs, contexts } = await shared(page, browser);
-  await offerFromTheScreen(page);
+  const { id, theirs, ada, contexts } = await shared(page, browser);
+  await offerFromTheScreen(page, ada);
   await expect(said(page, 'Ownership offered to Bea Editor.')).toBeVisible();
   await theirs.goto('/notifications');
   const offerPath = (await theirs.getByRole('link', { name: 'Open the offer' }).getAttribute('href'))!;

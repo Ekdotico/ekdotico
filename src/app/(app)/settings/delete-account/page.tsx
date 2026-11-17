@@ -73,6 +73,8 @@ export default async function DeleteAccountPage() {
               longest={transfer.longest}
               people={transfer.people}
               days={settings().ownershipOfferDays}
+              email={user?.email ?? ''}
+              secondFactor={user?.twoFactorEnabled === true}
             />
             <Clearing
               all={{

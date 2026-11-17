@@ -23,6 +23,7 @@ import { publishCollabEvent } from '../collab/events.ts';
 import { db } from '../db.ts';
 import { securityLogIn } from '../security-log.ts';
 import { roleUnderLock } from './collaborators.ts';
+import { revokeInvitationsOfLostRight } from './sharing.ts';
 import { applyRequest, sameSet, wholeSet, type PermissionRequest } from './permission-rules.ts';
 import { holds, type PermissionSet } from './permissions.ts';
 
@@ -52,6 +53,8 @@ export async function changePermissionSet(
     if (sameSet(before, next)) return { outcome: 'unchanged', set: before, defaults };
     await tx.document.update({ where: { id: documentId }, data: { permissionSet: next } });
     await securityLogIn(tx, { kind: 'permission_set_changed', userId: callerId, documentId });
+    // FR-ED-37, D300: a role that stops holding the permission to invite loses its senders' pending invitations, here.
+    await revokeInvitationsOfLostRight(tx, documentId, new Date());
     return { outcome: 'changed', set: next, defaults };
   });
   // Only a change that was made is told: after its commit, never before.

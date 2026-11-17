@@ -48,7 +48,7 @@ export function reminderEmail(
   return {
     to,
     subject: 'Your invitation to a document in Ekdotico expires soon',
-    text: `${sender} invited you to a document in Ekdotico as ${role}. The invitation expires on ${dateText(expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico: ${link}.`,
+    text: `${sender} invited you to a document in Ekdotico as ${role}. The invitation expires on ${dateText(expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico:\n${link}`,
   };
 }
 

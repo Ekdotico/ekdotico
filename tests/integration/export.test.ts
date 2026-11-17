@@ -392,10 +392,10 @@ describe('the archive (FR-EX-36)', () => {
   it('holds each image as the store holds it, named by its order in the document, and refers to it by that path', async () => {
     const owner = await person();
     const first = png(5000, 1);
-    const second = Buffer.from('GIF89a-second'.padEnd(3000, 'x'));
+    const second = Buffer.from('RIFF-second'.padEnd(3000, 'x'));
     const id = await documentFor(owner);
     const one1 = await stored(owner, id, first);
-    const two = await stored(owner, id, second, 'image/gif');
+    const two = await stored(owner, id, second, 'image/webp');
     const jpeg = await stored(owner, id, Buffer.alloc(100, 9), 'image/jpeg');
     const webp = await stored(owner, id, Buffer.alloc(10, 3), 'image/webp');
     const state = stateOf(
@@ -410,7 +410,7 @@ describe('the archive (FR-EX-36)', () => {
     const entries = await archiveOf(await post(id, owner.cookie));
     expect(entries.map((each) => each.name)).toEqual([
       'A document.md',
-      'images/001.gif',
+      'images/001.webp',
       'images/002.png',
       'images/003.jpg',
       'images/004.webp',
@@ -419,9 +419,9 @@ describe('the archive (FR-EX-36)', () => {
     expect(entries[2]!.bytes.equals(first)).toBe(true);
     expect(entries[3]!.bytes.length).toBe(100);
     const file = entries[0]!.bytes.toString();
-    expect(file).toContain('![second image](images/001.gif)\n\nFigure 1');
+    expect(file).toContain('![second image](images/001.webp)\n\nFigure 1');
     expect(file).toContain('![first image](images/002.png)');
-    expect(file).toContain('![second again](images/001.gif)');
+    expect(file).toContain('![second again](images/001.webp)');
     expect(file).toContain('![jpeg](images/003.jpg)');
     expect(file).toContain('![webp](images/004.webp)');
     // Each object is read once, however many blocks name it.

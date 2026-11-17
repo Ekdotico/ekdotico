@@ -1,18 +1,15 @@
 // The removal of metadata from an image (NFR-SE-18: "The location data and every
 // other piece of embedded metadata of an image are removed before it is
-// stored"; the owner's answer to Q13), for each of the four formats: each kind
+// stored"; the owner's answer to Q13), for each of the three formats: each kind
 // of metadata that the format can carry has a file here, and the output is read
 // back. Each test names what it checks and so what breaking the rule fails.
 import { describe, expect, it } from 'vitest';
-import { removeGifMetadata } from '../../src/lib/images/metadata/gif.ts';
 import { removeJpegMetadata } from '../../src/lib/images/metadata/jpeg.ts';
 import { orientationOf, orientationTiff } from '../../src/lib/images/metadata/orientation.ts';
 import { removePngMetadata } from '../../src/lib/images/metadata/png.ts';
 import { REMOVAL_POLICY, type RemovalPolicy } from '../../src/lib/images/metadata/policy.ts';
 import { removeWebpMetadata } from '../../src/lib/images/metadata/webp.ts';
 import {
-  GIF_CONTROL,
-  GIF_FRAME,
   GPS_MARK,
   JFIF_THUMBNAIL,
   JPEG_FRAME,
@@ -23,11 +20,6 @@ import {
   adobeSegment,
   exifSegment,
   exifTiff,
-  gif,
-  gifComment,
-  gifLoop,
-  gifPlainText,
-  gifXmp,
   iccSegment,
   jfif,
   jpeg,
@@ -177,20 +169,32 @@ describe('a PNG file', () => {
     ).toEqual(['IHDR', 'IDAT', 'IEND']);
   });
 
-  it('keeps the chunks of an animation and of a palette and of transparency', () => {
-    // Of the lengths the format gives them: a palette of one entry, one colour for transparency (the image is
-    // truecolour), and the two controls of an animation.
-    const picture = [
-      pngChunk('PLTE', Buffer.alloc(3, 1)),
-      pngChunk('tRNS', Buffer.alloc(6, 1)),
+  it('keeps the chunks of a palette and of transparency', () => {
+    // Of the lengths the format gives them: a palette of one entry, and one colour for transparency (the image is
+    // truecolour).
+    const picture = [pngChunk('PLTE', Buffer.alloc(3, 1)), pngChunk('tRNS', Buffer.alloc(6, 1))];
+    expect(pngTypes(removePngMetadata(png({ before: picture }), NONE)!)).toEqual([
+      'IHDR',
+      'PLTE',
+      'tRNS',
+      'IDAT',
+      'IEND',
+    ]);
+  });
+
+  // Review of PR 80 (round 2), D309, D310: an animated PNG is refused before this runs; a control chunk that is left
+  // over (an acTL after the picture is no animation) is dropped, wherever it stands. Weakening: they are on the list
+  // of what is kept.
+  it('drops acTL, fcTL and fdAT wherever they appear', () => {
+    const controls = [
       pngChunk('acTL', Buffer.alloc(8, 1)),
       pngChunk('fcTL', Buffer.alloc(26, 1)),
+      pngChunk('fdAT', Buffer.from([0, 0, 0, 1, 9])),
     ];
-    const output = removePngMetadata(
-      png({ before: picture, after: [pngChunk('fdAT', Buffer.from([0, 0, 0, 1, 9]))] }),
-      NONE,
-    )!;
-    expect(pngTypes(output)).toEqual(['IHDR', 'PLTE', 'tRNS', 'acTL', 'fcTL', 'IDAT', 'fdAT', 'IEND']);
+    for (const where of ['before', 'after'] as const) {
+      const types = pngTypes(removePngMetadata(png({ [where]: controls }), NONE)!);
+      expect(types, where).toEqual(['IHDR', 'IDAT', 'IEND']);
+    }
   });
 
   // The review of pull request 52 (S4): a part whose length the format fixes keeps no more than that, and a
@@ -259,9 +263,12 @@ describe('a PNG file', () => {
       for (const colourType of [4, 6]) expect(kept(colourType, 6), `type ${colourType}`).toBe(false);
     });
 
-    it('refuses the controls of an animation that are not their length, and drops a colour chunk that is not', () => {
-      expect(removePngMetadata(png({ before: [pngChunk('acTL', HIDDEN)] }), NONE)).toBeNull();
-      expect(removePngMetadata(png({ before: [pngChunk('fcTL', HIDDEN)] }), NONE)).toBeNull();
+    it('drops a colour chunk that is not its length, and the controls of an animation whatever their length', () => {
+      for (const type of ['acTL', 'fcTL']) {
+        const output = removePngMetadata(png({ before: [pngChunk(type, HIDDEN)] }), NONE)!;
+        expect(hides(output), type).toBe(false);
+        expect(pngTypes(output), type).not.toContain(type);
+      }
       for (const type of ['gAMA', 'cHRM', 'sRGB', 'cICP']) {
         const output = removePngMetadata(png({ before: [pngChunk(type, HIDDEN)] }), KEEP_BOTH)!;
         expect(hides(output), type).toBe(false);
@@ -481,95 +488,6 @@ describe('a JPEG file', () => {
     expect(removeJpegMetadata(bytes, KEEP_BOTH)).toBeNull();
   });
 });
-
-describe('a GIF file', () => {
-  const metadata: [string, Buffer][] = [
-    ['a comment', gifComment()],
-    ['an application extension that is not the loop count (where XMP is)', gifXmp()],
-    ['an application extension of another application', gifExtension2()],
-  ];
-  function gifExtension2(): Buffer {
-    return Buffer.concat([
-      Buffer.from([0x21, 0xff, 11]),
-      Buffer.from('ICCRGBG1012', 'latin1'),
-      Buffer.from([SECRET.length]),
-      Buffer.from(SECRET, 'latin1'),
-      Buffer.from([0]),
-    ]);
-  }
-
-  it.each(metadata)('loses %s, and keeps the picture', (name, block) => {
-    for (const where of ['before', 'after'] as const) {
-      const output = removeGifMetadata(gif({ [where]: [block] }), NONE)!;
-      expect(output, name).not.toBeNull();
-      expect(leaks(output)).toBe(false);
-      // What is left is what a GIF without it would be: byte for byte.
-      expect(output.equals(gif())).toBe(true);
-    }
-  });
-
-  it('loses a plain text extension, and the graphic control that waits for it, so the next frame is not given it', () => {
-    // The frame has no control of its own, so one that is left over would be given to it.
-    const output = removeGifMetadata(
-      gif({ before: [GIF_CONTROL, gifPlainText()], frames: [GIF_FRAME] }),
-      NONE,
-    )!;
-    expect(leaks(output)).toBe(false);
-    expect(output.equals(gif({ frames: [GIF_FRAME] }))).toBe(true);
-    expect(output.includes(GIF_CONTROL)).toBe(false);
-  });
-
-  it('loses everything written after the trailer', () => {
-    const output = removeGifMetadata(gif({ tail: Buffer.from(`${SECRET}-after`) }), NONE)!;
-    expect(output.equals(gif())).toBe(true);
-  });
-
-  it('keeps the loop count of an animation, the control of each frame, and every frame', () => {
-    const frames = [GIF_CONTROL, GIF_FRAME, gifComment(), GIF_CONTROL, GIF_FRAME];
-    const output = removeGifMetadata(gif({ before: [gifLoop()], frames }), NONE)!;
-    expect(
-      output.equals(gif({ before: [gifLoop()], frames: [GIF_CONTROL, GIF_FRAME, GIF_CONTROL, GIF_FRAME] })),
-    ).toBe(true);
-    expect(output.includes(Buffer.from('NETSCAPE2.0'))).toBe(true);
-  });
-
-  it('keeps the colour tables of the screen and of a frame', () => {
-    const local = Buffer.concat([
-      Buffer.from([0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0x80]),
-      Buffer.from([9, 9, 9, 8, 8, 8]),
-      Buffer.from([2, 2, 0x44, 0x01, 0]),
-    ]);
-    const file = gif({ frames: [GIF_CONTROL, local] });
-    expect(removeGifMetadata(file, NONE)!.equals(file)).toBe(true);
-  });
-
-  it('is the same file where it is removed again', () => {
-    const once = removeGifMetadata(gif({ before: [gifLoop(), gifXmp(), gifComment()] }), KEEP_BOTH)!;
-    expect(removeGifMetadata(once, KEEP_BOTH)!.equals(once)).toBe(true);
-  });
-
-  it.each([
-    ['empty', Buffer.alloc(0)],
-    ['a header alone', Buffer.from('GIF89a')],
-    ['no trailer', gif().subarray(0, gif().length - 1)],
-    ['cut in a frame', gif().subarray(0, 36)],
-    [
-      'sub-blocks that run past the file',
-      Buffer.concat([gif().subarray(0, gif().length - 1), Buffer.from([0x21, 0xfe, 200, 1, 2])]),
-    ],
-    ['a block that is none', gif({ before: [Buffer.from([0x99])] })],
-    ['no frame at all', gif({ frames: [] })],
-    [
-      'a colour table the file is too short for',
-      Buffer.concat([Buffer.from('GIF89a'), Buffer.from([1, 0, 1, 0, 0xf7, 0, 0])]),
-    ],
-    ['a PNG file', png()],
-    ['an SVG file', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')],
-  ])('is refused as %s', (_name, bytes) => {
-    expect(removeGifMetadata(bytes, KEEP_BOTH)).toBeNull();
-  });
-});
-
 describe('a WebP file', () => {
   const ICC = webpChunk('ICCP', Buffer.from('PROFILE-BYTES', 'latin1'));
   const XMP = webpChunk('XMP ', Buffer.from(`<x:xmpmeta>${SECRET}</x:xmpmeta>`, 'latin1'));
@@ -727,58 +645,6 @@ describe('a part that is kept whole for its length is rebuilt for what it is def
       expect(jpegMarkers(output)).not.toContain(0xee);
     });
   });
-
-  describe('a GIF file', () => {
-    const loop = (...after: Buffer[]) =>
-      Buffer.concat([
-        Buffer.from([0x21, 0xff, 11]),
-        Buffer.from('NETSCAPE2.0'),
-        Buffer.from([3, 1, 0, 0]),
-        ...after,
-        Buffer.from([0]),
-      ]);
-    const sub = (data: Buffer) => Buffer.concat([Buffer.from([data.length]), data]);
-
-    it('keeps the three bytes of the loop count of NETSCAPE2.0, and no sub-block after them', () => {
-      const hiding = gif({ before: [loop(sub(HIDDEN))] });
-      expect(hides(hiding)).toBe(true);
-      const output = removeGifMetadata(hiding, NONE)!;
-      expect(hides(output)).toBe(false);
-      expect(output.equals(gif({ before: [loop()] }))).toBe(true);
-    });
-
-    it('drops a NETSCAPE2.0 whose first sub-block is not the loop count', () => {
-      const odd = Buffer.concat([
-        Buffer.from([0x21, 0xff, 11]),
-        Buffer.from('NETSCAPE2.0'),
-        sub(HIDDEN),
-        Buffer.from([0]),
-      ]);
-      const output = removeGifMetadata(gif({ before: [odd] }), NONE)!;
-      expect(hides(output)).toBe(false);
-      expect(output.equals(gif())).toBe(true);
-    });
-
-    it('keeps the four bytes of the graphic control and no sub-block after them', () => {
-      const hiding = Buffer.concat([
-        Buffer.from([0x21, 0xf9, 4, 0, 10, 0, 0]),
-        sub(HIDDEN),
-        Buffer.from([0]),
-      ]);
-      expect(hides(gif({ frames: [hiding, GIF_FRAME] }))).toBe(true);
-      const output = removeGifMetadata(gif({ frames: [hiding, GIF_FRAME] }), NONE)!;
-      expect(hides(output)).toBe(false);
-      expect(output.equals(gif({ frames: [GIF_CONTROL, GIF_FRAME] }))).toBe(true);
-    });
-
-    it('drops a graphic control that is not four bytes', () => {
-      const odd = Buffer.concat([Buffer.from([0x21, 0xf9]), sub(HIDDEN), Buffer.from([0])]);
-      const output = removeGifMetadata(gif({ frames: [odd, GIF_FRAME] }), NONE)!;
-      expect(hides(output)).toBe(false);
-      expect(output.equals(gif({ frames: [GIF_FRAME] }))).toBe(true);
-    });
-  });
-
   describe('a WebP file', () => {
     const header = Buffer.alloc(16);
     const animated = (frame: Buffer) =>
