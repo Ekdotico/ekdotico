@@ -21,7 +21,7 @@ describe('the header (modernisation A3)', () => {
 
   it('caps the row at the page width, centred, one bar high, by tokens', () => {
     const row = /\.headerRow \{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(row).toContain('max-inline-size: calc(var(--content-w) + 2 * var(--gutter))');
+    expect(row).toContain('max-inline-size: var(--page-w)');
     expect(row).toContain('margin-inline: auto');
     expect(row).toContain('min-block-size: var(--topbar-h)');
     expect(row).not.toContain('flex-wrap');
