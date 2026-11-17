@@ -47,6 +47,9 @@ function useUnread(): number {
  * the account settings (FR-AU-85), and the way to sign out (FR-AU-84).
  */
 export function ShellHeader() {
+  const pathname = usePathname();
+  const current = (path: string) =>
+    pathname === path || pathname.startsWith(`${path}/`) ? ('page' as const) : undefined;
   const [fault, setFault] = useState<Fault | null>(null);
   const unread = useUnread();
   return (
@@ -55,21 +58,26 @@ export function ShellHeader() {
         <Link href="/" prefetch={false} className={styles.home}>
           <Logo />
         </Link>
-        <Cluster gap={4} align="center">
-          <Link href="/notifications" prefetch={false}>
-            Notifications
-            {unread > 0 ? (
-              <>
-                {' '}
-                <Badge variant="new">{`${unread} unread`}</Badge>
-              </>
-            ) : null}
-          </Link>
-          <Link href="/settings" prefetch={false}>
-            Account settings
-          </Link>
-          <SignOutButton variant="quiet" onFault={setFault} />
-        </Cluster>
+        <nav aria-label="Main">
+          <Cluster gap={4} align="center">
+            <Link href="/" prefetch={false} aria-current={pathname === '/' ? 'page' : undefined}>
+              Documents
+            </Link>
+            <Link href="/notifications" prefetch={false} aria-current={current('/notifications')}>
+              Notifications
+              {unread > 0 ? (
+                <>
+                  {' '}
+                  <Badge variant="new">{`${unread} unread`}</Badge>
+                </>
+              ) : null}
+            </Link>
+            <Link href="/settings" prefetch={false} aria-current={current('/settings')}>
+              Account settings
+            </Link>
+            <SignOutButton variant="quiet" onFault={setFault} />
+          </Cluster>
+        </nav>
       </header>
       {fault ? (
         <div className={styles.fault}>

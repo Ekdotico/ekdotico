@@ -7,7 +7,6 @@ import {
   Checkbox,
   Cluster,
   FormFault,
-  PageHeading,
   RadioGroup,
   Stack,
   Table,
@@ -68,7 +67,15 @@ const ROLES = [
  * the server's, shown as it is given; the list is read again after each.
  * Text for a person (plan Q6; docs/plan/slice-13.md, §5).
  */
-export function SharingSettings({ view, section }: { view: SharingView; section?: ReactNode }) {
+export function SharingSettings({
+  view,
+  section,
+  head,
+}: {
+  view: SharingView;
+  section?: ReactNode;
+  head: ReactNode;
+}) {
   const router = useRouter();
   const ready = useReady();
   const [emails, setEmails] = useState('');
@@ -143,7 +150,7 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
   const base = `/api/documents/${view.documentId}/invitations`;
   return (
     <Stack gap={6}>
-      <PageHeading>Sharing</PageHeading>
+      {head}
 
       <Stack gap={3}>
         <h2 className={styles.heading}>People</h2>
