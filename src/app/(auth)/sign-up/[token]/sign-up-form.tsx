@@ -112,7 +112,7 @@ export function SignUp({
             id="name"
             name="name"
             label="Name"
-            hint="1 to 100 characters. At least one of them can be seen."
+            hint="1 to 100 characters, not counting spaces at either end. It needs at least one character that shows, and no control or text-direction characters."
             autoComplete="name"
             required
             error={fields.name}
