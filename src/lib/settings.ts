@@ -3,6 +3,7 @@
 // (NFR-SE-17 (f)). Every secret is read here and nowhere else (NFR-SE-19).
 import { isIP } from 'node:net';
 import { acceptedAddress } from './field-text.ts';
+import { checkInUrl } from './healthcheck.ts';
 
 /**
  * `COLLAB_HOST`: a specific IP address, 127.0.0.1 where unset or empty. A name is refused, since it could resolve
@@ -219,6 +220,10 @@ export interface Settings {
   exportIdleSeconds: number;
   /** FR-EX-36: a name derived from a title "is cut to 100 characters (an initial value)". */
   exportNameMaxChars: number;
+  /** D275: the ping address of the check of the application's timers. Absent: nothing is called. */
+  healthcheckTimersUrl: string | undefined;
+  /** D274, D320: the ping address of the check of email health. Absent: nothing is called. */
+  healthcheckEmailUrl: string | undefined;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -653,6 +658,8 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     // At least 1: an idle period of 0 would abort every export before its first byte.
     exportIdleSeconds: wholeNumber(env, 'EXPORT_IDLE_SECONDS', 30, 1),
     exportNameMaxChars: exportNameMaxChars(env),
+    healthcheckTimersUrl: checkInUrl(env, 'HEALTHCHECK_TIMERS_URL'),
+    healthcheckEmailUrl: checkInUrl(env, 'HEALTHCHECK_EMAIL_URL'),
     limits,
   };
 }

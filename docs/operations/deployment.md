@@ -196,6 +196,62 @@ A one-off check, which the owner decided on 9 October 2026. An address is stored
 
 `PASSWORD_LIST_FILE` names the list of commonly used and known-compromised passwords (FR-AU-82), by default `data/common-passwords.txt` under the directory the process is started in. The file ships with the deployment. Where it cannot be read, or holds no entry, every request that sets a password fails, so that none is set unchecked. The file in the repository is a published list of 476,776 passwords of 8 to 32 characters (the owner's decision of 8 October 2026; register A66, D86); its name, version, source, licence, and filter, and what loading it costs, are in `data/common-passwords.md`. It is read at the first password that is checked, and then holds about 27 MB of memory.
 
+## Check-ins with Healthchecks.io (D274, D275, D280)
+
+Each check is **off until its address is set**: merging and deploying this changes nothing. An address is a secret (whoever holds it can silence the alarm), so it lives in the environment file of the unit that uses it, is never written to a log, and is never committed. It has the form `https://hc-ping.com/<uuid>` or `https://hc-ping.com/<key>/<slug>`; anything else is refused by name at start (the web application) or before the first call (the two scripts). A check-in is a plain GET with no body, and `/fail` is the one failure signal used. The period and grace time of each check are set in the service and recorded in [procedure 2](../procedures/02-health-checks.md) (D280); the code does not know them.
+
+| Setting                  | Read by                 | What a check-in proves                                                                                                                                                  |
+| ------------------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HEALTHCHECK_WEB_URL`    | `scripts/self-check.ts` | `https://app.ekdoti.co/api/health` answered 200 from the server itself, this minute                                                                                     |
+| `HEALTHCHECK_COLLAB_URL` | `scripts/self-check.ts` | `https://app.ekdoti.co/collab/health` answered 200 from the server itself, this minute                                                                                  |
+| `HEALTHCHECK_BACKUP_URL` | `scripts/backup.ts`     | the copy of the backups was stored at Scaleway; a failed or refused run calls `/fail`                                                                                   |
+| `HEALTHCHECK_TIMERS_URL` | the web application     | every 15 minutes, the timer of the email retry ran against the database and ended without a fault, so the application's timers are running                              |
+| `HEALTHCHECK_EMAIL_URL`  | the web application     | every 15 minutes, while email is healthy (D320): the last hand-over to Brevo was not an account fault, and the queue of emails waiting to be tried again is not growing |
+
+**Email health (D320).** An account fault is a 401, 402 or 403 from Brevo, or a 400 that is neither a refusal of the message nor "seen already" (no credits, a key it does not know, an unverified sender or domain). A 429, a 5xx, a timeout and a failed connection are not counted. A success, a refusal of one message and "seen already" clear a fault. The queue grows when more rows wait than at the previous run of the timer. While either holds the application stays silent, and the service emails the owner. The state is in memory, so a restart forgets a fault, and before the first hand-over after a start email counts as healthy: the row states that cost. The check is named `ekdotico-email`, period 15 minutes, grace 10 minutes (D320).
+
+The check of the database log (D275, the fifth) is **not built**: the managed database keeps its own log, and D321 keeps the check in the register for a database the team runs itself. The copy is weekly, on Sunday at 03:00 UTC, with one hour of grace (D322): set that check's period to 1 week and its grace to 1 hour.
+
+### The server checks itself
+
+The unit files are the owner's and are not in the repository. Install them as root, with the same environment file as the web application (`APP_ORIGIN`, `HEALTHCHECK_WEB_URL`, `HEALTHCHECK_COLLAB_URL`); the script reads no other secret. Adjust the paths to where the application is installed.
+
+```ini
+# /etc/systemd/system/ekdotico-selfcheck.service
+[Unit]
+Description=Ekdotico: the server calls its own health addresses and checks in
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ekdotico
+WorkingDirectory=/opt/ekdotico
+EnvironmentFile=/etc/ekdotico/web.env
+ExecStart=/usr/bin/node scripts/self-check.ts
+TimeoutStartSec=30
+```
+
+```ini
+# /etc/systemd/system/ekdotico-selfcheck.timer
+[Unit]
+Description=Ekdotico: self-check, each minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl daemon-reload && systemctl enable --now ekdotico-selfcheck.timer
+```
+
+A failed round leaves the unit failed (`systemctl status ekdotico-selfcheck.service`) and writes one line naming which address did not answer. The gap is stated in D280: a fault seen only from outside, such as a firewall rule that blocks others and not the server, is not caught.
+
+To check in for the copy of the backups, add `HEALTHCHECK_BACKUP_URL=...` to the environment file of `ekdotico-backup.service`; to check in for the timers, add `HEALTHCHECK_TIMERS_URL=...` and `HEALTHCHECK_EMAIL_URL=...` to that of `ekdotico-web.service` and restart it.
+
 ## Email
 
 There are two senders, chosen by `EMAIL_TRANSPORT` (register D206, D262). **`sink`** writes each message to a file and sends nothing, and is for a development machine alone. The web application and the collaboration server each refuse to start with it wherever `APP_ORIGIN` is not on localhost (`refuseSinkAwayFromDevelopment` in `src/lib/settings.ts`, called from `src/instrumentation.ts` and from the start of `src/collab/server.ts`; the owner's answer of 31 October 2026, register D270), so that a deployment writes no file. A deployment that has not set Brevo does not start, where it once started and sent nothing. **`brevo`** sends each message through Brevo's API.

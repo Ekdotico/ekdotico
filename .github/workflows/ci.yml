@@ -128,12 +128,14 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: '@ekdotico'
       - run: pnpm install --frozen-lockfile
+      # -volume.max: SeaweedFS gives every bucket 7 volumes of its own and, left alone, caps the volumes by the free disk,
+      # which a runner has little of: the fourth bucket then fails its first write with InternalError 500.
       # A `services:` entry cannot be given the command the store is started with, so it is run here.
       - name: Object store of the images (S3 protocol), and its bucket
         run: |
           docker run -d --name objectstore -p 8333:8333 \
             -v "$PWD/docker/object-store-s3.json:/etc/seaweedfs/s3.json:ro" \
-            chrislusf/seaweedfs:4.48 server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
+            chrislusf/seaweedfs:4.48 server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data -volume.max=200
           node scripts/create-bucket.ts
       # The test of the copy of the backups runs pg_dump against the server above, and pg_dump refuses a server
       # of a later major version than its own; the runner's own client is older than 17.
