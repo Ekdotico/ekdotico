@@ -13,6 +13,7 @@ import { acceptedAddress } from '../field-text.ts';
 import { settings } from '../settings.ts';
 import { hashToken, newToken, TOKEN } from '../token.ts';
 import { createPersonalWorkspace } from '../workspace.ts';
+import { deleteExpiredNonces } from './nonce.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -189,6 +190,8 @@ const ADDRESS_DAYS = 30;
  * so two instances clear each row once. Answers with the number cleared.
  */
 export async function clearAdmissionAddresses(now: Date = new Date()): Promise<number> {
+  // FR-AU-89, D299: the nonces whose window is over go in the same hourly run; they hold no address and are not counted.
+  await deleteExpiredNonces(now);
   const before = new Date(now.getTime() - ADDRESS_DAYS * DAY_MS);
   const stale = await db().admissionInvitation.updateMany({
     where: { email: { not: null }, state: 'PENDING', expiresAt: { lte: before } },

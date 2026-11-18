@@ -33,7 +33,7 @@ test('the Owner offers the ownership of all documents to the longest-standing Ed
 }) => {
   test.slow();
   const elsewhere = watchOrigins(page);
-  await enter(page, { ...newPerson(), name: 'Ada Owner' });
+  const ada = await enter(page, { ...newPerson(), name: 'Ada Owner' });
   const id = await shareNew(page);
   const bea = { ...newPerson(), name: 'Bea Editor' };
   const beaContext = await browser.newContext();
@@ -92,6 +92,8 @@ test('the Owner offers the ownership of all documents to the longest-standing Ed
   await expect(open).toBeFocused();
 
   await open.click();
+  // FR-AU-92, D285: the confirmation asks for the password.
+  await dialog.getByLabel('Current password').fill(ada.password);
   await dialog.getByRole('button', { name: 'Offer 1 document' }).click();
   await expect(dialog).toBeHidden();
   await expect(main.getByRole('status').filter({ hasText: 'Ownership of 1 document offered.' })).toHaveText(

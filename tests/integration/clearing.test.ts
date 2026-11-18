@@ -663,8 +663,10 @@ describe('the notices (FR-ED-42, FR-AU-91)', () => {
       'The Owner of 1 document that you have access to in Ekdotico will delete it on ',
     );
     expect(toViewer.text).toContain(
-      'Until then you can open each one and take a draft export of it. Your notifications in Ekdotico name them: https://app.example.test/notifications.',
+      'Until then you can open each one and take a draft export of it. Your notifications in Ekdotico name them:\nhttps://app.example.test/notifications',
     );
+    // D315: the link ends the text, on a line of its own, with no full stop after it.
+    expect(toViewer.text.endsWith('\nhttps://app.example.test/notifications')).toBe(true);
     // The day: the one form of a date, in UTC.
     const when = new Date(deleteOn as string);
     expect(toViewer.text).toMatch(
@@ -818,6 +820,7 @@ describe('the period: read-only for everyone, and what it leaves open (FR-AU-91,
     const offered = await r.offer.POST(
       w.request('POST', `/api/documents/${documentId}/ownership-offer`, owner.cookie, {
         collaboratorId: editorRow.id,
+        password: PASSWORD,
       }),
       context(documentId),
     );
