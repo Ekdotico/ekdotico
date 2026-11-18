@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { cookiesOf, createAccount, load, ORIGIN, PASSWORD, post, prepare, signIn, sunk } from './identity.ts';
-import { enrol, nextCode, passwordStep, secondStep, unbase32 } from './second-factor.ts';
+import { enrol, midStep, nextCode, passwordStep, secondStep, unbase32 } from './second-factor.ts';
 
 const sink = mkdtempSync(join(tmpdir(), 'ekdotico-two-factor-races-mail-'));
 const database = prepare('tworaces', { TRUSTED_PROXY_COUNT: '1', EMAIL_SINK_DIRECTORY: sink });
@@ -73,6 +73,23 @@ function hold<T extends object>(object: T, method: keyof T & string) {
   );
   return { reached, open };
 }
+/**
+ * Waits for the held call, and fails at once, with the status, where the
+ * request is answered first: a refusal before the step that is held would
+ * otherwise wait out the test's timeout.
+ */
+async function reaches(
+  held: { reached: Promise<void> },
+  request: PromiseLike<{ response: { status: number } } | { status: number }>,
+) {
+  await Promise.race([
+    held.reached,
+    Promise.resolve(request).then((answer) => {
+      const status = 'response' in answer ? answer.response.status : answer.status;
+      throw new Error(`answered ${status} before the held step`);
+    }),
+  ]);
+}
 /** The transaction of a change: the step after the password and the code were checked. */
 const holdTransaction = () => hold(db(), '$transaction');
 /** The making of a session: the step after the second step's check of the code. */
@@ -105,7 +122,7 @@ describe('turning two-factor authentication off, on its way (FR-AU-83, FR-AU-86)
         ...fresh(),
       },
     );
-    await held.reached;
+    await reaches(held, attacker);
     await reset(email, token);
     held.open();
     const answered = await attacker;
@@ -121,9 +138,12 @@ describe('turning two-factor authentication off, on its way (FR-AU-83, FR-AU-86)
   });
 
   it('turns nothing off under a session that was ended meanwhile', async () => {
+    // Three codes of one secret are spent here: not across a step's end, where the third is two steps old.
+    await midStep();
     const { email, id, cookie, secret } = await enrolled();
     const step = await passwordStep(auth, email, fresh());
     const owner = cookiesOf(await secondStep(auth, step, nextCode(secret), 'totp', fresh()));
+    await midStep();
     const held = holdTransaction();
 
     const attacker = post(
@@ -135,7 +155,7 @@ describe('turning two-factor authentication off, on its way (FR-AU-83, FR-AU-86)
         ...fresh(),
       },
     );
-    await held.reached;
+    await reaches(held, attacker);
     expect((await post(auth, '/revoke-other-sessions', undefined, { cookie: owner })).response.status).toBe(
       200,
     );
@@ -162,7 +182,7 @@ describe('turning two-factor authentication off, on its way (FR-AU-83, FR-AU-86)
         ...fresh(),
       },
     );
-    await held.reached;
+    await reaches(held, first);
     // The same account, in another request: the code just checked is void now.
     const replaced = await post(
       auth,
@@ -200,7 +220,7 @@ describe('replacing the recovery codes and beginning an enrolment, on their way 
         ...fresh(),
       },
     );
-    await held.reached;
+    await reaches(held, attacker);
     await reset(email, token);
     held.open();
     const answered = await attacker;
@@ -218,7 +238,7 @@ describe('replacing the recovery codes and beginning an enrolment, on their way 
     const held = holdTransaction();
 
     const attacker = post(auth, '/two-factor/enable', { password: PASSWORD }, { cookie, ...fresh() });
-    await held.reached;
+    await reaches(held, attacker);
     await reset(email, token);
     held.open();
     const answered = await attacker;
@@ -242,7 +262,7 @@ describe('replacing the recovery codes and beginning an enrolment, on their way 
       { code: nextCode(secret) },
       { cookie, ...fresh() },
     );
-    await held.reached;
+    await reaches(held, attacker);
     expect((await post(auth, '/revoke-other-sessions', undefined, { cookie: owner })).response.status).toBe(
       200,
     );
@@ -285,7 +305,7 @@ describe('a sign-in with the old password on its way (FR-AU-81, FR-AU-83, FR-AU-
     const held = hold(db().verification, 'create');
 
     const attacker = signIn(auth, email, PASSWORD, fresh());
-    await held.reached;
+    await reaches(held, attacker);
     await reset(email, token);
     held.open();
     const signed = await attacker;
@@ -316,7 +336,7 @@ describe('a sign-in with the old password on its way (FR-AU-81, FR-AU-83, FR-AU-
     const held = await holdSession();
 
     const attacker = secondStep(auth, step, nextCode(secret), 'totp', fresh());
-    await held.reached;
+    await reaches(held, attacker);
     await reset(email, token);
     held.open();
     const signed = await attacker;
@@ -333,7 +353,7 @@ describe('a sign-in with the old password on its way (FR-AU-81, FR-AU-83, FR-AU-
     const held = await holdSession();
 
     const attacker = secondStep(auth, step, nextCode(secret), 'totp', fresh());
-    await held.reached;
+    await reaches(held, attacker);
     const changed = await post(
       auth,
       '/change-password',
@@ -372,7 +392,7 @@ describe('a sign-in with the old password on its way (FR-AU-81, FR-AU-83, FR-AU-
     const held = await holdSession();
 
     const late = secondStep(auth, step, recoveryCodes[0], 'backup-code', fresh());
-    await held.reached;
+    await reaches(held, late);
     await db().verification.updateMany({
       where: { value: id },
       data: { expiresAt: new Date(Date.now() - 1) },

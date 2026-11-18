@@ -14,7 +14,7 @@ import {
   imageAttributeAllowed,
 } from '../../src/lib/images/node.ts';
 import { prepareImage } from '../../src/lib/images/prepare.ts';
-import { sniffImage } from '../../src/lib/images/sniff.ts';
+import { isGif, sniffImage } from '../../src/lib/images/sniff.ts';
 import { documentOfKey, newObjectKey } from '../../src/lib/images/storage.ts';
 import { exifSegment, exifTiff, gif, jpeg, png, SECRET, webp } from './image-fixtures.ts';
 
@@ -24,11 +24,20 @@ describe('the type of an upload is read from its content (NFR-SE-18)', () => {
   it.each([
     ['png', png()],
     ['jpeg', jpeg()],
-    ['gif', gif()],
-    ['gif', Buffer.concat([text('GIF87a'), gif().subarray(6)])],
     ['webp', webp()],
   ])('is %s for the content of one', (format, bytes) => {
     expect(sniffImage(bytes)).toBe(format);
+  });
+
+  // D310: a GIF is none of the three, and is told by its first six bytes whatever follows them.
+  it('is no type for a GIF, which isGif finds by its signature alone', () => {
+    for (const bytes of [gif(), Buffer.concat([text('GIF87a'), gif().subarray(6)]), text('GIF89a')]) {
+      expect(sniffImage(bytes)).toBeNull();
+      expect(isGif(bytes)).toBe(true);
+    }
+    for (const bytes of [png(), jpeg(), webp(), text('GIF90a......'), text('GIF8')]) {
+      expect(isGif(bytes)).toBe(false);
+    }
   });
 
   it.each([
@@ -60,12 +69,12 @@ describe('the type of an upload is read from its content (NFR-SE-18)', () => {
   });
 
   it('is the same wherever a file begins with the signature of one and holds another', () => {
-    // A polyglot: the signature of a GIF, the body of an SVG. It does not parse as a GIF, so it is refused.
+    // A polyglot: the signature of a GIF, the body of an SVG. Every GIF is refused (D310), by its signature alone.
     expect(
       prepareImage(Buffer.concat([text('GIF89a'), text('<svg xmlns="http://www.w3.org/2000/svg"/>')])),
     ).toEqual({
       ok: false,
-      reason: 'not_accepted',
+      reason: 'gif',
     });
     // The signature of a PNG alone.
     expect(prepareImage(png().subarray(0, 8))).toEqual({ ok: false, reason: 'not_accepted' });
@@ -76,7 +85,6 @@ describe('an upload becomes what is stored (NFR-SE-18)', () => {
   it.each([
     ['png', png(), 'image/png'],
     ['jpeg', jpeg(), 'image/jpeg'],
-    ['gif', gif(), 'image/gif'],
     ['webp', webp(), 'image/webp'],
   ] as const)('keeps the type the server established: %s', (format, bytes, contentType) => {
     const prepared = prepareImage(bytes);
@@ -85,7 +93,7 @@ describe('an upload becomes what is stored (NFR-SE-18)', () => {
   });
 
   it('has no type that a browser would run as a document', () => {
-    expect(Object.values(IMAGE_TYPES).sort()).toEqual(['image/gif', 'image/jpeg', 'image/png', 'image/webp']);
+    expect(Object.values(IMAGE_TYPES).sort()).toEqual(['image/jpeg', 'image/png', 'image/webp']);
   });
 
   it('has its metadata removed: it is what comes out that is stored', () => {
@@ -115,7 +123,6 @@ describe('an upload becomes what is stored (NFR-SE-18)', () => {
 
   it('is refused where it begins as an image and does not parse to its end', () => {
     expect(prepareImage(jpeg().subarray(0, 30))).toEqual({ ok: false, reason: 'not_accepted' });
-    expect(prepareImage(gif().subarray(0, 20))).toEqual({ ok: false, reason: 'not_accepted' });
     expect(prepareImage(webp().subarray(0, 20))).toEqual({ ok: false, reason: 'not_accepted' });
   });
 });

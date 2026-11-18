@@ -56,7 +56,7 @@ describe('the fixed texts of FR-AU-91, verbatim', () => {
     expect(to).toBe('reader@example.com');
     expect(subject).toBe('Documents you have access to in Ekdotico will be deleted');
     expect(text).toBe(
-      `The Owner of 3 documents that you have access to in Ekdotico will delete them on 2 Nov 2026, 14:05 UTC. Until then you can open each one and take a draft export of it. Your notifications in Ekdotico name them: ${ORIGIN}/notifications.`,
+      `The Owner of 3 documents that you have access to in Ekdotico will delete them on 2 Nov 2026, 14:05 UTC. Until then you can open each one and take a draft export of it. Your notifications in Ekdotico name them:\n${ORIGIN}/notifications`,
     );
     expect(text).not.toMatch(/\/documents\//);
     expect(subject).not.toMatch(/[\r\n]/);
@@ -65,7 +65,7 @@ describe('the fixed texts of FR-AU-91, verbatim', () => {
   it('writes the same sentences for one document', async () => {
     const { text } = await email(1, new Date(Date.UTC(2026, 10, 2, 14, 5)));
     expect(text).toBe(
-      `The Owner of 1 document that you have access to in Ekdotico will delete it on 2 Nov 2026, 14:05 UTC. Until then you can open it and take a draft export of it. Your notifications in Ekdotico name it: ${ORIGIN}/notifications.`,
+      `The Owner of 1 document that you have access to in Ekdotico will delete it on 2 Nov 2026, 14:05 UTC. Until then you can open it and take a draft export of it. Your notifications in Ekdotico name it:\n${ORIGIN}/notifications`,
     );
   });
 });

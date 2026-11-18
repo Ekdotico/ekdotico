@@ -72,7 +72,7 @@ function resetEmail(to: string, token: string): EmailMessage {
   return {
     to,
     subject: 'Set a new password for Ekdotico',
-    text: `You asked to set a new password for your Ekdotico account. To set it, open this link: ${link}. The link works once and is valid for 1 hour. If you did not ask for this, you can ignore this email, and your password stays as it is.`,
+    text: `You asked to set a new password for your Ekdotico account. To set it, open this link:\n${link}\nThe link works once and is valid for 1 hour. If you did not ask for this, you can ignore this email, and your password stays as it is.`,
   };
 }
 
