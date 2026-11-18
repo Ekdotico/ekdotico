@@ -1,0 +1,156 @@
+name: release
+
+# Builds a release of the application for the server, and uploads it as an artifact of this run. Nothing here
+# connects to the server or holds a credential for it: the person deploying downloads the artifact and ships it
+# over their own ssh (scripts/deploy/deploy.mjs; docs/operations/deployment.md, "Deploying a release").
+#
+# By hand (workflow_dispatch) from main, with the full sha of a commit of main whose push run of `ci` passed,
+# `full` included: anything else is refused before the build. Such a build is DEPLOYABLE, and is sealed to the
+# public key in the repository variable RELEASE_PUBLIC_KEY, because the build output holds Next.js's preview
+# identifier ("The build output is kept as a secret is") and the artifacts of a public repository can be
+# downloaded by anyone signed in to GitHub.
+#
+# On a pull request that changes this file or scripts/deploy/, the same build runs on the pull request's head to
+# test the route; it is marked NOT deployable in its manifest, is not sealed, and is kept for one day.
+#
+# The runner must match the server: Linux with glibc, the same CPU (sharp's libvips and Prisma's schema engine are
+# native), and Node.js from .nvmrc (the server's must be the same major; server.mjs refuses another). x64 is
+# assumed (deployment.md, "Assumptions about the server"); for an ARM server set the repository variable
+# RELEASE_RUNNER to ubuntu-24.04-arm.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full sha of the commit of main to build (its push run of ci must have passed)
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/deploy/**
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.event.inputs.sha || github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ vars.RELEASE_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SHA: ${{ github.event.inputs.sha || github.event.pull_request.head.sha }}
+      DEPLOYABLE: ${{ github.event_name == 'workflow_dispatch' }}
+    services:
+      # For the start test alone: the collaboration server's health route answers 200 only once it holds its
+      # subscription in Valkey.
+      valkey:
+        image: valkey/valkey:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Only a commit of main whose full CI run passed
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -eu
+          case "$SHA" in *[!0-9a-f]*|'') echo "::error::not a full lower-case sha: $SHA"; exit 1;; esac
+          [ "${#SHA}" -eq 40 ] || { echo "::error::not a full sha: $SHA"; exit 1; }
+          # The definition of this workflow that runs must be main's own.
+          [ "$REF" = refs/heads/main ] || { echo "::error::dispatch this workflow from main, not $REF"; exit 1; }
+          status=$(gh api "repos/$REPO/compare/$SHA...main" --jq .status)
+          case "$status" in identical|ahead) ;; *) echo "::error::$SHA is not on main ($status)"; exit 1;; esac
+          run=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&status=success" --jq '.workflow_runs[0].id // empty')
+          [ -n "$run" ] || { echo "::error::no successful push run of ci on main for $SHA"; exit 1; }
+          full=$(gh api "repos/$REPO/actions/runs/$run/jobs" --jq '[.jobs[] | select(.name == "full")][0].conclusion // empty')
+          [ "$full" = success ] || { echo "::error::the full job of run $run is '$full', not success"; exit 1; }
+          echo "ci run $run passed, full included"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://npm.pkg.github.com
+          scope: '@ekdotico'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Pack (and seal a deployable build)
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: |
+          if [ "$DEPLOYABLE" = true ]; then
+            node scripts/deploy/pack.mjs --sha "$SHA" --out "$RUNNER_TEMP/release" --run "$GITHUB_RUN_ID" --deployable
+          else
+            node scripts/deploy/pack.mjs --sha "$SHA" --out "$RUNNER_TEMP/release" --run "$GITHUB_RUN_ID" --reason "built from pull request ${{ github.event.pull_request.number }}, to test the route"
+          fi
+      # Both processes start from the unpacked tarball, as they would on the server, with settings of a
+      # development machine (no database is needed for either health route).
+      - name: Start both processes from the unpacked release
+        env:
+          APP_ORIGIN: http://localhost:3000
+          FOUNDING_TEAM_EMAILS: ''
+          DATABASE_URL: postgresql://nobody@127.0.0.1:5432/nothing
+          VALKEY_URL: redis://localhost:6379
+          AUTH_SECRET: start-test-only-start-test-only-start-test-only
+          EMAIL_TRANSPORT: sink
+          EMAIL_SINK_DIRECTORY: ${{ runner.temp }}/sink
+        run: |
+          set -eu
+          # The build writes its own absolute path into .next/required-server-files.json (and .js): appDir,
+          # outputFileTracingRoot, turbopack.root. `next start` reads its configuration again from next.config.ts in
+          # its working directory and takes only `isExperimentalCompile` from that file, so the output runs from any
+          # path. This proves it: the checkout it was built in is moved away, and the release is started as the
+          # server starts it, from releases/<sha> through a `current` link.
+          mv "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE.moved"
+          base="$RUNNER_TEMP/srv"
+          dir="$base/releases/$SHA"
+          mkdir -p "$dir" "$EMAIL_SINK_DIRECTORY"
+          tar -xzf "$RUNNER_TEMP/release/release.tgz" -C "$dir"
+          ln -s "releases/$SHA" "$base/current"
+          cd "$base/current"
+          node node_modules/next/dist/bin/next start -p 3000 > "$RUNNER_TEMP/web.log" 2>&1 &
+          node src/collab/server.ts > "$RUNNER_TEMP/collab.log" 2>&1 &
+          ok=
+          for i in $(seq 1 40); do
+            if curl -fsS -o /dev/null http://127.0.0.1:3000/api/health && curl -fsS -o /dev/null http://127.0.0.1:1234/collab/health; then ok=1; break; fi
+            sleep 2
+          done
+          echo '--- web'; cat "$RUNNER_TEMP/web.log"; echo '--- collab'; cat "$RUNNER_TEMP/collab.log"
+          [ -n "$ok" ] || { echo "::error::a process did not answer its health route"; exit 1; }
+          # A page too, rendered through the proxy (src/proxy.ts), not only a route handler.
+          page=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/sign-in)
+          echo "GET /sign-in: $page"
+          case "$page" in 200|307) ;; *) echo "::error::the sign-in page answered $page"; cat "$RUNNER_TEMP/web.log"; exit 1;; esac
+          echo "both answer, from a path other than the one built in"
+      - name: Put the checkout back
+        if: always()
+        run: if [ -d "$GITHUB_WORKSPACE.moved" ]; then mv "$GITHUB_WORKSPACE.moved" "$GITHUB_WORKSPACE"; fi
+        working-directory: ${{ runner.temp }}
+      - name: Size
+        run: ls -l "$RUNNER_TEMP/release"; cat "$RUNNER_TEMP/release/release.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ env.SHA }}
+          # A deployable build uploads the sealed file and never the open tarball.
+          path: |
+            ${{ runner.temp }}/release/release.json
+            ${{ runner.temp }}/release/${{ env.DEPLOYABLE == 'true' && 'release.sealed' || 'release.tgz' }}
+          retention-days: ${{ env.DEPLOYABLE == 'true' && 30 || 1 }}
+          if-no-files-found: error
+          compression-level: 0
