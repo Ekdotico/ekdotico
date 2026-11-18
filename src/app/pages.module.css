@@ -179,6 +179,14 @@
   display: none;
 }
 
+/* The status of the connection takes what the row leaves and wraps inside it, so that a long label ("Syncing.
+   ..." while a change is unsent) never pushes the status onto a second row of the header: the row would then
+   lose a line when the label turns to "In sync", and the page below it would move under the pointer. */
+.statusSlot {
+  flex: 1 1 0;
+  min-inline-size: 0;
+}
+
 /* The same, of a title set as the heading of its page. */
 .breakable {
   min-inline-size: 0;

@@ -77,7 +77,7 @@ export default async function DocumentPage({ params }: Props) {
           {/* FR-ED-17: the people who have the document open, which the editor draws here once it is connected. */}
           <span id={PEOPLE_SLOT} className={styles.peopleSlot} />
           {/* The status of the connection, after the people (modernisation A2). */}
-          <span id={STATUS_SLOT} className={styles.peopleSlot} />
+          <span id={STATUS_SLOT} className={`${styles.peopleSlot} ${styles.statusSlot}`} />
         </Cluster>
       </Stack>
       <DocumentView

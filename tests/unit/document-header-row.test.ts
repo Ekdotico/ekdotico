@@ -31,6 +31,12 @@ describe('the document header row (modernisation A2)', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
+  it('lets the status wrap inside the row, so that a long label never adds a row', () => {
+    expect(page).toContain('styles.statusSlot');
+    const css = readFileSync('src/app/pages.module.css', 'utf8');
+    expect(css).toMatch(/\.statusSlot\s*\{[^}]*flex:\s*1 1 0;[^}]*min-inline-size:\s*0;/);
+  });
+
   it('puts the sync status in its slot in the header', () => {
     expect(editor).toContain('document.getElementById(STATUS_SLOT)');
   });
