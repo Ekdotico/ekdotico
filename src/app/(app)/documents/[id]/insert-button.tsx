@@ -60,9 +60,16 @@ export function InsertButton({
   useLayoutEffect(() => {
     const element = control.current;
     if (!element) return;
-    if (!cursor.atEnd) {
+    // Hidden, and put back at the origin: a hidden box still counts in the page's width, so a place it was
+    // given at a wide viewport would scroll the page sideways at 320 pixels (FR-AU-88).
+    const hide = () => {
       element.style.visibility = 'hidden';
       element.dataset.settled = 'false';
+      element.style.left = '0px';
+      element.style.top = '0px';
+    };
+    if (!cursor.atEnd) {
+      hide();
       return;
     }
     const put = () => {
@@ -100,8 +107,7 @@ export function InsertButton({
     // the layout has settled; a move of the cursor alone glides.
     const onTransaction = ({ transaction }: { transaction: Transaction }) => {
       if (!endsBlock(editor.state)) {
-        element.style.visibility = 'hidden';
-        element.dataset.settled = 'false';
+        hide();
         return;
       }
       cancelAnimationFrame(settle);
