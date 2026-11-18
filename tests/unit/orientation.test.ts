@@ -36,7 +36,9 @@ describe('the header', () => {
   it('holds its links in a landmark named "Main", with a link "Documents" to the list', () => {
     // Modernisation A3: the same links twice, in the row (from 921px) and in the drawer (below it); CSS shows one
     // at each width, so a screen reader meets one landmark. Each must hold the whole set.
-    const navs = [...shown('/').matchAll(/<nav aria-label="Main"[^>]*>(.*?)<\/nav>/gs)].map((each) => each[1] ?? '');
+    const navs = [...shown('/').matchAll(/<nav aria-label="Main"[^>]*>(.*?)<\/nav>/gs)].map(
+      (each) => each[1] ?? '',
+    );
     expect(navs).toHaveLength(2);
     for (const nav of navs) {
       expect(nav).toMatch(/<a [^>]*href="\/"[^>]*>Documents<\/a>/);
