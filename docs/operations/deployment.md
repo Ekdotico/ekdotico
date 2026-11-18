@@ -150,11 +150,60 @@ Live since 16 November 2026, from `main` at `2c90668`. The facts below are those
 - **The images are in Spaces in AMS3**, bucket `ekdotico-images`.
 - **TLS is ended by nginx** with a certificate from certbot (renewed by `snap.certbot.renew.timer`); HSTS is set by nginx (`max-age=31536000`, item 12) and `server_tokens off`.
 - **The sealed copy of the backups** is made by `ekdotico-backup.service`, a one-shot unit that runs as the user `ekdotico-backup` from `/srv/ekdotico-backup/app` with `/etc/ekdotico-backup/backup.env`, and is started by `ekdotico-backup.timer` every Sunday at 03:00 UTC (`OnCalendar=Sun *-*-* 03:00:00 UTC`, `RandomizedDelaySec=15m`, `Persistent=true`). The copy goes to Scaleway, `ekdotico-backups`, in fr-par, with Object Lock (D271). See [backup.md](backup.md).
-- **Checkout and deployment.** The deploy keys of the organisation are off, so the Droplet receives a `git archive` of the deployed commit over ssh. SSH is by key alone (`PermitRootLogin prohibit-password`, no passwords, no X11 forwarding); unattended security updates are on.
+- **Checkout and deployment.** The Droplet builds nothing. A release is built in GitHub Actions and shipped by the person deploying, over their own ssh (next section). SSH is by key alone (`PermitRootLogin prohibit-password`, no passwords, no X11 forwarding), from named addresses only; unattended security updates are on.
+
+## Deploying a release
+
+Production is never stopped for a build. Until 18 November 2026 the Droplet built each release itself, which needs about 1.5 GB and so stopped both services for the length of the build; that cost two outages that day. Now:
+
+1. **The workflow `release`** (`.github/workflows/release.yml`) is started by hand from `main` with the full sha of a commit of `main`. It refuses a commit that is not on `main`, and one whose push run of `ci` did not pass with the job `full` passed. It installs, builds, packs the built tree (sources, `.next` without its cache, `node_modules`, and `RELEASE.json`, which names the commit, the platform, the CPU and the Node.js version), starts both processes from the unpacked tarball and waits for both health routes, then uploads `release.sealed` (the tarball sealed to the deployer's public key, below) and `release.json` (the manifest, with the tarball's sha-256). The artifact is kept 30 days. Actions holds no credential for the server and never connects to it.
+2. **The deployer runs `scripts/deploy/deploy.mjs` on their own machine.** It downloads the artifact with `gh`, opens it with the private key, checks the sha and the checksum, copies it and the release's own `scripts/deploy/server.mjs` to the server, and drives that script there over ssh: stage, then (when asked) migrate, then switch, then prune.
+3. **On the server** each release unpacks into `/srv/ekdotico/releases/<sha>/`, beside the running one, after its checksum is checked again and its manifest is checked against the server's own platform, CPU and Node.js major. `/srv/ekdotico/current` is a symbolic link to the running release; the switch replaces it in one rename, restarts both units, and checks that both are active and that `/api/health` (port 3000) and `/collab/health` (port 1234) answer 200 within 90 seconds. If they do not, it points `current` back, restarts again, and says so; it exits with 1 either way. The three newest releases are kept, and never the running one or the one to roll back to.
+
+The server's address, the ssh user and the paths come from the deployer's environment, never from a file in this repository: `DEPLOY_HOST` (a host or an alias of `~/.ssh/config`), `DEPLOY_USER` (where the alias names none), `DEPLOY_SSH_PORT` (optional) and `DEPLOY_BASE` (`/srv/ekdotico` where unset).
+
+### What a user sees
+
+- **A deployment:** the download, the checks, the copy, the staging and any migration happen while the running release serves as before. The only gap is the restart of the two units: some seconds in which nginx answers 502 for pages, and the editor's connection is lost and tried again (item "The editor's connection" above). The collaboration server stores every open document on `SIGTERM` before it exits, so nothing written is lost; a page reconnects by itself.
+- **A rollback:** the same restart, and nothing else.
+- **A failed check after the switch:** two restarts, the second on the release that was running before.
+
+### One-time steps (the owner's)
+
+1. **A key pair for the artifacts.** On the deployer's machine: `node scripts/deploy/deploy.mjs keygen --out <path outside the repository>`. It writes the private key (mode 600) and prints the public key. Put the public key, the whole PEM, in the repository variable `RELEASE_PUBLIC_KEY` (Settings, Secrets and variables, Actions, Variables). The public key is not secret; the private key never leaves the deployer's machine. Each deployer may hold the same private key, or the variable is changed when the deployer changes.
+2. **The layout, in one step that can be undone.** As root on the Droplet, with the release that is running now left exactly where it is:
+
+   ```sh
+   install -d -o <deployer> -g ekdotico -m 2750 /srv/ekdotico/releases /srv/ekdotico/incoming /srv/ekdotico/bin
+   ln -s app /srv/ekdotico/current          # current -> the release running now
+   chown -h <deployer>:ekdotico /srv/ekdotico/current
+   ```
+
+   Then in `ekdotico-web.service` and `ekdotico-collab.service` set `WorkingDirectory=/srv/ekdotico/current` (and any absolute path under `/srv/ekdotico/app` in `ExecStart` to `/srv/ekdotico/current`), and run `systemctl daemon-reload` and `systemctl restart ekdotico-collab.service ekdotico-web.service`. That restart is the one gap of this step. `/srv/ekdotico` itself must be writable by the deployer, since the switch writes `current` and `.previous` there. **To undo it:** set `WorkingDirectory` back to `/srv/ekdotico/app`, `daemon-reload`, restart; `app` was never moved. The first release staged by the new route becomes `releases/<sha>`, and `app` is the release that the first rollback returns to; prune never deletes it. Remove it by hand once a later release has run for a while.
+
+3. **The deployer's rights on the server:** write to `/srv/ekdotico` as above, and `sudo -n systemctl restart ekdotico-collab.service ekdotico-web.service` with no password (a sudoers line for that one command). The script runs `systemctl is-active` without sudo.
+4. **Node.js 26 on the server**, as `node` on the deployer's `PATH`: the server script runs with it, and refuses a release built with another major.
+5. **The swap file added on 18 November 2026** for the builds on the server can be removed: nothing builds there now.
+
+### A normal deployment
+
+1. Wait for the push run of `ci` on `main` to pass for the commit, `full` included.
+2. Start the build: `gh workflow run release --repo Ekdotico/ekdotico --ref main -f sha=<full sha>`, then find its run id with `gh run list --repo Ekdotico/ekdotico --workflow release --limit 1`, and wait for it to pass (`gh run watch <run id>`).
+3. With `DEPLOY_HOST` (and `DEPLOY_USER`) set: `node scripts/deploy/deploy.mjs deploy --sha <full sha> --run <run id> --key <private key file>`.
+   **Where the release brings a migration**, add `--migrate --env-file <file on the server that sets MIGRATE_DATABASE_URL>`. The migration runs from the new release, against the running database, before the switch: migrations are additive (the standing practice), so the release still running keeps working on the migrated schema. A failed migration stops the deployment before the switch, and the running release is untouched.
+4. The script ends with `current is releases/<sha> and answers`, or with the reason it switched back.
+
+### A rollback
+
+`node scripts/deploy/deploy.mjs rollback` switches `current` to the release recorded in `/srv/ekdotico/.previous`, restarts both units, and checks them as a deployment does. A second rollback returns to where the first began. A migration is not undone: since migrations are additive, the earlier release runs on the later schema. `node scripts/deploy/deploy.mjs status` prints the current release, the previous one and the releases kept.
+
+### Assumptions about the server
+
+The repository does not state the Droplet's CPU architecture or Ubuntu release. The workflow builds on `ubuntu-24.04` (x64, glibc); sharp's libvips and Prisma's schema engine are native and need the same CPU and a glibc Linux with OpenSSL 3 (Ubuntu 22.04 or later). For an ARM server set the repository variable `RELEASE_RUNNER` to `ubuntu-24.04-arm`; the manifest check refuses a mismatch on the server either way. Also assumed: the units start the web application with `next start` and the collaboration server with `node src/collab/server.ts` from their `WorkingDirectory`, as `package.json` does, and read their settings from `/etc/ekdotico` and nothing under `/srv/ekdotico/app`, and the web application listens on port 3000 and the collaboration server on 1234 on localhost.
 
 ## The build output is kept as a secret is
 
-The `.next` directory holds the identifier of item 4. A container image, a build artefact, and a host that hold it are readable only by those who may deploy. Draft mode is never used, since it sends the same identifier to the browser as a cookie; the lint rule in `eslint.config.mjs` refuses its import.
+The `.next` directory holds the identifier of item 4. A container image, a build artefact, and a host that hold it are readable only by those who may deploy. The artifacts of a public repository can be downloaded by anyone signed in to GitHub, so a deployable release is uploaded only sealed to the deployer's public key (AES-256-GCM under a key of its own, wrapped with RSA-OAEP; `scripts/deploy/lib.mjs`). A build of a pull request, which the workflow runs to test the route, is uploaded open, kept for one day, and marked not deployable in its manifest; its identifier is its own and is never served. On the server the release directories are mode 2750, group `ekdotico`. Draft mode is never used, since it sends the same identifier to the browser as a cookie; the lint rule in `eslint.config.mjs` refuses its import.
 
 ## Settings
 
