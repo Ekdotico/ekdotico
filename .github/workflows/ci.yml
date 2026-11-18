@@ -1,29 +1,86 @@
 name: ci
 
-# Every pull request, and every push to main. Node.js comes from .nvmrc, which
-# holds the 26 line (NFR-IC-03). Actions are pinned to a commit, with the
-# release in the comment.
+# Two tiers. Node.js comes from .nvmrc, which holds the 26 line (NFR-IC-03). Actions are pinned to a
+# commit, with the release in the comment.
+#
+# `quick` (about two minutes) runs on every pull request and every push to main: install, the check of the
+# dependencies, format, lint, typecheck and the unit tests. `full` (33 to 42 minutes: integration tests,
+# build, end-to-end tests) runs only on a push to main, by hand (workflow_dispatch), or when the label
+# `ci:full` is added to a pull request that is not a draft. A later push to that pull request runs `quick`
+# alone, and the full run reports on the commit it started on: remove the label and add it again to run
+# the suite on the new head. A pull request that fails `quick` never starts `full` (`needs`).
+#
+# No path filters. A change to documentation alone still needs `quick`: the format check covers Markdown,
+# and tests/unit/storage-match.test.ts reads docs/records/storage-match.md.
+#
+# `labeled` is added to the default types (opened, synchronize, reopened) so that the label starts a run.
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
   packages: read
 
+# A push cancels the earlier runs of pushes to the same ref and nothing else. A run started by a label has a
+# group of its own per label, and a manual run one of its own per ref, so that neither a later push nor
+# another label cancels a 30-minute suite that someone asked for; only the same label added again, or
+# another manual run on the same ref, does.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event.action == 'labeled' && format('label-{0}', github.event.label.name) || github.event_name == 'workflow_dispatch' && 'dispatch' || 'push' }}
   cancel-in-progress: true
 
 jobs:
-  checks:
+  quick:
+    # Adding a label other than ci:full starts a run that does nothing.
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     runs-on: ubuntu-latest
-    # The whole run took 17 to 19 minutes before the tests of October 2026 that hold a key
-    # for 30 seconds; at 20 it was cut off in the last step with every step before it passed.
-    timeout-minutes: 35
+    timeout-minutes: 15
+    env:
+      # Reads @ekdotico/domico from GitHub Packages. The package has to grant
+      # this repository access under "Manage Actions access".
+      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          # Writes a user-level .npmrc that names NODE_AUTH_TOKEN for this
+          # registry. pnpm does not take a registry credential from the
+          # project's .npmrc, so the token cannot be configured there.
+          registry-url: https://npm.pkg.github.com
+          scope: '@ekdotico'
+      - run: pnpm install --frozen-lockfile
+      - name: Exact pins and licences (NFR-IC-08, NFR-IC-12)
+        run: pnpm check:deps
+      - run: pnpm format
+      - run: pnpm lint
+      - run: pnpm typecheck
+      # The unit tests set their own fake database and Valkey addresses: no service is started for them.
+      - run: pnpm test
+
+  full:
+    needs: quick
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+      github.event.label.name == 'ci:full' && !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    # Measured on GitHub's runners on 18 November 2026, over 14 runs that reached the end-to-end tests: the
+    # integration tests alone took 18 to 25 minutes and the end-to-end tests 10 to 12 where they finished.
+    # With the setup that is 33 to 42 minutes, so the earlier limit of 35 cut off 13 runs in the last step with
+    # every step before it passed, and let one through at 34.6. 60 leaves room and still stops a run that hangs.
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17
@@ -68,18 +125,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-          # Writes a user-level .npmrc that names NODE_AUTH_TOKEN for this
-          # registry. pnpm does not take a registry credential from the
-          # project's .npmrc, so the token cannot be configured there.
           registry-url: https://npm.pkg.github.com
           scope: '@ekdotico'
       - run: pnpm install --frozen-lockfile
-      - name: Exact pins and licences (NFR-IC-08, NFR-IC-12)
-        run: pnpm check:deps
-      - run: pnpm format
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
       # -volume.max: SeaweedFS gives every bucket 7 volumes of its own and, left alone, caps the volumes by the free disk,
       # which a runner has little of: the fourth bucket then fails its first write with InternalError 500.
       # A `services:` entry cannot be given the command the store is started with, so it is run here.
