@@ -148,15 +148,21 @@ export async function switchTo(target, ops) {
   // return to, never a stale one.
   ops.writePrevious(previous);
   let failure;
+  let moved = false;
   try {
     ops.link(target);
+    moved = true;
     await ops.restart();
     if (await ops.healthy()) return { previous, current: target };
     failure = 'failed its check after the restart';
   } catch (error) {
     failure = `failed: ${error instanceof Error ? error.message : error}`;
   }
-  // Any failure after the record, a restart or a check that throws included, returns to the previous release.
+  // A link that failed never moved (link() renames last, in one step): the running release was not touched and
+  // nothing is restarted.
+  if (!moved)
+    throw new Error(`${target} ${failure}; nothing was switched or restarted, ${previous} still runs`);
+  // Any failure after the link moved, a restart or a check that throws included, returns to the previous release.
   let back = false;
   try {
     ops.link(previous);

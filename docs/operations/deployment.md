@@ -161,7 +161,7 @@ Production is never stopped for a build. Until 18 November 2026 the Droplet buil
 2. **The deployer runs `scripts/deploy/deploy.mjs` on their own machine.** It downloads the artifact with `gh`, opens it with the private key, checks the sha and the checksum, copies it and the release's own `scripts/deploy/server.mjs` to the server, and drives that script there over ssh: stage, then (when asked) migrate, then switch, then prune.
 3. **On the server** each release unpacks into `/srv/ekdotico/releases/<sha>/`, beside the running one, after its checksum is checked again and its manifest is checked against the server's own platform, CPU and Node.js major. `/srv/ekdotico/current` is a symbolic link to the running release; the switch replaces it in one rename, restarts both units, and checks that both are active and that `/api/health` (port 3000) and `/collab/health` (port 1234) answer 200 within 90 seconds. If they do not, it points `current` back, restarts again, and says so; it exits with 1 either way. The three newest releases are kept, and never the running one or the one to roll back to.
 
-**The cache of Next.js.** The running application writes `.next/cache` (optimised images and the incremental cache). The tarball leaves the cache out, and a release is otherwise read-only to the unit user, so `server.mjs stage` creates an empty `.next/cache` in each release, mode 2770, group `ekdotico`. Each release keeps its own cache, which does not survive a switch: entries written by one build are never served by another, a rollback finds its release's cache as it left it, and the cache is deleted with its release when that is pruned. A first request for each image after a switch is optimised again.
+**The cache of Next.js.** The running application writes `.next/cache` (optimised images and the incremental cache). The tarball leaves the cache out, and a release is otherwise read-only to the unit user, so `server.mjs stage` creates an empty `.next/cache` in each release, mode 2770, with the group of `releases/` (`ekdotico-release`, one-time step 3), and refuses the stage if either is not so. Each release keeps its own cache, which does not survive a switch: entries written by one build are never served by another, a rollback finds its release's cache as it left it, and the cache is deleted with its release when that is pruned. A first request for each image after a switch is optimised again.
 
 **Pruning** ranks releases by the time they were staged, which `stage` sets on the release directory, and not by the build time that the archive carries.
 
@@ -191,12 +191,15 @@ The server's address, the ssh user and the paths come from the deployer's enviro
 3. **The layout, in one step that can be undone.** As root, with `<deployer>` the ssh user who deploys:
 
    ```sh
-   chown <deployer>:ekdotico /srv/ekdotico && chmod 0750 /srv/ekdotico   # the switch writes current and .previous here
-   install -d -o <deployer> -g ekdotico -m 2750 /srv/ekdotico/releases /srv/ekdotico/incoming /srv/ekdotico/bin
-   ln -s app /srv/ekdotico/current && chown -h <deployer>:ekdotico /srv/ekdotico/current
+   groupadd --system ekdotico-release
+   usermod -aG ekdotico-release ekdotico        # the unit user reads the releases
+   usermod -aG ekdotico-release <deployer>      # the deployer gives each release's cache to this group
+   chown <deployer>:ekdotico-release /srv/ekdotico && chmod 0750 /srv/ekdotico   # the switch writes current and .previous here
+   install -d -o <deployer> -g ekdotico-release -m 2750 /srv/ekdotico/releases /srv/ekdotico/incoming /srv/ekdotico/bin
+   ln -s app /srv/ekdotico/current && chown -h <deployer>:ekdotico-release /srv/ekdotico/current
    ```
 
-   Mode 2750 with group `ekdotico` lets the unit user read each release and write nothing in it. The one exception is the release's `.next/cache`, which `server.mjs stage` creates with mode 2770 (below). Then add a drop-in for each unit, which leaves the unit files as they are:
+   **Why a group of its own:** the deployer must be in the group that owns the releases, and the group `ekdotico` also opens `shared.env` and `web.env` (mode 640, `root:ekdotico`). So the deployer joins `ekdotico-release` and never `ekdotico`. Mode 2750 with that group lets the unit user read each release and write nothing in it. The one exception is the release's `.next/cache`. `server.mjs stage` gives the cache the group of `releases/` and mode 2770. It does this explicitly, because tar's restored modes clear the setgid bit below the release. Then it checks both, and refuses the stage if either is wrong (as it would be for a deployer outside the group). The deployer's new group counts from their next ssh login, and the unit user's from the restart below. Then add a drop-in for each unit, which leaves the unit files as they are:
 
    ```ini
    # /etc/systemd/system/ekdotico-web.service.d/release.conf, and the same for ekdotico-collab.service
@@ -215,6 +218,17 @@ The server's address, the ssh user and the paths come from the deployer's enviro
    It names the exact command `server.mjs` runs, with the arguments in that order. The script runs `systemctl is-active` without sudo. **For `--migrate`**, the deployer reads a file that holds `MIGRATE_DATABASE_URL` (the role `ekdotico_migrate`, which only a deployment uses; `prisma.config.ts`) and nothing else. For example, `/etc/ekdotico/migrate.env`, owned `root:<deployer>`, mode 640. The cluster's CA file named in that address must be readable by the deployer too; a CA certificate is not secret, so mode 644 is enough. The application's own `shared.env` and `web.env` stay `root:ekdotico` and are not opened to the deployer.
 
 5. **Node.js 26 on the server**, as `node` on the deployer's `PATH` and as the units' `node`. The release is built with the version in `.nvmrc` (26.11.0 today), and `server.mjs` refuses a release built with another major than the server's.
+
+   **Before the first deployment, check (read-only)**, as the deployer over ssh:
+
+   ```sh
+   node --version                                   # must start v26.
+   systemctl show -p ExecStart ekdotico-web.service ekdotico-collab.service   # the node the units run: its path, then run that path with --version
+   command -v systemctl                             # the path the sudoers line names, /usr/bin/systemctl on Ubuntu
+   sudo -n -l                                       # lists the one restart command, with no password asked
+   id                                               # ekdotico-release among the groups, ekdotico not
+   ```
+
 6. **The swap file added on 18 November 2026** for the builds on the server can be removed: nothing builds there now.
 
 ### A normal deployment

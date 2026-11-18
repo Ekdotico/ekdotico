@@ -27,7 +27,7 @@ import {
   unseal,
   verifyChecksum,
 } from '../../scripts/deploy/lib.mjs';
-import { fsOps, prune, stage } from '../../scripts/deploy/server.mjs';
+import { ensureCache, fsOps, prune, stage } from '../../scripts/deploy/server.mjs';
 
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -230,6 +230,17 @@ describe('the switch', () => {
     await expect(switchTo('releases/new', ops)).rejects.toThrow(/ALSO FAILS/);
   });
 
+  it('restarts nothing when the link never moved', async () => {
+    const { calls, ops } = fake([true]);
+    ops.link = () => {
+      throw new Error('/srv/x/releases/new does not exist');
+    };
+    await expect(switchTo('releases/new', ops)).rejects.toThrow(
+      /does not exist; nothing was switched or restarted, releases\/old still runs/,
+    );
+    expect(calls).toEqual(['previous releases/old']);
+  });
+
   it('refuses to switch to what is current', async () => {
     const { calls, ops } = fake([true]);
     await expect(switchTo('releases/old', ops)).rejects.toThrow(/already current/);
@@ -247,6 +258,24 @@ describe('the switch', () => {
     expect(readdirSync(base)).not.toContain('current.next');
     expect(() => ops.link(`releases/${OTHER}`)).toThrow(/does not exist/);
     expect(readlinkSync(join(base, 'current'))).toBe(`releases/${SHA}`);
+  });
+});
+
+describe('the cache of a release', () => {
+  it('is given the group and mode 2770, even below a directory without setgid', () => {
+    const dir = join(temp(), '.next');
+    mkdirSync(dir, { mode: 0o755 });
+    const gid = statSync(dir).gid;
+    ensureCache(join(dir, 'cache'), gid);
+    const { gid: actual, mode } = statSync(join(dir, 'cache'));
+    expect([actual, mode & 0o7777]).toEqual([gid, 0o2770]);
+  });
+
+  // A group the deployer is not in cannot be given; root can give any, so the refusal is not observable as root.
+  it.skipIf(process.getuid?.() === 0)('refuses a group the deployer is not in', () => {
+    expect(() => ensureCache(join(temp(), 'cache'), 0)).toThrow(
+      /cannot give .* to group 0 \(is the deployer in it\?\)/,
+    );
   });
 });
 

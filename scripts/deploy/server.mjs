@@ -23,6 +23,7 @@ import {
   symlinkSync,
   utimesSync,
   chmodSync,
+  chownSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -95,6 +96,26 @@ export function serviceOps({
   };
 }
 
+/**
+ * Makes `path` a directory of group `gid`, mode 2770, and refuses the stage unless it is: the deployer must be a
+ * member of that group to give a directory to it.
+ */
+export function ensureCache(path, gid) {
+  mkdirSync(path, { recursive: true });
+  try {
+    chownSync(path, -1, gid);
+  } catch (error) {
+    throw new Error(`cannot give ${path} to group ${gid} (is the deployer in it?): ${error.message}`);
+  }
+  chmodSync(path, 0o2770);
+  const { gid: actual, mode } = statSync(path);
+  if (actual !== gid || (mode & 0o7777) !== 0o2770) {
+    throw new Error(
+      `${path} is group ${actual}, mode ${(mode & 0o7777).toString(8)}; it must be group ${gid}, mode 2770`,
+    );
+  }
+}
+
 export async function stage({ base, sha, tarball, sha256 }) {
   checkSha(sha);
   const dir = join(base, 'releases', sha);
@@ -114,9 +135,14 @@ export async function stage({ base, sha, tarball, sha256 }) {
   // the running application writes (optimised images, the incremental cache) and which the tarball leaves out.
   // Each release has its own, deleted with it: entries of one build are not served by another, and a rollback
   // finds its release's cache as it left it.
-  const cache = join(partial, '.next', 'cache');
-  mkdirSync(cache, { recursive: true });
-  chmodSync(cache, 0o2770);
+  try {
+    // The group of releases/, which the one-time step gives the unit user's group (ekdotico): tar restores the modes
+    // of the archive's directories, which clears the setgid bit below the release, so the group is set here.
+    ensureCache(join(partial, '.next', 'cache'), statSync(join(base, 'releases')).gid);
+  } catch (error) {
+    rmSync(partial, { recursive: true, force: true });
+    throw error;
+  }
   renameSync(partial, dir);
   // Pruning ranks releases by this time, the stage time; the archive carries the time of the build.
   const now = new Date();
