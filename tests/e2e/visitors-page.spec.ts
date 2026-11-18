@@ -46,6 +46,8 @@ test('the internal page answers 404 when it is asked for by name', async ({ requ
 test('a person signed in reaches their documents at the root, not the page of visitors', async ({ page }) => {
   await signUp(page, newPerson());
   await page.getByRole('button', { name: 'Continue' }).click();
+  // Wait for the page Continue leads to: a navigation still under way aborts the next one.
+  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
   await expect(page.getByText('Ekdotico is in Closed α')).toHaveCount(0);
