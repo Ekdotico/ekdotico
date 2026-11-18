@@ -30,6 +30,11 @@
    hovered or focused, and always solid where there is no hover (a touch screen), where more contrast is
    asked for, and in forced colours. */
 .insert {
+  /* Exactly the height of the box: a wrapper taller than it (the line's strut under an inline child, about
+     3.5px at 17px text) would be centred by its own height and leave the box above the line's middle. */
+  display: flex;
+  block-size: 20px;
+  line-height: 0;
   position: absolute;
   z-index: 1;
   margin-inline-start: var(--sp-2);

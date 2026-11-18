@@ -13,6 +13,8 @@ describe('the target of the Insert control', () => {
     const border = Number(/border: (\d+)px/.exec(own)![1]);
     const inset = Number(/inset: -(\d+)px/.exec(rule('.insertButton::before'))![1]);
     expect(size).toBe(20);
+    // The wrapper that is centred on the line is exactly as tall as the box, or it centres its own height.
+    expect(rule('.insert')).toContain('block-size: 20px');
     // The inset is taken from the padding box, inside the border.
     expect(size - 2 * border + 2 * inset).toBeGreaterThanOrEqual(24);
   });

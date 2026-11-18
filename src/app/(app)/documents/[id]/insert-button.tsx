@@ -9,6 +9,7 @@
 // the page.
 
 import { useLayoutEffect, useRef, type RefObject } from 'react';
+import type { EditorState, Transaction } from '@tiptap/pm/state';
 import { useEditorState, type Editor } from '@tiptap/react';
 import { Tooltip } from '@ekdotico/domico/components';
 import { PlusIcon } from '@ekdotico/domico/icons';
@@ -16,6 +17,18 @@ import styles from './editor.module.css';
 import { INSERT_NAME } from './insert-name.ts';
 import { lineCentre } from './line-centre.ts';
 import { openSlashPalette } from './slash-palette.tsx';
+
+/** A collapsed cursor at the end of a text block that is not code: the only place the control is shown. */
+function endsBlock(state: EditorState): boolean {
+  const { selection } = state;
+  const { $head } = selection;
+  return (
+    selection.empty &&
+    $head.parent.isTextblock &&
+    !$head.parent.type.spec.code &&
+    $head.parentOffset === $head.parent.content.size
+  );
+}
 
 /** Beside the cursor, in the margin the surface keeps for it. Shown only to a person who may edit. */
 export function InsertButton({
@@ -31,16 +44,7 @@ export function InsertButton({
     editor,
     selector: ({ editor: current }) => {
       const { selection, doc } = current.state;
-      const { $head } = selection;
-      return {
-        head: selection.head,
-        size: doc.content.size,
-        atEnd:
-          selection.empty &&
-          $head.parent.isTextblock &&
-          !$head.parent.type.spec.code &&
-          $head.parentOffset === $head.parent.content.size,
-      };
+      return { head: selection.head, size: doc.content.size, atEnd: endsBlock(current.state) };
     },
   });
   const control = useRef<HTMLDivElement>(null);
@@ -82,15 +86,37 @@ export function InsertButton({
       element.style.visibility = 'visible';
     };
     put();
-    const settle = requestAnimationFrame(() => (element.dataset.settled = 'true'));
-    // The text wraps anew at another width, and the line moves with it; and the document changes under a
-    // cursor that has not moved (a closed list's `/` taken out), which the render alone does not follow.
+    let settle = requestAnimationFrame(() => (element.dataset.settled = 'true'));
+    // On the transaction itself, in the frame of the change, and not on the render that follows it: the
+    // document changes under a cursor that has not moved (a closed list's `/` taken out). It is hidden at
+    // once where the cursor has left the end of its block. A change of the text jumps to its place (no
+    // glide, which would still be on its way in that frame) and is placed once more a frame later, when
+    // the layout has settled; a move of the cursor alone glides.
+    const onTransaction = ({ transaction }: { transaction: Transaction }) => {
+      if (!endsBlock(editor.state)) {
+        element.style.visibility = 'hidden';
+        element.dataset.settled = 'false';
+        return;
+      }
+      cancelAnimationFrame(settle);
+      if (transaction.docChanged) {
+        element.dataset.settled = 'false';
+        put();
+        settle = requestAnimationFrame(() => {
+          put();
+          element.dataset.settled = 'true';
+        });
+      } else {
+        put();
+      }
+    };
+    // The text wraps anew at another width, and the line moves with it.
     window.addEventListener('resize', put);
-    editor.on('transaction', put);
+    editor.on('transaction', onTransaction);
     return () => {
       cancelAnimationFrame(settle);
       window.removeEventListener('resize', put);
-      editor.off('transaction', put);
+      editor.off('transaction', onTransaction);
     };
   }, [editor, surface, cursor.atEnd, cursor.head, cursor.size]);
 
