@@ -4,7 +4,7 @@ Ekdotico is a browser-based academic writing platform: a collaborative block edi
 
 This repository is the application. It does **not** contain Istorico, the Ekdotico provenance system (recording, signing, and `verify.ekdoti.co`), which is [`Ekdotico/istorico`](https://github.com/Ekdotico/istorico). The application meets Istorico only through a port, which the integration contract in the Docs defines.
 
-**Status:** pre-launch. Most of the features of α 0.1.0 are built: admission and sign-in, documents and their sharing, the collaborative editor with images, the draft export, and the deletion of documents and of accounts. The slices still open are listed in the build handoff, and nothing is deployed. The repository is private until the first hosted release (NFR-IC-11); the licence is `AGPL-3.0-only`.
+**Status:** pre-launch. Most of the features of α 0.1.0 are built: admission and sign-in, documents and their sharing, the collaborative editor with images, the draft export, and the deletion of documents and of accounts. The slices still open are listed in the build handoff, and nothing is deployed.
 
 ## Specification
 
@@ -26,18 +26,20 @@ One interface is defined here and not in the specification, provisionally: the w
 
 - Node.js 26 (`.nvmrc`), and pnpm 10.
 - `psql`, the PostgreSQL client, for the provisioning script and its test.
-- A token that can read GitHub Packages, to install `@ekdotico/domico`.
+- A GitHub token that can read packages, to install `@ekdotico/domico` (see Installing).
 
-pnpm takes a registry credential only from your own `~/.npmrc`, never from the one in this repository. Put this line in `~/.npmrc` once; it names a variable and holds no token:
+## Installing
+
+`@ekdotico/domico` is on GitHub's package registry, which asks for a token even for a public package. Make a classic personal access token with only the `read:packages` scope, and put it in your environment as `NODE_AUTH_TOKEN`; never write its value into a file. pnpm takes a registry credential only from your own `~/.npmrc`, never from the one in this repository, so put this line there once. It names the variable and holds no token:
 
 ```
 //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
 
-Then pass the token for the one command:
+Then install:
 
 ```bash
-NODE_AUTH_TOKEN="$(gh auth token)" pnpm install
+pnpm install
 ```
 
 ## Local services
