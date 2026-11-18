@@ -7,7 +7,7 @@
 import { chromium } from '@playwright/test';
 import type { Typist } from './harness.ts';
 
-function cookiesOf(header: string, origin: string) {
+export function cookiesOf(header: string, origin: string) {
   return header
     .split(';')
     .map((pair) => pair.trim())

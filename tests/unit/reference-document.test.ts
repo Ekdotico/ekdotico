@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { closeSchema, extensions } from '../../src/app/(app)/documents/[id]/extensions.tsx';
 import { MAX_STATE_BYTES, elementDepth, encodeState } from '../../src/lib/collab/state.ts';
-import { countWords, referenceDocument, WORDS } from '../fixtures/reference-document.ts';
+import { countWords, referenceDocument, WORDS, WORDS_LARGE } from '../fixtures/reference-document.ts';
 
 const committed = JSON.parse(readFileSync('tests/fixtures/reference-document.json', 'utf8'));
 const schema = closeSchema(getSchema(extensions(new Y.Doc())));
@@ -39,6 +39,17 @@ describe('the reference document', () => {
     expect(
       committed.content.filter((block: { type: string }) => block.type === 'paragraph').length,
     ).toBeGreaterThan(40);
+  });
+
+  it('can be made of 50,000 words (register D296): the same kinds of block, only longer, and always the same one', () => {
+    const large = referenceDocument(WORDS_LARGE);
+    expect(WORDS_LARGE).toBe(50000);
+    expect(countWords(large)).toBe(50000);
+    expect(referenceDocument(WORDS_LARGE)).toEqual(large);
+    expect(new Set(large.content.map((block) => block.type))).toEqual(new Set(['heading', 'paragraph']));
+    expect(large.content.length).toBeGreaterThan(committed.content.length * 5);
+    schema.nodeFromJSON(large).check();
+    expect(encodeState(prosemirrorJSONToYDoc(schema, large, 'default')).length).toBeLessThan(MAX_STATE_BYTES);
   });
 
   it('is a document of the editor: the schema takes it, and it is far inside the limits of a document', () => {
