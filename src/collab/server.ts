@@ -1566,10 +1566,12 @@ if (import.meta.main) {
   // health check says so; it could admit no one either (NFR-SE-07).
   void collab.listenForEvents().then(() => {
     if (signalled) return;
-    collab.httpServer.listen(Number(process.env.COLLAB_PORT ?? 1234), () => {
+    // On the loopback address unless COLLAB_HOST says otherwise: the proxy is the only way in (deployment.md, item 8).
+    collab.httpServer.listen(Number(process.env.COLLAB_PORT ?? 1234), loaded.collabHost, () => {
       const address = collab.httpServer.address();
       console.log(
-        `collaboration server listening on ${typeof address === 'object' ? address?.port : address}`,
+        // The address it bound to and the port, so that the log shows the bind (deployment.md, item 8).
+        `collaboration server listening on ${typeof address === 'object' && address ? `${address.address}:${address.port}` : address}`,
       );
     });
   });
