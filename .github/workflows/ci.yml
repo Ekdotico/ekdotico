@@ -4,7 +4,7 @@ name: ci
 # commit, with the release in the comment.
 #
 # `quick` (about two minutes) runs on every pull request and every push to main: install, the check of the
-# dependencies, format, lint, typecheck and the unit tests. `full` (about 30 minutes: integration tests,
+# dependencies, format, lint, typecheck and the unit tests. `full` (33 to 42 minutes: integration tests,
 # build, end-to-end tests) runs only on a push to main, by hand (workflow_dispatch), or when the label
 # `ci:full` is added to a pull request that is not a draft. A later push to that pull request runs `quick`
 # alone, and the full run reports on the commit it started on: remove the label and add it again to run
@@ -76,9 +76,11 @@ jobs:
       (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
       github.event.label.name == 'ci:full' && !github.event.pull_request.draft)
     runs-on: ubuntu-latest
-    # The whole run took 17 to 19 minutes before the tests of October 2026 that hold a key
-    # for 30 seconds; at 20 it was cut off in the last step with every step before it passed.
-    timeout-minutes: 35
+    # Measured on GitHub's runners on 18 November 2026, over 14 runs that reached the end-to-end tests: the
+    # integration tests alone took 18 to 25 minutes and the end-to-end tests 10 to 12 where they finished.
+    # With the setup that is 33 to 42 minutes, so the earlier limit of 35 cut off 13 runs in the last step with
+    # every step before it passed, and let one through at 34.6. 60 leaves room and still stops a run that hangs.
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17

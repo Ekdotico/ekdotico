@@ -137,9 +137,9 @@ ADMIN_DATABASE_URL=postgresql://localhost:5432/postgres E2E_PORT=3109 pnpm test:
 CI is in two tiers, on Node.js 26 (`.github/workflows/ci.yml`):
 
 - **On every pull request and every push to `main`**, the `quick` job: install, `check:deps`, format, lint, typecheck and the unit tests. It takes about two minutes and needs no service.
-- **The full suite**, the `full` job (integration tests, build and end-to-end tests, with PostgreSQL, Valkey and the object store), takes about 30 minutes. It runs on a push to `main`, when the workflow is run by hand on a branch (the Actions tab, or `gh workflow run ci --ref <branch>`), and when the label `ci:full` is added to a pull request that is not a draft. It starts only after `quick` has passed.
+- **The full suite**, the `full` job (integration tests, build and end-to-end tests, with PostgreSQL, Valkey and the object store), takes 33 to 42 minutes. It runs on a push to `main`, when the workflow is run by hand on a branch (the Actions tab, or `gh workflow run ci --ref <branch>`), and when the label `ci:full` is added to a pull request that is not a draft. It starts only after `quick` has passed.
 - A full run reports on the commit it started on. A later push to the pull request runs `quick` alone, even while the label stays, so to run the suite on the new head, remove the label and add it again, or run the workflow by hand. The same goes for a draft that already carries the label: marking it ready for review starts no run, so remove the label and add it again after that.
-- While GitHub Actions cannot run for the organisation, none of this runs: the gate for a merge is the local script `ci-local.mjs`, which the Master Orchestrator runs once per batch of pull requests with all the steps of both tiers.
+- CI runs on GitHub Actions and nowhere else. The full suite is not run on a developer's machine as a gate; where Actions cannot run, the merge waits.
 
 ## Contributing
 
