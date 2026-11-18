@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button, Cluster, Dialog, FormFault, RadioGroup, Select, Stack } from '@ekdotico/domico/components';
 import { useReady } from '../../../../components/ready.ts';
+import { PromptFields } from '../../../../components/prompt-fields.tsx';
 import { sendFor, type Fault } from '../../../../components/send.ts';
 import {
   confirmControl,
@@ -14,6 +15,7 @@ import {
   offeredStatement,
   TRANSFER_ALL,
   TRANSFER_DIALOG,
+  TRANSFER_PROMPT,
   TRANSFER_SCREEN,
 } from '../../../../lib/account/transfer-texts.ts';
 import { chosenPerson } from '../../../../lib/account/transfer-choice.ts';
@@ -92,7 +94,12 @@ export function TransferDocuments({
   longest,
   people,
   days,
+  email,
+  secondFactor,
 }: {
+  /** The account's address and whether it asks for a code: the prompt of FR-AU-92 (D285). */
+  email: string;
+  secondFactor: boolean;
   documents: ShownDocument[];
   accepted: { id: string; title: string; toName: string }[];
   longest: Counted;
@@ -108,6 +115,7 @@ export function TransferDocuments({
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
+  const formRef = useRef<HTMLFormElement>(null);
 
   // The person chosen, as the list now holds them: one who has left it is no longer chosen, and none is put in their
   // place (src/lib/account/transfer-choice.ts); the action waits until a person is chosen again.
@@ -125,20 +133,30 @@ export function TransferDocuments({
   const anything = longest.offered > 0 || people.length > 0;
 
   function close() {
+    formRef.current?.reset();
     setFault(null);
     setOpen(false);
   }
 
-  async function confirm() {
+  async function confirm(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     if (pending) return;
+    const form = event.currentTarget;
+    const entered = new FormData(form);
     setPending(true);
+    const prompt = {
+      password: entered.get('password'),
+      ...(secondFactor ? { code: entered.get('code') } : {}),
+    };
     const sent = await sendFor(
       '/api/account/documents/transfer',
       mode === 'person' && person
-        ? { mode, collaboratorId: person.collaboratorId, documentIds: person.documentIds }
-        : { mode: 'longest', documentIds: longest.documentIds },
+        ? { mode, collaboratorId: person.collaboratorId, documentIds: person.documentIds, ...prompt }
+        : { mode: 'longest', documentIds: longest.documentIds, ...prompt },
     );
     setPending(false);
+    // Neither the password nor the code stays in the page, whatever the answer: a refused one is typed again.
+    form.reset();
     if ('fault' in sent) {
       setFault(sent.fault);
       setAttempt((count) => count + 1);
@@ -221,66 +239,73 @@ export function TransferDocuments({
         aria-describedby="transfer-statement"
         initialFocusRef={cancel}
       >
-        <Stack gap={5}>
-          {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
-          <RadioGroup
-            legend={TRANSFER_DIALOG.legend}
-            hint={TRANSFER_DIALOG.hint}
-            name="transfer-mode"
-            value={mode}
-            onChange={(value) => setMode(value === 'person' ? 'person' : 'longest')}
-            options={[
-              { value: 'longest', label: OPTION_LONGEST },
-              { value: 'person', label: OPTION_PERSON, disabled: people.length === 0 },
-            ]}
-          />
-          {mode === 'person' ? (
-            <Select
-              label={TRANSFER_DIALOG.person}
-              value={person?.collaboratorId ?? ''}
-              onChange={(event) => setChosen(event.target.value)}
-            >
-              <option value="" disabled>
-                {TRANSFER_DIALOG.choose}
-              </option>
-              {people.map(({ collaboratorId, name, offered }) => (
-                <option key={collaboratorId} value={collaboratorId}>
-                  {TRANSFER_DIALOG.personOption(name, offered)}
+        <form method="post" noValidate ref={formRef} onSubmit={confirm}>
+          <Stack gap={5}>
+            {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
+            <RadioGroup
+              legend={TRANSFER_DIALOG.legend}
+              hint={TRANSFER_DIALOG.hint}
+              name="transfer-mode"
+              value={mode}
+              onChange={(value) => setMode(value === 'person' ? 'person' : 'longest')}
+              options={[
+                { value: 'longest', label: OPTION_LONGEST },
+                { value: 'person', label: OPTION_PERSON, disabled: people.length === 0 },
+              ]}
+            />
+            {mode === 'person' ? (
+              <Select
+                label={TRANSFER_DIALOG.person}
+                value={person?.collaboratorId ?? ''}
+                onChange={(event) => setChosen(event.target.value)}
+              >
+                <option value="" disabled>
+                  {TRANSFER_DIALOG.choose}
                 </option>
-              ))}
-            </Select>
-          ) : null}
-          <div id="transfer-statement">
-            <Stack gap={3}>
-              {confirmation({
-                mode,
-                personName: person ? person.name : null,
-                offered: counted.offered,
-                kept: counted.kept,
-                cannot: counted.cannot,
-              }).map((line) => (
-                <p key={line} className={styles.text}>
-                  {line}
-                </p>
-              ))}
-              {counted.offered > 0 ? <p className={styles.text}>{TRANSFER_DIALOG.acceptance(days)}</p> : null}
-            </Stack>
-          </div>
-          <Cluster gap={3}>
-            <Button
-              type="button"
-              disabled={counted.offered === 0 || (mode === 'person' && !person)}
-              pending={pending}
-              pendingLabel={TRANSFER_DIALOG.pending}
-              onClick={() => void confirm()}
-            >
-              {counted.offered > 0 ? confirmControl(counted.offered) : TRANSFER_DIALOG.legend}
-            </Button>
-            <Button id={CANCEL_ID} onClick={close}>
-              {TRANSFER_DIALOG.cancel}
-            </Button>
-          </Cluster>
-        </Stack>
+                {people.map(({ collaboratorId, name, offered }) => (
+                  <option key={collaboratorId} value={collaboratorId}>
+                    {TRANSFER_DIALOG.personOption(name, offered)}
+                  </option>
+                ))}
+              </Select>
+            ) : null}
+            <div id="transfer-statement">
+              <Stack gap={3}>
+                {confirmation({
+                  mode,
+                  personName: person ? person.name : null,
+                  offered: counted.offered,
+                  kept: counted.kept,
+                  cannot: counted.cannot,
+                }).map((line) => (
+                  <p key={line} className={styles.text}>
+                    {line}
+                  </p>
+                ))}
+                {counted.offered > 0 ? (
+                  <p className={styles.text}>{TRANSFER_DIALOG.acceptance(days)}</p>
+                ) : null}
+              </Stack>
+            </div>
+            <p className={styles.text}>
+              {secondFactor ? TRANSFER_PROMPT.passwordAndCode : TRANSFER_PROMPT.password}
+            </p>
+            <PromptFields idPrefix="transfer" email={email} secondFactor={secondFactor} />
+            <Cluster gap={3}>
+              <Button
+                type="submit"
+                disabled={counted.offered === 0 || (mode === 'person' && !person)}
+                pending={pending}
+                pendingLabel={TRANSFER_DIALOG.pending}
+              >
+                {counted.offered > 0 ? confirmControl(counted.offered) : TRANSFER_DIALOG.legend}
+              </Button>
+              <Button id={CANCEL_ID} onClick={close}>
+                {TRANSFER_DIALOG.cancel}
+              </Button>
+            </Cluster>
+          </Stack>
+        </form>
       </Dialog>
     </Stack>
   );

@@ -5,6 +5,7 @@
 // lasts; a cancellation or a transfer gives each back what its role allows; the re-check is the backstop of a
 // lost notice; and the day closes them all. The real collaboration server in this process, the real provider of the
 // editor over Node's own WebSocket, the application's own routes, the real database and Valkey.
+import { HELD } from './guard.ts';
 import type { AddressInfo } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
@@ -248,7 +249,7 @@ describe('the end of the period without the deletion', () => {
     const local = await inProcess();
     try {
       const { id, owner, editor, viewer, rows, clients } = await shared(local);
-      expect((await makeOffer(id, owner.id, rows.editor)).outcome).toBe('offered');
+      expect((await makeOffer(id, owner.id, rows.editor, undefined, HELD)).outcome).toBe('offered');
       const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId: id } });
       await clear(owner.cookie, await everything(owner.id));
       // A second Editor, whom the transfer does not name: only the event of the clearing reaches this connection.

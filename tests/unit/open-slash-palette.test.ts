@@ -50,11 +50,23 @@ describe('opening the palette from the Insert control (FR-ED-10)', () => {
     expect(slashPalette(editor.state).open).toBe(true);
   });
 
-  it('leaves nothing behind where the rules do not open it: the start of a block that holds text', () => {
+  it('opens it at the start of a block that holds text, as a typed slash does there', () => {
     const editor = editorOf([paragraph('word')], 1);
+    expect(openSlashPalette(editor)).toBe(true);
+    expect(editor.state.doc.textContent).toBe('/word');
+  });
+
+  it('leaves nothing behind where the palette may not open: a code block', () => {
+    const editor = editorOf([{ type: 'codeBlock', content: [{ type: 'text', text: 'let a' }] }], 6);
     expect(openSlashPalette(editor)).toBe(false);
-    expect(editor.state.doc.textContent).toBe('word');
-    expect(slashPalette(editor.state).open).toBe(false);
+    expect(editor.state.doc.textContent).toBe('let a');
+  });
+
+  it('needs no mounted view: it asks for no focus where the editor has none, and still opens', () => {
+    const editor = editorOf([paragraph()], 1);
+    expect(editor.isInitialized).toBe(false);
+    expect(() => openSlashPalette(editor)).not.toThrow();
+    expect(slashPalette(editor.state).open).toBe(true);
   });
 
   it('does nothing where the document cannot be edited', () => {

@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DAY_MS, json, MAIL, world } from './clearing.ts';
 import { MemoryStorage } from './image-storage.ts';
-import { load, prepare } from './identity.ts';
+import { load, PASSWORD, prepare } from './identity.ts';
 
 const flags = vi.hoisted(() => ({ failAfter: -1, made: 0 }));
 vi.mock('next/server', async (original) => ({
@@ -60,7 +60,9 @@ describe('a fault after the offers are counted', () => {
     }
     const body = { mode: 'longest', documentIds: (await transferScreen(owner.id)).longest.documentIds };
     const post = () =>
-      transferRoute.POST(request('POST', '/api/account/documents/transfer', owner.cookie, body));
+      transferRoute.POST(
+        request('POST', '/api/account/documents/transfer', owner.cookie, { ...body, password: PASSWORD }),
+      );
     // The fifth offer fails: the twenty were counted, and the five written are undone with the transaction.
     flags.failAfter = 5;
     const failed = await post();
