@@ -1,9 +1,9 @@
 // The path rule of CI (.github/workflows/ci.yml, job `changes`): whether a change needs the full tier
 // (integration and end-to-end tests) or is gated by `quick` alone.
 //
-// Input: the output of `git diff --no-renames --name-status <base> <head>`, one "STATUS<TAB>path" a line.
+// Input: the output of `git diff --raw --no-renames <base> <head>`, one line a file.
 // A change is content-only when it is not empty and EVERY line matches an entry below. Anything else, an
-// unknown status, a quoted (unusual) path, or an empty diff, needs the full tier: the rule fails closed.
+// unknown status, a file that is not a regular one, a quoted (unusual) path, or an empty diff, needs the full tier: the rule fails closed.
 //
 // Usage: node scripts/ci/scope.mjs <file>   prints `full=true` or `full=false`.
 
@@ -21,13 +21,21 @@ export const CONTENT_ONLY = [
   { statuses: 'AM', path: /^public\/images\/[^"]+\.(png|jpe?g|webp|avif|gif)$/ },
 ];
 
+// A line of `git diff --raw --no-renames`: ":<old mode> <new mode> <old sha> <new sha> <status>\t<path>".
+const RAW = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ ([A-Z])\t([^\t]+)$/;
+
 /** @param {string} text */
 export function needsFull(text) {
   const lines = text.split('\n').filter((line) => line !== '');
   if (lines.length === 0) return true;
   return !lines.every((line) => {
-    const [status, path, extra] = line.split('\t');
-    if (extra !== undefined || !path || status?.length !== 1) return false;
+    const match = RAW.exec(line);
+    if (!match) return false;
+    const [, oldMode, newMode, status, path] = match;
+    // A regular file and nothing else: a symbolic link (120000), a submodule (160000), an executable
+    // (100755) or a change of type needs the full tier.
+    const regular = status === 'D' ? oldMode === '100644' : newMode === '100644';
+    if (!regular || (status === 'M' && oldMode !== '100644')) return false;
     return CONTENT_ONLY.some((entry) => entry.statuses.includes(status) && entry.path.test(path));
   });
 }

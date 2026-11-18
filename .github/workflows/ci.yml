@@ -109,7 +109,7 @@ jobs:
           set -eu
           case "$EVENT" in
             pull_request)
-              git diff --no-renames --name-status "$PR_BASE...$PR_HEAD" > changes.txt
+              git diff --raw --no-renames "$PR_BASE...$PR_HEAD" > changes.txt
               echo "Diff: $PR_BASE...$PR_HEAD (the pull request)" >> "$GITHUB_STEP_SUMMARY" ;;
             push)
               base=''
@@ -127,7 +127,7 @@ jobs:
                 echo full=true >> "$GITHUB_OUTPUT"
                 exit 0
               fi
-              git diff --no-renames --name-status "$base" "$HEAD" > changes.txt
+              git diff --raw --no-renames "$base" "$HEAD" > changes.txt
               echo "Diff: $base..$HEAD (since the last commit of main with \`full\` passed)" >> "$GITHUB_STEP_SUMMARY" ;;
             *)
               echo "Run by hand: the full tier runs." >> "$GITHUB_STEP_SUMMARY"
