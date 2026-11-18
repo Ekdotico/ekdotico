@@ -34,23 +34,29 @@ describe('the header', () => {
   };
 
   it('holds its links in a landmark named "Main", with a link "Documents" to the list', () => {
-    const nav = /<nav aria-label="Main">(.*?)<\/nav>/s.exec(shown('/'))?.[1] ?? '';
-    expect(nav).toMatch(/<a [^>]*href="\/"[^>]*>Documents<\/a>/);
-    expect(nav).toContain('Account settings');
+    // Modernisation A3: the same links twice, in the row (from 921px) and in the drawer (below it); CSS shows one
+    // at each width, so a screen reader meets one landmark. Each must hold the whole set.
+    const navs = [...shown('/').matchAll(/<nav aria-label="Main"[^>]*>(.*?)<\/nav>/gs)].map((each) => each[1] ?? '');
+    expect(navs).toHaveLength(2);
+    for (const nav of navs) {
+      expect(nav).toMatch(/<a [^>]*href="\/"[^>]*>Documents<\/a>/);
+      expect(nav).toContain('Account settings');
+    }
   });
 
   it('marks the link of the current page, and no other', () => {
-    expect(shown('/').match(/aria-current="page"/g)).toHaveLength(1);
-    expect(shown('/')).toMatch(/aria-current="page"[^>]*>Documents</);
-    expect(shown('/settings')).toMatch(/aria-current="page"[^>]*>Account settings</);
+    // One mark in each of the two copies of the navigation, so one for a reader at any width.
+    expect(shown('/').match(/aria-current="page"/g)).toHaveLength(2);
+    expect(shown('/').match(/aria-current="page"[^>]*>Documents</g)).toHaveLength(2);
+    expect(shown('/settings').match(/aria-current="page"[^>]*>Account settings</g)).toHaveLength(2);
     expect(shown('/documents/abc/sharing')).not.toContain('aria-current');
   });
 
   it('carries the design system\'s appearance control, named "Appearance"', () => {
     const markup = shown('/');
-    expect(markup.match(/<button[^>]*aria-expanded="false"[^>]*>/g)).toHaveLength(1);
-    expect(markup).toMatch(
-      /<button[^>]*aria-expanded="false"[^>]*>(?:(?!<\/button>).)*Appearance|<button[^>]*aria-label="Appearance"/s,
-    );
+    // The menu's trigger of the phone header (A3) is the other button that can expand: it is named "Menu".
+    const triggers = markup.match(/<button[^>]*aria-expanded="false"[^>]*>(?:(?!<\/button>).)*/gs) ?? [];
+    expect(triggers.filter((each) => /Appearance/.test(each))).toHaveLength(1);
+    expect(triggers.filter((each) => /Menu/.test(each))).toHaveLength(1);
   });
 });
