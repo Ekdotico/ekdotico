@@ -11,12 +11,14 @@
 // host or an alias of ~/.ssh/config), DEPLOY_USER (optional where the alias names one), DEPLOY_BASE (default
 // /srv/ekdotico), DEPLOY_SSH_PORT (optional).
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkSha, keyPair, parseArgs, unseal, verifyChecksum } from './lib.mjs';
+import { checkRun, checkSha, keyPair, parseArgs, unseal, verifyChecksum } from './lib.mjs';
 
+const REPO = 'Ekdotico/ekdotico';
 const run = (command, args) => execFileSync(command, args, { stdio: 'inherit' });
+const gh = (args) => JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
 
 function server(env = process.env) {
   if (!env.DEPLOY_HOST)
@@ -44,7 +46,24 @@ async function deploy(args) {
   if (args['env-file'] && !/^\/[A-Za-z0-9/._-]+$/.test(args['env-file']))
     throw new Error('--env-file must be an absolute plain path');
   const s = server();
+  // Where the run came from, from GitHub's API and not from the artifact: neither release.json nor the seal (made
+  // with a public key) proves its origin.
+  const runHead = checkRun(gh(['api', `repos/${REPO}/actions/runs/${args.run}`]));
+  // The gate let the dispatch build only a commit of main as main stood then: the release is that commit or an
+  // ancestor of the run's head.
+  const relation = gh(['api', `repos/${REPO}/compare/${sha}...${runHead}`]).status;
+  if (!['identical', 'ahead'].includes(relation)) {
+    throw new Error(`${sha} is not on main as it stood for run ${args.run} (${relation})`);
+  }
   const dir = mkdtempSync(join(tmpdir(), 'ekdotico-release-'));
+  try {
+    await fetchAndShip(args, sha, s, dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true }); // the opened tarball holds the build output
+  }
+}
+
+async function fetchAndShip(args, sha, s, dir) {
   run('gh', [
     'run',
     'download',
@@ -59,6 +78,7 @@ async function deploy(args) {
 
   const manifest = JSON.parse(readFileSync(join(dir, 'release.json'), 'utf8'));
   if (manifest.sha !== sha) throw new Error(`run ${args.run} built ${manifest.sha}, not ${sha}`);
+  if (manifest.run !== args.run) throw new Error(`the manifest names run ${manifest.run}, not ${args.run}`);
   if (manifest.deployable !== true) throw new Error(`run ${args.run} is not deployable: ${manifest.reason}`);
   const tarball = join(dir, 'release.tgz');
   writeFileSync(tarball, unseal(readFileSync(join(dir, 'release.sealed')), readFileSync(args.key, 'utf8')));
@@ -68,6 +88,19 @@ async function deploy(args) {
   // The server script of the release itself, so that the steps are those of the commit being deployed.
   run('tar', ['-xzf', tarball, '-C', dir, 'scripts/deploy/server.mjs', 'scripts/deploy/lib.mjs']);
   const incoming = `${s.base}/incoming/${sha}`;
+  try {
+    await ship(args, sha, s, dir, tarball, manifest, incoming);
+  } finally {
+    // The opened tarball is not left on the server, whichever step failed.
+    try {
+      s.ssh('rm', '-rf', incoming);
+    } catch {
+      console.error(`could not remove ${incoming} on the server: remove it by hand`);
+    }
+  }
+}
+
+async function ship(args, sha, s, dir, tarball, manifest, incoming) {
   s.ssh('mkdir', '-p', '-m', '700', incoming);
   s.scp([tarball, join(dir, 'scripts/deploy/server.mjs'), join(dir, 'scripts/deploy/lib.mjs')], incoming);
   const at = (command, ...rest) =>
@@ -80,7 +113,6 @@ async function deploy(args) {
   // first one (`app`, which has no copy) included.
   s.ssh('mkdir', '-p', `${s.base}/bin`);
   s.ssh('cp', `${incoming}/server.mjs`, `${incoming}/lib.mjs`, `${s.base}/bin/`);
-  s.ssh('rm', '-rf', incoming);
 }
 
 const [command, ...argv] = process.argv.slice(2);

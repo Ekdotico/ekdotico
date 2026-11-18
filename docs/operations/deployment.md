@@ -138,6 +138,7 @@ The same configuration also does what items 1 to 6 above ask:
 
 - **An unknown host gets no answer.** A `default_server` on 443 with `ssl_reject_handshake on` refuses the handshake for any name but `app.ekdoti.co` (the bare address, a scanner), and logs nothing; the default server on 80 answers 444.
 - **`X-Forwarded-For` is set to the client's address** with `proxy_set_header X-Forwarded-For $remote_addr` on every `location`, which overwrites what the client sent, so nginx is the one proxy and `TRUSTED_PROXY_COUNT` is 1 in `/etc/ekdotico/shared.env`. `x-prerender-revalidate` is set to the empty string on every `location` (item 4). `/collab` carries `Upgrade` and `Connection` with `proxy_read_timeout 120s`, and only `/collab`, `/collab/health` and the paths of the web application are sent on.
+- **An internal path is not sent to the client (the owner's step, not yet applied).** Next.js adds a response header, `x-nextjs-rewritten-path`, that names the internal path a rewrite went to: the visitors page's, for one (review of pull request 102). Add `proxy_hide_header x-nextjs-rewritten-path;` to every `location` that passes to the web application, and reload nginx.
 - **Two firewalls.** The DigitalOcean cloud firewall in front of the Droplet, and `ufw` on it: default deny incoming, and 22, 80 and 443 (TCP) allowed. `ufw` also closes port 1234, on which the collaboration server listens on every interface; the web application listens on `127.0.0.1:3000` and Valkey on `127.0.0.1:6379` and `[::1]:6379` alone.
 
 ## The deployment as built (AMS3, D313)
@@ -160,6 +161,12 @@ Production is never stopped for a build. Until 18 November 2026 the Droplet buil
 2. **The deployer runs `scripts/deploy/deploy.mjs` on their own machine.** It downloads the artifact with `gh`, opens it with the private key, checks the sha and the checksum, copies it and the release's own `scripts/deploy/server.mjs` to the server, and drives that script there over ssh: stage, then (when asked) migrate, then switch, then prune.
 3. **On the server** each release unpacks into `/srv/ekdotico/releases/<sha>/`, beside the running one, after its checksum is checked again and its manifest is checked against the server's own platform, CPU and Node.js major. `/srv/ekdotico/current` is a symbolic link to the running release; the switch replaces it in one rename, restarts both units, and checks that both are active and that `/api/health` (port 3000) and `/collab/health` (port 1234) answer 200 within 90 seconds. If they do not, it points `current` back, restarts again, and says so; it exits with 1 either way. The three newest releases are kept, and never the running one or the one to roll back to.
 
+**The cache of Next.js.** The running application writes `.next/cache` (optimised images and the incremental cache). The tarball leaves the cache out, and a release is otherwise read-only to the unit user, so `server.mjs stage` creates an empty `.next/cache` in each release, mode 2770, group `ekdotico`. Each release keeps its own cache, which does not survive a switch: entries written by one build are never served by another, a rollback finds its release's cache as it left it, and the cache is deleted with its release when that is pruned. A first request for each image after a switch is optimised again.
+
+**Pruning** ranks releases by the time they were staged, which `stage` sets on the release directory, and not by the build time that the archive carries.
+
+**Where the run came from** is checked by `deploy.mjs` with GitHub's API before anything is downloaded. Neither `release.json` nor the seal proves it, since the seal uses a public key and a pull request's run executes the pull request's own workflow file. The run must be of `.github/workflows/release.yml`, started by `workflow_dispatch` on `main` of `Ekdotico/ekdotico` (not a fork), and must have passed. The release's sha must be the run's head or an ancestor of it, which is what the workflow's gate allowed. The local copy of the opened tarball, and the copy in `incoming/` on the server, are deleted whether the deployment succeeds or fails.
+
 The server's address, the ssh user and the paths come from the deployer's environment, never from a file in this repository: `DEPLOY_HOST` (a host or an alias of `~/.ssh/config`), `DEPLOY_USER` (where the alias names none), `DEPLOY_SSH_PORT` (optional) and `DEPLOY_BASE` (`/srv/ekdotico` where unset).
 
 ### What a user sees
@@ -171,19 +178,44 @@ The server's address, the ssh user and the paths come from the deployer's enviro
 ### One-time steps (the owner's)
 
 1. **A key pair for the artifacts.** On the deployer's machine: `node scripts/deploy/deploy.mjs keygen --out <path outside the repository>`. It writes the private key (mode 600) and prints the public key. Put the public key, the whole PEM, in the repository variable `RELEASE_PUBLIC_KEY` (Settings, Secrets and variables, Actions, Variables). The public key is not secret; the private key never leaves the deployer's machine. Each deployer may hold the same private key, or the variable is changed when the deployer changes.
-2. **The layout, in one step that can be undone.** As root on the Droplet, with the release that is running now left exactly where it is:
+2. **Look first.** Who owns `/srv/ekdotico` and `app`, and whether anything reads a path under `app` other than the two units, is not recorded here. As root:
 
    ```sh
-   install -d -o <deployer> -g ekdotico -m 2750 /srv/ekdotico/releases /srv/ekdotico/incoming /srv/ekdotico/bin
-   ln -s app /srv/ekdotico/current          # current -> the release running now
-   chown -h <deployer>:ekdotico /srv/ekdotico/current
+   stat -c '%U:%G %a %n' /srv/ekdotico /srv/ekdotico/app /srv/ekdotico/app/.next /srv/ekdotico/app/.next/cache
+   systemctl cat ekdotico-web.service ekdotico-collab.service | grep -E 'WorkingDirectory|ExecStart|ReadWritePaths'
+   grep -rln '/srv/ekdotico/app' /etc/systemd/system /etc/nginx /etc/ekdotico /etc/cron* 2>/dev/null
    ```
 
-   Then in `ekdotico-web.service` and `ekdotico-collab.service` set `WorkingDirectory=/srv/ekdotico/current` (and any absolute path under `/srv/ekdotico/app` in `ExecStart` to `/srv/ekdotico/current`), and run `systemctl daemon-reload` and `systemctl restart ekdotico-collab.service ekdotico-web.service`. That restart is the one gap of this step. `/srv/ekdotico` itself must be writable by the deployer, since the switch writes `current` and `.previous` there. **To undo it:** set `WorkingDirectory` back to `/srv/ekdotico/app`, `daemon-reload`, restart; `app` was never moved. The first release staged by the new route becomes `releases/<sha>`, and `app` is the release that the first rollback returns to; prune never deletes it. Remove it by hand once a later release has run for a while.
+   The last command should list the two unit files and nothing else. Anything else it lists (a timer, an nginx `root`, a cron job) moves to `/srv/ekdotico/current` in the same step below. `app` itself is not moved or changed, so whoever owns it keeps it.
 
-3. **The deployer's rights on the server:** write to `/srv/ekdotico` as above, and `sudo -n systemctl restart ekdotico-collab.service ekdotico-web.service` with no password (a sudoers line for that one command). The script runs `systemctl is-active` without sudo.
-4. **Node.js 26 on the server**, as `node` on the deployer's `PATH`: the server script runs with it, and refuses a release built with another major.
-5. **The swap file added on 18 November 2026** for the builds on the server can be removed: nothing builds there now.
+3. **The layout, in one step that can be undone.** As root, with `<deployer>` the ssh user who deploys:
+
+   ```sh
+   chown <deployer>:ekdotico /srv/ekdotico && chmod 0750 /srv/ekdotico   # the switch writes current and .previous here
+   install -d -o <deployer> -g ekdotico -m 2750 /srv/ekdotico/releases /srv/ekdotico/incoming /srv/ekdotico/bin
+   ln -s app /srv/ekdotico/current && chown -h <deployer>:ekdotico /srv/ekdotico/current
+   ```
+
+   Mode 2750 with group `ekdotico` lets the unit user read each release and write nothing in it. The one exception is the release's `.next/cache`, which `server.mjs stage` creates with mode 2770 (below). Then add a drop-in for each unit, which leaves the unit files as they are:
+
+   ```ini
+   # /etc/systemd/system/ekdotico-web.service.d/release.conf, and the same for ekdotico-collab.service
+   [Service]
+   WorkingDirectory=/srv/ekdotico/current
+   ```
+
+   Before, each unit reads `WorkingDirectory=/srv/ekdotico/app`; after, the drop-in reads `WorkingDirectory=/srv/ekdotico/current`. If `ExecStart` names a path under `/srv/ekdotico/app` (step 2 shows it), the drop-in replaces it too: an empty `ExecStart=` line, then the same line with `/srv/ekdotico/app` replaced by `/srv/ekdotico/current`. A unit with `ReadWritePaths` naming `app` gets the same change. Then run `systemctl daemon-reload` and `systemctl restart ekdotico-collab.service ekdotico-web.service`. That restart is the one gap of this step. **To undo it:** delete the two drop-ins, run `daemon-reload`, and restart. `app` was never moved. The first release staged by the new route becomes `releases/<sha>`, and `app` is the release the first rollback returns to. Prune never deletes `app`; remove it by hand once a later release has run for a while.
+
+4. **The deployer's rights on the server.** Ownership of `/srv/ekdotico`, as above. One sudoers line, written with `visudo -f /etc/sudoers.d/ekdotico-deploy`:
+
+   ```
+   <deployer> ALL=(root) NOPASSWD: /usr/bin/systemctl restart ekdotico-collab.service ekdotico-web.service
+   ```
+
+   It names the exact command `server.mjs` runs, with the arguments in that order. The script runs `systemctl is-active` without sudo. **For `--migrate`**, the deployer reads a file that holds `MIGRATE_DATABASE_URL` (the role `ekdotico_migrate`, which only a deployment uses; `prisma.config.ts`) and nothing else. For example, `/etc/ekdotico/migrate.env`, owned `root:<deployer>`, mode 640. The cluster's CA file named in that address must be readable by the deployer too; a CA certificate is not secret, so mode 644 is enough. The application's own `shared.env` and `web.env` stay `root:ekdotico` and are not opened to the deployer.
+
+5. **Node.js 26 on the server**, as `node` on the deployer's `PATH` and as the units' `node`. The release is built with the version in `.nvmrc` (26.11.0 today), and `server.mjs` refuses a release built with another major than the server's.
+6. **The swap file added on 18 November 2026** for the builds on the server can be removed: nothing builds there now.
 
 ### A normal deployment
 

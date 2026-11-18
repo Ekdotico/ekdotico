@@ -2,12 +2,21 @@
 // release"): argument checks, the checksum and manifest checks, sealing, release pruning, and the order of the switch
 // and its rollback. Restarting systemd units and the health routes are not exercised here.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readlinkSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readlinkSync,
+  readdirSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   checkManifest,
+  checkRun,
   checkSha,
   keyPair,
   parseArgs,
@@ -108,6 +117,40 @@ describe('pruning', () => {
   });
 });
 
+describe('where a run came from', () => {
+  const good = {
+    id: 1,
+    path: '.github/workflows/release.yml',
+    event: 'workflow_dispatch',
+    head_branch: 'main',
+    status: 'completed',
+    conclusion: 'success',
+    head_sha: SHA,
+    head_repository: { full_name: 'Ekdotico/ekdotico' },
+    repository: { full_name: 'Ekdotico/ekdotico' },
+  };
+
+  it('accepts a passed dispatch of release.yml on main of this repository', () => {
+    expect(checkRun(good)).toBe(SHA);
+  });
+
+  it.each([
+    ['a pull request', { event: 'pull_request' }, /event pull_request/],
+    ['another workflow', { path: '.github/workflows/ci.yml' }, /workflow/],
+    ['another branch', { head_branch: 'feature' }, /branch feature/],
+    ['a failed run', { conclusion: 'failure' }, /conclusion failure/],
+    ['a run still going', { status: 'in_progress', conclusion: null }, /conclusion/],
+    ['a fork', { head_repository: { full_name: 'someone/ekdotico' } }, /repository someone/],
+    ['a short head sha', { head_sha: 'abc' }, /full commit sha/],
+  ])('refuses %s', (_, change, message) => {
+    expect(() => checkRun({ ...good, ...change })).toThrow(message);
+  });
+
+  it('refuses nothing at all', () => {
+    expect(() => checkRun(undefined)).toThrow(/not a passed dispatch/);
+  });
+});
+
 describe('the switch', () => {
   const fake = (results: boolean[]) => {
     const calls: string[] = [];
@@ -124,13 +167,46 @@ describe('the switch', () => {
     };
   };
 
-  it('links, records the previous, restarts and checks, in that order', async () => {
+  it('records the previous, links, restarts and checks, in that order', async () => {
     const { calls, ops } = fake([true]);
     await expect(switchTo('releases/new', ops)).resolves.toEqual({
       previous: 'releases/old',
       current: 'releases/new',
     });
-    expect(calls).toEqual(['link releases/new', 'previous releases/old', 'restart', 'check']);
+    expect(calls).toEqual(['previous releases/old', 'link releases/new', 'restart', 'check']);
+  });
+
+  const rollback = ['link releases/old', 'restart', 'check'];
+
+  it('switches back when the restart throws', async () => {
+    const { calls, ops } = fake([true]);
+    let first = true;
+    ops.restart = async () => {
+      calls.push('restart');
+      if (first) {
+        first = false;
+        throw new Error('systemctl exited with 1');
+      }
+    };
+    await expect(switchTo('releases/new', ops)).rejects.toThrow(
+      /failed: systemctl exited with 1; switched back to releases\/old, which is up again/,
+    );
+    expect(calls).toEqual(['previous releases/old', 'link releases/new', 'restart', ...rollback]);
+  });
+
+  it('switches back when the check throws', async () => {
+    const { calls, ops } = fake([true]);
+    let first = true;
+    ops.healthy = async () => {
+      calls.push('check');
+      if (first) {
+        first = false;
+        throw new Error('fetch failed');
+      }
+      return true;
+    };
+    await expect(switchTo('releases/new', ops)).rejects.toThrow(/failed: fetch failed; switched back/);
+    expect(calls).toEqual(['previous releases/old', 'link releases/new', 'restart', 'check', ...rollback]);
   });
 
   it('switches back by itself and says so when the check fails', async () => {
@@ -139,8 +215,8 @@ describe('the switch', () => {
       /switched back to releases\/old, which is up again/,
     );
     expect(calls).toEqual([
-      'link releases/new',
       'previous releases/old',
+      'link releases/new',
       'restart',
       'check',
       'link releases/old',
@@ -179,7 +255,8 @@ describe('staging', () => {
     const src = temp();
     writeFileSync(join(src, 'RELEASE.json'), JSON.stringify(m));
     const file = join(temp(), 'release.tgz');
-    execFileSync('tar', ['-czf', file, '-C', src, 'RELEASE.json']);
+    utimesSync(src, 1, 1); // an archive of long ago
+    execFileSync('tar', ['-czf', file, '-C', src, '.']);
     return file;
   };
   const node = process.version;
@@ -190,6 +267,11 @@ describe('staging', () => {
     const file = tarball(real);
     await stage({ base, sha: SHA, tarball: file, sha256: await sha256File(file) });
     expect(readdirSync(join(base, 'releases'))).toEqual([SHA]);
+    const dir = join(base, 'releases', SHA);
+    // A cache the unit user's group can write, in a release that is otherwise read-only to it.
+    expect(statSync(join(dir, '.next', 'cache')).mode & 0o7777).toBe(0o2770);
+    // Stamped with the stage time, which pruning ranks by, not the build time the archive carries.
+    expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000);
     await expect(stage({ base, sha: SHA, tarball: file, sha256: await sha256File(file) })).rejects.toThrow(
       /exists already/,
     );

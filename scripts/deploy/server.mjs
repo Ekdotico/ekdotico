@@ -21,6 +21,8 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
+  chmodSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -108,7 +110,17 @@ export async function stage({ base, sha, tarball, sha256 }) {
     rmSync(partial, { recursive: true, force: true });
     throw error;
   }
+  // The release is read-only to the unit user (group ekdotico, no group write), except Next.js's own cache, which
+  // the running application writes (optimised images, the incremental cache) and which the tarball leaves out.
+  // Each release has its own, deleted with it: entries of one build are not served by another, and a rollback
+  // finds its release's cache as it left it.
+  const cache = join(partial, '.next', 'cache');
+  mkdirSync(cache, { recursive: true });
+  chmodSync(cache, 0o2770);
   renameSync(partial, dir);
+  // Pruning ranks releases by this time, the stage time; the archive carries the time of the build.
+  const now = new Date();
+  utimesSync(dir, now, now);
   console.log(`staged ${dir}`);
 }
 

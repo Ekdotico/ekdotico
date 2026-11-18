@@ -144,14 +144,51 @@ export function parseArgs(argv, { required = [], flags = [], optional = [] }) {
 export async function switchTo(target, ops) {
   const previous = ops.readCurrent();
   if (previous === target) throw new Error(`${target} is already current`);
-  ops.link(target);
+  // Recorded before the link moves, so that a crash between the two leaves a record that names the release to
+  // return to, never a stale one.
   ops.writePrevious(previous);
-  await ops.restart();
-  if (await ops.healthy()) return { previous, current: target };
-  ops.link(previous);
-  await ops.restart();
-  const back = await ops.healthy();
+  let failure;
+  try {
+    ops.link(target);
+    await ops.restart();
+    if (await ops.healthy()) return { previous, current: target };
+    failure = 'failed its check after the restart';
+  } catch (error) {
+    failure = `failed: ${error instanceof Error ? error.message : error}`;
+  }
+  // Any failure after the record, a restart or a check that throws included, returns to the previous release.
+  let back = false;
+  try {
+    ops.link(previous);
+    await ops.restart();
+    back = await ops.healthy();
+  } catch {}
   throw new Error(
-    `${target} failed its check after the restart; switched back to ${previous}, which ${back ? 'is up again' : 'ALSO FAILS ITS CHECK: act now'}`,
+    `${target} ${failure}; switched back to ${previous}, which ${back ? 'is up again' : 'ALSO FAILS ITS CHECK: act now'}`,
   );
+}
+
+/**
+ * Refuses a run of the workflow that did not come from the dispatch on main of this repository: a pull request's
+ * run executes the pull request's own workflow file, so it could upload an artifact named for a commit of main and
+ * marked deployable. `run` is the object of GET /repos/{repo}/actions/runs/{id}.
+ * @param {any} run
+ */
+export function checkRun(run, repo = 'Ekdotico/ekdotico') {
+  const wrong = [
+    [run?.path === '.github/workflows/release.yml', `workflow ${run?.path}`],
+    [run?.event === 'workflow_dispatch', `event ${run?.event}`],
+    [run?.head_branch === 'main', `branch ${run?.head_branch}`],
+    [run?.status === 'completed' && run?.conclusion === 'success', `conclusion ${run?.conclusion}`],
+    [
+      run?.head_repository?.full_name === repo && run?.repository?.full_name === repo,
+      `repository ${run?.head_repository?.full_name}`,
+    ],
+  ].filter(([ok]) => !ok);
+  if (wrong.length) {
+    throw new Error(
+      `run ${run?.id} is not a passed dispatch of release.yml on main of ${repo}: ${wrong.map(([, why]) => why).join(', ')}`,
+    );
+  }
+  return checkSha(run.head_sha);
 }
