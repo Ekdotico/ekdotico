@@ -17,6 +17,7 @@ import {
   WAITING_LIST_URL,
 } from '../../src/lib/visitors.ts';
 import { classify, SESSIONLESS } from '../../src/proxy.ts';
+import nextConfig from '../../next.config.ts';
 
 const env = {
   FOUNDING_TEAM_EMAILS: '',
@@ -106,6 +107,25 @@ describe('CONTACT_ADDRESS', () => {
     for (const file of ['.env.example']) {
       expect(readFileSync(file, 'utf8')).not.toMatch(/^\s*CONTACT_ADDRESS=\S/m);
     }
+  });
+});
+
+describe('the rewrite that answers the root for a visitor (next.config.ts)', () => {
+  it('is for `/` alone, before the files of the build, where the mark is present, and names a path and no origin', async () => {
+    const rewrites = (await nextConfig.rewrites!()) as { beforeFiles: unknown[] };
+    expect(rewrites.beforeFiles).toEqual([
+      {
+        source: '/',
+        has: [{ type: 'header', key: 'x-ekdotico-visitor', value: '1' }],
+        destination: '/visitors-page',
+      },
+    ]);
+  });
+
+  // A rewrite of the proxy's is taken for one to another origin by a process started with
+  // `--hostname 127.0.0.1`, as a deployment is (src/lib/visitors.ts): `/` answered 500 there.
+  it('is the only one: the proxy rewrites nothing', () => {
+    expect(readFileSync('src/proxy.ts', 'utf8')).not.toMatch(/NextResponse\s*\.\s*rewrite/);
   });
 });
 

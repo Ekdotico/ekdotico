@@ -1,6 +1,7 @@
 // The page for a visitor who is not signed in (FR-AU-93; register D327 to
-// D330). It is not reached at this address: the proxy rewrites `GET /` and
-// `HEAD /` to it for a request without a session, and answers 404 to a request
+// D330). It is not reached at this address: the proxy marks `GET /` and
+// `HEAD /` of a request without a session, which next.config.ts rewrites to
+// it (src/lib/visitors.ts), and answers 404 to a request
 // that names it (src/proxy.ts). It reads nothing of the request: not a cookie,
 // not a header, not the query. It shows the fixed text of src/lib/visitors.ts,
 // and the contact address only where `CONTACT_ADDRESS` says its mailbox exists

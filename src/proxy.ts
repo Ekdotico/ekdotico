@@ -22,7 +22,7 @@ import { errorResponse, faultPage, INTERNAL_FAULT, onlyReads, returnPath } from 
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
-import { VISITORS_PATH } from './lib/visitors.ts';
+import { VISITOR_HEADER, VISITOR_MARK, VISITORS_PATH } from './lib/visitors.ts';
 import { settings } from './lib/settings.ts';
 
 /** Where a visitor without a session is sent (FR-AU-07; API design, "Sign-in and identity"). */
@@ -127,7 +127,7 @@ const MESSAGES = {
  * and a file of the build, keeps the policy every response has, which admits
  * nothing (next.config.ts), and so does every answer this file makes itself.
  */
-function onward(request: NextRequest, rewriteTo?: string): NextResponse {
+function onward(request: NextRequest, asVisitor = false): NextResponse {
   const { pathname } = request.nextUrl;
   // Under `/_next/` nothing is a page, whether or not it is a file of the
   // build. A route is handed the request as it came, and nothing with it
@@ -145,16 +145,14 @@ function onward(request: NextRequest, rewriteTo?: string): NextResponse {
   const headers = new Headers(request.headers);
   headers.set(NONCE_HEADER, nonce);
   headers.set('Content-Security-Policy', policy);
-  // A rewrite keeps the request's own origin and drops its query: the page it
-  // names reads nothing of the request (FR-AU-93).
-  const target = request.nextUrl.clone();
-  if (rewriteTo) {
-    target.pathname = rewriteTo;
-    target.search = '';
-  }
-  const response = rewriteTo
-    ? NextResponse.rewrite(target, { request: { headers } })
-    : NextResponse.next({ request: { headers } });
+  // FR-AU-93: the mark is the proxy's and never the client's. It is taken off
+  // every page request, and put on the one of a visitor for `/`, which
+  // next.config.ts then answers with the page of visitors (src/lib/visitors.ts
+  // says why the proxy does not rewrite). Next.js drops from the request every
+  // header that is not in this set, so a mark a client sent does not arrive.
+  headers.delete(VISITOR_HEADER);
+  if (asVisitor) headers.set(VISITOR_HEADER, VISITOR_MARK);
+  const response = NextResponse.next({ request: { headers } });
   response.headers.set('Content-Security-Policy', policy);
   return response;
 }
@@ -181,7 +179,7 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
   const changesState = !onlyReads(method);
   const group = classify(method, pathname);
 
-  // FR-AU-93: the page of a visitor is reached by `/` alone, rewritten below.
+  // FR-AU-93: the page of a visitor is reached by `/` alone, marked below.
   // Named in a request it is no page, for a visitor and for a person signed in.
   if (pathname === VISITORS_PATH) return errorResponse(404, 'not_found', MESSAGES.notFound);
 
@@ -239,7 +237,7 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
       return withCookies(errorResponse(401, 'unauthenticated', MESSAGES.unauthenticated), setCookie);
     }
     // FR-AU-93, D327: `GET /` and `HEAD /` of a visitor are answered with the
-    // page of visitors, rewritten and not redirected, so the address stays
+    // page of visitors, in place and not by a redirect, so the address stays
     // `/`. Counted as the pages of group (a) are, and only here: a request of a
     // person signed in does not reach this line, so it spends none of the
     // address's count (NFR-SE-07).
@@ -254,7 +252,7 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
           setCookie,
         );
       }
-      return withCookies(onward(request, VISITORS_PATH), setCookie);
+      return withCookies(onward(request, true), setCookie);
     }
     const signIn = new URL(SIGN_IN_PATH, settings().appOrigin);
     signIn.searchParams.set(RETURN_PARAMETER, returnPath(pathname + search));
