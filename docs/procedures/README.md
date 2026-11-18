@@ -1,6 +1,6 @@
 # The procedures that show the release criteria
 
-Six procedures, copied from the build-phases page ("How each criterion is tested", at the draft register `docs-decisions@ee3a637`) with a box for each step and a field for each thing a step says to record, and the procedure for rotating the secrets (NFR-SE-17 (e), `docs/operations/secret-rotation.md`). A member of the team follows one in order, on the Frankfurt deployment, and its record stays in this repository with its date and the release tested.
+Six procedures, copied from the build-phases page ("How each criterion is tested", at the draft register `docs-decisions@ee3a637`) with a box for each step and a field for each thing a step says to record, and the procedure for rotating the secrets (NFR-SE-17 (e), `docs/operations/secret-rotation.md`). A member of the team follows one in order, on the Amsterdam deployment, and its record stays in this repository with its date and the release tested.
 
 | #   | Procedure                                                | Criterion            | Record goes in                          |
 | --- | -------------------------------------------------------- | -------------------- | --------------------------------------- |

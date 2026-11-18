@@ -51,6 +51,12 @@
    for a person who may edit: the control is absolute, so that it moves nothing as the cursor moves. */
 .writable {
   padding-inline-end: var(--sp-8);
+  /* The Insert control's box and its gap from the cursor: its one copy. On an empty block the control stands
+     at the start of the line and the placeholder begins after it, by the property the design package reads
+     (`--ekd-editor-placeholder-offset`, from 0.44.0; harmless before). Set only here, where the control is. */
+  --insert-box: 20px;
+  --insert-gap: var(--sp-2);
+  --ekd-editor-placeholder-offset: calc(var(--insert-box) + var(--insert-gap));
 }
 
 /* The Insert control: immediately to the right of the cursor, a step of space after it, centred on the
@@ -59,15 +65,55 @@
    hovered or focused, and always solid where there is no hover (a touch screen), where more contrast is
    asked for, and in forced colours. */
 .insert {
+  /* Exactly the height of the box: a wrapper taller than it (the line's strut under an inline child, about
+     3.5px at 17px text) would be centred by its own height and leave the box above the line's middle. */
+  display: flex;
+  block-size: var(--insert-box);
+  line-height: 0;
   position: absolute;
   z-index: 1;
-  margin-inline-start: var(--sp-2);
+  margin-inline-start: var(--insert-gap);
   transform: translateY(-50%);
   opacity: 0.6;
   transition:
     left var(--dur-fast) var(--ease-soft),
     top var(--dur-fast) var(--ease-soft),
     opacity var(--dur-fast) var(--ease-soft);
+}
+
+/* The visible box is 20 by 20 and the glyph is 1em of the text it stands beside (the font size is set on
+   the control from the cursor's own block); the pointer target is 24 by 24, by a transparent pseudo-element
+   that leaves the box as it is. `.insert` is centred on the cursor's line by its transform. */
+.insertButton {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: var(--insert-box);
+  block-size: var(--insert-box);
+  padding: 0;
+  background: transparent;
+  color: var(--fg-1);
+  border: 1px solid var(--rule-control);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-soft);
+}
+
+.insertButton::before {
+  content: '';
+  position: absolute;
+  /* An inset is taken from the padding box, inside the 1px border: 18 + 2 × 3 = 24. */
+  inset: -3px;
+}
+
+.insertButton:hover {
+  background: var(--bg-surface-2);
+}
+
+.insertButton svg {
+  inline-size: 1em;
+  block-size: 1em;
 }
 
 .insert[data-settled='false'] {
