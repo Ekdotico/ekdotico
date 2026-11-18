@@ -125,14 +125,37 @@ test('an account whose documents are not shared clears them at once: the control
 
   // The right one.
   await dialog.getByLabel('Current password').fill(person.password);
-  await dialog.getByRole('button', { name: 'Delete 1 document permanently' }).click();
-  await expect(dialog).toBeHidden();
-  const status = main.getByRole('status').filter({ hasText: 'being deleted now' });
-  await expect(status).toHaveText(
-    '1 document is being deleted now. Ekdotico completes the deletion without you.',
+  // The statement lives only until the screen is read again. The page asks for that the moment the response is in,
+  // and the deletion runs after the response: a quick one leaves the account owning nothing, and the page without
+  // the control and its statement. Hold that one read of the page until the statement has been asserted, so that
+  // the test does not race the deletion.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let holding = 0;
+  await page.route(
+    (url) => url.pathname === '/settings/delete-account',
+    async (route) => {
+      if (route.request().headers()['rsc'] === '1') {
+        holding += 1;
+        await held;
+      }
+      await route.continue();
+    },
   );
-  await expect(status).toBeFocused();
-  await screens(page, 'clearing-done');
+  const status = main.getByRole('status').filter({ hasText: 'being deleted now' });
+  try {
+    await dialog.getByRole('button', { name: 'Delete 1 document permanently' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(status).toHaveText(
+      '1 document is being deleted now. Ekdotico completes the deletion without you.',
+    );
+    await expect(status).toBeFocused();
+    await screens(page, 'clearing-done');
+    // The screen did ask to be read again, once: if the app stops doing so, the hold proves nothing.
+    await expect.poll(() => holding).toBe(1);
+  } finally {
+    release();
+  }
   // Completed without the user, a moment after the response: the account owns nothing, and the screen offers its deletion.
   await expect
     .poll(async () => (await (await page.request.get('/api/documents')).json()).documents.length, {
