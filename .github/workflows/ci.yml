@@ -4,16 +4,25 @@ name: ci
 # commit, with the release in the comment.
 #
 # `quick` (about two minutes) runs on every pull request and every push to main: install, the check of the
-# dependencies, format, lint, typecheck and the unit tests. `full` (33 to 42 minutes: integration tests,
-# build, end-to-end tests) runs only on a push to main, by hand (workflow_dispatch), or when the label
-# `ci:full` is added to a pull request that is not a draft. A later push to that pull request runs `quick`
-# alone, and the full run reports on the commit it started on: remove the label and add it again to run
-# the suite on the new head. A pull request that fails `quick` never starts `full` (`needs`).
+# dependencies, format, lint, typecheck and the unit tests.
 #
-# No path filters. A change to documentation alone still needs `quick`: the format check covers Markdown,
-# and tests/unit/storage-match.test.ts reads docs/records/storage-match.md.
+# The full tier runs only on a push to main, by hand (workflow_dispatch), or when the label `ci:full` is added
+# to a pull request that is not a draft. A later push to that pull request runs `quick` alone, and the full run
+# reports on the commit it started on: remove the label and add it again to run the suite on the new head.
+# It is three jobs that run at the same time, each on a runner of its own with its own services (`suite`: the
+# integration tests in two halves, and the end-to-end tests), and one job, `full`, which is the single thing to
+# depend on: release.yml's gate, a required check, and this file's readers look at `full` and nothing else.
+# `full` succeeds only if `quick` succeeded and either every `suite` job succeeded, or the path rule below
+# found the change to be content alone. It fails, and is never skipped, when one of them fails or is cancelled.
+# A failed `suite` job can be re-run alone ("Re-run failed jobs"), and `full` is re-run with it.
 #
-# `labeled` is added to the default types (opened, synchronize, reopened) so that the label starts a run.
+# The path rule (job `changes`, scripts/ci/scope.mjs, tests/unit/ci-scope.test.ts). The diff that decides is:
+# on a pull request, its base to its head (three dots: from where it left main); on a push to main, the last
+# commit of main whose push run of ci succeeded with `full` passed, to the pushed head, so that a push of
+# several commits or a merge is judged as a whole; by hand, nothing: always the full tier. Where that diff is
+# made only of the files scripts/ci/scope.mjs lists, `quick` gates the change and `full` records in the run's
+# summary that the tier was satisfied by the path rule. Where the diff is empty, cannot be computed, or the
+# job fails, the full tier runs (`changes` fails closed).
 
 on:
   pull_request:
@@ -68,19 +77,95 @@ jobs:
       # The unit tests set their own fake database and Valkey addresses: no service is started for them.
       - run: pnpm test
 
-  full:
-    needs: quick
+  # Whether the change needs the full tier. Its `if` is the one place that says when the full tier is asked
+  # for at all: the jobs after it run only where it did not skip.
+  changes:
     if: >-
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
       github.event.label.name == 'ci:full' && !github.event.pull_request.draft)
     runs-on: ubuntu-latest
-    # Measured on GitHub's runners on 18 November 2026, over 14 runs that reached the end-to-end tests: the
-    # integration tests alone took 18 to 25 minutes and the end-to-end tests 10 to 12 where they finished.
-    # With the setup that is 33 to 42 minutes, so the earlier limit of 35 cut off 13 runs in the last step with
-    # every step before it passed, and let one through at 34.6. 60 leaves room and still stops a run that hangs.
-    timeout-minutes: 60
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      full: ${{ steps.decide.outputs.full }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          HEAD: ${{ github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          case "$EVENT" in
+            pull_request)
+              git diff --raw --no-renames "$PR_BASE...$PR_HEAD" > changes.txt
+              echo "Diff: $PR_BASE...$PR_HEAD (the pull request)" >> "$GITHUB_STEP_SUMMARY" ;;
+            push)
+              base=''
+              for sha in $(gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=50" --jq '.workflow_runs[].head_sha'); do
+                [ "$sha" != "$HEAD" ] || continue
+                git merge-base --is-ancestor "$sha" "$HEAD" || continue
+                run=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$sha&event=push&branch=main&status=success" --jq '.workflow_runs[0].id')
+                ok=$(gh api "repos/$REPO/actions/runs/$run/jobs" --jq '[.jobs[] | select(.name == "full")][0].conclusion // empty')
+                [ "$ok" = success ] || continue
+                base=$sha
+                break
+              done
+              if [ -z "$base" ]; then
+                echo "No earlier commit of main with \`full\` passed was found: the full tier runs." >> "$GITHUB_STEP_SUMMARY"
+                echo full=true >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              git diff --raw --no-renames "$base" "$HEAD" > changes.txt
+              echo "Diff: $base..$HEAD (since the last commit of main with \`full\` passed)" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              echo "Run by hand: the full tier runs." >> "$GITHUB_STEP_SUMMARY"
+              echo full=true >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+          { echo '```'; cat changes.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          decision=$(node scripts/ci/scope.mjs changes.txt)
+          case "$decision" in full=true|full=false) ;; *) echo "::error::unexpected answer: $decision"; exit 1;; esac
+          echo "Path rule: $decision" >> "$GITHUB_STEP_SUMMARY"
+          echo "$decision" >> "$GITHUB_OUTPUT"
+
+  suite:
+    needs: [quick, changes]
+    # Where `changes` failed its output is empty, which is not 'false': the suite runs.
+    if: >-
+      !cancelled() && needs.quick.result == 'success' &&
+      needs.changes.result != 'skipped' && needs.changes.outputs.full != 'false'
+    name: ${{ matrix.part }}
+    strategy:
+      # A failure leaves the other jobs running, so that each can be judged and re-run alone.
+      fail-fast: false
+      matrix:
+        include:
+          # The files of the integration tests are independent: each makes a database of its own
+          # (tests/integration/database.ts, createDatabase), and each half has its own services.
+          - part: integration 1 of 2
+            run: pnpm test:integration --shard=1/2
+          - part: integration 2 of 2
+            run: pnpm test:integration --shard=2/2
+          - part: end-to-end
+            e2e: true
+            run: pnpm test:e2e
+    runs-on: ubuntu-latest
+    # Measured on GitHub's runners on 18 November 2026, over 14 runs: the integration tests alone took 18 to
+    # 25 minutes and the end-to-end tests 10 to 12 (with their build). 40 leaves room for each part alone and
+    # still stops a run that hangs.
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:17
@@ -138,14 +223,65 @@ jobs:
             chrislusf/seaweedfs:4.48 server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data -volume.max=200
           node scripts/create-bucket.ts
       # The test of the copy of the backups runs pg_dump against the server above, and pg_dump refuses a server
-      # of a later major version than its own; the runner's own client is older than 17.
+      # of a later major version than its own; the runner's own client is older than 17. The end-to-end tests
+      # make their database with psql as the integration tests do, so they take the same client.
       - name: PostgreSQL 17 client (pg_dump, pg_restore, psql)
         run: |
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y postgresql-client-17
           echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
-      - name: Integration tests against PostgreSQL and Valkey (provisioning and migrations of contract IC-51 among them)
-        run: pnpm test:integration
-      - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      # The browser is cached by the version of Playwright, which names the browser's build; the system
+      # libraries it needs are installed every time, since they are not under the cache's directory.
+      - name: Version of Playwright
+        if: matrix.e2e
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache of the browser
+        if: matrix.e2e
+        id: browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+      - if: matrix.e2e && steps.browser.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+      - if: matrix.e2e && steps.browser.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+      # Next.js's own build cache, which it checks against the sources itself. The run's sha ends the key, so a
+      # run saves its cache and restores the latest of the same lockfile.
+      - name: Cache of the build
+        if: matrix.e2e
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: next-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+      # The integration tests against PostgreSQL and Valkey (the provisioning and migrations of contract IC-51
+      # among them), or the end-to-end tests. Playwright builds the application itself before it starts it
+      # (playwright.config.ts, webServer), so the build is tested here, and a build failure fails this job.
+      - name: ${{ matrix.part }}
+        run: ${{ matrix.run }}
+
+  full:
+    needs: [quick, changes, suite]
+    # Runs wherever the full tier was asked for, whatever happened before it, so that it fails rather than skips.
+    if: always() && needs.changes.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          QUICK: ${{ needs.quick.result }}
+          CHANGES: ${{ needs.changes.result }}
+          FULL: ${{ needs.changes.outputs.full }}
+          SUITE: ${{ needs.suite.result }}
+        run: |
+          set -eu
+          echo "quick: $QUICK; changes: $CHANGES (full=$FULL); suite: $SUITE"
+          [ "$QUICK" = success ] || { echo "::error::quick is '$QUICK'"; exit 1; }
+          if [ "$CHANGES" = success ] && [ "$FULL" = false ]; then
+            echo "The full tier was satisfied by the path rule: the change is content alone (scripts/ci/scope.mjs); \`quick\` passed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # `suite` is a matrix: its result is success only if every part of it succeeded.
+          [ "$SUITE" = success ] || { echo "::error::the suite is '$SUITE'"; exit 1; }
+          echo "The full tier ran and passed: integration (both halves) and end-to-end." >> "$GITHUB_STEP_SUMMARY"
