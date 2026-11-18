@@ -25,8 +25,8 @@ test('the control is faint until hovered, solid on hover and on focus, and opens
 }) => {
   await enter(page);
   await shareNew(page);
+  // Back from the sharing settings to the page of the document, which shareNew opened first.
   await page.goBack();
-  await page.getByRole('link', { name: 'Untitled document' }).click();
   await expect(text(page)).toBeVisible();
   const button = page.getByRole('button', { name: NAME });
   const wrapper = button.locator('..');
