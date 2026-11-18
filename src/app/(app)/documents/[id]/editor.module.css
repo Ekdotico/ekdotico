@@ -63,7 +63,8 @@
 .insertButton::before {
   content: '';
   position: absolute;
-  inset: -2px;
+  /* An inset is taken from the padding box, inside the 1px border: 18 + 2 × 3 = 24. */
+  inset: -3px;
 }
 
 .insertButton:hover {

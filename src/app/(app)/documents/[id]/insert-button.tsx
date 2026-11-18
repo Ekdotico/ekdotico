@@ -14,6 +14,7 @@ import { Tooltip } from '@ekdotico/domico/components';
 import { PlusIcon } from '@ekdotico/domico/icons';
 import styles from './editor.module.css';
 import { INSERT_NAME } from './insert-name.ts';
+import { lineCentre } from './line-centre.ts';
 import { openSlashPalette } from './slash-palette.tsx';
 
 /** Beside the cursor, in the margin the surface keeps for it. Shown only to a person who may edit. */
@@ -59,23 +60,37 @@ export function InsertButton({
     }
     const put = () => {
       if (!surface.current) return;
-      const line = editor.view.coordsAtPos(Math.min(cursor.head, editor.state.doc.content.size));
+      // Read from the editor's own state now, not from the render's: this also runs on the transaction itself.
+      const head = Math.min(editor.state.selection.head, editor.state.doc.content.size);
+      const line = editor.view.coordsAtPos(head);
       const box = surface.current.getBoundingClientRect();
-      element.style.left = `${line.right - box.left}px`;
-      element.style.top = `${(line.top + line.bottom) / 2 - box.top}px`;
-      // The glyph is 1em of the text it stands beside: the size of the cursor's own block.
-      const at = editor.view.domAtPos(Math.min(cursor.head, editor.state.doc.content.size)).node;
+      const at = editor.view.domAtPos(head).node;
       const block = at instanceof Element ? at : at.parentElement;
-      if (block) element.style.fontSize = getComputedStyle(block).fontSize;
+      let middle = (line.top + line.bottom) / 2;
+      if (block) {
+        const style = getComputedStyle(block);
+        // The glyph is 1em of the text it stands beside: the size of the cursor's own block.
+        element.style.fontSize = style.fontSize;
+        const contentTop =
+          block.getBoundingClientRect().top +
+          (Number.parseFloat(style.paddingTop) || 0) +
+          (Number.parseFloat(style.borderTopWidth) || 0);
+        middle = lineCentre(line.top, line.bottom, contentTop, Number.parseFloat(style.lineHeight));
+      }
+      element.style.left = `${line.right - box.left}px`;
+      element.style.top = `${middle - box.top}px`;
       element.style.visibility = 'visible';
     };
     put();
     const settle = requestAnimationFrame(() => (element.dataset.settled = 'true'));
-    // The text wraps anew at another width, and the line moves with it.
+    // The text wraps anew at another width, and the line moves with it; and the document changes under a
+    // cursor that has not moved (a closed list's `/` taken out), which the render alone does not follow.
     window.addEventListener('resize', put);
+    editor.on('transaction', put);
     return () => {
       cancelAnimationFrame(settle);
       window.removeEventListener('resize', put);
+      editor.off('transaction', put);
     };
   }, [editor, surface, cursor.atEnd, cursor.head, cursor.size]);
 
