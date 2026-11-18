@@ -7,6 +7,7 @@
 // when that page is opened (./document-view.tsx).
 'use client';
 
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -29,7 +30,9 @@ import styles from './editor.module.css';
 import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { IMAGE_TEXT } from './images.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
+import { createPortal } from 'react-dom';
 import { PeopleRow } from './people-row.tsx';
+import { STATUS_SLOT } from './people-slot.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
 
@@ -543,6 +546,8 @@ function OpenDocument({
     );
   }
 
+  const place = document.getElementById(STATUS_SLOT);
+  const placeInHeader = (node: ReactNode) => (place ? createPortal(node, place) : node);
   const status = syncStatus(state);
   // FR-ED-40 (b), FR-ED-41: what the server says the connection may do, at each handshake and at each change of role; until it has said, what the page was opened with.
   const mayEdit = state.canEdit ?? canEdit;
@@ -560,17 +565,21 @@ function OpenDocument({
           <p>{AT_CAPACITY}</p>
         </FormFault>
       ) : (
-        <SyncStatus
-          state={status.state}
-          label={status.label}
-          onClick={() => {
-            const mine = (asked.current += 1);
-            setCheck('checking');
-            void connection.verify().then((same) => {
-              if (asked.current === mine) setCheck(same ? 'in-sync' : 'unconfirmed');
-            });
-          }}
-        />
+        // Modernisation A2: in the header's row after the people, where the page has made the place (the editor is
+        // made in the browser alone); inline where it has not.
+        placeInHeader(
+          <SyncStatus
+            state={status.state}
+            label={status.label}
+            onClick={() => {
+              const mine = (asked.current += 1);
+              setCheck('checking');
+              void connection.verify().then((same) => {
+                if (asked.current === mine) setCheck(same ? 'in-sync' : 'unconfirmed');
+              });
+            }}
+          />,
+        )
       )}
       {unrepaired ? (
         <FormFault tone="neutral" announce="polite">
