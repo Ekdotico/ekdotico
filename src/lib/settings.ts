@@ -180,6 +180,12 @@ export interface Settings {
   emailFrom: string;
   /** `emailFrom` as a name and an address: set with Brevo, which needs both, and undefined with the sink. */
   emailSender: EmailSender | undefined;
+  /**
+   * The contact address of the team (register D121, D329; Q35), set only once its mailbox exists. The page of a
+   * visitor (FR-AU-93) shows it where it is set and leaves the line about it off where it is not. Never set by
+   * default.
+   */
+  contactAddress: string | undefined;
   /** The key of the Brevo account: set with Brevo, undefined with the sink. Read here and nowhere else (NFR-SE-19). */
   brevoApiKey: string | undefined;
   /**
@@ -516,6 +522,12 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     throw new Error('BREVO_API_KEY must differ from the other secrets of the application.');
   }
 
+  // D329: absent until the mailbox exists. Present, it is held to the one rule of an address (FR-AU-02), since
+  // it is written into a page and a link.
+  const contactText = env.CONTACT_ADDRESS?.trim();
+  const contactAddress = (contactText ? acceptedAddress(contactText) : undefined) ?? undefined;
+  if (contactText && !contactAddress) throw new Error('CONTACT_ADDRESS must be an email address, or unset.');
+
   const sessionIdleSeconds = wholeNumber(env, 'SESSION_IDLE_SECONDS', 7 * DAY, 1);
   const sessionRenewSeconds = wholeNumber(env, 'SESSION_RENEW_SECONDS', DAY, 1);
   const sessionMaxSeconds = wholeNumber(env, 'SESSION_MAX_SECONDS', 30 * DAY, 1);
@@ -636,6 +648,7 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     emailSinkDirectory: env.EMAIL_SINK_DIRECTORY || '.local/mail',
     emailFrom,
     emailSender: sender,
+    contactAddress,
     brevoApiKey: brevoKey,
     collabStoreDelayMs,
     collabStoreMaxMs,
