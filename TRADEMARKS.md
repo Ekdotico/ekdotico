@@ -3,10 +3,7 @@
 The licence of this repository ([LICENSE](LICENSE)) is a copyright licence.
 It grants no rights in trade marks.
 
-"Ekdotico", the Ekdotico logo mark and the Ekdotico wordmarks are names and
-marks that the copyright holder named in [NOTICE](NOTICE) uses as unregistered
-trade marks. No registration is claimed. The same holds for the names of the
-suite's other products, Domico, Praktico, Istorico and Amyntico.
+"Ekdotico", the Ekdotico logo mark and the Ekdotico wordmarks are used by Stavros Apostolou, the copyright holder named in [NOTICE](NOTICE), as unregistered trade marks. No registration is claimed, and the lack of one gives no one else a right to use them. The same holds for the name Domico.
 
 ## What you may do without asking
 
@@ -28,8 +25,6 @@ suite's other products, Domico, Praktico, Istorico and Amyntico.
 
 ## If you fork
 
-Rename the fork and replace the Ekdotico name and marks wherever they appear
-(the application's name, its pages and emails, and any logo) before you
-distribute it or run it as a service.
+Rename it and remove the Ekdotico name and logo before you distribute it or run it as a service.
 
-Requests: legal@ekdoti.co
+Enquiries: legal@ekdoti.co

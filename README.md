@@ -36,7 +36,7 @@ One interface is defined here and not in the specification, provisionally: the w
 //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
 
-Then install:
+Then, in a shell where `NODE_AUTH_TOKEN` is set:
 
 ```bash
 pnpm install
