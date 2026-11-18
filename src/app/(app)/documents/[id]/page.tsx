@@ -58,24 +58,27 @@ export default async function DocumentPage({ params }: Props) {
       <Stack gap={3}>
         {/* The title is text, whatever it holds (NFR-SE-08). */}
         <PageHeading className={styles.breakable}>{document.title}</PageHeading>
-      <Cluster gap={3} align="center">
-        {document.recording === 'UNRECORDED' ? (
-          <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
-        ) : null}
-        {/* FR-ED-21, FR-ED-37: the sharing settings, for every role. */}
-        {document.deletedAt === null ? <ButtonLink variant="quiet" href={`/documents/${document.id}/sharing`}>
-            Sharing
-          </ButtonLink> : null}
-        {/* FR-EX-36, FR-ED-44: the draft export, for a role that holds the permission. The editor has this page read
+        <Cluster gap={3} align="center">
+          {document.recording === 'UNRECORDED' ? (
+            <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
+          ) : null}
+          {/* FR-ED-21, FR-ED-37: the sharing settings, for every role. */}
+          {document.deletedAt === null ? (
+            <ButtonLink variant="quiet" href={`/documents/${document.id}/sharing`}>
+              Sharing
+            </ButtonLink>
+          ) : null}
+          {/* FR-EX-36, FR-ED-44: the draft export, for a role that holds the permission. The editor has this page read
             again when its role or its permissions change (FR-ED-40 (g)), so the control follows them. */}
-        {holds(document.permissionSet, role, 'document.export.draft') || noticeRuns(document, new Date()) ? (
-          <ExportDraft documentId={document.id} />
-        ) : null}
-        {/* FR-ED-17: the people who have the document open, which the editor draws here once it is connected. */}
-        <span id={PEOPLE_SLOT} className={styles.peopleSlot} />
-        {/* The status of the connection, after the people (modernisation A2). */}
-        <span id={STATUS_SLOT} className={styles.peopleSlot} />
-      </Cluster>
+          {holds(document.permissionSet, role, 'document.export.draft') ||
+          noticeRuns(document, new Date()) ? (
+            <ExportDraft documentId={document.id} />
+          ) : null}
+          {/* FR-ED-17: the people who have the document open, which the editor draws here once it is connected. */}
+          <span id={PEOPLE_SLOT} className={styles.peopleSlot} />
+          {/* The status of the connection, after the people (modernisation A2). */}
+          <span id={STATUS_SLOT} className={styles.peopleSlot} />
+        </Cluster>
       </Stack>
       <DocumentView
         documentId={document.id}

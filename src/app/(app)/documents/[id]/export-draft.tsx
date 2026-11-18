@@ -99,7 +99,13 @@ export function ExportDraft({ documentId }: { documentId: string }) {
   return (
     // Beside the title and the link to the sharing settings, in the header's row, which wraps where a statement is long.
     <>
-      <Button variant="quiet" disabled={!ready} pending={working} pendingLabel={WORKING} onClick={() => void run()}>
+      <Button
+        variant="quiet"
+        disabled={!ready}
+        pending={working}
+        pendingLabel={WORKING}
+        onClick={() => void run()}
+      >
         {LABEL}
       </Button>
       {fault ? <FormFault title={fault} focusKey={attempt} /> : null}
