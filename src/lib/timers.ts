@@ -127,12 +127,26 @@ function deleteDocuments(): void {
 // minutes, not each hour, so it has its own interval. Each attempt removes its row first (src/lib/email/retry.ts),
 // so two instances do not send one twice.
 /**
+ * The settings, read when a timer runs and not when the module loads, and undefined where they cannot be
+ * loaded. A process that runs the timers has loaded them at start and refused to start otherwise
+ * (src/instrumentation.ts), so undefined here is a process that never loaded them, such as a test of another
+ * timer; monitoring must not fail a run or write a line for it.
+ */
+function checkInSettings(): ReturnType<typeof settings> | undefined {
+  try {
+    return settings();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * D274, D320: while email is healthy (src/lib/email/health.ts) this run checks in at HEALTHCHECK_EMAIL_URL, and
  * while it is not it stays silent, so that the service emails the owner. Never rejects; it counts nothing and
  * calls nothing where the address is not set.
  */
 export async function checkInEmail(): Promise<void> {
-  const url = settings().healthcheckEmailUrl;
+  const url = checkInSettings()?.healthcheckEmailUrl;
   if (!url) return;
   try {
     if (emailHealthy(await db().emailRetry.count())) await checkIn(url);
@@ -148,7 +162,7 @@ function retryDocumentEmails(): void {
     // a fault checks in. Nothing is called where HEALTHCHECK_TIMERS_URL is not set, and a check-in never
     // fails the run. It is this timer's run because it is the shortest, so the grace of the check is short.
     () => {
-      void checkIn(settings().healthcheckTimersUrl);
+      void checkIn(checkInSettings()?.healthcheckTimersUrl);
       void checkInEmail();
     },
     (error) => console.error(`timer failed: email-retry (${faultOf(error)})`),
