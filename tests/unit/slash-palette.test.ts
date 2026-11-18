@@ -667,9 +667,7 @@ describe('the choice of /image (FR-ED-08, FR-ED-12)', () => {
       expect(text(editor)).toBe('');
       expect(editor.state.doc.children.map((node) => node.type.name)).toEqual(['paragraph']);
       expect(slashPalette(editor.state).open).toBe(false);
-      expect(opened).toEqual([
-        { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple: true },
-      ]);
+      expect(opened).toEqual([{ type: 'file', accept: 'image/png,image/jpeg,image/webp', multiple: true }]);
     } finally {
       click.mockRestore();
     }

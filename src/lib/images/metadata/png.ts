@@ -3,8 +3,8 @@
 // needs; the data of the image (every IDAT) is copied byte for byte.
 //
 // A WHITELIST. Kept: the chunks that the picture is made of (IHDR, PLTE, tRNS,
-// IDAT, IEND), the chunks of an animation (acTL, fcTL, fdAT), and, by the
-// policy, the colour chunks. Everything else is dropped, whatever it is called:
+// IDAT, IEND) and, by the policy, the colour chunks. Everything else is dropped,
+// the chunks of an animation (acTL, fcTL, fdAT) among them, whatever it is called:
 // tEXt, zTXt and iTXt (an XMP packet is an iTXt), eXIf (where the location
 // is), tIME, pHYs, sBIT, bKGD, hIST, sPLT, every chunk that is private or
 // unknown, and anything after IEND.
@@ -13,7 +13,9 @@ import { orientationOf, orientationTiff } from './orientation.ts';
 import type { RemovalPolicy } from './policy.ts';
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const PICTURE = new Set(['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND', 'acTL', 'fcTL', 'fdAT']);
+// The chunks of an animation (acTL, fcTL, fdAT) are not here: an animated PNG is refused before this runs (D309,
+// D310), and a control chunk that is left over, after the picture, is dropped like any other that is not the picture's.
+const PICTURE = new Set(['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND']);
 const COLOUR = new Set(['gAMA', 'cHRM', 'sRGB', 'iCCP', 'cICP']);
 
 function chunk(type: string, data: Uint8Array): Buffer {
@@ -44,10 +46,6 @@ function sizeOf(type: string, length: number, colourType: number | undefined): '
       if (colourType === 2) return length === 6 ? 'keep' : 'drop';
       if (colourType === 3) return length >= 1 && length <= 256 ? 'keep' : 'drop';
       return 'drop';
-    case 'acTL':
-      return length === 8 ? 'keep' : 'refuse';
-    case 'fcTL':
-      return length === 26 ? 'keep' : 'refuse';
     case 'gAMA':
     case 'cICP':
       return length === 4 ? 'keep' : 'drop';
