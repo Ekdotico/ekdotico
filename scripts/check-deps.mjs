@@ -9,7 +9,10 @@ import { readFileSync } from 'node:fs';
 const FREE = new Set(['MIT', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0', 'ISC', 'CC0-1.0']);
 // Reviewed: package name -> the licence that was reviewed and where the review is recorded.
 const REVIEWED = {
-  '@ekdotico/domico': { license: 'AGPL-3.0-only', record: 'Build phases, entry criteria (register D19)' },
+  '@ekdotico/domico': {
+    license: 'AGPL-3.0-only AND LicenseRef-Ekdotico-Brand',
+    record: 'Build phases, entry criteria (register D19); the logo terms from 0.43.2 (register D365, D373)',
+  },
 };
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));

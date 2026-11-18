@@ -3,6 +3,7 @@
 // the permanent deletion of FR-ED-36; the notices of it; and what it leaves alone (a document cancelled, passed to
 // another Owner, or deleted by retention meanwhile). Against a provisioned database, with the in-memory store of
 // images and an Istorico port that reports the erasure capability where a test needs it.
+import { HELD } from './guard.ts';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DAY_MS, json, MAIL, TITLE, world } from './clearing.ts';
 import { MemoryStorage } from './image-storage.ts';
@@ -176,7 +177,7 @@ describe('on its day, a shared document is deleted permanently, in the order of 
     const collaborator = await db().documentCollaborator.findFirstOrThrow({
       where: { documentId, userId: editor.id },
     });
-    const offered = await makeOffer(documentId, owner.id, collaborator.id);
+    const offered = await makeOffer(documentId, owner.id, collaborator.id, undefined, HELD);
     expect(offered.outcome).toBe('offered');
     expect(await db().ownershipOffer.count({ where: { documentId, state: 'PENDING' } })).toBe(1);
     expect(await db().notification.count({ where: { kind: 'ownership_offer' } })).toBeGreaterThan(0);
@@ -291,7 +292,7 @@ describe('what the day leaves alone', () => {
     const collaborator = await db().documentCollaborator.findFirstOrThrow({
       where: { documentId, userId: editor.id },
     });
-    const offered = await makeOffer(documentId, owner.id, collaborator.id);
+    const offered = await makeOffer(documentId, owner.id, collaborator.id, undefined, HELD);
     if (offered.outcome !== 'offered') throw new Error('not offered');
     const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId, state: 'PENDING' } });
     expect(await answerOffer(editor.id, offer.id, 'accept')).toEqual({ outcome: 'accepted', documentId });
@@ -328,7 +329,7 @@ describe('what the day leaves alone', () => {
     const collaborator = await db().documentCollaborator.findFirstOrThrow({
       where: { documentId, userId: editor.id },
     });
-    expect((await makeOffer(documentId, owner.id, collaborator.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, collaborator.id, undefined, HELD)).outcome).toBe('offered');
     const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId, state: 'PENDING' } });
     const after = new Date(day.getTime() + 1);
     // Accepted a moment after the day, before any run of the timer: refused, and the offer stays pending.
@@ -338,9 +339,13 @@ describe('what the day leaves alone', () => {
     expect(kept?.clearingAt?.getTime()).toBe(day.getTime());
     expect((await db().ownershipOffer.findUniqueOrThrow({ where: { id: offer.id } })).state).toBe('PENDING');
     // Declining stays open, and no new offer is made after the day.
-    expect((await makeOffer(documentId, owner.id, collaborator.id, after)).outcome).toBe('clearing_over');
+    expect((await makeOffer(documentId, owner.id, collaborator.id, after, HELD)).outcome).toBe(
+      'clearing_over',
+    );
     await db().ownershipOffer.update({ where: { id: offer.id }, data: { state: 'WITHDRAWN' } });
-    expect((await makeOffer(documentId, owner.id, collaborator.id, after)).outcome).toBe('clearing_over');
+    expect((await makeOffer(documentId, owner.id, collaborator.id, after, HELD)).outcome).toBe(
+      'clearing_over',
+    );
     expect(await carryOutClearings(after)).toEqual({ deleted: 1, kept: 0 });
     expect(await exists(documentId)).toBe(false);
   });
@@ -351,7 +356,7 @@ describe('what the day leaves alone', () => {
     const collaborator = await db().documentCollaborator.findFirstOrThrow({
       where: { documentId, userId: editor.id },
     });
-    expect((await makeOffer(documentId, owner.id, collaborator.id)).outcome).toBe('offered');
+    expect((await makeOffer(documentId, owner.id, collaborator.id, undefined, HELD)).outcome).toBe('offered');
     const offer = await db().ownershipOffer.findFirstOrThrow({ where: { documentId, state: 'PENDING' } });
     await db().document.update({
       where: { id: documentId },

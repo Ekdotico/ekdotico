@@ -14,6 +14,8 @@ import {
   png,
   pngChunk,
   webp,
+  webpChunk,
+  WEBP_PICTURE,
 } from '../unit/image-fixtures.ts';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 import { MemoryStorage } from './image-storage.ts';
@@ -145,7 +147,6 @@ describe('the upload of an image', () => {
 
   it.each([
     ['JPEG', () => jpeg({ first: [exifSegment(exifTiff(null))] }), 'image/jpeg'],
-    ['GIF', () => gif(), 'image/gif'],
     ['WebP', () => webp(), 'image/webp'],
   ])('takes a %s, stored as what it is', async (_name, make, contentType) => {
     const owner = await person();
@@ -192,7 +193,6 @@ describe('the upload of an image', () => {
     ['a PDF', '%PDF-1.7 ...'],
     ['nothing', ''],
     ['a PNG that is cut', pngOf().subarray(0, 30)],
-    ['a GIF signature over an SVG', 'GIF89a<svg xmlns="http://www.w3.org/2000/svg"/>'],
   ])('refuses %s with a 415, and stores nothing', async (_name, content) => {
     const owner = await person();
     const document = await documentOf(owner.id);
@@ -200,9 +200,73 @@ describe('the upload of an image', () => {
     expect(response.status).toBe(415);
     const { error } = await bodyOf(response);
     expect(error.code).toBe('image_type_not_accepted');
-    expect(error.message).toContain('PNG, JPEG, GIF, or WebP');
+    expect(error.message).toContain('PNG, JPEG, or WebP');
     expect(storage.objects.size).toBe(0);
     expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+  });
+
+  // D309, D310: every GIF, by its first bytes whatever the name or the declared type, and an animated PNG or WebP.
+  // Weakening: a still GIF is taken, the declared type is believed, or the animation is looked for in the pixels.
+  it.each([
+    ['a still GIF declared as a GIF', () => gif(), 'image/gif', 'image_gif_refused'],
+    ['a still GIF declared as a PNG', () => gif(), 'image/png', 'image_gif_refused'],
+    [
+      'a GIF signature over an SVG',
+      () => Buffer.from('GIF89a<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      'image/png',
+      'image_gif_refused',
+    ],
+    [
+      'an animated PNG declared as a PNG',
+      () => png({ before: [pngChunk('acTL', Buffer.alloc(8))] }),
+      'image/png',
+      'image_animated_refused',
+    ],
+    [
+      'an animated WebP declared as a WebP',
+      () => webp([webpChunk('VP8X', Buffer.from([0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0])), WEBP_PICTURE]),
+      'image/webp',
+      'image_animated_refused',
+    ],
+  ])('refuses %s with a 415, and stores nothing', async (_name, make, declared, refusal) => {
+    const owner = await person();
+    const document = await documentOf(owner.id);
+    const response = await send(document, owner.cookie, make(), { 'content-type': declared });
+    expect(response.status).toBe(415);
+    expect((await bodyOf(response)).error.code).toBe(refusal);
+    expect(storage.objects.size).toBe(0);
+    expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+  });
+
+  // Review of PR 80, round 2. An acTL after the picture is no animation (no decoder reads it), so the image is taken;
+  // and it is stored without it. Weakening: the stripper keeps the controls of an animation.
+  it('takes a PNG with an acTL after its picture and stores it without acTL, fcTL or fdAT', async () => {
+    const owner = await person();
+    const document = await documentOf(owner.id);
+    const sent = png({
+      after: [
+        pngChunk('acTL', Buffer.alloc(8, 1)),
+        pngChunk('fcTL', Buffer.alloc(26, 1)),
+        pngChunk('fdAT', Buffer.from([0, 0, 0, 1, 9])),
+      ],
+    });
+    const response = await send(document, owner.cookie, sent);
+    expect(response.status).toBe(201);
+    const [stored] = [...storage.objects.values()];
+    for (const type of ['acTL', 'fcTL', 'fdAT']) {
+      expect(Buffer.from(stored!.bytes).includes(type), type).toBe(false);
+    }
+  });
+
+  // A side of 0 is an unreadable header (D308): a 415, and not the 413 of the bound. Weakening: left to the bound.
+  it('refuses a JPEG whose header gives a height of 0 with a 415, and stores nothing', async () => {
+    const owner = await person();
+    const document = await documentOf(owner.id);
+    const flat = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 0, 0, 10, 1, 1, 0x11, 0, 0xff, 0xd9]);
+    const response = await send(document, owner.cookie, flat, { 'content-type': 'image/jpeg' });
+    expect(response.status).toBe(415);
+    expect((await bodyOf(response)).error.code).toBe('image_type_not_accepted');
+    expect(storage.objects.size).toBe(0);
   });
 
   describe('its size (NFR-SE-18, FR-ED-08)', () => {
@@ -214,6 +278,39 @@ describe('the upload of an image', () => {
       expect(over.status).toBe(413);
       expect((await bodyOf(over)).error.code).toBe('image_too_large');
       expect(await db().documentImage.count({ where: { documentId: document } })).toBe(1);
+    });
+
+    // NFR-SE-18, D301, Q80: a small file cannot be a very large picture. Weakening: no check, or the check after the
+    // removal of metadata (these files parse to their end).
+    it('refuses a small file that declares over 12,000 pixels on a side or 50 megapixels in all, with a 413 that states it, and stores nothing', async () => {
+      const owner = await person();
+      const document = await documentOf(owner.id);
+      const header = (width: number, height: number) => {
+        const data = Buffer.alloc(13);
+        data.writeUInt32BE(width, 0);
+        data.writeUInt32BE(height, 4);
+        data[8] = 8;
+        data[9] = 2;
+        return pngChunk('IHDR', data);
+      };
+      for (const [width, height] of [
+        [12_001, 1],
+        [1, 12_001],
+        [10_000, 5_001],
+      ] as const) {
+        const response = await send(document, owner.cookie, png({ ihdr: header(width, height) }));
+        expect(response.status, `${width} by ${height}`).toBe(413);
+        const { error } = await bodyOf(response);
+        expect(error.code).toBe('image_dimensions_too_large');
+        // Text for the owner's approval, pinned whole.
+        expect(error.message).toBe(
+          'That image is more than 12,000 pixels wide or high, or more than 50 megapixels in all, so it was not added. Choose a smaller image, or reduce its size first.',
+        );
+      }
+      expect(storage.objects.size).toBe(0);
+      expect(await db().documentImage.count({ where: { documentId: document } })).toBe(0);
+      // At the bound it is taken.
+      expect((await send(document, owner.cookie, png({ ihdr: header(10_000, 5_000) }))).status).toBe(201);
     });
 
     // A length that is declared over the limit is refused as it is: the body is never read.

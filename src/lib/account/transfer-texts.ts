@@ -104,10 +104,19 @@ export function offeredStatement({ offered, kept }: { offered: number; kept: num
   return kept > 0 ? `${told} ${already(kept, 'had')}` : told;
 }
 
+/** The sentence of the dialog that asks for the prompt of FR-AU-92 (D285), after the confirmation. Approved by the owner. */
+export const TRANSFER_PROMPT = {
+  password: 'Enter your current password to confirm.',
+  passwordAndCode: 'Enter your current password and a code to confirm.',
+};
+
 /** What the route answers with, for a program, and the browser shows as it is given. */
 export const TRANSFER_MESSAGES = {
   shape:
     'The request must hold how to choose the new Owner, the identifiers of the documents, and nothing else. No offer was made.',
+  // FR-AU-92, D285; register Q82 point 6. Approved by the owner.
+  password: 'No offer was made. Enter your current password to confirm.',
+  passwordAndCode: 'No offer was made. Enter your current password and a code to confirm.',
   changed:
     'The documents of this account, or the Editors on them, are no longer the ones you were shown. The page now shows what they are. Check it, and confirm again. No offer was made.',
   nothing: 'No document of this account can be offered in this way. No offer was made.',

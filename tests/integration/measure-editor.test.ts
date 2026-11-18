@@ -40,7 +40,7 @@ beforeAll(async () => {
     let out = '';
     server.stdout!.on('data', (chunk) => {
       out += chunk;
-      const match = /listening on (\d+)/.exec(out);
+      const match = /listening on \S+:(\d+)/.exec(out);
       if (match) resolve(Number(match[1]));
     });
     server.once('exit', () => reject(new Error('the collaboration server did not start')));

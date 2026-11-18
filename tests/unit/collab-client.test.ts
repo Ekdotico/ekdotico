@@ -81,6 +81,7 @@ async function opened() {
   socket.receive(authenticated('read-write')); // the scope of the handshake (an Editor's)
   socket.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
   socket.receive(toFrame(8, 1)); // the acknowledgement of our second step
+  socket.receive(stateless(JSON.stringify({ kind: 'people', people: [] }))); // the last notice of a connection
   await vi.advanceTimersByTimeAsync(0);
   expect(connection.getState()).toMatchObject({ phase: 'connected', unsent: false });
   // The first step of the opening cost a token; the bucket is full again.
@@ -559,6 +560,74 @@ describe('the role of an open connection changes (FR-ED-40 (b), FR-ED-41)', () =
   });
 });
 
+describe('what the server says of its store (D294)', () => {
+  it('is held from the notice, taken away by a notice that it stored, and by a lost socket', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(JSON.stringify({ kind: 'store', stored: false })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unstored).toBe(true);
+    expect(syncStatus(connection.getState()).state).toBe('syncing');
+    socket.receive(stateless(JSON.stringify({ kind: 'store', stored: true })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unstored).toBe(false);
+    expect(syncStatus(connection.getState())).toEqual({ state: 'synced', label: 'In sync' });
+    connection.stop();
+  });
+
+  // Mutation S03: "In sync" shows between the synchronisation and the server's notices of the connection.
+  it('never shows "In sync" on a reconnection while the store is failing', async () => {
+    const { connection, socket } = await opened();
+    socket.receive(stateless(JSON.stringify({ kind: 'store', stored: false })));
+    await vi.advanceTimersByTimeAsync(0);
+    socket.close();
+    await vi.advanceTimersByTimeAsync(0);
+    const labels: string[] = [];
+    connection.subscribe(() => labels.push(syncStatus(connection.getState()).label));
+    await vi.advanceTimersByTimeAsync(30_000);
+    const next = Socket.all.at(-1)!;
+    next.receive(new Uint8Array([9]).buffer);
+    next.receive(authenticated('read-write'));
+    next.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
+    next.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().phase).toBe('connected');
+    expect(syncStatus(connection.getState()).label).not.toBe('In sync');
+    // The server's notices of the connection: the store first, the people last.
+    next.receive(stateless(JSON.stringify({ kind: 'store', stored: false })));
+    next.receive(stateless(JSON.stringify({ kind: 'people', people: [] })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncStatus(connection.getState()).label).toContain('not yet saved');
+    expect(labels).not.toContain('In sync');
+    connection.stop();
+  });
+
+  // The order of the real server: its notices (the people last) come before the library reports the
+  // synchronisation. Mutation S03: `connected` took the notices for not yet heard, and "In sync" never came.
+  it('shows "In sync" once the document has synchronised when the notices came before it', async () => {
+    const connection = new DocumentConnection({
+      url: 'ws://example.invalid/collab',
+      documentId: ID,
+      errorAfterMs: 60_000,
+      probe: async () => 200,
+      WebSocketPolyfill: Socket,
+    });
+    connection.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const socket = Socket.all.at(-1)!;
+    socket.receive(new Uint8Array([9]).buffer);
+    socket.receive(authenticated('read-write'));
+    socket.receive(stateless(JSON.stringify({ kind: 'people', people: [] })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncStatus(connection.getState()).label).not.toBe('In sync');
+    socket.receive(toFrame(SYNC, 1, ...varint(2), ...Y.encodeStateAsUpdate(new Y.Doc())));
+    socket.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().phase).toBe('connected');
+    expect(syncStatus(connection.getState())).toEqual({ state: 'synced', label: 'In sync' });
+    connection.stop();
+  });
+});
+
 /** A paragraph of the document as the editor's binding writes one. */
 function paragraphOf(text: string): Y.XmlElement {
   const element = new Y.XmlElement('paragraph');
@@ -776,7 +845,8 @@ describe('who has the document open (FR-ED-17)', () => {
 
   it('is kept as the server last said it, and the next list replaces it', async () => {
     const { connection, socket } = await opened();
-    expect(connection.getState().people).toBeUndefined();
+    // `opened()` delivers the empty list the server sends first.
+    expect(connection.getState().people).toEqual([]);
     socket.receive(stateless(list([{ slot: 1, name: 'Ada Owner', role: 'owner', you: true }])));
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.getState().people).toEqual([{ slot: 1, name: 'Ada Owner', role: 'owner', you: true }]);
