@@ -19,6 +19,7 @@ import {
   FRAGMENT_NAME,
   LIMIT_REFUSAL,
   readPeopleNotice,
+  readStoreNotice,
   readPermissionsNotice,
   readRoleNotice,
   REFUSAL,
@@ -112,6 +113,14 @@ export interface ConnectionState {
   canEdit?: boolean;
   /** Changes the server has not acknowledged, which are lost if the tab is closed (FR-ED-18). */
   unsent: boolean;
+  /**
+   * FR-ED-23, NFR-RE-07 (D294): the server holds a change it received and a store of it has failed. Told by the
+   * server when the store fails and at every connection made while it still does, and taken away when a store has
+   * succeeded and when the socket is lost (the next connection is told again where it still holds).
+   */
+  unstored?: boolean;
+  /** False from the start, and again whenever the socket is lost, until the server's notices of the connection (its list of people is the last) have arrived: "In sync" is not shown before, since a failed store is told in them (D294). They may arrive before the synchronisation is reported. */
+  heard?: boolean;
   /**
    * F14-2: the role of this connection became one that cannot edit while the tab
    * held changes the server had not acknowledged. The server does not take them
@@ -254,7 +263,7 @@ export class DocumentConnection {
     if (this.started) return;
     this.started = true;
     const { options } = this;
-    this.state = { phase: 'opening', opened: this.state.opened, unsent: false };
+    this.state = { phase: 'opening', opened: this.state.opened, unsent: false, heard: false };
     this.shown = undefined;
     this.waiting = false;
     this.socket = new HocuspocusProviderWebsocket({
@@ -419,10 +428,15 @@ export class DocumentConnection {
       });
       return;
     }
+    const store = readStoreNotice(payload);
+    if (store) {
+      this.set({ unstored: !store.stored });
+      return;
+    }
     const people = readPeopleNotice(payload);
     if (people) {
       // FR-ED-17: who has the document open. The server's list replaces the last.
-      this.set({ people });
+      this.set({ people, heard: true });
       return;
     }
     const notice = readRoleNotice(payload);
@@ -523,6 +537,8 @@ export class DocumentConnection {
   private connected(): void {
     this.clearTimers();
     this.refusals = 0;
+    // `heard` is not touched: the server's notices come before the library reports the synchronisation, so
+    // the list of people may already have arrived, and it is false again only when the socket is lost.
     this.set({ phase: 'connected', opened: true });
   }
 
@@ -559,7 +575,10 @@ export class DocumentConnection {
   private dropped(): void {
     if (this.over()) return;
     clearTimeout(this.retryTimer);
-    if (this.state.phase !== 'lost') this.set({ phase: 'restoring' });
+    // What the server said of its store is of a connection that is gone: the next one is told again.
+    // Nor did it hear anything on the next one yet: "In sync" waits for that connection's own notices.
+    if (this.state.phase !== 'lost') this.set({ phase: 'restoring', unstored: false, heard: false });
+    else this.set({ unstored: false, heard: false });
     this.expectConnection();
     // FOR THE SLICE THAT BUILDS SHARING (slice 13): the socket that the library
     // opens next carries whatever session cookie the browser holds then. Once a
@@ -649,6 +668,8 @@ export class DocumentConnection {
 // under the Expression Guidelines (system feedback) and approved by the owner
 // with the pull request (the answer to Q6 of the plan).
 const UNSENT = 'Changes that are not yet sent are lost if this tab is closed.';
+// D294: the owner approved this text on 17 November 2026 (Open Questions answer txt-notsaved).
+const NOT_SAVED = 'This document is not yet saved. Ekdotico keeps trying to save it.';
 
 /**
  * FR-ED-23, and the owner's decision E3 of 8 October 2026: one of the three
@@ -658,13 +679,18 @@ const UNSENT = 'Changes that are not yet sent are lost if this tab is closed.';
  * are lost if the tab is closed (FR-ED-18). `capacity`, `ended` and `held` are
  * shown by a statement and not by the indicator.
  */
-export function syncStatus({ phase, unsent }: ConnectionState): {
+export function syncStatus({ phase, unsent, unstored, heard }: ConnectionState): {
   state: 'synced' | 'syncing' | 'error';
   label: string;
 } {
   const tail = unsent ? ` ${UNSENT}` : '';
   switch (phase) {
     case 'connected':
+      // D294: the server holds a change that a failed store has not saved; "In sync" would be untrue. The
+      // sentence is the text of txt-notsaved.
+      if (unstored) return { state: 'syncing', label: `Syncing. ${NOT_SAVED}${tail}` };
+      // Not "In sync" until the server's notices of this connection have arrived (they tell a failed store).
+      if (heard === false) return { state: 'syncing', label: 'Opening the document' };
       return unsent
         ? { state: 'syncing', label: `Syncing. ${UNSENT}` }
         : { state: 'synced', label: 'In sync' };

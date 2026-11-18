@@ -4979,7 +4979,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     browser,
   }) => {
     test.slow();
-    const { manage, theirs, context } = await owned(page, browser);
+    const { manage, theirs, context, owner } = await owned(page, browser);
     const sockets = [countSockets(page), countSockets(theirs)];
     const role = (on: Page, now: string) =>
       on.getByRole('status').filter({
@@ -4988,6 +4988,11 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
 
     // The Owner offers from the sharing settings in her second tab.
     await manage.getByRole('button', { name: 'Offer ownership' }).click();
+    // FR-ED-47, D285: the offer asks for the password.
+    await manage
+      .getByRole('dialog', { name: 'Offer ownership' })
+      .getByLabel('Current password')
+      .fill(owner.password);
     await manage
       .getByRole('dialog', { name: 'Offer ownership' })
       .getByRole('button', { name: 'Offer ownership' })
