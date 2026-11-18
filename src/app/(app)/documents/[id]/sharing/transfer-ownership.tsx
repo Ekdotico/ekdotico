@@ -4,7 +4,9 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Cluster, Dialog, FormFault, Select, Stack } from '@ekdotico/domico/components';
 import { useReady } from '../../../../../components/ready.ts';
+import { PromptFields } from '../../../../../components/prompt-fields.tsx';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
+import { OFFER_PROMPT } from '../../../../../lib/documents/ownership-texts.ts';
 import styles from '../../../../pages.module.css';
 import { InBrowser, LocalTime } from '../../../local-time.tsx';
 import { useCancel } from './collaborator-actions.tsx';
@@ -29,8 +31,13 @@ export function TransferOwnership({
   editors,
   offer,
   days,
+  email,
+  secondFactor,
 }: {
   documentId: string;
+  /** The account's address and whether it asks for a code: the prompt of FR-ED-47 (D285). */
+  email: string;
+  secondFactor: boolean;
   /** The collaborators who hold the Editor role, by the identifier of their row. */
   editors: { id: string; name: string }[];
   /** The offer that is open, with its expiry as ISO 8601 in UTC. */
@@ -50,6 +57,7 @@ export function TransferOwnership({
   const [said, setSaid] = useState('');
   const [answers, setAnswers] = useState(0);
   const statusRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     if (answers > 0) statusRef.current?.focus();
   }, [answers]);
@@ -59,15 +67,25 @@ export function TransferOwnership({
 
   // A refusal shown in the dialog stays in the dialog: closing it clears it, so that it is not stated again outside.
   function close() {
+    formRef.current?.reset();
     setOpen(false);
     setFault(null);
   }
 
-  async function offerOwnership() {
-    if (!person) return;
+  async function offerOwnership(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!person || pending) return;
+    const form = event.currentTarget;
+    const entered = new FormData(form);
     setPending(true);
-    const sent = await sendFor(`/api/documents/${documentId}/ownership-offer`, { collaboratorId: person.id });
+    const sent = await sendFor(`/api/documents/${documentId}/ownership-offer`, {
+      collaboratorId: person.id,
+      password: entered.get('password'),
+      ...(secondFactor ? { code: entered.get('code') } : {}),
+    });
     setPending(false);
+    // Neither the password nor the code stays in the page, whatever the answer: a refused one is typed again.
+    form.reset();
     if ('fault' in sent) {
       setFault(sent.fault);
       setAttempt((count) => count + 1);
@@ -165,35 +183,35 @@ export function TransferOwnership({
         aria-describedby="offer-name offer-statement"
         initialFocusRef={cancel}
       >
-        <Stack gap={5}>
-          {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
-          <Stack gap={1}>
-            <p className={styles.meta}>Editor</p>
-            <p className={styles.text}>
-              <bdi id="offer-name" className={styles.documentTitle}>
-                {person?.name}
-              </bdi>
+        <form method="post" noValidate ref={formRef} onSubmit={offerOwnership}>
+          <Stack gap={5}>
+            {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
+            <Stack gap={1}>
+              <p className={styles.meta}>Editor</p>
+              <p className={styles.text}>
+                <bdi id="offer-name" className={styles.documentTitle}>
+                  {person?.name}
+                </bdi>
+              </p>
+            </Stack>
+            <p id="offer-statement" className={styles.text}>
+              You are asking this Editor to accept ownership of this document. You stay the Owner until they
+              accept. If they accept, they become the Owner, you become an Editor, and the document moves to
+              their personal workspace. Everything else stays as it is. The offer is open for {days}{' '}
+              {days === 1 ? 'day' : 'days'}.{' '}
+              {secondFactor ? OFFER_PROMPT.passwordAndCode : OFFER_PROMPT.password}
             </p>
+            <PromptFields idPrefix="offer" email={email} secondFactor={secondFactor} />
+            <Cluster gap={3}>
+              <Button type="submit" pending={pending} pendingLabel="Offering ownership…">
+                Offer ownership
+              </Button>
+              <Button id={CANCEL_ID} onClick={close}>
+                Cancel
+              </Button>
+            </Cluster>
           </Stack>
-          <p id="offer-statement" className={styles.text}>
-            You are asking this Editor to accept ownership of this document. You stay the Owner until they
-            accept. If they accept, they become the Owner, you become an Editor, and the document moves to
-            their personal workspace. Everything else stays as it is. The offer is open for {days}{' '}
-            {days === 1 ? 'day' : 'days'}.
-          </p>
-          <Cluster gap={3}>
-            <Button
-              pending={pending}
-              pendingLabel="Offering ownership…"
-              onClick={() => void offerOwnership()}
-            >
-              Offer ownership
-            </Button>
-            <Button id={CANCEL_ID} onClick={close}>
-              Cancel
-            </Button>
-          </Cluster>
-        </Stack>
+        </form>
       </Dialog>
     </Stack>
   );

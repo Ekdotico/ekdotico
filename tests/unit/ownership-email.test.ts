@@ -22,7 +22,7 @@ describe('the email of an offer of ownership', () => {
     expect(to).toBe('editor@example.com');
     expect(subject).toBe('An offer of ownership of a document in Ekdotico');
     expect(text).toBe(
-      `Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico: ${ORIGIN}/notifications. The offer is open until 2 Oct 2026, 14:05 UTC. If you accept, you become the Owner of the document and Ada Owner becomes an Editor.`,
+      `Ada Owner has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico:\n${ORIGIN}/notifications\nThe offer is open until 2 Oct 2026, 14:05 UTC. If you accept, you become the Owner of the document and Ada Owner becomes an Editor.`,
     );
   });
 

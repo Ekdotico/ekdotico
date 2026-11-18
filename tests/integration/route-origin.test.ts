@@ -317,7 +317,7 @@ const CASES: Case[] = [
   {
     // FR-ED-47: ownership offered to an Editor of the session's own document, named by the identifier of its row.
     handler: 'src/app/api/documents/[id]/ownership-offer/route.ts POST',
-    body: { collaboratorId: 'editor-row-of-the-offer' },
+    body: { collaboratorId: 'editor-row-of-the-offer', password: PASSWORD },
     arrange: async (owner) => {
       const documentId = await live(owner);
       await db().documentCollaborator.create({

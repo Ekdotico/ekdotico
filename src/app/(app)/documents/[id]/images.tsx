@@ -69,7 +69,7 @@ export const IMAGE_TEXT = {
 // ── The upload ──────────────────────────────────────────────────────────────
 
 /** What the picker offers: the four types of NFR-SE-18. The server decides all the same, from the content. */
-const ACCEPT = 'image/png,image/jpeg,image/gif,image/webp';
+const ACCEPT = 'image/png,image/jpeg,image/webp';
 
 export type Uploaded = { ok: true; id: string } | { ok: false; words: string };
 

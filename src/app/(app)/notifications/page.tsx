@@ -20,6 +20,7 @@ export default async function Notifications() {
         // A removal, an offer and the end of an offer name no role; the others name the one in words.
         if (
           notification.kind === 'removed' ||
+          notification.kind === 'two_factor_offer' ||
           notification.kind === 'ownership_offer' ||
           notification.kind === 'ownership_offer_ended'
         ) {

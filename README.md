@@ -4,7 +4,7 @@ Ekdotico is a browser-based academic writing platform: a collaborative block edi
 
 This repository is the application. It does **not** contain Istorico, the Ekdotico provenance system (recording, signing, and `verify.ekdoti.co`), which is [`Ekdotico/istorico`](https://github.com/Ekdotico/istorico). The application meets Istorico only through a port, which the integration contract in the Docs defines.
 
-**Status:** pre-launch. Most of the features of α 0.1.0 are built: admission and sign-in, documents and their sharing, the collaborative editor with images, the draft export, and the deletion of documents and of accounts. The slices still open are listed in the build handoff, and nothing is deployed. The repository is private until the first hosted release (NFR-IC-11); the licence is `AGPL-3.0-only`.
+**Status:** pre-launch. Most of the features of α 0.1.0 are built: admission and sign-in, documents and their sharing, the collaborative editor with images, the draft export, and the deletion of documents and of accounts. The slices still open are listed in the build handoff, and nothing is deployed.
 
 ## Specification
 
@@ -26,23 +26,25 @@ One interface is defined here and not in the specification, provisionally: the w
 
 - Node.js 26 (`.nvmrc`), and pnpm 10.
 - `psql`, the PostgreSQL client, for the provisioning script and its test.
-- A token that can read GitHub Packages, to install `@ekdotico/domico`.
+- A GitHub token that can read packages, to install `@ekdotico/domico` (see Installing).
 
-pnpm takes a registry credential only from your own `~/.npmrc`, never from the one in this repository. Put this line in `~/.npmrc` once; it names a variable and holds no token:
+## Installing
+
+`@ekdotico/domico` is on GitHub's package registry, which asks for a token even for a public package. Make a classic personal access token with only the `read:packages` scope, and put it in your environment as `NODE_AUTH_TOKEN`; never write its value into a file. pnpm takes a registry credential only from your own `~/.npmrc`, never from the one in this repository, so put this line there once. It names the variable and holds no token:
 
 ```
 //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
 
-Then pass the token for the one command:
+Then, in a shell where `NODE_AUTH_TOKEN` is set:
 
 ```bash
-NODE_AUTH_TOKEN="$(gh auth token)" pnpm install
+pnpm install
 ```
 
 ## Local services
 
-Development runs against local equivalents of the production services. Production is DigitalOcean Frankfurt and is provisioned by the owner.
+Development runs against local equivalents of the production services. Production is DigitalOcean in AMS3 (register D313) and is provisioned by the owner.
 
 Start PostgreSQL 17, Valkey, and the local object store of the images (SeaweedFS, a store of the S3 protocol; production is DigitalOcean Spaces, which the owner provisions):
 
@@ -132,7 +134,20 @@ They build the application and serve it on port 3000. Where `pnpm dev` holds tha
 ADMIN_DATABASE_URL=postgresql://localhost:5432/postgres E2E_PORT=3109 pnpm test:e2e
 ```
 
-CI runs all of them on every pull request, on Node.js 26.
+CI is in two tiers, on Node.js 26 (`.github/workflows/ci.yml`):
+
+- **On every pull request and every push to `main`**, the `quick` job: install, `check:deps`, format, lint, typecheck and the unit tests. It takes about two minutes and needs no service.
+- **The full suite**, the `full` job (integration tests, build and end-to-end tests, with PostgreSQL, Valkey and the object store), takes 33 to 42 minutes. It runs on a push to `main`, when the workflow is run by hand on a branch (the Actions tab, or `gh workflow run ci --ref <branch>`), and when the label `ci:full` is added to a pull request that is not a draft. It starts only after `quick` has passed.
+- A full run reports on the commit it started on. A later push to the pull request runs `quick` alone, even while the label stays, so to run the suite on the new head, remove the label and add it again, or run the workflow by hand. The same goes for a draft that already carries the label: marking it ready for review starts no run, so remove the label and add it again after that.
+- CI runs on GitHub Actions and nowhere else. The full suite is not run on a developer's machine as a gate; where Actions cannot run, the merge waits.
+
+## Contributing
+
+Until the beta, Ekdotico is built by a small founding team, and we are not accepting pull requests from outside the team. Issues are very welcome: if you find a bug or have an idea, please open one. We will say here when that changes.
+
+## Licence
+
+The code is licensed under the GNU Affero General Public License, version 3 only (`AGPL-3.0-only`); see [LICENSE](LICENSE). [NOTICE](NOTICE) names the copyright holder. The Ekdotico name and marks are not licensed; see [TRADEMARKS.md](TRADEMARKS.md).
 
 ## Records and procedures the release carries
 

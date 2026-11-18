@@ -10,6 +10,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect as tcp, type AddressInfo } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/provider';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -55,7 +56,8 @@ const written: (() => string)[] = [];
 
 async function startServer(env: Record<string, string> = {}, port = 0) {
   const child = spawn('node', ['src/collab/server.ts'], {
-    env: { ...process.env, EMAIL_TRANSPORT: 'brevo', ...env, COLLAB_PORT: String(port) },
+    // COLLAB_HOST is empty unless a test sets it, so that the shell this runs in cannot change the address.
+    env: { ...process.env, EMAIL_TRANSPORT: 'brevo', COLLAB_HOST: '', ...env, COLLAB_PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(child);
@@ -65,16 +67,16 @@ async function startServer(env: Record<string, string> = {}, port = 0) {
   const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) =>
     child.once('exit', (code, signal) => resolve({ code, signal })),
   );
-  const listening = await new Promise<number>((resolve, reject) => {
+  const listening = await new Promise<{ host: string; port: number }>((resolve, reject) => {
     let stdout = '';
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
-      const match = /listening on (\d+)/.exec(stdout);
-      if (match) resolve(Number(match[1]));
+      const match = /listening on (\S+):(\d+)/.exec(stdout);
+      if (match) resolve({ host: match[1]!, port: Number(match[2]) });
     });
     child.once('exit', () => reject(new Error(`the collaboration server did not start: ${stderr}`)));
   });
-  return { port: listening, child, exited, stderr: () => stderr };
+  return { port: listening.port, host: listening.host, child, exited, stderr: () => stderr };
 }
 
 // Two processes for the whole file: one as a deployment has it by default, and
@@ -521,6 +523,26 @@ describe('the founding-team gate at the handshake (FR-AU-83; register D114, A102
     expect((await handshake(team.port, { cookie: founder.cookie })).status).toBe(101);
     await db().user.update({ where: { id: founder.id }, data: { twoFactorEnabled: false } });
     await expectRefused(team.port, { cookie: founder.cookie }, 403);
+  });
+});
+
+// docs/operations/deployment.md, item 8: the process is reached only through the proxy, so it listens on the loopback
+// address and on no other. Weakening: the host argument of `listen` is dropped.
+const elsewhere = Object.values(networkInterfaces())
+  .flat()
+  .find((each) => each?.family === 'IPv4' && !each.internal)?.address;
+describe('the address the collaboration server listens on', () => {
+  // Needs no second network interface, so the skip below cannot hide a regression: the address the process says it
+  // bound to is 127.0.0.1 by default and the one named by COLLAB_HOST otherwise.
+  it('is 127.0.0.1 by default and the address of COLLAB_HOST where that is set', async () => {
+    expect((await startServer()).host).toBe('127.0.0.1');
+    expect((await startServer({ COLLAB_HOST: '::1' })).host).toBe('::1');
+  });
+
+  it.skipIf(!elsewhere)('is the loopback address alone, not the other addresses of the machine', async () => {
+    const instance = await startServer();
+    expect((await fetch(`http://127.0.0.1:${instance.port}/collab/health`)).status).toBe(200);
+    await expect(fetch(`http://${elsewhere}:${instance.port}/collab/health`)).rejects.toThrow();
   });
 });
 
@@ -3002,6 +3024,11 @@ describe('a store that fails, tried again (NFR-RE-07)', () => {
         const id = await documentOf(owner.id);
         const client = connect(local.port, owner.cookie);
         const { synced, changes, provider } = client.open(id);
+        const told: unknown[] = [];
+        provider.on('stateless', ({ payload }: { payload: string }) => {
+          const notice = JSON.parse(payload) as { kind: string };
+          if (notice.kind === 'store') told.push(notice);
+        });
         await synced;
 
         const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -3034,6 +3061,9 @@ describe('a store that fails, tried again (NFR-RE-07)', () => {
         expect(gaps[1]).toBeLessThan(2600);
         expect(errors.mock.calls).toEqual([['collab: store failed (Error)']]);
 
+        // D294: the writer was told that the store failed (FR-ED-23), once.
+        expect(told).toEqual([{ kind: 'store', stored: false }]);
+
         // The last client leaves: the document stays in memory, since nothing else holds its changes.
         await until(() => provider.unsyncedChanges === 0);
         client.socket.destroy();
@@ -3042,12 +3072,28 @@ describe('a store that fails, tried again (NFR-RE-07)', () => {
         expect(local.hocuspocus.documents.has(id)).toBe(true);
         expect(await stored(id)).toBeNull();
 
+        // D294: a connection made while the store still fails is told so as it joins, and is told when a store succeeds.
+        const second = connect(local.port, owner.cookie);
+        const joining = second.open(id);
+        const joined: unknown[] = [];
+        joining.provider.on('stateless', ({ payload }: { payload: string }) => {
+          const notice = JSON.parse(payload) as { kind: string };
+          if (notice.kind === 'store') joined.push(notice);
+        });
+        await joining.synced;
+        await until(() => joined.length === 1);
+        expect(joined).toEqual([{ kind: 'store', stored: false }]);
+
         // The database answers again: the next attempt stores the state as it is now, says so, and the document is let go.
         failing = false;
         await until(() => errors.mock.calls.length === 2, 6000);
         expect(errors.mock.calls[1]).toEqual(['collab: store recovered']);
+        await until(() => joined.length === 2);
+        expect(joined[1]).toEqual({ kind: 'store', stored: true });
         expect(attempts[3]! - attempts[2]!).toBeGreaterThanOrEqual(3950);
         expect(await stored(id)).toHaveLength(made);
+        // Let go once nobody holds it.
+        second.socket.destroy();
         await until(() => !local.hocuspocus.documents.has(id));
       } finally {
         await local.stop();

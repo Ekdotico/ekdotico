@@ -36,7 +36,6 @@ import { checkEntryName, zip, type ZipEntry } from './zip.ts';
 const EXTENSIONS: Readonly<Record<string, string>> = {
   [IMAGE_TYPES.png]: 'png',
   [IMAGE_TYPES.jpeg]: 'jpg',
-  [IMAGE_TYPES.gif]: 'gif',
   [IMAGE_TYPES.webp]: 'webp',
 };
 

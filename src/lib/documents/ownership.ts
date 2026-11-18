@@ -21,6 +21,7 @@
 // logs a name, an address, a title or an identifier of a person.
 import type { Prisma } from '../../generated/prisma/client.ts';
 import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
+import { guardRefusal, guardSpend, type Guard, type GuardRefusal } from '../account/guard.ts';
 import { announce as announceClearing, takeOutOfClearing } from '../clearing/clearing.ts';
 import { publishCollabEvent } from '../collab/events.ts';
 import { displayNameOf } from '../collab/presence.ts';
@@ -39,7 +40,7 @@ import {
   OFFER_NOTIFICATION,
   type OfferEnd,
 } from './ownership-notifications.ts';
-import { lockDocument } from './sharing.ts';
+import { lockDocument, revokeInvitationsOfLostRight } from './sharing.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -285,7 +286,9 @@ export type OfferResult =
   /** NFR-SE-07, S17-7: past the offers an Owner may make in an hour: a 429. */
   | { outcome: 'rate_limited'; retryAfterSeconds: number }
   /** FR-AU-91: the day of the clearing has come: no offer "may still be made". A 409. */
-  | { outcome: 'clearing_over' };
+  | { outcome: 'clearing_over' }
+  /** FR-ED-47, D285: the prompt's password or session no longer stands, or the recovery code is spent: the route answers. */
+  | GuardRefusal;
 
 /**
  * The document, read under its row, when the caller is its Owner now. FR-ED-44:
@@ -343,12 +346,17 @@ export async function createOffer(
  * whose row this is. In one transaction under the document's row: the offer
  * and the Editor's notification (FR-ED-42). The email is `deliverOffer`'s,
  * after the response.
+ *
+ * `guard` is the prompt of FR-ED-47 (D285; register Q82 point 6): the password, and the code where two-factor
+ * authentication is on, which the route asked for and has checked, asked again here under the lock, as every
+ * change under a prompt does (src/lib/account/prompt.ts). The route always passes it.
  */
 export async function makeOffer(
   documentId: string,
   callerId: string,
   collaboratorId: unknown,
   now: Date = new Date(),
+  guard: Guard,
 ): Promise<OfferResult> {
   // NFR-SE-07, S17-7: as the invitations of `createInvitations`, an offer is counted inside the transaction,
   // after every refusal, and given back where the transaction then fails, so that only an offer made counts.
@@ -357,6 +365,8 @@ export async function makeOffer(
     return await db().$transaction(async (tx): Promise<OfferResult> => {
       const owned = await ownedUnderLock(tx, documentId, callerId);
       if (owned.stop) return owned.stop;
+      const outrun = await guardRefusal(tx, guard);
+      if (outrun) return outrun;
       if (!transferable(owned.document)) return { outcome: 'not_transferable' };
       // FR-AU-91: "An offer of ownership may still be made for the document" while its notice period runs; the day
       // has come and the document is the timer's (review item 2).
@@ -384,6 +394,14 @@ export async function makeOffer(
       const limit = await takeLimitReturnable('OFFERS_PER_USER', callerId);
       if (!limit.ok) return { outcome: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
       giveBack = limit.giveBack;
+      // Every refusal of the action, the limit included, is behind us: a recovery code is spent only by an offer
+      // that is made (review of PR 80, item 1). Where it was spent already, the count is given back.
+      const gone = await guardSpend(tx, guard);
+      if (gone) {
+        await giveBack();
+        giveBack = undefined;
+        return gone;
+      }
       const { id, expiresAt } = await createOffer(tx, {
         documentId,
         fromUserId: callerId,
@@ -459,7 +477,7 @@ export function offerEmail(to: string, ownerName: string, expiresAt: Date): Emai
   return {
     to,
     subject: 'An offer of ownership of a document in Ekdotico',
-    text: `${ownerName} has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico: ${link}. The offer is open until ${dateText(expiresAt, 'utc')}. If you accept, you become the Owner of the document and ${ownerName} becomes an Editor.`,
+    text: `${ownerName} has offered you ownership of a document that you edit in Ekdotico. To accept or decline, open your notifications in Ekdotico:\n${link}\nThe offer is open until ${dateText(expiresAt, 'utc')}. If you accept, you become the Owner of the document and ${ownerName} becomes an Editor.`,
   };
 }
 
@@ -702,6 +720,8 @@ export async function answerOffer(
       });
       // S17-5: the notices of ended offers say "You are still its Owner"; the former Owner is not, from here.
       await endOfferEndedNotifications(tx, offer.fromUserId, documentId);
+      // FR-ED-37, D300: the former Owner is an Editor now and keeps its pending invitations only where an Editor may invite.
+      await revokeInvitationsOfLostRight(tx, documentId, now);
       await securityLogIn(tx, { kind: 'owner_changed', userId, documentId });
       // FR-AU-91: "its acceptance takes the document out of the clearing, since the account no longer owns it".
       // Under the document's row, which this transaction holds, and after the roles are rewritten, so that the

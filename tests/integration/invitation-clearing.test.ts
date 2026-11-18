@@ -137,7 +137,7 @@ describe('the one reminder (FR-ED-48)', () => {
     const mails = await remindersTo(invitee.email);
     expect(mails).toHaveLength(1);
     expect(mails[0]!.text).toBe(
-      `A Person (${owner.email}) invited you to a document in Ekdotico as Editor. The invitation expires on ${dateText(row.expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico: ${ORIGIN}/notifications.`,
+      `A Person (${owner.email}) invited you to a document in Ekdotico as Editor. The invitation expires on ${dateText(row.expiresAt, 'utc')}. To accept or decline it, open your notifications in Ekdotico:\n${ORIGIN}/notifications`,
     );
     const rows = await reminderNotifications(invitee.id);
     expect(rows).toHaveLength(1);
