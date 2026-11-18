@@ -23,7 +23,7 @@ test.afterAll(stopCollab);
 
 // The fixed texts, written out here and not taken from the code under test.
 const NOT_AN_IMAGE =
-  'That file is not a PNG, JPEG, GIF, or WebP image, so it was not added. Choose an image in one of those formats.';
+  'That file is not a PNG, JPEG, or WebP image, so it was not added. Choose an image in one of those formats.';
 const GONE =
   'This image is no longer available. An image that has been out of the document for more than 30 days is deleted from storage.';
 const STORE = process.env.IMAGE_STORAGE_ENDPOINT!;

@@ -212,7 +212,7 @@ describe('the title is shown to the invitee (D202)', () => {
     expect(mail.subject).toBe(SUBJECT);
     expect(mail.text).toMatch(
       new RegExp(
-        `^Ada Owner \\(${owner.email.replace('.', '\\.')}\\) invited you to a document in Ekdotico as Viewer\\. To accept or decline, open this link: https://app\\.example\\.test/invitations/[A-Za-z0-9_-]{43}\\. The link works once, and the invitation is open until \\d{1,2} [A-Z][a-z]{2} \\d{4}, \\d{2}:\\d{2} UTC\\. If you did not expect this invitation, you can ignore this email\\.\\n?$`,
+        `^Ada Owner \\(${owner.email.replace('.', '\\.')}\\) invited you to a document in Ekdotico as Viewer\\. To accept or decline, open this link:\\nhttps://app\\.example\\.test/invitations/[A-Za-z0-9_-]{43}\\nThe link works once, and the invitation is open until \\d{1,2} [A-Z][a-z]{2} \\d{4}, \\d{2}:\\d{2} UTC\\. If you did not expect this invitation, you can ignore this email\\.\\n?$`,
       ),
     );
   });

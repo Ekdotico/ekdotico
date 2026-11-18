@@ -31,7 +31,7 @@ import { endRoleChanges, notifyRemoved, notifyRoleChanged } from './access-notif
 import { mayAct, refusalOn, type CollaboratorAction } from './collaborator-rules.ts';
 import { withdrawOffersFor } from './ownership.ts';
 import { COLLABORATOR_ROLE, type DocumentRole } from './permissions.ts';
-import { lockDocument, OFFERED, type OfferedRole } from './sharing.ts';
+import { lockDocument, OFFERED, revokeInvitationsOfLostRight, type OfferedRole } from './sharing.ts';
 
 /** What the identifier of a collaborator's row looks like (a cuid); anything else names no one and is not looked up. */
 const COLLABORATOR_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -148,6 +148,8 @@ export async function changeRole(
       await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
       // FR-ED-47: an offer of ownership to an Editor who stops being one is withdrawn.
       if (OFFERED[wanted] !== 'EDITOR') await withdrawOffersFor(tx, documentId, found.userId, now);
+      // FR-ED-37, D300: a sender whose new role lacks the permission to invite loses its pending invitations, here.
+      await revokeInvitationsOfLostRight(tx, documentId, now);
       // FR-ED-42, S15-2: the person whose role it is is told, in this transaction.
       await notifyRoleChanged(tx, { recipientId: found.userId, actorId: callerId, documentId, role: wanted });
       return { result: { outcome: 'changed', name, role: wanted }, userId: found.userId };
@@ -177,7 +179,10 @@ export async function removeCollaborator(
       const { found, name } = acted;
       await tx.documentCollaborator.delete({ where: { id: found.id } });
       await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
-      await withdrawOffersFor(tx, documentId, found.userId, new Date());
+      const now = new Date();
+      await withdrawOffersFor(tx, documentId, found.userId, now);
+      // FR-ED-37, D300: the pending invitations of the person removed are revoked in this transaction.
+      await revokeInvitationsOfLostRight(tx, documentId, now);
       // FR-ED-42, S15-2: the person removed is told, in this transaction.
       await notifyRemoved(tx, { recipientId: found.userId, actorId: callerId, documentId });
       return { result: { outcome: 'removed', name }, userId: found.userId };
@@ -201,7 +206,10 @@ export async function leaveDocument(documentId: string, callerId: string): Promi
     if (count !== 1) return { outcome: 'not_found' };
     // The one who acts is the one who goes.
     await securityLogIn(tx, { kind: 'collaborators_changed', userId: callerId, documentId });
-    await withdrawOffersFor(tx, documentId, callerId, new Date());
+    const now = new Date();
+    await withdrawOffersFor(tx, documentId, callerId, now);
+    // FR-ED-37, D300: a leave has the effect of a removal, so the pending invitations of the one who leaves go.
+    await revokeInvitationsOfLostRight(tx, documentId, now);
     // No notification of a leave (the person's own act), and none of the changes of the role that ended.
     await endRoleChanges(tx, callerId, documentId);
     return { outcome: 'left' };
