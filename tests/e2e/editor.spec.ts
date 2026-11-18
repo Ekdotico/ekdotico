@@ -4148,6 +4148,12 @@ test('a Viewer reads what the Owner writes, in an editor that does not write', a
   await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
   await page.goto(`/documents/${id}`);
   await expect(text(page)).toHaveAttribute('aria-readonly', 'false');
+  // F10: a reader is told in one line, where the keys of a writer stand, that the text is for reading, and
+  // the role; a writer is not. (Here, and not in the permissions spec, which starts no collaboration server.)
+  await expect(
+    theirs.getByText('You can read this document. Your role on it is Viewer.', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('You can read this document.')).toHaveCount(0);
   await text(page).click();
   await page.keyboard.type('Written by the Owner');
   await expect(text(theirs)).toContainText('Written by the Owner');
