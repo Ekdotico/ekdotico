@@ -141,7 +141,7 @@ it(
         let stdout = '';
         child.stdout.on('data', (chunk) => {
           stdout += chunk;
-          const match = /listening on (\d+)/.exec(stdout);
+          const match = /listening on \S+:(\d+)/.exec(stdout);
           if (match) resolve(match[1]!);
         });
         child.once('exit', () => reject(new Error(`the collaboration server did not start: ${stderr}`)));
