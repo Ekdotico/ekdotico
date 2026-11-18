@@ -41,6 +41,40 @@
     opacity var(--dur-fast) var(--ease-soft);
 }
 
+/* The visible box is 20 by 20 and the glyph is 1em of the text it stands beside (the font size is set on
+   the control from the cursor's own block); the pointer target is 24 by 24, by a transparent pseudo-element
+   that leaves the box as it is. `.insert` is centred on the cursor's line by its transform. */
+.insertButton {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: 20px;
+  block-size: 20px;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-1);
+  border: 1px solid var(--rule-control);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-soft);
+}
+
+.insertButton::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+}
+
+.insertButton:hover {
+  background: var(--bg-surface-2);
+}
+
+.insertButton svg {
+  inline-size: 1em;
+  block-size: 1em;
+}
+
 .insert[data-settled='false'] {
   transition: none;
 }

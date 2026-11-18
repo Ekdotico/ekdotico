@@ -10,7 +10,7 @@
 
 import { useLayoutEffect, useRef, type RefObject } from 'react';
 import { useEditorState, type Editor } from '@tiptap/react';
-import { Button, Tooltip } from '@ekdotico/domico/components';
+import { Tooltip } from '@ekdotico/domico/components';
 import { PlusIcon } from '@ekdotico/domico/icons';
 import styles from './editor.module.css';
 import { INSERT_NAME } from './insert-name.ts';
@@ -63,6 +63,10 @@ export function InsertButton({
       const box = surface.current.getBoundingClientRect();
       element.style.left = `${line.right - box.left}px`;
       element.style.top = `${(line.top + line.bottom) / 2 - box.top}px`;
+      // The glyph is 1em of the text it stands beside: the size of the cursor's own block.
+      const at = editor.view.domAtPos(Math.min(cursor.head, editor.state.doc.content.size)).node;
+      const block = at instanceof Element ? at : at.parentElement;
+      if (block) element.style.fontSize = getComputedStyle(block).fontSize;
       element.style.visibility = 'visible';
     };
     put();
@@ -78,15 +82,16 @@ export function InsertButton({
   return (
     <div ref={control} className={styles.insert} data-settled="false" style={{ visibility: 'hidden' }}>
       <Tooltip content={INSERT_NAME} placement="top">
-        <Button
-          variant="secondary"
+        <button
+          type="button"
+          className={styles.insertButton}
           aria-label={INSERT_NAME}
           // The text keeps its focus and its cursor while the button is pressed.
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => openSlashPalette(editor)}
         >
           <PlusIcon />
-        </Button>
+        </button>
       </Tooltip>
     </div>
   );
