@@ -22,6 +22,12 @@
    for a person who may edit: the control is absolute, so that it moves nothing as the cursor moves. */
 .writable {
   padding-inline-end: var(--sp-8);
+  /* The Insert control's box and its gap from the cursor: its one copy. On an empty block the control stands
+     at the start of the line and the placeholder begins after it, by the property the design package reads
+     (`--ekd-editor-placeholder-offset`, from 0.44.0; harmless before). Set only here, where the control is. */
+  --insert-box: 20px;
+  --insert-gap: var(--sp-2);
+  --ekd-editor-placeholder-offset: calc(var(--insert-box) + var(--insert-gap));
 }
 
 /* The Insert control: immediately to the right of the cursor, a step of space after it, centred on the
@@ -33,11 +39,11 @@
   /* Exactly the height of the box: a wrapper taller than it (the line's strut under an inline child, about
      3.5px at 17px text) would be centred by its own height and leave the box above the line's middle. */
   display: flex;
-  block-size: 20px;
+  block-size: var(--insert-box);
   line-height: 0;
   position: absolute;
   z-index: 1;
-  margin-inline-start: var(--sp-2);
+  margin-inline-start: var(--insert-gap);
   transform: translateY(-50%);
   opacity: 0.6;
   transition:
@@ -53,8 +59,8 @@
   position: relative;
   display: grid;
   place-items: center;
-  inline-size: 20px;
-  block-size: 20px;
+  inline-size: var(--insert-box);
+  block-size: var(--insert-box);
   padding: 0;
   background: transparent;
   color: var(--fg-1);

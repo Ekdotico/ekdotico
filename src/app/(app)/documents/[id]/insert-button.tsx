@@ -18,6 +18,9 @@ import { INSERT_NAME } from './insert-name.ts';
 import { lineCentre } from './line-centre.ts';
 import { openSlashPalette } from './slash-palette.tsx';
 
+/** The gap between the cursor and the control, from the stylesheet's own `--insert-gap`, in pixels. */
+const getGap = (element: HTMLElement) => Number.parseFloat(getComputedStyle(element).marginInlineStart) || 0;
+
 /** A collapsed cursor at the end of a text block that is not code: the only place the control is shown. */
 function endsBlock(state: EditorState): boolean {
   const { selection } = state;
@@ -81,7 +84,10 @@ export function InsertButton({
           (Number.parseFloat(style.borderTopWidth) || 0);
         middle = lineCentre(line.top, line.bottom, contentTop, Number.parseFloat(style.lineHeight));
       }
-      element.style.left = `${line.right - box.left}px`;
+      // On an empty block the control stands at the start of the line, and the placeholder begins after it
+      // (`--ekd-editor-placeholder-offset`, the box and the gap): its own gap is taken back there.
+      const gap = editor.state.selection.$head.parent.content.size === 0 ? getGap(element) : 0;
+      element.style.left = `${line.right - box.left - gap}px`;
       element.style.top = `${middle - box.top}px`;
       element.style.visibility = 'visible';
     };

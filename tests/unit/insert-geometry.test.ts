@@ -9,14 +9,29 @@ const rule = (selector: string) => css.slice(css.indexOf(`${selector} {`)).match
 describe('the target of the Insert control', () => {
   it('is at least 24px square around a 20px box with a 1px border', () => {
     const own = rule('.insertButton');
-    const size = Number(/inline-size: (\d+)px/.exec(own)![1]);
+    const size = Number(/--insert-box: (\d+)px/.exec(rule('.writable'))![1]);
     const border = Number(/border: (\d+)px/.exec(own)![1]);
     const inset = Number(/inset: -(\d+)px/.exec(rule('.insertButton::before'))![1]);
     expect(size).toBe(20);
+    expect(own).toContain('inline-size: var(--insert-box)');
+    expect(own).toContain('block-size: var(--insert-box)');
     // The wrapper that is centred on the line is exactly as tall as the box, or it centres its own height.
-    expect(rule('.insert')).toContain('block-size: 20px');
+    expect(rule('.insert')).toContain('block-size: var(--insert-box)');
     // The inset is taken from the padding box, inside the border.
     expect(size - 2 * border + 2 * inset).toBeGreaterThanOrEqual(24);
+  });
+});
+
+describe('the placeholder offset of an empty block', () => {
+  it('is the control box plus its gap, from the same two properties, set where the control is', () => {
+    const writable = rule('.writable');
+    expect(writable).toContain(
+      '--ekd-editor-placeholder-offset: calc(var(--insert-box) + var(--insert-gap))',
+    );
+    expect(writable).toContain('--insert-gap: var(--sp-2)');
+    expect(rule('.insert')).toContain('margin-inline-start: var(--insert-gap)');
+    // Nowhere else: the reader's surface has no control and no offset.
+    expect(css.match(/--ekd-editor-placeholder-offset:/g)).toHaveLength(1);
   });
 });
 
