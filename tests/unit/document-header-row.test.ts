@@ -14,7 +14,8 @@ describe('the document header row (modernisation A2)', () => {
   });
 
   it('keeps the order title, Sharing, Export, people, status on one baseline', () => {
-    expect(page).toContain('<Cluster gap={3} align="baseline">');
+    // The title is its own line, the controls one Cluster under it.
+    expect(page).toMatch(/<Stack gap=\{3\}>\s*\{\/\*[^]*?<PageHeading[^]*?<Cluster gap=\{3\} align="center">/);
     const order = ['<PageHeading', '>\n            Sharing', '<ExportDraft', 'id={PEOPLE_SLOT}', 'id={STATUS_SLOT}'].map((s) => page.indexOf(s));
     expect(order.every((n) => n >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);

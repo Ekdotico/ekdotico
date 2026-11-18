@@ -52,11 +52,13 @@ export default async function DocumentPage({ params }: Props) {
   const { document, role } = access;
   return (
     <Stack gap={5}>
-      {/* Modernisation A2: the title, then one row of quiet controls on one baseline; the row wraps under the title
-          where it is narrow. Tab order: title, Sharing, Export, people, status. */}
-      <Cluster gap={3} align="baseline">
+      {/* Modernisation A2: the title on its own line, then one row of quiet controls from the left edge, so that the
+          status stays last in the row in the 760px column whatever the title's length. Tab order: title, mark,
+          Sharing, Export, status. */}
+      <Stack gap={3}>
         {/* The title is text, whatever it holds (NFR-SE-08). */}
         <PageHeading className={styles.breakable}>{document.title}</PageHeading>
+      <Cluster gap={3} align="center">
         {document.recording === 'UNRECORDED' ? (
           <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
         ) : null}
@@ -74,6 +76,7 @@ export default async function DocumentPage({ params }: Props) {
         {/* The status of the connection, after the people (modernisation A2). */}
         <span id={STATUS_SLOT} className={styles.peopleSlot} />
       </Cluster>
+      </Stack>
       <DocumentView
         documentId={document.id}
         // FR-ED-44: fixed by role. The server discards what a role that cannot
