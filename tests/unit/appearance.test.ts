@@ -10,8 +10,8 @@ const store = (jar: Record<string, string>) => ({
 });
 
 describe('the appearance cookies', () => {
-  it('put no attribute on the page when nothing was chosen: Parchment, and the mode of the device', () => {
-    expect({ ...appearanceAttributes(store({})) }).toEqual({});
+  it('put Parchment on the page when nothing was chosen, and leave the mode to the device', () => {
+    expect({ ...appearanceAttributes(store({})) }).toEqual({ 'data-theme': 'parchment' });
     expect(appearanceState(store({}))).toEqual({ theme: 'parchment', mode: 'auto' });
   });
 
@@ -23,7 +23,9 @@ describe('the appearance cookies', () => {
     expect({ ...appearanceAttributes(store({ 'ekd-theme': 'mono', 'ekd-mode': 'auto' })) }).toEqual({
       'data-theme': 'mono',
     });
-    expect({ ...appearanceAttributes(store({ 'ekd-theme': 'neon', 'ekd-mode': 'blue' })) }).toEqual({});
+    expect({ ...appearanceAttributes(store({ 'ekd-theme': 'neon', 'ekd-mode': 'blue' })) }).toEqual({
+      'data-theme': 'parchment',
+    });
     expect(appearanceState(store({ 'ekd-theme': 'library', 'ekd-mode': 'light' }))).toEqual({
       theme: 'library',
       mode: 'light',
