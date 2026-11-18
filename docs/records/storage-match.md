@@ -72,7 +72,7 @@ Every column of every table is named, in the one row it belongs to; there is no 
 
 | Prefix    | Where                                              | Row     | Note                                                                                                                      |
 | --------- | -------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `images`  | The bucket of the images, DigitalOcean Spaces AMS3 | images  | `images/<document>/<random>`; versioned or copied each day to a second bucket in AMS3, the owner's choice (procedure 6)   |
+| `images`  | The bucket of the images, DigitalOcean Spaces AMS3 | images  | `images/<document>/<random>`; versioned or copied each day to a second bucket, the owner's choice (procedure 6)           |
 | `backups` | The bucket of the copies, Scaleway, an EEA region  | backups | `backups/<year>/<month>/<time>-<random>.ekdbak`, sealed; the 4 weeks are a rule of the bucket (docs/operations/backup.md) |
 
 ## D. Valkey
