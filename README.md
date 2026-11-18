@@ -136,6 +136,14 @@ ADMIN_DATABASE_URL=postgresql://localhost:5432/postgres E2E_PORT=3109 pnpm test:
 
 CI runs all of them on every pull request, on Node.js 26.
 
+## Contributing
+
+Until the beta, Ekdotico is built by a small founding team, and we are not accepting pull requests from outside the team. Issues are very welcome: if you find a bug or have an idea, please open one. We will say here when that changes.
+
+## Licence
+
+The code is licensed under the GNU Affero General Public License, version 3 only (`AGPL-3.0-only`); see [LICENSE](LICENSE). [NOTICE](NOTICE) names the copyright holder. The Ekdotico name and marks are not licensed; see [TRADEMARKS.md](TRADEMARKS.md).
+
 ## Records and procedures the release carries
 
 The match of every table, column, object prefix, Valkey key family, timer and file to a row of §2.7 ([`docs/records/storage-match.md`](docs/records/storage-match.md)), the processors ([`docs/records/processors.md`](docs/records/processors.md)), the 14 days for security patches ([`docs/records/dependency-patches.md`](docs/records/dependency-patches.md)), the six procedures that show the release criteria ([`docs/procedures`](docs/procedures/README.md); `node scripts/record.ts new <procedure> <release>` makes the record of a run), the rotation of the secrets ([`docs/operations/secret-rotation.md`](docs/operations/secret-rotation.md)) and the copy of the backups outside DigitalOcean ([`docs/operations/backup.md`](docs/operations/backup.md); `scripts/backup.ts`, `scripts/backup-restore.ts`). The reference document of NFR-IC-14 is `tests/fixtures/reference-document.json` and its harness is `scripts/measure-editor.ts`. The test of the copy needs `pg_dump` of the server's major version or later (`brew install postgresql@17`).
