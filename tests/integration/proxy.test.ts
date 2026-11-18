@@ -4,6 +4,7 @@
 import { NextRequest } from 'next/server';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { cookiesOf, createAccount, DAY, load, ORIGIN, prepare, signIn } from './identity.ts';
+import { VISITOR_HEADER, VISITOR_MARK } from '../../src/lib/visitors.ts';
 
 const database = prepare('proxy', {
   // One trusted proxy, so that each test can come from an address of its own.
@@ -269,15 +270,24 @@ describe('every other path, without a session (FR-AU-07)', () => {
 });
 
 describe('the root, for a visitor and for a person signed in (FR-AU-93; register D327)', () => {
-  const rewrittenTo = (response: Response) => response.headers.get('x-middleware-rewrite');
+  // The proxy names the headers of the request Next.js passes on, each under this prefix, and Next.js drops every
+  // other one (`x-middleware-override-headers`): the mark is there for a visitor, and absent for anyone else.
+  const marked = (response: Response) =>
+    response.headers.get(`x-middleware-request-${VISITOR_HEADER}`) === VISITOR_MARK;
+  const passedOn = (response: Response) =>
+    (response.headers.get('x-middleware-override-headers') ?? '').split(',');
 
   it.each(['GET', 'HEAD'])(
-    'rewrites a %s without a session to the page of visitors, and does not redirect',
+    'marks a %s without a session for the page of visitors, and neither redirects nor rewrites',
     async (method) => {
       const response = await call(method, '/', address());
       expect(response.status).toBe(200);
       expect(response.headers.get('location')).toBeNull();
-      expect(new URL(rewrittenTo(response)!).pathname).toBe('/visitors-page');
+      expect(passed(response)).toBe(true);
+      expect(marked(response)).toBe(true);
+      // The rewrite is the configuration's (next.config.ts): one of the proxy's is taken for another origin
+      // by a process started with `--hostname 127.0.0.1` (src/lib/visitors.ts).
+      expect(response.headers.get('x-middleware-rewrite')).toBeNull();
       // The page is a page: the policy with a nonce made for this request, as any page has.
       expect(response.headers.get('content-security-policy')).toMatch(
         /script-src 'self' 'nonce-[A-Za-z0-9+/]{22}=='/,
@@ -287,33 +297,50 @@ describe('the root, for a visitor and for a person signed in (FR-AU-93; register
     },
   );
 
-  it('gives the same answer to a cookie that is no session, and carries nothing of the query', async () => {
+  it('gives the same answer to a cookie that is no session, whatever the query', async () => {
     const response = await call('GET', '/?return=https%3A%2F%2Fevil.example&x=1', {
       ...address(),
       cookie: 'better-auth.session_token=not-a-session',
     });
-    const target = new URL(rewrittenTo(response)!);
-    expect(target.pathname).toBe('/visitors-page');
-    expect(target.search).toBe('');
+    expect(marked(response)).toBe(true);
     expect(response.headers.get('location')).toBeNull();
   });
 
   it('counts a visitor against the limit of the address, and answers 429 past it (NFR-SE-07)', async () => {
     const from = address();
-    for (let n = 0; n < 5; n++) expect(rewrittenTo(await call('GET', '/', from))).not.toBeNull();
+    for (let n = 0; n < 5; n++) expect(marked(await call('GET', '/', from))).toBe(true);
     await expectError(await call('GET', '/', from), 429, 'rate_limited');
   });
 
-  it('does not count a person signed in against it, and does not rewrite for them', async () => {
+  it('does not count a person signed in against it, and does not mark their request', async () => {
     const { cookie } = await person();
     const from = address();
     for (let n = 0; n < 8; n++) {
       const response = await call('GET', '/', { ...cookie, ...from });
       expect(passed(response)).toBe(true);
-      expect(rewrittenTo(response)).toBeNull();
+      expect(marked(response)).toBe(false);
     }
     // The address has all five of its counts left for visitors.
-    for (let n = 0; n < 5; n++) expect(rewrittenTo(await call('GET', '/', from))).not.toBeNull();
+    for (let n = 0; n < 5; n++) expect(marked(await call('GET', '/', from))).toBe(true);
+  });
+
+  it('takes off a mark the client sent, for a person signed in and on every other page', async () => {
+    const { cookie } = await person();
+    const forged = { [VISITOR_HEADER]: VISITOR_MARK };
+    const requests: [string, Record<string, string>][] = [
+      ['/', { ...cookie, ...forged }],
+      ['/settings', { ...cookie, ...forged }],
+      ['/sign-in', { ...address(), ...forged }],
+    ];
+    for (const [path, headers] of requests) {
+      const response = await call('GET', path, headers);
+      expect(passed(response), path).toBe(true);
+      expect(marked(response), path).toBe(false);
+      expect(passedOn(response), path).not.toContain(VISITOR_HEADER);
+      expect(response.headers.get(`x-middleware-request-${VISITOR_HEADER}`), path).toBeNull();
+    }
+    // A visitor who sends it gets what a visitor gets: the mark is the proxy's own.
+    expect(marked(await call('GET', '/', { ...address(), ...forged }))).toBe(true);
   });
 
   it('answers a request that changes state on the root with a 401, as on any page', async () => {
@@ -326,7 +353,7 @@ describe('the root, for a visitor and for a person signed in (FR-AU-93; register
       for (const headers of [{}, cookie]) {
         const response = await call(method, '/visitors-page', { ...headers, origin: ORIGIN });
         expect(passed(response)).toBe(false);
-        expect(rewrittenTo(response)).toBeNull();
+        expect(marked(response)).toBe(false);
         expect(response.status).toBe(404);
       }
     }
