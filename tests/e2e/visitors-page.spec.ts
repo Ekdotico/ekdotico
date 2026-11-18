@@ -6,7 +6,10 @@
 import { expect, test } from './fixtures.ts';
 import { newPerson, signUp } from './account.ts';
 
-test('a visitor at the root gets the page, at the same address, with no cookie', async ({ page, request }) => {
+test('a visitor at the root gets the page, at the same address, with no cookie', async ({
+  page,
+  request,
+}) => {
   const response = await request.get('/', { maxRedirects: 0 });
   expect(response.status()).toBe(200);
   expect(response.headersArray().filter(({ name }) => name.toLowerCase() === 'set-cookie')).toEqual([]);
@@ -20,7 +23,9 @@ test('a visitor at the root gets the page, at the same address, with no cookie',
       'Ekdotico is being tested by a small group, and accounts are by invitation. Each invitation is sent by a person on the team.',
     ),
   ).toBeVisible();
-  await expect(page.getByText('To ask for one, add your email address to the list.', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('To ask for one, add your email address to the list.', { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText('write to')).toHaveCount(0);
   await expect(page.getByText('Already invited?')).toBeVisible();
 

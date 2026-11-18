@@ -30,7 +30,8 @@ const env = {
 };
 
 const WITHOUT_ADDRESS = 'To ask for one, add your email address to the list.';
-const WITH_ADDRESS = (address: string) => `To ask for one, add your email address to the list, or write to ${address}.`;
+const WITH_ADDRESS = (address: string) =>
+  `To ask for one, add your email address to the list, or write to ${address}.`;
 
 /** The line as a reader gets it, with the address in place. */
 const line = (address: string | undefined) => {

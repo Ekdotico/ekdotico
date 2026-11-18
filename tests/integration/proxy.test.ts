@@ -271,16 +271,21 @@ describe('every other path, without a session (FR-AU-07)', () => {
 describe('the root, for a visitor and for a person signed in (FR-AU-93; register D327)', () => {
   const rewrittenTo = (response: Response) => response.headers.get('x-middleware-rewrite');
 
-  it.each(['GET', 'HEAD'])('rewrites a %s without a session to the page of visitors, and does not redirect', async (method) => {
-    const response = await call(method, '/', address());
-    expect(response.status).toBe(200);
-    expect(response.headers.get('location')).toBeNull();
-    expect(new URL(rewrittenTo(response)!).pathname).toBe('/visitors-page');
-    // The page is a page: the policy with a nonce made for this request, as any page has.
-    expect(response.headers.get('content-security-policy')).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/]{22}=='/);
-    // It sets no cookie.
-    expect(response.headers.get('set-cookie')).toBeNull();
-  });
+  it.each(['GET', 'HEAD'])(
+    'rewrites a %s without a session to the page of visitors, and does not redirect',
+    async (method) => {
+      const response = await call(method, '/', address());
+      expect(response.status).toBe(200);
+      expect(response.headers.get('location')).toBeNull();
+      expect(new URL(rewrittenTo(response)!).pathname).toBe('/visitors-page');
+      // The page is a page: the policy with a nonce made for this request, as any page has.
+      expect(response.headers.get('content-security-policy')).toMatch(
+        /script-src 'self' 'nonce-[A-Za-z0-9+/]{22}=='/,
+      );
+      // It sets no cookie.
+      expect(response.headers.get('set-cookie')).toBeNull();
+    },
+  );
 
   it('gives the same answer to a cookie that is no session, and carries nothing of the query', async () => {
     const response = await call('GET', '/?return=https%3A%2F%2Fevil.example&x=1', {

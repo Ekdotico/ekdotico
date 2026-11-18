@@ -496,7 +496,7 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
   // D329: absent until the mailbox exists. Present, it is held to the one rule of an address (FR-AU-02), since
   // it is written into a page and a link.
   const contactText = env.CONTACT_ADDRESS?.trim();
-  const contactAddress = contactText ? acceptedAddress(contactText) : undefined;
+  const contactAddress = (contactText ? acceptedAddress(contactText) : undefined) ?? undefined;
   if (contactText && !contactAddress) throw new Error('CONTACT_ADDRESS must be an email address, or unset.');
 
   const sessionIdleSeconds = wholeNumber(env, 'SESSION_IDLE_SECONDS', 7 * DAY, 1);
