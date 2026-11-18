@@ -253,7 +253,7 @@ describe('the texts', () => {
     expect(message.to).toBe('ed@example.com');
     expect(message.subject).toBe('An offer of ownership of 3 documents in Ekdotico');
     expect(message.text).toBe(
-      `Grace has offered you ownership of 3 documents that you edit in Ekdotico. To accept or decline each one, open your notifications in Ekdotico: ${ORIGIN}/notifications. The offers are open until 11 Nov 2026, 09:30 UTC. For each one you accept, you become the Owner of the document and Grace becomes an Editor.`,
+      `Grace has offered you ownership of 3 documents that you edit in Ekdotico. To accept or decline each one, open your notifications in Ekdotico:\n${ORIGIN}/notifications\nThe offers are open until 11 Nov 2026, 09:30 UTC. For each one you accept, you become the Owner of the document and Grace becomes an Editor.`,
     );
     expect(message.text).not.toMatch(/\/documents\//);
   });

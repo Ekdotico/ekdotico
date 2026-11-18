@@ -20,6 +20,7 @@
 // leaves this module once, inside the email.
 import { Prisma, type DocumentRole as StoredRole } from '../../generated/prisma/client.ts';
 import { holdOwnableAccount, inDeletion } from '../account/in-deletion.ts';
+import { listTwoFactorOffers, type TwoFactorOfferView } from '../auth/enrolment-offer.ts';
 import { listClearingNotifications, type ClearingNotificationView } from '../clearing/notices.ts';
 import { displayNameOf } from '../collab/presence.ts';
 import { dateText } from '../date-text.ts';
@@ -374,6 +375,48 @@ export async function endInvitationsOf(
 }
 
 /**
+ * FR-ED-37, D300 (docs@da33e58; register Q82 point 5): where the sender of a pending invitation no longer
+ * holds the permission to invite (FR-ED-44 (a)) or the role that carries it, each of its invitations still
+ * pending is revoked, and the notifications of those invitations go, as for any revocation (FR-ED-42).
+ *
+ * It judges what is stored NOW, whatever the cause, so that every change that can end the right calls this
+ * one function in its own transaction: the change of a role, the removal or leaving of the sender, the change
+ * of the permission set (FR-ED-45), and the transfer of the document (the former Owner becomes an Editor).
+ * The caller holds the document's row (`lockDocument`), as the acceptance of an invitation does, so the
+ * acceptance reads the state this leaves. The deletion of the sender's account is `endInvitationsOfAccount`,
+ * in the transaction of its own step.
+ */
+export async function revokeInvitationsOfLostRight(
+  tx: Prisma.TransactionClient,
+  documentId: string,
+  now: Date,
+): Promise<void> {
+  const pending = await tx.documentInvitation.findMany({
+    where: { documentId, state: 'PENDING' },
+    select: { id: true, invitedById: true },
+  });
+  if (pending.length === 0) return;
+  const document = await tx.document.findUnique({
+    where: { id: documentId },
+    select: { ownerId: true, permissionSet: true, collaborators: { select: { userId: true, role: true } } },
+  });
+  if (!document) return;
+  const roles = new Map(document.collaborators.map(({ userId, role }) => [userId, COLLABORATOR_ROLE[role]]));
+  const ids = pending
+    .filter(({ invitedById }) => {
+      const role = invitedById === document.ownerId ? 'owner' : roles.get(invitedById);
+      return !role || !holds(document.permissionSet, role, 'document.collaborators.invite');
+    })
+    .map(({ id }) => id);
+  if (ids.length === 0) return;
+  await tx.documentInvitation.updateMany({
+    where: { id: { in: ids }, state: 'PENDING' },
+    data: { state: 'REVOKED', respondedAt: now },
+  });
+  await tx.notification.deleteMany({ where: notificationsOf(ids) });
+}
+
+/**
  * FR-AU-58 (f): what the deletion of an account does to the invitations it sent and was sent, in the
  * transaction of the step that ends its roles. Found by the account's identifier and by its address,
  * which is why this runs before the address is cleared from the row of the account.
@@ -447,7 +490,7 @@ export function invitationEmail(
   return {
     to,
     subject: 'You have been invited to a document | Ekdotico',
-    text: `${sender} invited you to a document in Ekdotico as ${ROLE_NAME[role]}.${hidden} To accept or decline, open this link: ${link}. The link works once, and the invitation is open until ${dateText(expiresAt, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
+    text: `${sender} invited you to a document in Ekdotico as ${ROLE_NAME[role]}.${hidden} To accept or decline, open this link:\n${link}\nThe link works once, and the invitation is open until ${dateText(expiresAt, 'utc')}. If you did not expect this invitation, you can ignore this email.`,
   };
 }
 
@@ -796,7 +839,8 @@ export type ListedNotification =
   | AccessNotificationView
   | OfferNotificationView
   | OfferEndedNotificationView
-  | ClearingNotificationView;
+  | ClearingNotificationView
+  | TwoFactorOfferView;
 
 /**
  * The account's notifications whose subject still exists, newest first, with
@@ -907,6 +951,8 @@ export async function listNotifications(
     ...(await listOfferEndedNotifications(userId, now)),
     // FR-ED-42, FR-AU-91: the notices of a clearing: that a document will be deleted, that it will not, that it was.
     ...(await listClearingNotifications(userId, now)),
+    // NFR-SE-17 (e), D302: the offer of enrolment to an account that lost its second factor in a forced re-enrolment.
+    ...(await listTwoFactorOffers(userId)),
   ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   return { unread: notifications.filter(({ read }) => !read).length, notifications };
 }

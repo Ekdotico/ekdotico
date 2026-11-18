@@ -103,6 +103,7 @@ afterEach(async () => {
   for (const name of readdirSync(sink)) rmSync(join(sink, name));
   await db().securityLogEntry.deleteMany();
   await db().admissionInvitation.deleteMany();
+  await db().admissionNonce.deleteMany();
 });
 afterAll(async () => {
   await db().$disconnect();
@@ -771,5 +772,119 @@ describe('what no log holds (NFR-SE-19)', () => {
     expect(message).not.toContain('private.person');
     // Its class and its code, which tells one fault from another, and nothing it said.
     expect(JSON.stringify(printed.mock.calls)).toBe('[["admission: request failed (Error P1001)"]]');
+  });
+});
+
+describe('a signed request is single-use (FR-AU-89; D299; register Q82 point 4)', () => {
+  const body = { email: 'once@example.com', requestId: 'r-once' };
+  const bytes = new TextEncoder().encode(JSON.stringify(body));
+  const NONCE = 'a1'.repeat(16);
+  const nonces = () => db().admissionNonce.findMany();
+
+  // Weakening: no nonce is kept, or it is kept and not asked for before the request is processed.
+  it('rejects the copy of a request that was accepted, as it rejects a bad signature, and does nothing for it', async () => {
+    const headers = signedHeaders(SECRET, 'POST', PATH, bytes, undefined, NONCE);
+    expect((await send(signed('POST', PATH, body, headers))).status).toBe(201);
+    await afterResponse();
+    const sent = mail().length;
+    const replay = await send(signed('POST', PATH, body, headers));
+    const message = await expectError(replay, 401, 'unauthorised');
+    await afterResponse();
+    // The same words as for any other request that is not accepted: nothing says which check failed.
+    const forged = await send(signed('POST', PATH, body, { ...headers, [SIGNATURE_HEADER]: 'f'.repeat(64) }));
+    expect(await expectError(forged, 401, 'unauthorised')).toBe(message);
+    expect(mail().length).toBe(sent);
+    expect(await db().admissionInvitation.count()).toBe(1);
+  });
+
+  // Weakening: a check that reads, and then writes: two copies sent at one moment are both accepted.
+  it('accepts exactly one of several copies sent at the same moment', async () => {
+    const headers = signedHeaders(SECRET, 'POST', PATH, bytes, undefined, NONCE);
+    const answers = await Promise.all(
+      Array.from({ length: 6 }, () => send(signed('POST', PATH, body, headers))),
+    );
+    expect(answers.map(({ status }) => status).sort()).toEqual([201, 401, 401, 401, 401, 401]);
+    await afterResponse();
+    expect(await db().admissionInvitation.count()).toBe(1);
+    expect(mail().length).toBe(1);
+  });
+
+  // Weakening: the nonce is recorded before the signature is verified, so that a forged request burns a real one.
+  it('records a nonce only once the signature and the time have verified', async () => {
+    const forged = signedHeaders(`${SECRET}x`, 'POST', PATH, bytes, undefined, NONCE);
+    expect((await send(signed('POST', PATH, body, forged))).status).toBe(401);
+    const late = signedHeaders(SECRET, 'POST', PATH, bytes, Date.now() - 301_000, 'b2'.repeat(16));
+    expect((await send(signed('POST', PATH, body, late))).status).toBe(401);
+    expect(await nonces()).toEqual([]);
+    // The request that the forger copied the nonce of is still accepted.
+    const real = signedHeaders(SECRET, 'POST', PATH, bytes, undefined, NONCE);
+    expect((await send(signed('POST', PATH, body, real))).status).toBe(201);
+    expect((await nonces()).map(({ nonce }) => nonce)).toEqual([NONCE]);
+  });
+
+  // Weakening: the row is kept for 5 minutes and not for the second more that a clock of whole seconds accepts.
+  it('keeps the nonce until the signed time is more than 5 minutes in the past, in the database', async () => {
+    const at = Date.now() - 100_000;
+    const headers = signedHeaders(SECRET, 'GET', PATH, undefined, at, NONCE);
+    expect((await send(signed('GET', PATH, undefined, headers))).status).toBe(200);
+    const [row] = await nonces();
+    expect(row!.nonce).toBe(NONCE);
+    expect(row!.expiresAt.getTime()).toBe((Math.floor(at / 1000) + 301) * 1000);
+    // Not deleted while its time may still be accepted; deleted once it cannot.
+    const { deleteExpiredNonces } = await import('../../src/lib/admission/nonce.ts');
+    expect(await deleteExpiredNonces(new Date(row!.expiresAt.getTime() - 1))).toBe(0);
+    expect(await deleteExpiredNonces(row!.expiresAt)).toBe(1);
+    expect(await nonces()).toEqual([]);
+  });
+
+  // D312: "kept 5 minutes past the signed time of the request". A request signed ahead of the server's clock is accepted
+  // for as long as the clock stays within 300 s of its time, which is up to 599 s after it was accepted; its nonce is
+  // kept that long, from the signed time and not from the server's clock. Weakening: the row's end taken from the
+  // server's clock when the request arrives, so that a request signed 299 s ahead could be replayed once it is cleared.
+  it('keeps the nonce of a request signed 299 s ahead for as long as its time check passes, and refuses its replay for as long', async () => {
+    const at = Date.now() + 299_000;
+    const headers = signedHeaders(SECRET, 'GET', PATH, undefined, at, NONCE);
+    expect((await send(signed('GET', PATH, undefined, headers))).status).toBe(200);
+    const signedAt = Math.floor(at / 1000);
+    const [row] = await nonces();
+    // The end is the signed time plus 5 minutes and the second the whole-second clock accepts, whatever the clock says.
+    expect(row!.expiresAt.getTime()).toBe((signedAt + 301) * 1000);
+
+    // The last moment the time check passes: the application's clock, in whole seconds, is 300 s past the signed time.
+    const last = (signedAt + 300) * 1000 + 999;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(last);
+    try {
+      const { clearAdmissionAddresses } = await import('../../src/lib/admission/invitations.ts');
+      await clearAdmissionAddresses(new Date(last));
+      expect(await nonces()).toHaveLength(1);
+      const replay = await send(signed('GET', PATH, undefined, headers));
+      await expectError(replay, 401, 'unauthorised');
+      expect(await nonces()).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+
+    // A millisecond later the time check itself refuses it, and the nonce may go.
+    const { deleteExpiredNonces } = await import('../../src/lib/admission/nonce.ts');
+    expect(await deleteExpiredNonces(row!.expiresAt)).toBe(1);
+  });
+
+  it('is cleared by the hourly run that clears admission addresses, and the command makes a nonce of its own for each request', async () => {
+    await db().admissionNonce.createMany({
+      data: [
+        { nonce: 'c3'.repeat(16), expiresAt: new Date(Date.now() - 1000) },
+        { nonce: 'd4'.repeat(16), expiresAt: new Date(Date.now() + 60_000) },
+      ],
+    });
+    const { clearAdmissionAddresses } = await import('../../src/lib/admission/invitations.ts');
+    await clearAdmissionAddresses();
+    expect((await nonces()).map(({ nonce }) => nonce)).toEqual(['d4'.repeat(16)]);
+    await db().admissionNonce.deleteMany();
+    const viaHandlers = ((input: string | URL | Request, init?: RequestInit) =>
+      send(new Request(input, init))) as typeof fetch;
+    const env = { ADMISSION_SECRET: SECRET, APP_ORIGIN: ORIGIN };
+    expect(await run(['list'], env, viaHandlers, () => {})).toBe(0);
+    expect(await run(['list'], env, viaHandlers, () => {})).toBe(0);
+    expect(await nonces()).toHaveLength(2);
   });
 });

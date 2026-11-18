@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Badge, Button, Cluster, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
 import { send, type Fault } from '../../../components/send.ts';
+import { TWO_FACTOR_OFFER_TEXT } from '../../../lib/auth/enrolment-offer-text.ts';
 import styles from '../../pages.module.css';
 import { InvitedBy, Sender } from '../invitations/invitation-view.tsx';
 import { InBrowser, LocalTime } from '../local-time.tsx';
@@ -43,6 +44,8 @@ export type NotificationItem =
   | (Shown & { kind: 'role_changed'; documentId: string; title: string; role: string })
   // FR-ED-42, S15-2: the person was removed. It names no document and links to nothing (register row PR-5).
   | (Shown & { kind: 'removed' })
+  // NFR-SE-17 (e), D302: after a forced re-enrolment, an account that had two-factor authentication is offered it again.
+  | (Shown & { kind: 'two_factor_offer' })
   // FR-ED-42, FR-ED-47: ownership of a document is offered to the person; the title is shown, behind sign-in (S17-2, D202).
   | (Shown & { kind: 'ownership_offer'; ownerName: string; title: string; offerId: string })
   // FR-ED-42, FR-AU-91: the document will be deleted by a clearing of its Owner's documents, on the day (ISO 8601, UTC).
@@ -95,6 +98,9 @@ function Statement({ notification }: { notification: NotificationItem }) {
       );
     case 'removed':
       return <>You no longer have access to a document.</>;
+    case 'two_factor_offer':
+      // NFR-SE-17 (e), D302: for the owner's approval.
+      return <>{TWO_FACTOR_OFFER_TEXT}</>;
     case 'ownership_offer':
       return (
         <>
@@ -211,6 +217,12 @@ function Subject({ notification }: { notification: NotificationItem }) {
           href={`/ownership-offers/${encodeURIComponent(notification.offerId)}`}
         >
           Open the offer
+        </Link>
+      );
+    case 'two_factor_offer':
+      return (
+        <Link id={`open-${notification.id}`} href="/settings">
+          Open the settings
         </Link>
       );
     case 'removed':
