@@ -18,6 +18,12 @@ export function fieldText(value: string): { text: string; characters: number } {
 export const NAME_REFUSAL =
   'A name has 1 to 100 characters, at least one of which can be seen, and holds no control character and no character that changes the direction of text. Enter a name of that kind.';
 
+// Text for a person: the hint under the Name field at sign-up (F11, ekdotico#89). The owner chose this
+// shorter hint on 17 November 2026 (ui-t4-name); the server still refuses a control character, with
+// NAME_REFUSAL.
+export const NAME_HINT =
+  '1 to 100 characters. It needs at least one character that shows; spaces alone are not a name.';
+
 // The owner's decision of 9 October 2026 (its register row is pending), for a
 // name alone; the title of a document keeps its own rule (documents.ts).
 // Never in a name: a control character, C1 among them (PostgreSQL cannot

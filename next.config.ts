@@ -1,5 +1,6 @@
 import type { NextConfig } from 'next';
 import { COMPANION_HEADERS, STATIC_POLICY } from './src/lib/csp.ts';
+import { VISITORS_REWRITE } from './src/lib/visitors.ts';
 
 /**
  * The pages whose address holds the token of a single-use link (src/proxy.ts,
@@ -53,7 +54,8 @@ export function collabRewrites(env: Record<string, string | undefined> = process
 
 const config: NextConfig = {
   poweredByHeader: false,
-  rewrites: async () => collabRewrites(),
+  // FR-AU-93: the page of visitors answers `/` where the proxy marked the request (src/lib/visitors.ts).
+  rewrites: async () => ({ beforeFiles: [VISITORS_REWRITE], afterFiles: collabRewrites(), fallback: [] }),
   // The development server would write an AGENTS.md of its own into the repository.
   agentRules: false,
   experimental: {

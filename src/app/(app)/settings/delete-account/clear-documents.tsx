@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Button,
@@ -223,10 +223,39 @@ export function ClearDocuments({
   );
 }
 
+const Say = createContext<(text: string) => void>(() => {});
+
+/**
+ * The one status of the deletion screen. It wraps both what the screen offers for the documents and the deletion of
+ * the account, so that it outlives the reading of the page again: a clearing of documents that are not shared can
+ * finish before that read, and the screen then offers the account's deletion in place of `Clearing`, which would take
+ * the statement and its focus with it. `live` is whether documents are on the screen: where none are, the empty
+ * status is left out until there is something to say.
+ */
+export function ClearingStatus({ live, children }: { live: boolean; children: React.ReactNode }) {
+  const [status, setStatus] = useState<{ text: string; time: number } | null>(null);
+  const statement = useRef<HTMLParagraphElement>(null);
+  // The control that had focus is gone with the document it was for: the statement of what was done takes it.
+  useEffect(() => {
+    if (status) statement.current?.focus();
+  }, [status]);
+  const say = useCallback((text: string) => setStatus({ text, time: Date.now() }), []);
+  return (
+    <Stack gap={8}>
+      {/* Present from the first paint and empty until something is done: a status that arrives with its text is not announced. */}
+      <p role="status" ref={statement} tabIndex={-1} className={styles.text} hidden={!live && !status}>
+        {status?.text}
+      </p>
+      <Say.Provider value={say}>{children}</Say.Provider>
+    </Stack>
+  );
+}
+
 /**
  * What the deletion screen offers for the documents the account owns (FR-AU-58, FR-AU-91): the documents that wait
  * for their day with the means to cancel, "Clear all documents", and the deletion of the deleted documents alone.
- * One status for the screen, which survives the reading of the page again: the control that was used may be gone.
+ * Its statements go to `ClearingStatus`, which survives the reading of the page again: the control that was used
+ * may be gone.
  */
 export function Clearing({
   all,
@@ -249,19 +278,9 @@ export function Clearing({
   /** ISO 8601, UTC: the last day on which a document waits; the account cannot be deleted before it. */
   lastDay: string | null;
 }) {
-  const [status, setStatus] = useState<{ text: string; time: number } | null>(null);
-  const statement = useRef<HTMLParagraphElement>(null);
-  // The control that had focus is gone with the document it was for: the statement of what was done takes it.
-  useEffect(() => {
-    if (status) statement.current?.focus();
-  }, [status]);
-  const say = (text: string) => setStatus({ text, time: Date.now() });
+  const say = useContext(Say);
   return (
     <Stack gap={8}>
-      {/* Present from the first paint and empty until something is done: a status that arrives with its text is not announced. */}
-      <p role="status" ref={statement} tabIndex={-1} className={styles.text}>
-        {status?.text}
-      </p>
       {deleting > 0 ? <p className={styles.text}>{SCREEN.deleting(deleting)}</p> : null}
       {waiting.length > 0 ? (
         <Stack gap={4}>

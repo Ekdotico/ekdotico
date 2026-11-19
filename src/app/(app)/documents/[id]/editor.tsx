@@ -26,6 +26,8 @@ import { ROLE_NAME, type DocumentRole } from '../../../../lib/documents/permissi
 import pageStyles from '../../../pages.module.css';
 import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
 import styles from './editor.module.css';
+import { InsertButton } from './insert-button.tsx';
+import { readerLine } from './reader-line.ts';
 import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { IMAGE_TEXT } from './images.tsx';
 import { MARKDOWN_INPUT } from './input-rules.ts';
@@ -187,6 +189,7 @@ function Text({
   awareness,
   editable,
   reads,
+  role,
   onEditor,
   onUnshown,
   onUnrepairable,
@@ -201,6 +204,8 @@ function Text({
   editable: boolean;
   /** This browser cannot edit the document, whatever the connection: it shows what the schema can show and writes nothing. */
   reads: boolean;
+  /** The role of the account on the document now, named to a reader (F10). */
+  role: DocumentRole;
   /** Told that the document cannot be built here: the text goes, and the page says so. */
   onUnshown: () => void;
   /** Told that a repair was not written because it would pass 5 MB: the text is read-only (D180). */
@@ -326,52 +331,58 @@ function Text({
 
   return (
     <Editable.Provider value={editable}>
-      {reads ? null : (
-        <p id={keys} className={pageStyles.meta}>
-          {KEYS}
-        </p>
-      )}
-      {/* NFR-IC-19: a change that was not made is said to be so, in words that
+      <div className={styles.sheet}>
+        {reads ? (
+          <p className={pageStyles.meta}>{readerLine(role)}</p>
+        ) : (
+          <p id={keys} className={pageStyles.meta}>
+            {KEYS}
+          </p>
+        )}
+        {/* NFR-IC-19: a change that was not made is said to be so, in words that
           are seen, here, and heard, from the region below, when the screen
           reader next falls silent. No fault of the writer's, and the focus
           stays in the text. */}
-      {over && !reads ? (
-        <FormFault tone="neutral" announce="polite">
-          {over.split('\n').map((sentence) => (
-            <p key={sentence}>{sentence}</p>
-          ))}
-        </FormFault>
-      ) : null}
-      {refusal ? (
-        <FormFault tone="neutral" announce="off">
-          <p>{refusal.words}</p>
-        </FormFault>
-      ) : null}
-      <span ref={heard} role="status" className="sr-only" />
-      {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
-      {editable && !reads ? (
-        <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
-          {IMAGE_TEXT.choose}
-        </Button>
-      ) : null}
-      <p role="status" className={pageStyles.meta}>
-        {uploading}
-      </p>
-      <div
-        ref={surface}
-        className={styles.surface}
-        onFocus={() => (within.current = true)}
-        onBlur={(event) => {
-          // To somewhere else on the page. A control that is removed while it
-          // has the focus names no such place, and the focus is still the surface's.
-          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
-            within.current = false;
-          }
-        }}
-      >
-        {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
-        <EditorContent editor={editor} />
-        {editor ? <SlashPaletteList editor={editor} /> : null}
+        {over && !reads ? (
+          <FormFault tone="neutral" announce="polite">
+            {over.split('\n').map((sentence) => (
+              <p key={sentence}>{sentence}</p>
+            ))}
+          </FormFault>
+        ) : null}
+        {refusal ? (
+          <FormFault tone="neutral" announce="off">
+            <p>{refusal.words}</p>
+          </FormFault>
+        ) : null}
+        <span ref={heard} role="status" className="sr-only" />
+        {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
+        {editable && !reads ? (
+          <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
+            {IMAGE_TEXT.choose}
+          </Button>
+        ) : null}
+        <p role="status" className={pageStyles.meta}>
+          {uploading}
+        </p>
+        <div
+          ref={surface}
+          className={editable && !reads ? `${styles.surface} ${styles.writable}` : styles.surface}
+          onFocus={() => (within.current = true)}
+          onBlur={(event) => {
+            // To somewhere else on the page. A control that is removed while it
+            // has the focus names no such place, and the focus is still the surface's.
+            if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
+              within.current = false;
+            }
+          }}
+        >
+          {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
+          <EditorContent editor={editor} />
+          {editor ? <SlashPaletteList editor={editor} /> : null}
+          {/* After the text in the Tab order: Tab from the text reaches it. Not for a person who can only read. */}
+          {editor && editable && !reads ? <InsertButton editor={editor} surface={surface} /> : null}
+        </div>
       </div>
     </Editable.Provider>
   );
@@ -477,6 +488,7 @@ function Unsaved({ text, because = UNSAVED }: { text: string; because?: string }
 
 function OpenDocument({
   connection,
+  role: openedAs,
   canEdit,
   documentId,
   imageDays,
@@ -484,6 +496,7 @@ function OpenDocument({
   alreadyDeleted,
 }: {
   connection: DocumentConnection;
+  role: DocumentRole;
   canEdit: boolean;
   documentId: string;
   imageDays: number;
@@ -618,6 +631,7 @@ function OpenDocument({
           awareness={connection.awareness}
           editable={mayEdit && state.phase !== 'lost' && state.phase !== 'held' && !unrepaired}
           reads={!mayEdit}
+          role={state.notice?.role ?? state.permissions?.role ?? openedAs}
           onEditor={keep}
           onUnshown={fail}
           onUnrepairable={unrepairable}
@@ -639,6 +653,7 @@ function OpenDocument({
 
 export default function Editor({
   documentId,
+  role,
   canEdit,
   errorAfterMs,
   imageDays,
@@ -646,6 +661,7 @@ export default function Editor({
   alreadyDeleted,
 }: {
   documentId: string;
+  role: DocumentRole;
   canEdit: boolean;
   errorAfterMs: number;
   imageDays: number;
@@ -681,6 +697,7 @@ export default function Editor({
   return (
     <OpenDocument
       connection={connection}
+      role={role}
       canEdit={canEdit}
       documentId={documentId}
       imageDays={imageDays}
