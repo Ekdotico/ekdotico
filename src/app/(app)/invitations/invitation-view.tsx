@@ -142,7 +142,7 @@ export function OpenInvitation({
         </p>
       ) : (
         <Cluster gap={3}>
-          <Button disabled={sending} onClick={() => void answer('accept')}>
+          <Button variant="primary" disabled={sending} onClick={() => void answer('accept')}>
             Accept
           </Button>
           <Button variant="quiet" disabled={sending} onClick={() => void answer('decline')}>

@@ -30,6 +30,8 @@ async function create(page: Page, title: string) {
   const rows = page.getByRole('listitem');
   const before = await rows.count();
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   await expect(rows).toHaveCount(before + 1);
   await rows.first().getByRole('button', { name: 'Rename' }).click();
   const dialog = page.getByRole('dialog', { name: 'Rename document' });
