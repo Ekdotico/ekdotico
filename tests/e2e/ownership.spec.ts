@@ -236,8 +236,14 @@ test('an Editor who is made a Viewer is offered nothing, and the offer is over',
   // The Owner makes the Editor a Viewer: the offer ends without anyone's action (FR-ED-47).
   await page.goto(`/documents/${id}/sharing`);
   const row = personRow(page, 'Bea Editor');
-  await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('viewer');
-  await row.getByRole('button', { name: 'Change role' }).click();
+  const change = row.getByRole('button', { name: 'Change role' });
+  // A choice made before the page's script has taken over reaches no handler, and the script then puts the old role
+  // back: the button stays disabled. Choose again until the button is enabled, which only a choice it heard does.
+  await expect(async () => {
+    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('viewer');
+    await expect(change).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
+  await change.click();
   await expect(page.getByRole('status')).toHaveText('Role of Bea Editor changed to Viewer.');
   await expect(page.getByText('This document has no Editor to offer ownership to.')).toBeVisible();
   await theirs.goto(offerPath);
