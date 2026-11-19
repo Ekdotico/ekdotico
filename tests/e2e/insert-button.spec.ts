@@ -20,7 +20,7 @@ async function enter(page: Page, person = newPerson()) {
   return person;
 }
 
-test('the control is faint until hovered, solid on hover and on focus, and opens the palette that the slash opens', async ({
+test('the control is not seen at rest, appears under the pointer and on focus, and opens the palette that the slash opens', async ({
   page,
 }) => {
   await enter(page);
@@ -31,8 +31,8 @@ test('the control is faint until hovered, solid on hover and on focus, and opens
   const button = page.getByRole('button', { name: NAME });
   const wrapper = button.locator('..');
   await expect(button).toBeVisible();
-  // Faint at rest, solid on hover, solid on keyboard focus.
-  await expect(wrapper).toHaveCSS('opacity', '0.6');
+  // Not seen at rest (the pointer starts far from it), seen under the pointer and on keyboard focus.
+  await expect(wrapper).toHaveCSS('opacity', '0');
   await button.hover();
   await expect(wrapper).toHaveCSS('opacity', '1');
   await text(page).click();

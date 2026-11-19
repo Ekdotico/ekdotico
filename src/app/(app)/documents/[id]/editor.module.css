@@ -30,11 +30,12 @@
   --ekd-editor-placeholder-offset: calc(var(--insert-box) + var(--insert-gap));
 }
 
-/* The Insert control: immediately to the right of the cursor, a step of space after it, centred on the
-   cursor's line (the owner's sketch). It glides to the cursor's next place by the package's motion tokens, and
-   not at all where motion is reduced, nor on the first placement (data-settled). Faint at rest, solid when
-   hovered or focused, and always solid where there is no hover (a touch screen), where more contrast is
-   asked for, and in forced colours. */
+/* The Insert control: a plus a step of space to the right of the cursor, centred on the cursor's line (the
+   owner's sketch, and the owner's word of 19 November 2026). It is not seen at rest. It appears when the
+   pointer comes near the cursor (`data-near`, written by insert-button.tsx) or the keyboard reaches it, and it
+   is always seen where there is no hover (a touch screen), where more contrast is asked for, and in forced
+   colours. Only its appearing is animated; its place is not, so it is at the cursor in the frame the cursor
+   moves. */
 .insert {
   /* Exactly the height of the box: a wrapper taller than it (the line's strut under an inline child, about
      3.5px at 17px text) would be centred by its own height and leave the box above the line's middle. */
@@ -45,16 +46,19 @@
   z-index: 1;
   margin-inline-start: var(--insert-gap);
   transform: translateY(-50%);
-  opacity: 0.6;
-  transition:
-    left var(--dur-fast) var(--ease-soft),
-    top var(--dur-fast) var(--ease-soft),
-    opacity var(--dur-fast) var(--ease-soft);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-soft);
 }
 
-/* The visible box is 20 by 20 and the glyph is 1em of the text it stands beside (the font size is set on
-   the control from the cursor's own block); the pointer target is 24 by 24, by a transparent pseudo-element
-   that leaves the box as it is. `.insert` is centred on the cursor's line by its transform. */
+.insert[data-near='true'],
+.insert:focus-within {
+  opacity: 1;
+}
+
+/* The box is 20 by 20 with no outline of its own, and the plus is the design package's, at the package's
+   own size whatever the text beside it (a heading does not enlarge it). The pointer target is 24 by 24, by a
+   transparent pseudo-element that leaves the box as it is. `.insert` is centred on the cursor's line by its
+   transform. */
 .insertButton {
   position: relative;
   display: grid;
@@ -63,12 +67,13 @@
   block-size: var(--insert-box);
   padding: 0;
   background: transparent;
-  color: var(--fg-1);
-  border: 1px solid var(--rule-control);
+  color: var(--fg-3);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font: inherit;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-soft);
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft);
 }
 
 .insertButton::before {
@@ -78,22 +83,11 @@
   inset: -3px;
 }
 
-.insertButton:hover {
-  background: var(--bg-surface-2);
-}
-
-.insertButton svg {
-  inline-size: 1em;
-  block-size: 1em;
-}
-
-.insert[data-settled='false'] {
-  transition: none;
-}
-
-.insert:hover,
-.insert:focus-within {
-  opacity: 1;
+/* Solid under the pointer and under the keyboard's focus: the ink as the ground, the page as the plus. */
+.insertButton:hover,
+.insertButton:focus-visible {
+  background: var(--fg-1);
+  color: var(--bg-canvas);
 }
 
 @media (hover: none), (prefers-contrast: more), (forced-colors: active) {
@@ -103,7 +97,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .insert {
+  .insert,
+  .insertButton {
     transition: none;
   }
 }
