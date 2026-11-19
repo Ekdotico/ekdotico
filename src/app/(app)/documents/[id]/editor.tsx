@@ -26,6 +26,7 @@ import { ROLE_NAME, type DocumentRole } from '../../../../lib/documents/permissi
 import pageStyles from '../../../pages.module.css';
 import { TABLE_PAST_BOUNDS, heldTitle, overLimits } from './block-limits.ts';
 import styles from './editor.module.css';
+import { InsertButton } from './insert-button.tsx';
 import { readerLine } from './reader-line.ts';
 import { BLOCK_CONTROLS, Editable, SLASH_HINT, copyText, extensions } from './extensions.tsx';
 import { IMAGE_TEXT } from './images.tsx';
@@ -365,7 +366,7 @@ function Text({
       </p>
       <div
         ref={surface}
-        className={styles.surface}
+        className={editable && !reads ? `${styles.surface} ${styles.writable}` : styles.surface}
         onFocus={() => (within.current = true)}
         onBlur={(event) => {
           // To somewhere else on the page. A control that is removed while it
@@ -378,6 +379,8 @@ function Text({
         {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
         <EditorContent editor={editor} />
         {editor ? <SlashPaletteList editor={editor} /> : null}
+        {/* After the text in the Tab order: Tab from the text reaches it. Not for a person who can only read. */}
+        {editor && editable && !reads ? <InsertButton editor={editor} surface={surface} /> : null}
       </div>
     </Editable.Provider>
   );
