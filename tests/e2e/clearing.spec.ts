@@ -156,6 +156,13 @@ test('an account whose documents are not shared clears them at once: the control
   } finally {
     release();
   }
+  // The read goes on and the account owns nothing: the screen offers the deletion of the account, and the statement
+  // the person was given stays where it was, with focus.
+  await expect(main.getByRole('button', { name: 'Delete account' })).toBeVisible({ timeout: 20_000 });
+  await expect(status).toHaveText(
+    '1 document is being deleted now. Ekdotico completes the deletion without you.',
+  );
+  await expect(status).toBeFocused();
   // Completed without the user, a moment after the response: the account owns nothing, and the screen offers its deletion.
   await expect
     .poll(async () => (await (await page.request.get('/api/documents')).json()).documents.length, {
