@@ -84,6 +84,8 @@ export function RoleControl({
         labelHidden
         size="small"
         value={chosen}
+        // Until the page is ready a choice reaches no handler and is lost when the page takes over (NFR-IC-19).
+        disabled={!ready}
         onChange={(event) => setChosen(event.target.value)}
       >
         {!offered ? (
