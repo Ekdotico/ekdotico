@@ -166,7 +166,7 @@ function CodeBlockView({ node, updateAttributes, editor, decorations }: NodeView
         ) : null}
       </BlockControls>
       {/* FR-ED-03: "Code blocks shall not be subject to spell-checking". */}
-      <pre spellCheck={false}>
+      <pre spellCheck={false} className={styles.code}>
         <NodeViewContent<'code'> as="code" className={`hljs language-${language}`} />
       </pre>
     </NodeViewWrapper>
