@@ -144,7 +144,12 @@ export function TransferOwnership({
             If they accept, they become the Owner, you become an Editor, and the document moves to their
             personal workspace.
           </p>
-          <Select label="Editor" value={person.id} disabled={!ready} onChange={(event) => setChosen(event.target.value)}>
+          <Select
+            label="Editor"
+            value={person.id}
+            disabled={!ready}
+            onChange={(event) => setChosen(event.target.value)}
+          >
             {editors.map(({ id, name }) => (
               <option key={id} value={id}>
                 {name}
