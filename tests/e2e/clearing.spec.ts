@@ -162,8 +162,12 @@ test('an account whose documents are not shared clears them at once: the control
       timeout: 20_000,
     })
     .toBe(0);
-  await page.reload();
-  await expect(main.getByRole('button', { name: 'Delete account' })).toBeVisible();
+  // The list above drops a document the moment it is claimed; the screen counts it until it is deleted permanently,
+  // a little later. Read the screen again until it shows what the account may do now.
+  await expect(async () => {
+    await page.reload();
+    await expect(main.getByRole('button', { name: 'Delete account' })).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
   await expect(main.getByRole('button', { name: 'Clear all documents' })).toHaveCount(0);
   expect(elsewhere).toEqual([]);
 });
