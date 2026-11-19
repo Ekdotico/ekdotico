@@ -4,11 +4,13 @@ import { expect, test } from './fixtures.ts';
 import { AUTH_SECRET } from './origin.ts';
 
 // NFR-SE-05, FR-AU-07: a path that is not on the allow-list requires a session,
-// and a visitor without one is sent to sign in and returned afterwards.
+// and a visitor without one is sent to sign in and returned afterwards. The root is
+// the one exception (FR-AU-93): it answers with the page of visitors, which
+// visitors-page.spec.ts asserts.
 test('a page is not served without a session', async ({ request }) => {
-  const response = await request.get('/', { maxRedirects: 0 });
+  const response = await request.get('/documents', { maxRedirects: 0 });
   expect(response.status()).toBe(307);
-  expect(response.headers().location).toBe('/sign-in?return=%2F');
+  expect(response.headers().location).toBe('/sign-in?return=%2Fdocuments');
 });
 
 test('an API route answers 401 without a session', async ({ request }) => {

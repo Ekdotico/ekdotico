@@ -1,0 +1,9 @@
+/* The app at 150% on a very wide screen (a 2K 27-inch monitor is 2560 CSS pixels).
+   Domico 0.46.0 scales its type, spacing, radii, layout lengths and icons by
+   `--scale`; nothing is zoomed, so the editor's measured geometry stays true.
+   The breakpoint is the one the deree and alpha sites use. */
+@media (min-width: 2200px) {
+  :root {
+    --scale: 1.5;
+  }
+}

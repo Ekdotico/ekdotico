@@ -138,6 +138,7 @@ The same configuration also does what items 1 to 6 above ask:
 
 - **An unknown host gets no answer.** A `default_server` on 443 with `ssl_reject_handshake on` refuses the handshake for any name but `app.ekdoti.co` (the bare address, a scanner), and logs nothing; the default server on 80 answers 444.
 - **`X-Forwarded-For` is set to the client's address** with `proxy_set_header X-Forwarded-For $remote_addr` on every `location`, which overwrites what the client sent, so nginx is the one proxy and `TRUSTED_PROXY_COUNT` is 1 in `/etc/ekdotico/shared.env`. `x-prerender-revalidate` is set to the empty string on every `location` (item 4). `/collab` carries `Upgrade` and `Connection` with `proxy_read_timeout 120s`, and only `/collab`, `/collab/health` and the paths of the web application are sent on.
+- **An internal path is not sent to the client (the owner's step, not yet applied).** Next.js adds a response header, `x-nextjs-rewritten-path`, that names the internal path a rewrite went to: the visitors page's, for one (review of pull request 102). Add `proxy_hide_header x-nextjs-rewritten-path;` to every `location` that passes to the web application, and reload nginx.
 - **Two firewalls.** The DigitalOcean cloud firewall in front of the Droplet, and `ufw` on it: default deny incoming, and 22, 80 and 443 (TCP) allowed. `ufw` also closes port 1234, on which the collaboration server listens on every interface; the web application listens on `127.0.0.1:3000` and Valkey on `127.0.0.1:6379` and `[::1]:6379` alone.
 
 ## The deployment as built (AMS3, D313)
@@ -150,11 +151,105 @@ Live since 16 November 2026, from `main` at `2c90668`. The facts below are those
 - **The images are in Spaces in AMS3**, bucket `ekdotico-images`.
 - **TLS is ended by nginx** with a certificate from certbot (renewed by `snap.certbot.renew.timer`); HSTS is set by nginx (`max-age=31536000`, item 12) and `server_tokens off`.
 - **The sealed copy of the backups** is made by `ekdotico-backup.service`, a one-shot unit that runs as the user `ekdotico-backup` from `/srv/ekdotico-backup/app` with `/etc/ekdotico-backup/backup.env`, and is started by `ekdotico-backup.timer` every Sunday at 03:00 UTC (`OnCalendar=Sun *-*-* 03:00:00 UTC`, `RandomizedDelaySec=15m`, `Persistent=true`). The copy goes to Scaleway, `ekdotico-backups`, in fr-par, with Object Lock (D271). See [backup.md](backup.md).
-- **Checkout and deployment.** The deploy keys of the organisation are off, so the Droplet receives a `git archive` of the deployed commit over ssh. SSH is by key alone (`PermitRootLogin prohibit-password`, no passwords, no X11 forwarding); unattended security updates are on.
+- **Checkout and deployment.** The Droplet builds nothing. A release is built in GitHub Actions and shipped by the person deploying, over their own ssh (next section). SSH is by key alone (`PermitRootLogin prohibit-password`, no passwords, no X11 forwarding), from named addresses only; unattended security updates are on.
+
+## Deploying a release
+
+Production is never stopped for a build. Until 18 November 2026 the Droplet built each release itself, which needs about 1.5 GB and so stopped both services for the length of the build; that cost two outages that day. Now:
+
+1. **The workflow `release`** (`.github/workflows/release.yml`) is started by hand from `main` with the full sha of a commit of `main`. It refuses a commit that is not on `main`, and one whose push run of `ci` did not pass with the job `full` passed. It installs, builds, packs the built tree (sources, `.next` without its cache, `node_modules`, and `RELEASE.json`, which names the commit, the platform, the CPU and the Node.js version), starts both processes from the unpacked tarball and waits for both health routes, then uploads `release.sealed` (the tarball sealed to the deployer's public key, below) and `release.json` (the manifest, with the tarball's sha-256). The artifact is kept 30 days. Actions holds no credential for the server and never connects to it.
+2. **The deployer runs `scripts/deploy/deploy.mjs` on their own machine.** It downloads the artifact with `gh`, opens it with the private key, checks the sha and the checksum, copies it and the release's own `scripts/deploy/server.mjs` to the server, and drives that script there over ssh: stage, then (when asked) migrate, then switch, then prune.
+3. **On the server** each release unpacks into `/srv/ekdotico/releases/<sha>/`, beside the running one, after its checksum is checked again and its manifest is checked against the server's own platform, CPU and Node.js major. `/srv/ekdotico/current` is a symbolic link to the running release; the switch replaces it in one rename, restarts both units, and checks that both are active and that `/api/health` (port 3000) and `/collab/health` (port 1234) answer 200 within 90 seconds. If they do not, it points `current` back, restarts again, and says so; it exits with 1 either way. The three newest releases are kept, and never the running one or the one to roll back to.
+
+**The cache of Next.js.** The running application writes `.next/cache` (optimised images and the incremental cache). The tarball leaves the cache out, and a release is otherwise read-only to the unit user, so `server.mjs stage` creates an empty `.next/cache` in each release, mode 2770, with the group of `releases/` (`ekdotico-release`, one-time step 3), and refuses the stage if either is not so. Each release keeps its own cache, which does not survive a switch: entries written by one build are never served by another, a rollback finds its release's cache as it left it, and the cache is deleted with its release when that is pruned. A first request for each image after a switch is optimised again.
+
+**Pruning** ranks releases by the time they were staged, which `stage` sets on the release directory, and not by the build time that the archive carries.
+
+**Where the run came from** is checked by `deploy.mjs` with GitHub's API before anything is downloaded. Neither `release.json` nor the seal proves it, since the seal uses a public key and a pull request's run executes the pull request's own workflow file. The run must be of `.github/workflows/release.yml`, started by `workflow_dispatch` on `main` of `Ekdotico/ekdotico` (not a fork), and must have passed. The release's sha must be the run's head or an ancestor of it, which is what the workflow's gate allowed. The local copy of the opened tarball, and the copy in `incoming/` on the server, are deleted whether the deployment succeeds or fails.
+
+The server's address, the ssh user and the paths come from the deployer's environment, never from a file in this repository: `DEPLOY_HOST` (a host or an alias of `~/.ssh/config`), `DEPLOY_USER` (where the alias names none), `DEPLOY_SSH_PORT` (optional) and `DEPLOY_BASE` (`/srv/ekdotico` where unset).
+
+### What a user sees
+
+- **A deployment:** the download, the checks, the copy, the staging and any migration happen while the running release serves as before. The only gap is the restart of the two units: some seconds in which nginx answers 502 for pages, and the editor's connection is lost and tried again (item "The editor's connection" above). The collaboration server stores every open document on `SIGTERM` before it exits, so nothing written is lost; a page reconnects by itself.
+- **A rollback:** the same restart, and nothing else.
+- **A failed check after the switch:** two restarts, the second on the release that was running before.
+
+### One-time steps (the owner's)
+
+1. **A key pair for the artifacts.** On the deployer's machine: `node scripts/deploy/deploy.mjs keygen --out <path outside the repository>`. It writes the private key (mode 600) and prints the public key. Put the public key, the whole PEM, in the repository variable `RELEASE_PUBLIC_KEY` (Settings, Secrets and variables, Actions, Variables). The public key is not secret; the private key never leaves the deployer's machine. Each deployer may hold the same private key, or the variable is changed when the deployer changes.
+2. **Look first.** Who owns `/srv/ekdotico` and `app`, and whether anything reads a path under `app` other than the two units, is not recorded here. As root:
+
+   ```sh
+   stat -c '%U:%G %a %n' /srv/ekdotico /srv/ekdotico/app /srv/ekdotico/app/.next /srv/ekdotico/app/.next/cache
+   systemctl cat ekdotico-web.service ekdotico-collab.service | grep -E 'WorkingDirectory|ExecStart|ReadWritePaths'
+   grep -rln '/srv/ekdotico/app' /etc/systemd/system /etc/nginx /etc/ekdotico /etc/cron* 2>/dev/null
+   ```
+
+   The last command should list the two unit files and nothing else. Anything else it lists (a timer, an nginx `root`, a cron job) moves to `/srv/ekdotico/current` in the same step below. `app` itself is not moved or changed, so whoever owns it keeps it.
+
+3. **The layout, in one step that can be undone.** As root, with `<deployer>` the ssh user who deploys:
+
+   ```sh
+   groupadd --system ekdotico-release
+   usermod -aG ekdotico-release ekdotico        # the unit user reads the releases
+   usermod -aG ekdotico-release <deployer>      # the deployer gives each release's cache to this group
+   chown <deployer>:ekdotico-release /srv/ekdotico && chmod 0750 /srv/ekdotico   # the switch writes current and .previous here
+   install -d -o <deployer> -g ekdotico-release -m 2750 /srv/ekdotico/releases /srv/ekdotico/incoming /srv/ekdotico/bin
+   ln -s app /srv/ekdotico/current && chown -h <deployer>:ekdotico-release /srv/ekdotico/current
+   ```
+
+   **Why a group of its own:** the deployer must be in the group that owns the releases, and the group `ekdotico` also opens `shared.env` and `web.env` (mode 640, `root:ekdotico`). So the deployer joins `ekdotico-release` and never `ekdotico`. Mode 2750 with that group lets the unit user read each release and write nothing in it. The one exception is the release's `.next/cache`. `server.mjs stage` gives the cache the group of `releases/` and mode 2770. It does this explicitly, because tar's restored modes clear the setgid bit below the release. Then it checks both, and refuses the stage if either is wrong (as it would be for a deployer outside the group). The deployer's new group counts from their next ssh login, and the unit user's from the restart below. Then add a drop-in for each unit, which leaves the unit files as they are:
+
+   ```ini
+   # /etc/systemd/system/ekdotico-web.service.d/release.conf, and the same for ekdotico-collab.service
+   [Service]
+   WorkingDirectory=/srv/ekdotico/current
+   ```
+
+   Before, each unit reads `WorkingDirectory=/srv/ekdotico/app`; after, the drop-in reads `WorkingDirectory=/srv/ekdotico/current`. If `ExecStart` names a path under `/srv/ekdotico/app` (step 2 shows it), the drop-in replaces it too: an empty `ExecStart=` line, then the same line with `/srv/ekdotico/app` replaced by `/srv/ekdotico/current`. A unit with `ReadWritePaths` naming `app` gets the same change. Then run `systemctl daemon-reload` and `systemctl restart ekdotico-collab.service ekdotico-web.service`. That restart is the one gap of this step. **To undo it:** delete the two drop-ins, run `daemon-reload`, and restart. `app` was never moved. The first release staged by the new route becomes `releases/<sha>`, and `app` is the release the first rollback returns to. Prune never deletes `app`; remove it by hand once a later release has run for a while.
+
+4. **The deployer's rights on the server.** Ownership of `/srv/ekdotico`, as above. One sudoers line, written with `visudo -f /etc/sudoers.d/ekdotico-deploy`:
+
+   ```
+   <deployer> ALL=(root) NOPASSWD: /usr/bin/systemctl restart ekdotico-collab.service ekdotico-web.service
+   ```
+
+   It names the exact command `server.mjs` runs, with the arguments in that order. The script runs `systemctl is-active` without sudo. **For `--migrate`**, the deployer reads a file that holds `MIGRATE_DATABASE_URL` (the role `ekdotico_migrate`, which only a deployment uses; `prisma.config.ts`) and nothing else. For example, `/etc/ekdotico/migrate.env`, owned `root:<deployer>`, mode 640. The cluster's CA file named in that address must be readable by the deployer too; a CA certificate is not secret, so mode 644 is enough. The application's own `shared.env` and `web.env` stay `root:ekdotico` and are not opened to the deployer.
+
+5. **Node.js 26 on the server**, as `node` on the deployer's `PATH` and as the units' `node`. The release is built with the version in `.nvmrc` (26.11.0 today), and `server.mjs` refuses a release built with another major than the server's.
+
+   **Before the first deployment, check (read-only)**, as the deployer over ssh:
+
+   ```sh
+   node --version                                   # must start v26.
+   systemctl show -p ExecStart ekdotico-web.service ekdotico-collab.service   # the node the units run: its path, then run that path with --version
+   command -v systemctl                             # the path the sudoers line names, /usr/bin/systemctl on Ubuntu
+   sudo -n -l                                       # lists the one restart command, with no password asked
+   id                                               # ekdotico-release among the groups, ekdotico not
+   ```
+
+6. **The swap file added on 18 November 2026** for the builds on the server can be removed: nothing builds there now.
+
+### A normal deployment
+
+1. Wait for the push run of `ci` on `main` to pass for the commit, `full` included.
+2. Start the build: `gh workflow run release --repo Ekdotico/ekdotico --ref main -f sha=<full sha>`, then find its run id with `gh run list --repo Ekdotico/ekdotico --workflow release --limit 1`, and wait for it to pass (`gh run watch <run id>`).
+3. With `DEPLOY_HOST` (and `DEPLOY_USER`) set: `node scripts/deploy/deploy.mjs deploy --sha <full sha> --run <run id> --key <private key file>`.
+   **Where the release brings a migration**, add `--migrate --env-file <file on the server that sets MIGRATE_DATABASE_URL>`. The migration runs from the new release, against the running database, before the switch: migrations are additive (the standing practice), so the release still running keeps working on the migrated schema. A failed migration stops the deployment before the switch, and the running release is untouched.
+4. The script ends with `current is releases/<sha> and answers`, or with the reason it switched back.
+
+### A rollback
+
+`node scripts/deploy/deploy.mjs rollback` switches `current` to the release recorded in `/srv/ekdotico/.previous`, restarts both units, and checks them as a deployment does. A second rollback returns to where the first began. A migration is not undone: since migrations are additive, the earlier release runs on the later schema. `node scripts/deploy/deploy.mjs status` prints the current release, the previous one and the releases kept.
+
+### Assumptions about the server
+
+The repository does not state the Droplet's CPU architecture or Ubuntu release. The workflow builds on `ubuntu-24.04` (x64, glibc); sharp's libvips and Prisma's schema engine are native and need the same CPU and a glibc Linux with OpenSSL 3 (Ubuntu 22.04 or later). For an ARM server set the repository variable `RELEASE_RUNNER` to `ubuntu-24.04-arm`; the manifest check refuses a mismatch on the server either way. Also assumed: the units start the web application with `next start` and the collaboration server with `node src/collab/server.ts` from their `WorkingDirectory`, as `package.json` does, and read their settings from `/etc/ekdotico` and nothing under `/srv/ekdotico/app`, and the web application listens on port 3000 and the collaboration server on 1234 on localhost.
 
 ## The build output is kept as a secret is
 
-The `.next` directory holds the identifier of item 4. A container image, a build artefact, and a host that hold it are readable only by those who may deploy. Draft mode is never used, since it sends the same identifier to the browser as a cookie; the lint rule in `eslint.config.mjs` refuses its import.
+The `.next` directory holds the identifier of item 4. A container image, a build artefact, and a host that hold it are readable only by those who may deploy. The artifacts of a public repository can be downloaded by anyone signed in to GitHub, so a deployable release is uploaded only sealed to the deployer's public key (AES-256-GCM under a key of its own, wrapped with RSA-OAEP; `scripts/deploy/lib.mjs`). A build of a pull request, which the workflow runs to test the route, is uploaded open, kept for one day, and marked not deployable in its manifest; its identifier is its own and is never served. On the server the release directories are mode 2750, group `ekdotico`. Draft mode is never used, since it sends the same identifier to the browser as a cookie; the lint rule in `eslint.config.mjs` refuses its import.
 
 ## Settings
 
@@ -163,6 +258,8 @@ A process refuses to start without `FOUNDING_TEAM_EMAILS`, `APP_ORIGIN`, `DATABA
 An entry of `FOUNDING_TEAM_EMAILS` that is not an email address an account can have stops a process too (the owner's decision of 9 October 2026): an entry with no domain, or with a domain written in full-width or other compatibility letters, or with a label that begins or ends with a hyphen. Such an entry would match no account, and the account it was meant for would not be required to use two-factor authentication. The message gives the position of the entry in the list and never the entry.
 
 `EMAIL_SINK_DIRECTORY` names the directory the email sink writes to, with `EMAIL_TRANSPORT=sink`. Each file in it holds an address and may hold a single-use link. Only a development machine uses the sink (see Email, below), and a directory under the working directory is used there where the setting is absent. With `brevo` the setting is not read.
+
+`CONTACT_ADDRESS` is the contact address of the team (register D121, D329; Q35). It is **unset** until the mailbox exists, and is set nowhere in this repository. Unset, the page for a visitor who is not signed in (FR-AU-93) reads "To ask for one, add your email address to the list." (the owner's answer `list-only` of 17 November 2026); set, it reads the approved sentence, "To ask for one, add your email address to the list, or write to" the address, with the address as a link. Where set it must be an email address, or the process refuses to start. It is read when the page is rendered, so changing it takes a restart and no build.
 
 `TWO_FACTOR_STEP_SECONDS` is how long the second step of a sign-in stays open after the password, and how long the secret of an enrolment waits for its first code: 600, the 10 minutes of FR-AU-83, where the setting is absent. `TWO_FACTOR_WRONG_CODES` is the number of wrong codes at which either is over and begins again with the password: 5 where the setting is absent (NFR-SE-07). Each is a whole number, 1 or more, and anything else stops a process.
 
@@ -193,6 +290,62 @@ A one-off check, which the owner decided on 9 October 2026. An address is stored
 ## The password list
 
 `PASSWORD_LIST_FILE` names the list of commonly used and known-compromised passwords (FR-AU-82), by default `data/common-passwords.txt` under the directory the process is started in. The file ships with the deployment. Where it cannot be read, or holds no entry, every request that sets a password fails, so that none is set unchecked. The file in the repository is a published list of 476,776 passwords of 8 to 32 characters (the owner's decision of 8 October 2026; register A66, D86); its name, version, source, licence, and filter, and what loading it costs, are in `data/common-passwords.md`. It is read at the first password that is checked, and then holds about 27 MB of memory.
+
+## Check-ins with Healthchecks.io (D274, D275, D280)
+
+Each check is **off until its address is set**: merging and deploying this changes nothing. An address is a secret (whoever holds it can silence the alarm), so it lives in the environment file of the unit that uses it, is never written to a log, and is never committed. It has the form `https://hc-ping.com/<uuid>` or `https://hc-ping.com/<key>/<slug>`; anything else is refused by name at start (the web application) or before the first call (the two scripts). A check-in is a plain GET with no body, and `/fail` is the one failure signal used. The period and grace time of each check are set in the service and recorded in [procedure 2](../procedures/02-health-checks.md) (D280); the code does not know them.
+
+| Setting                  | Read by                 | What a check-in proves                                                                                                                                                  |
+| ------------------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HEALTHCHECK_WEB_URL`    | `scripts/self-check.ts` | `https://app.ekdoti.co/api/health` answered 200 from the server itself, this minute                                                                                     |
+| `HEALTHCHECK_COLLAB_URL` | `scripts/self-check.ts` | `https://app.ekdoti.co/collab/health` answered 200 from the server itself, this minute                                                                                  |
+| `HEALTHCHECK_BACKUP_URL` | `scripts/backup.ts`     | the copy of the backups was stored at Scaleway; a failed or refused run calls `/fail`                                                                                   |
+| `HEALTHCHECK_TIMERS_URL` | the web application     | every 15 minutes, the timer of the email retry ran against the database and ended without a fault, so the application's timers are running                              |
+| `HEALTHCHECK_EMAIL_URL`  | the web application     | every 15 minutes, while email is healthy (D320): the last hand-over to Brevo was not an account fault, and the queue of emails waiting to be tried again is not growing |
+
+**Email health (D320).** An account fault is a 401, 402 or 403 from Brevo, or a 400 that is neither a refusal of the message nor "seen already" (no credits, a key it does not know, an unverified sender or domain). A 429, a 5xx, a timeout and a failed connection are not counted. A success, a refusal of one message and "seen already" clear a fault. The queue grows when more rows wait than at the previous run of the timer. While either holds the application stays silent, and the service emails the owner. The state is in memory, so a restart forgets a fault, and before the first hand-over after a start email counts as healthy: the row states that cost. The check is named `ekdotico-email`, period 15 minutes, grace 10 minutes (D320).
+
+The check of the database log (D275, the fifth) is **not built**: the managed database keeps its own log, and D321 keeps the check in the register for a database the team runs itself. The copy is weekly, on Sunday at 03:00 UTC, with one hour of grace (D322): set that check's period to 1 week and its grace to 1 hour.
+
+### The server checks itself
+
+The unit files are the owner's and are not in the repository. Install them as root, with the same environment file as the web application (`APP_ORIGIN`, `HEALTHCHECK_WEB_URL`, `HEALTHCHECK_COLLAB_URL`); the script reads no other secret. Adjust the paths to where the application is installed.
+
+```ini
+# /etc/systemd/system/ekdotico-selfcheck.service
+[Unit]
+Description=Ekdotico: the server calls its own health addresses and checks in
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ekdotico
+WorkingDirectory=/opt/ekdotico
+EnvironmentFile=/etc/ekdotico/web.env
+ExecStart=/usr/bin/node scripts/self-check.ts
+TimeoutStartSec=30
+```
+
+```ini
+# /etc/systemd/system/ekdotico-selfcheck.timer
+[Unit]
+Description=Ekdotico: self-check, each minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl daemon-reload && systemctl enable --now ekdotico-selfcheck.timer
+```
+
+A failed round leaves the unit failed (`systemctl status ekdotico-selfcheck.service`) and writes one line naming which address did not answer. The gap is stated in D280: a fault seen only from outside, such as a firewall rule that blocks others and not the server, is not caught.
+
+To check in for the copy of the backups, add `HEALTHCHECK_BACKUP_URL=...` to the environment file of `ekdotico-backup.service`; to check in for the timers, add `HEALTHCHECK_TIMERS_URL=...` and `HEALTHCHECK_EMAIL_URL=...` to that of `ekdotico-web.service` and restart it.
 
 ## Email
 

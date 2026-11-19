@@ -26,9 +26,10 @@ services:
       - '6379:6379'
 
   # SeaweedFS 4.48 (Apache-2.0): the S3 interface on 8333. See docs/plan/slice-19.md, S19-1.
+  # -volume.max: keep in step with .github/workflows/ci.yml (tests/unit/object-store-definition.test.ts says why).
   objectstore:
     image: chrislusf/seaweedfs:4.48
-    command: server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
+    command: server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data -volume.max=200
     ports:
       - '8333:8333'
     volumes:
