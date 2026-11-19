@@ -153,12 +153,22 @@ test('an account whose documents are not shared clears them at once: the control
     await screens(page, 'clearing-done');
     // The screen did ask to be read again, once: if the app stops doing so, the hold proves nothing.
     await expect.poll(() => holding).toBe(1);
+    // Force the quick case: the held read of the screen is released only once the server's own page, which counts the
+    // account's documents as the held read does, no longer offers to clear any (the list of documents drops a
+    // document when it is claimed, a little before it is deleted permanently). This request is not the held one.
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get('/settings/delete-account')).text()).includes('Clear all documents'),
+        { timeout: 20_000 },
+      )
+      .toBe(false);
   } finally {
     release();
   }
   // The read goes on and the account owns nothing: the screen offers the deletion of the account, and the statement
   // the person was given stays where it was, with focus.
-  await expect(main.getByRole('button', { name: 'Delete account' })).toBeVisible({ timeout: 20_000 });
+  await expect(main.getByRole('button', { name: 'Delete account' })).toBeVisible();
   await expect(status).toHaveText(
     '1 document is being deleted now. Ekdotico completes the deletion without you.',
   );
