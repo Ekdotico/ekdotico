@@ -10,6 +10,7 @@ import { expectNoSidewaysScroll, mailFor, newPerson, screens, signUp, type Perso
 import {
   accept,
   CONFIRMATION,
+  chooseRole,
   expire,
   invite,
   INVITATION_LINK,
@@ -234,12 +235,12 @@ test('the Owner changes a role and removes a collaborator, a collaborator leaves
   await screens(page, 'sharing-people-owner');
 
   // A role is changed, and what was done is said, with focus on the statement (WCAG 2.4.3).
-  await cy$.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await chooseRole(cy$, 'Cy Viewer', 'editor');
   await cy$.getByRole('button', { name: 'Change role' }).click();
   await expect(page.getByRole('status')).toHaveText('Role of Cy Viewer changed to Editor.');
   await expect(page.getByRole('status')).toBeFocused();
   await expect(cy$).toContainText('Cy Viewer, Editor');
-  await cy$.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('viewer');
+  await chooseRole(cy$, 'Cy Viewer', 'viewer');
   await cy$.getByRole('button', { name: 'Change role' }).click();
   await expect(page.getByRole('status')).toHaveText('Role of Cy Viewer changed to Viewer.');
   await expect(cy$).toContainText('Cy Viewer, Viewer');
@@ -350,7 +351,7 @@ test('a change of role and a removal are notified to the person affected, and ne
 
   // A change of role: Cy is told, with the title as it stands and a link to the document.
   const cy$ = personRow(page, 'Cy Viewer');
-  await cy$.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await chooseRole(cy$, 'Cy Viewer', 'editor');
   await cy$.getByRole('button', { name: 'Change role' }).click();
   await expect(page.getByRole('status')).toHaveText('Role of Cy Viewer changed to Editor.');
   await notifications(his);
@@ -455,7 +456,7 @@ test('an Editor who is given the permissions acts on a Viewer, and is offered no
   // A refusal is stated by itself, and is met from there (WCAG 2.4.3, 4.1.3): the Owner made Cy an Editor
   // since this page was read, so the Editor's request over an Editor is refused with a 403.
   setRole(id, cy.email, 'editor');
-  await viewer.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await chooseRole(viewer, 'Cy Viewer', 'editor');
   await viewer.getByRole('button', { name: 'Change role of Cy Viewer' }).click();
   const refused = beas!.getByRole('alert').filter({ hasText: 'never on an Editor' });
   await expect(refused).toContainText(
@@ -469,7 +470,7 @@ test('an Editor who is given the permissions acts on a Viewer, and is offered no
   await beas!.reload();
 
   // The Editor raises the Viewer to Editor, and then has no control over that person (FR-ED-44 (b)).
-  await viewer.getByRole('combobox', { name: 'Role of Cy Viewer' }).selectOption('editor');
+  await chooseRole(viewer, 'Cy Viewer', 'editor');
   await viewer.getByRole('button', { name: 'Change role' }).click();
   await expect(beas!.getByRole('status')).toHaveText('Role of Cy Viewer changed to Editor.');
   await expect(personRow(beas!, 'Cy Viewer').getByRole('button')).toHaveCount(0);
