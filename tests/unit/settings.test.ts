@@ -643,6 +643,27 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     }
   });
 
+  // D275: the check of the application's timers is off unless its address is set, and the address is at
+  // hc-ping.com alone. The refusal names the setting and never the value.
+  it('checks the timers in only where HEALTHCHECK_TIMERS_URL is a ping address', () => {
+    expect(settings.healthcheckTimersUrl).toBeUndefined();
+    const ping = 'https://hc-ping.com/00000000-0000-4000-8000-000000000000';
+    expect(loadSettings({ ...env, HEALTHCHECK_TIMERS_URL: ping }).healthcheckTimersUrl).toBe(ping);
+    const wrong = 'https://evil.example/00000000-0000-4000-8000-000000000000';
+    let message = '';
+    try {
+      loadSettings({ ...env, HEALTHCHECK_TIMERS_URL: wrong });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('HEALTHCHECK_TIMERS_URL');
+    expect(message).not.toContain('evil.example');
+    // D320: the check of email health is the same, under its own name.
+    expect(settings.healthcheckEmailUrl).toBeUndefined();
+    expect(loadSettings({ ...env, HEALTHCHECK_EMAIL_URL: ping }).healthcheckEmailUrl).toBe(ping);
+    expect(() => loadSettings({ ...env, HEALTHCHECK_EMAIL_URL: wrong })).toThrow(/HEALTHCHECK_EMAIL_URL/);
+  });
+
   // FR-ED-41: "at least once every 60 seconds": a setting may make it more often and never less.
   it('re-checks every open connection every 60 seconds, and never less often, nor more often than once a second', () => {
     expect(settings.collabRecheckMs).toBe(60_000);
