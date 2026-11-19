@@ -49,6 +49,10 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   // FR-AU-88: the attributes a password manager needs.
   await expect(address).toHaveAttribute('autocomplete', 'username');
   await expect(page.getByLabel('Name')).toHaveAttribute('autocomplete', 'name');
+  // F11: the rule of a name, said beside the field and tied to it as its description.
+  await expect(page.getByLabel('Name')).toHaveAccessibleDescription(
+    '1 to 100 characters. It needs at least one character that shows; spaces alone are not a name.',
+  );
   const password = page.getByLabel('Password', { exact: true });
   await expect(password).toHaveAttribute('autocomplete', 'new-password');
   // The page names no address that the token could leak to.

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Button, FormFault, PageHeading, PasswordField, Stack, TextField } from '@ekdotico/domico/components';
 import { useReady } from '../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../components/send.ts';
+import { NAME_HINT } from '../../../../lib/field-text.ts';
 import { INVITATION_NOT_OPEN } from '../../../../lib/admission/statements.ts';
 
 /**
@@ -112,7 +113,7 @@ export function SignUp({
             id="name"
             name="name"
             label="Name"
-            hint="1 to 100 characters. At least one of them can be seen."
+            hint={NAME_HINT}
             autoComplete="name"
             required
             error={fields.name}
