@@ -7,7 +7,6 @@ import {
   Checkbox,
   Cluster,
   FormFault,
-  PageHeading,
   RadioGroup,
   Stack,
   Table,
@@ -68,7 +67,15 @@ const ROLES = [
  * the server's, shown as it is given; the list is read again after each.
  * Text for a person (plan Q6; docs/plan/slice-13.md, §5).
  */
-export function SharingSettings({ view, section }: { view: SharingView; section?: ReactNode }) {
+export function SharingSettings({
+  view,
+  section,
+  head,
+}: {
+  view: SharingView;
+  section?: ReactNode;
+  head: ReactNode;
+}) {
   const router = useRouter();
   const ready = useReady();
   const [emails, setEmails] = useState('');
@@ -143,7 +150,7 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
   const base = `/api/documents/${view.documentId}/invitations`;
   return (
     <Stack gap={6}>
-      <PageHeading>Sharing</PageHeading>
+      {head}
 
       <Stack gap={3}>
         <h2 className={styles.heading}>People</h2>
@@ -214,6 +221,8 @@ export function SharingSettings({ view, section }: { view: SharingView; section?
           <form onSubmit={(event) => void invite(event)} noValidate>
             <Stack gap={4}>
               <h2 className={styles.heading}>Invite</h2>
+              {/* UI audit F02: said before the form, and of no address (FR-ED-21's answer stays neutral). */}
+              <p className={styles.text}>The person you invite needs an Ekdotico account first.</p>
               <TextArea
                 id="invite-emails"
                 name="emails"

@@ -19,6 +19,7 @@ import { Stack } from '@ekdotico/domico/components';
 import { LeaveDocument } from './collaborator-actions.tsx';
 import { PermissionSettings } from './permission-settings.tsx';
 import { permissionRows, RoleSummary } from './permission-rows.tsx';
+import { SharingHead } from './sharing-head.tsx';
 import { SharingSettings } from './sharing-settings.tsx';
 import { TransferOwnership } from './transfer-ownership.tsx';
 
@@ -52,6 +53,7 @@ export default async function Sharing({ params }: { params: Promise<{ id: string
   if (!holds(document.permissionSet, role, 'document.collaborators.view')) {
     return (
       <Stack gap={6}>
+        <SharingHead documentId={document.id} title={document.title} />
         <p className={styles.text}>{NOT_SHOWN}</p>
         {permissions}
         {mayLeave ? <LeaveDocument documentId={document.id} /> : null}
@@ -80,6 +82,7 @@ export default async function Sharing({ params }: { params: Promise<{ id: string
   const remove = mayAct(document.permissionSet, role, 'remove');
   return (
     <SharingSettings
+      head={<SharingHead documentId={document.id} title={document.title} />}
       // FR-ED-46: the screen of the permission set is part of the sharing settings.
       section={
         <>

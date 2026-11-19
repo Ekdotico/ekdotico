@@ -331,56 +331,58 @@ function Text({
 
   return (
     <Editable.Provider value={editable}>
-      {reads ? (
-        <p className={pageStyles.meta}>{readerLine(role)}</p>
-      ) : (
-        <p id={keys} className={pageStyles.meta}>
-          {KEYS}
-        </p>
-      )}
-      {/* NFR-IC-19: a change that was not made is said to be so, in words that
+      <div className={styles.sheet}>
+        {reads ? (
+          <p className={pageStyles.meta}>{readerLine(role)}</p>
+        ) : (
+          <p id={keys} className={pageStyles.meta}>
+            {KEYS}
+          </p>
+        )}
+        {/* NFR-IC-19: a change that was not made is said to be so, in words that
           are seen, here, and heard, from the region below, when the screen
           reader next falls silent. No fault of the writer's, and the focus
           stays in the text. */}
-      {over && !reads ? (
-        <FormFault tone="neutral" announce="polite">
-          {over.split('\n').map((sentence) => (
-            <p key={sentence}>{sentence}</p>
-          ))}
-        </FormFault>
-      ) : null}
-      {refusal ? (
-        <FormFault tone="neutral" announce="off">
-          <p>{refusal.words}</p>
-        </FormFault>
-      ) : null}
-      <span ref={heard} role="status" className="sr-only" />
-      {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
-      {editable && !reads ? (
-        <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
-          {IMAGE_TEXT.choose}
-        </Button>
-      ) : null}
-      <p role="status" className={pageStyles.meta}>
-        {uploading}
-      </p>
-      <div
-        ref={surface}
-        className={editable && !reads ? `${styles.surface} ${styles.writable}` : styles.surface}
-        onFocus={() => (within.current = true)}
-        onBlur={(event) => {
-          // To somewhere else on the page. A control that is removed while it
-          // has the focus names no such place, and the focus is still the surface's.
-          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
-            within.current = false;
-          }
-        }}
-      >
-        {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
-        <EditorContent editor={editor} />
-        {editor ? <SlashPaletteList editor={editor} /> : null}
-        {/* After the text in the Tab order: Tab from the text reaches it. Not for a person who can only read. */}
-        {editor && editable && !reads ? <InsertButton editor={editor} surface={surface} /> : null}
+        {over && !reads ? (
+          <FormFault tone="neutral" announce="polite">
+            {over.split('\n').map((sentence) => (
+              <p key={sentence}>{sentence}</p>
+            ))}
+          </FormFault>
+        ) : null}
+        {refusal ? (
+          <FormFault tone="neutral" announce="off">
+            <p>{refusal.words}</p>
+          </FormFault>
+        ) : null}
+        <span ref={heard} role="status" className="sr-only" />
+        {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
+        {editable && !reads ? (
+          <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
+            {IMAGE_TEXT.choose}
+          </Button>
+        ) : null}
+        <p role="status" className={pageStyles.meta}>
+          {uploading}
+        </p>
+        <div
+          ref={surface}
+          className={editable && !reads ? `${styles.surface} ${styles.writable}` : styles.surface}
+          onFocus={() => (within.current = true)}
+          onBlur={(event) => {
+            // To somewhere else on the page. A control that is removed while it
+            // has the focus names no such place, and the focus is still the surface's.
+            if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
+              within.current = false;
+            }
+          }}
+        >
+          {editor ? <SelectionToolbar editor={editor} surface={surface} rowRef={row} /> : null}
+          <EditorContent editor={editor} />
+          {editor ? <SlashPaletteList editor={editor} /> : null}
+          {/* After the text in the Tab order: Tab from the text reaches it. Not for a person who can only read. */}
+          {editor && editable && !reads ? <InsertButton editor={editor} surface={surface} /> : null}
+        </div>
       </div>
     </Editable.Provider>
   );
