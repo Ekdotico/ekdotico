@@ -24,14 +24,59 @@
   padding: var(--sp-9) var(--gutter);
 }
 
+/* The rule runs the width of the screen; the row inside it is capped at --page-w and centred (the owner's answer ui-mod-width = header-1180: the logo sits left of the narrower content column)
+   (modernisation A3). One row of the bar's height at every width: below the breakpoint of the package's
+   drawer trigger (920px, which the package sets) the links are in the drawer. */
 .header {
+  border-block-end: 1px solid var(--rule);
+}
+
+.headerRow {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--gutter);
-  border-block-end: 1px solid var(--rule);
+  box-sizing: border-box;
+  max-inline-size: var(--page-w);
+  min-block-size: var(--topbar-h);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.headerEnd {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* The links in the row, from the width at which the package's drawer trigger goes. */
+.inlineNav {
+  display: none;
+}
+
+@media (min-width: 921px) {
+  .inlineNav {
+    display: block;
+  }
+
+  .drawerOnly {
+    display: none;
+  }
+}
+
+/* The links in the drawer, one under another. */
+.drawerNav {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-9) var(--sp-2) var(--sp-4);
+}
+
+/* The package leaves the navigation inside its drawer to the application. A link takes the horizontal
+   padding of the package's button, so that Sign out and the links start at one edge. */
+.drawerNav a {
+  padding: var(--sp-2) var(--sp-4);
 }
 
 .fault {
