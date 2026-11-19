@@ -45,6 +45,8 @@ test('the list of documents: empty, a document created, renamed, and still there
   // FR-ED-35, FR-AU-12: one control creates a document, with the default
   // title and without a choice of workspace.
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   const row = page.getByRole('listitem');
   await expect(row).toHaveCount(1);
   await expect(row).toContainText(DEFAULT_TITLE);
@@ -130,6 +132,8 @@ test('the list of documents: empty, a document created, renamed, and still there
 
   // A second document goes above the first: the newest first.
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   await expect(row).toHaveCount(2);
   await row.first().getByRole('button', { name: 'Rename' }).click();
   await dialog.getByRole('textbox', { name: 'Title' }).fill('The second document');
@@ -147,6 +151,8 @@ test('the explanation of "Not recorded": by keyboard, by pointer, and to a scree
 }) => {
   await enter(page);
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   const mark = page.getByRole('button', { name: MARK });
   const explanation = page.getByRole('tooltip');
   await expect(mark).toBeVisible();
@@ -206,6 +212,8 @@ test('the list at a width of 320 CSS pixels, with the longest title and the expl
 }) => {
   await enter(page);
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   await page.getByRole('button', { name: 'Rename' }).click();
   const dialog = page.getByRole('dialog', { name: 'Rename document' });
   // 200 characters without a place to break.
@@ -237,6 +245,8 @@ test('the list at a width of 320 CSS pixels, with the longest title and the expl
 test('a second account sees nothing of the first’s documents (NFR-SE-04)', async ({ page, browser }) => {
   await enter(page);
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   await expect(page.getByRole('listitem')).toHaveCount(1);
   const { documents } = await (await page.request.get('/api/documents')).json();
   const id = documents[0].id as string;

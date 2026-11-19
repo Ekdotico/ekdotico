@@ -126,6 +126,8 @@ test('an account that owns a document without an Editor is told so, and has no o
 }) => {
   await enter(page);
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   await expect(page.getByRole('listitem')).toHaveCount(1);
   await screen(page);
   const main = page.getByRole('main');

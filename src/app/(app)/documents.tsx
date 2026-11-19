@@ -14,7 +14,7 @@ import {
   Tooltip,
 } from '@ekdotico/domico/components';
 import { useReady } from '../../components/ready.ts';
-import { send, type Fault } from '../../components/send.ts';
+import { send, sendFor, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { InBrowser, LocalTime } from './local-time.tsx';
 import { NOT_RECORDED, NOT_RECORDED_EXPLANATION } from './not-recorded.ts';
@@ -210,15 +210,17 @@ export function Documents({
     setCreating(true);
     setFault(null);
     // FR-AU-12: the personal workspace is the only one, so none is chosen.
-    const refused = await send('/api/documents', {});
+    const sent = await sendFor('/api/documents', {});
     setCreating(false);
-    if (refused) {
-      setFault(refused);
+    if ('fault' in sent) {
+      setFault(sent.fault);
       setAttempt((count) => count + 1);
       return;
     }
-    // The list is the server's: it is read again, and this page is rendered from it.
-    router.refresh();
+    // F03: the new document is opened (FR-ED-35); the list is read again on return.
+    const { id } = (sent.answer ?? {}) as { id?: string };
+    if (id) router.push(`/documents/${id}`);
+    else router.refresh();
   }
 
   return (

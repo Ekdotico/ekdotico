@@ -67,6 +67,8 @@ test('an account that owns a document is told how many, and is offered no deleti
   const elsewhere = watchOrigins(page);
   const person = await enter(page);
   await page.getByRole('button', { name: 'New document' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await page.goto('/');
   await expect(page.getByRole('listitem')).toHaveCount(1);
 
   await openTheScreen(page);
