@@ -1,23 +1,17 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(new URL('../../src/app/frame.css', import.meta.url), 'utf8')
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
+const FRAME = "import '@ekdotico/domico/styles/frame.css';";
 const layout = readFileSync(new URL('../../src/app/layout.tsx', import.meta.url), 'utf8');
 
 describe('the wide-screen frame', () => {
-  it('caps the body at 1440px at the interface scale, above 1440 CSS pixels only', () => {
-    expect(css).toBe(
-      '@media (min-width: 1441px) { ' +
-        'html { background: color-mix(in srgb, var(--bg-canvas) 97%, black); } ' +
-        'body { max-width: calc(1440px * var(--scale)); min-height: 100dvh; margin-inline: auto; border-inline: 1px solid var(--rule); } ' +
-        '}',
-    );
+  it('comes from the design package, after the scale it multiplies by', () => {
+    expect(layout).toContain(FRAME);
+    expect(layout.indexOf(FRAME)).toBeGreaterThan(layout.indexOf("import './scale.css';"));
   });
 
-  it('is loaded by the root layout, after the scale it multiplies by', () => {
-    expect(layout.indexOf("import './frame.css';")).toBeGreaterThan(layout.indexOf("import './scale.css';"));
+  it('has no copy of its own in the application', () => {
+    expect(existsSync(new URL('../../src/app/frame.css', import.meta.url))).toBe(false);
+    expect(layout).not.toContain("import './frame.css';");
   });
 });
