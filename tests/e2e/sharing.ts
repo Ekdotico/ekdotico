@@ -4,7 +4,7 @@
 // tests/e2e/editor.spec.ts, the one file that runs it: its port is fixed, so
 // two files cannot each run one.
 import { spawnSync } from 'node:child_process';
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { mailFor } from './account.ts';
 import { APP_ORIGIN, AUTH_SECRET } from './origin.ts';
 
@@ -51,6 +51,21 @@ export async function accept(page: Page, address: string, documentId: string, ex
   await page.goto(new URL(link).pathname);
   await page.getByRole('button', { name: 'Accept' }).click();
   await page.waitForURL(`**/documents/${documentId}`);
+}
+
+/**
+ * Chooses a role for a person, and returns once the page has heard the choice: its "Change role" button is then
+ * enabled. A choice made before the page's script has taken over reaches no handler, and the script then puts the
+ * old role back, so it is made again until the button is enabled. It fails, in 20 s, if the select never takes it.
+ * `scope` is the page or the row that holds the person's controls.
+ */
+export async function chooseRole(scope: Page | Locator, name: string, role: string) {
+  await expect(async () => {
+    await scope.getByRole('combobox', { name: `Role of ${name}` }).selectOption(role);
+    await expect(scope.getByRole('button', { name: `Change role of ${name}` })).toBeEnabled({
+      timeout: 1_000,
+    });
+  }).toPass({ timeout: 20_000 });
 }
 
 /** The row of a person in the list of people of the sharing settings (FR-ED-38). */

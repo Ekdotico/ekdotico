@@ -79,6 +79,10 @@ test('the name is changed in the account settings, under the rule of the sign-up
   const name = part.getByLabel('Name', { exact: true });
   await expect(name).toHaveValue('Test Person');
   await expect(name).toHaveAttribute('autocomplete', 'name');
+  // F11 (ui-t4-name): the one approved hint, tied to the field as its description.
+  await expect(name).toHaveAccessibleDescription(
+    '1 to 100 characters. It needs at least one character that shows; spaces alone are not a name.',
+  );
 
   // A name that meets no rule is refused in words, at the head of the form and beside the field.
   await name.fill('   ');

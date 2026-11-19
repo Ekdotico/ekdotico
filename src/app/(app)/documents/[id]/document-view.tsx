@@ -5,6 +5,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import type { DocumentRole } from '../../../../lib/documents/permissions.ts';
 import pageStyles from '../../../pages.module.css';
 
 const Editor = dynamic(() => import('./editor.tsx'), {
@@ -19,6 +20,8 @@ const Editor = dynamic(() => import('./editor.tsx'), {
 
 export function DocumentView(props: {
   documentId: string;
+  /** The role of the account on the document, named in the line a reader is shown in place of the hint (F10). */
+  role: DocumentRole;
   canEdit: boolean;
   errorAfterMs: number;
   /** NFR-SE-18: how many days an image out of the document is kept, for the words of a block whose image is gone. */

@@ -38,7 +38,11 @@ const address = (file: string) =>
     )
     .join('/');
 
-const pages = globSync('src/app/**/page.tsx').map(address);
+// Not the page of visitors (FR-AU-93): named in a request it answers 404, and its page is the answer to `/`
+// without a session, which the sweep below asks for as `/`.
+const pages = globSync('src/app/**/page.tsx')
+  .map(address)
+  .filter((path) => path !== '/visitors-page');
 const routes = globSync('src/app/**/route.ts').map(address);
 // What is neither: an address without a page, one without a route, a file of
 // the build that is not there, the image optimiser, which no path admits, and
@@ -46,6 +50,7 @@ const routes = globSync('src/app/**/route.ts').map(address);
 // one without a session, and two of an account.
 const others = [
   '/no-such-page',
+  '/visitors-page',
   '/api/no-such-route',
   '/_next/static/no-such-file.js',
   '/_next/image?url=%2Fx&w=64&q=75',

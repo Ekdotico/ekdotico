@@ -153,7 +153,7 @@ test('a document deleted with its confirmation, seen in the list of deleted docu
   await screens(page, 'deleted-documents-empty');
 
   // And it is back in the list of documents, as it was.
-  await page.getByRole('link', { name: 'Documents', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Documents' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
   await expect(rows.locator('bdi')).toHaveText([TITLE, 'Stays']);
   expect((await (await page.request.get(`/api/documents/${id}`)).json()).title).toBe(TITLE);

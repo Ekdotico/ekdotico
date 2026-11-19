@@ -50,14 +50,20 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
   use: { baseURL: APP_ORIGIN },
-  // Four files start the collaboration server of their own, on the one port the application's rewrite names
+  // Five files start the collaboration server of their own, on the one port the application's rewrite names
   // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor, the
-  // footnotes for the images, and the export for the footnotes.
+  // footnotes for the images, the export for the footnotes, and the insert control for the export.
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: ['**/editor.spec.ts', '**/images.spec.ts', '**/footnotes.spec.ts', '**/export.spec.ts'],
+      testIgnore: [
+        '**/editor.spec.ts',
+        '**/images.spec.ts',
+        '**/footnotes.spec.ts',
+        '**/export.spec.ts',
+        '**/insert-button.spec.ts',
+      ],
     },
     { name: 'editor', use: { ...devices['Desktop Chrome'] }, testMatch: '**/editor.spec.ts' },
     {
@@ -77,6 +83,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       testMatch: '**/export.spec.ts',
       dependencies: ['footnotes'],
+    },
+    {
+      name: 'insert',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: '**/insert-button.spec.ts',
+      dependencies: ['export'],
     },
   ],
   webServer: {
