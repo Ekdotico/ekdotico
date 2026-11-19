@@ -1991,11 +1991,18 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
         ],
         columns: root.querySelectorAll('col').length,
         // Finding 2 and the policy of the page: the only inline styles are the widths of a table.
+        // The icons of the editor's own controls are the design package's, not the document's: they
+        // are read apart (`icons`) and held to the one property they write.
         styles: [
           ...new Set(
-            [...root.querySelectorAll('[style]')].map(
+            [...root.querySelectorAll('[style]:not(svg[data-ekd-icon])')].map(
               (each) => `${each.tagName.toLowerCase()} ${each.getAttribute('style')}`,
             ),
+          ),
+        ],
+        icons: [
+          ...new Set(
+            [...root.querySelectorAll('svg[data-ekd-icon][style]')].map((each) => each.getAttribute('style')),
           ),
         ],
         lists: [...root.querySelectorAll('ol:not(.ekd-toc-list)')].map((list) => ({
@@ -2026,6 +2033,8 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
     // …and what the library writes on the element of a block that has controls.
     const written = /^((col|table) (min-)?width: \d{1,4}px;|[a-z]+ white-space: [a-z-]+;)$/;
     for (const style of found.styles) expect(style).toMatch(written);
+    // An icon of the design package writes its size and nothing else (0.46.0, `--scale`).
+    for (const style of found.icons) expect(style).toMatch(/^--ekd-icon-size: \d{1,3}px;$/);
     expect(found.lists).toEqual([
       { start: null, type: null },
       { start: null, type: null },

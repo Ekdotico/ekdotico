@@ -37,6 +37,7 @@ import { open, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { checkIn, checkInUrl } from '../src/lib/healthcheck.ts';
 import { documentOfKey } from '../src/lib/images/storage.ts';
 import { EnvelopeError, publicKeyOf, seal, type Entry } from './backup-envelope.ts';
 import {
@@ -572,16 +573,36 @@ export async function backUp(env: Env): Promise<string> {
   return objectKey;
 }
 
+/**
+ * D275, "the nightly sealed copy": the check of Healthchecks.io for this job. It checks in after a copy
+ * that was stored and signals a failure after any other end, and changes neither the exit code nor a line.
+ * A setting that is not a ping address is said by name and does not stop the copy: it is monitoring, and
+ * the service emails the owner when the check-ins do not come. Nothing is called where it is not set.
+ */
+export async function reportToMonitor(env: Env, outcome: 'ok' | 'fail'): Promise<void> {
+  let url;
+  try {
+    url = checkInUrl(env, 'HEALTHCHECK_BACKUP_URL');
+  } catch (error) {
+    complain(`backup: ${(error as Error).message} No check-in is made.`);
+    return;
+  }
+  await checkIn(url, outcome);
+}
+
 if (import.meta.main) {
   try {
     await backUp(process.env);
   } catch (error) {
     if (error instanceof Refusal) {
       complain(`backup: refused: ${error.message}`);
+      await reportToMonitor(process.env, 'fail');
       process.exit(2);
     }
     // The class of the fault, and a code or a status: never what the tool or the SDK wrote, which names a host or a role (rule 2).
     complain(`backup: failed (${describeError(error)})`);
+    await reportToMonitor(process.env, 'fail');
     process.exit(1);
   }
+  await reportToMonitor(process.env, 'ok');
 }
