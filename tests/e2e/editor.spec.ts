@@ -20,7 +20,7 @@ import {
 } from './account.ts';
 import { FRAGMENT_NAME } from '../../src/lib/collab/protocol.ts';
 import { connectAs, startCollab, stopCollab } from './collab.ts';
-import { accept, invite, INVITATION_LINK, personRow, setRole, shareNew } from './sharing.ts';
+import { accept, chooseRole, invite, INVITATION_LINK, personRow, setRole, shareNew } from './sharing.ts';
 
 // One collaboration server for the file, and one test at a time: a test stops it.
 test.describe.configure({ mode: 'serial' });
@@ -4921,7 +4921,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
         .filter({ hasText: `The role of this account on this document is now ${now}. ${rest}` });
     const row = personRow(manage, 'Bea Editor');
 
-    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('viewer');
+    await chooseRole(row, 'Bea Editor', 'viewer');
     await row.getByRole('button', { name: 'Change role' }).click();
     await expect(manage.getByRole('status')).toHaveText('Role of Bea Editor changed to Viewer.');
     await expect(role('Viewer', 'The document is read-only in this tab.')).toBeVisible({ timeout: 5000 });
@@ -4930,7 +4930,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     await theirs.keyboard.type('Nothing of this.');
     await expect(text(theirs)).not.toContainText('Nothing of this.');
 
-    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('editor');
+    await chooseRole(row, 'Bea Editor', 'editor');
     await row.getByRole('button', { name: 'Change role' }).click();
     await expect(manage.getByRole('status')).toHaveText('Role of Bea Editor changed to Editor.');
     await expect(role('Editor', 'The document can be edited in this tab.')).toBeVisible({ timeout: 5000 });

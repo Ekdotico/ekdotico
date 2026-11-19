@@ -7,7 +7,7 @@
 // section 7 (for the owner's approval), written out here.
 import { expect, test, type Page } from './fixtures.ts';
 import { expectNoSidewaysScroll, mailFor, newPerson, screens, signUp, type Person } from './account.ts';
-import { accept, CONFIRMATION, invite, personRow, shareNew } from './sharing.ts';
+import { accept, CONFIRMATION, chooseRole, invite, personRow, shareNew } from './sharing.ts';
 
 const NO_LONGER_OPEN =
   'This offer is no longer open. The Editor accepted or declined it, the Owner withdrew it, or it expired. Open your notifications to see the offers that are open.';
@@ -236,14 +236,8 @@ test('an Editor who is made a Viewer is offered nothing, and the offer is over',
   // The Owner makes the Editor a Viewer: the offer ends without anyone's action (FR-ED-47).
   await page.goto(`/documents/${id}/sharing`);
   const row = personRow(page, 'Bea Editor');
-  const change = row.getByRole('button', { name: 'Change role' });
-  // A choice made before the page's script has taken over reaches no handler, and the script then puts the old role
-  // back: the button stays disabled. Choose again until the button is enabled, which only a choice it heard does.
-  await expect(async () => {
-    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('viewer');
-    await expect(change).toBeEnabled({ timeout: 1_000 });
-  }).toPass({ timeout: 20_000 });
-  await change.click();
+  await chooseRole(row, 'Bea Editor', 'viewer');
+  await row.getByRole('button', { name: 'Change role' }).click();
   await expect(page.getByRole('status')).toHaveText('Role of Bea Editor changed to Viewer.');
   await expect(page.getByText('This document has no Editor to offer ownership to.')).toBeVisible();
   await theirs.goto(offerPath);
