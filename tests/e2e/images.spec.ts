@@ -319,6 +319,10 @@ test('sets the width by the select, by the keys of the handle, and by dragging i
 
   // A drag: the width follows the pointer and is written when the pointer is let go, and not before.
   await widthSelect(page).selectOption('100');
+  // The picture is as tall as it is wide, and the handle is at the middle of its height: at the full width that is
+  // below a window of 720 pixels, under the header of the document. A person scrolls to it; the mouse of the test
+  // does not, and a press outside the window reaches nothing.
+  await handle(page).scrollIntoViewIfNeeded();
   const parent = (await figure(page).boundingBox())!;
   const grip = (await handle(page).boundingBox())!;
   await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
@@ -334,6 +338,7 @@ test('sets the width by the select, by the keys of the handle, and by dragging i
   await expect(widthSelect(page)).toHaveValue(String(dragged));
 
   // Escape in the middle of a drag puts the width back, and writes nothing.
+  await handle(page).scrollIntoViewIfNeeded();
   const again = (await handle(page).boundingBox())!;
   await page.mouse.move(again.x + again.width / 2, again.y + again.height / 2);
   await page.mouse.down();
