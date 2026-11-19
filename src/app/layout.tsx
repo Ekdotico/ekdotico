@@ -1,6 +1,7 @@
 import '@ekdotico/domico/tokens.css';
 import '@ekdotico/domico/styles.css';
 import './scale.css';
+import './frame.css';
 
 import type { Metadata } from 'next';
 import { Crimson_Pro, Commissioner, Fira_Code } from 'next/font/google';
