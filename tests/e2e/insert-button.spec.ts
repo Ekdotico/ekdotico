@@ -29,7 +29,8 @@ test('the control is not seen at rest, appears under the pointer and on focus, a
   await page.goBack();
   await expect(text(page)).toBeVisible();
   const button = page.getByRole('button', { name: NAME });
-  const wrapper = button.locator('..');
+  // The box that fades: the tooltip's own element stands between it and the button.
+  const wrapper = page.locator('[data-near]');
   await expect(button).toBeVisible();
   // Not seen at rest (the pointer starts far from it), seen under the pointer and on keyboard focus.
   await expect(wrapper).toHaveCSS('opacity', '0');
