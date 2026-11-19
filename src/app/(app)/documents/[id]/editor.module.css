@@ -2,9 +2,38 @@
    the toolbar, and every control are drawn by the package's own stylesheets
    (@ekdotico/domico, "The editor"); every value here is one of its tokens. */
 
+/* The sheet the document is written on (modernisation A1): a surface on the page, with the hint and the
+   image picker at its top edge. Decoration only: no role, no tab stop. It fills the column, so the page's
+   width and the prose measure are unchanged. */
+.sheet {
+  padding: var(--sp-4);
+  background-color: var(--bg-surface);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+@media (min-width: 768px) {
+  .sheet {
+    padding: var(--sp-8);
+  }
+}
+
+/* Paper has no shadow, hairline or inset. */
+@media print {
+  .sheet {
+    padding: var(--sp-0);
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
 /* What the toolbar on the selection is placed in. */
 .surface {
   position: relative;
+  /* The space between the lines above the text (the reader line, or the hint and the picker) and the text. */
+  margin-block-start: var(--sp-4);
 }
 
 /* Where the toolbar goes is the application's (the package's contract): over
