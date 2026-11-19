@@ -20,7 +20,7 @@ import {
 } from './account.ts';
 import { FRAGMENT_NAME } from '../../src/lib/collab/protocol.ts';
 import { connectAs, startCollab, stopCollab } from './collab.ts';
-import { accept, invite, INVITATION_LINK, personRow, setRole, shareNew } from './sharing.ts';
+import { accept, chooseRole, invite, INVITATION_LINK, personRow, setRole, shareNew } from './sharing.ts';
 
 // One collaboration server for the file, and one test at a time: a test stops it.
 test.describe.configure({ mode: 'serial' });
@@ -1991,11 +1991,18 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
         ],
         columns: root.querySelectorAll('col').length,
         // Finding 2 and the policy of the page: the only inline styles are the widths of a table.
+        // The icons of the editor's own controls are the design package's, not the document's: they
+        // are read apart (`icons`) and held to the one property they write.
         styles: [
           ...new Set(
-            [...root.querySelectorAll('[style]')].map(
+            [...root.querySelectorAll('[style]:not(svg[data-ekd-icon])')].map(
               (each) => `${each.tagName.toLowerCase()} ${each.getAttribute('style')}`,
             ),
+          ),
+        ],
+        icons: [
+          ...new Set(
+            [...root.querySelectorAll('svg[data-ekd-icon][style]')].map((each) => each.getAttribute('style')),
           ),
         ],
         lists: [...root.querySelectorAll('ol:not(.ekd-toc-list)')].map((list) => ({
@@ -2026,6 +2033,8 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
     // …and what the library writes on the element of a block that has controls.
     const written = /^((col|table) (min-)?width: \d{1,4}px;|[a-z]+ white-space: [a-z-]+;)$/;
     for (const style of found.styles) expect(style).toMatch(written);
+    // An icon of the design package writes its size and nothing else (0.46.0, `--scale`).
+    for (const style of found.icons) expect(style).toMatch(/^--ekd-icon-size: \d{1,3}px;$/);
     expect(found.lists).toEqual([
       { start: null, type: null },
       { start: null, type: null },
@@ -4148,6 +4157,12 @@ test('a Viewer reads what the Owner writes, in an editor that does not write', a
   await expect(text(theirs)).toHaveAttribute('aria-readonly', 'true');
   await page.goto(`/documents/${id}`);
   await expect(text(page)).toHaveAttribute('aria-readonly', 'false');
+  // F10: a reader is told in one line, where the keys of a writer stand, that the text is for reading, and
+  // the role; a writer is not. (Here, and not in the permissions spec, which starts no collaboration server.)
+  await expect(
+    theirs.getByText('You can read this document. Your role on it is Viewer.', { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('You can read this document.')).toHaveCount(0);
   await text(page).click();
   await page.keyboard.type('Written by the Owner');
   await expect(text(theirs)).toContainText('Written by the Owner');
@@ -4912,7 +4927,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
         .filter({ hasText: `The role of this account on this document is now ${now}. ${rest}` });
     const row = personRow(manage, 'Bea Editor');
 
-    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('viewer');
+    await chooseRole(row, 'Bea Editor', 'viewer');
     await row.getByRole('button', { name: 'Change role' }).click();
     await expect(manage.getByRole('status')).toHaveText('Role of Bea Editor changed to Viewer.');
     await expect(role('Viewer', 'The document is read-only in this tab.')).toBeVisible({ timeout: 5000 });
@@ -4921,7 +4936,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     await theirs.keyboard.type('Nothing of this.');
     await expect(text(theirs)).not.toContainText('Nothing of this.');
 
-    await row.getByRole('combobox', { name: 'Role of Bea Editor' }).selectOption('editor');
+    await chooseRole(row, 'Bea Editor', 'editor');
     await row.getByRole('button', { name: 'Change role' }).click();
     await expect(manage.getByRole('status')).toHaveText('Role of Bea Editor changed to Editor.');
     await expect(role('Editor', 'The document can be edited in this tab.')).toBeVisible({ timeout: 5000 });

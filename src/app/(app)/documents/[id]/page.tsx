@@ -84,6 +84,7 @@ export default async function DocumentPage({ params }: Props) {
         documentId={document.id}
         // FR-ED-44: fixed by role. The server discards what a role that cannot
         // edit sends (FR-ED-39); this only withdraws the controls.
+        role={role}
         canEdit={holds(document.permissionSet, role, 'document.content.edit') && document.clearingAt === null}
         // FR-ED-23: "30 seconds (an initial value)".
         errorAfterMs={settings().collabErrorAfterMs}

@@ -6,10 +6,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { newRecord, PROCEDURES, RUNS, whatIsLeft } from '../../scripts/record.ts';
 
-// The steps the build-phases page gives each procedure (draft register, ee3a637).
+// The steps the build-phases page gives each procedure (draft register, ee3a637), as amended: procedure 1 has the
+// run on 50,000 words, the page load and the deleting of the cookies (D296, D297); procedure 2 has the two
+// DigitalOcean uptime checks as a step of their own (D280, owner's answers of 18 November 2026).
 const STEPS: Record<string, number> = {
-  'editor-performance': 10,
-  'health-checks': 8,
+  'editor-performance': 13,
+  'health-checks': 9,
   'connection-limit': 8,
   accessibility: 8,
   browsers: 4,

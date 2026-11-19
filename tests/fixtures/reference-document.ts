@@ -10,6 +10,8 @@
 import { writeFileSync } from 'node:fs';
 
 export const WORDS = 5000;
+/** The second run of procedure 1 (NFR-IC-14, register D296): the same document, made longer. */
+export const WORDS_LARGE = 50000;
 
 type Node = { type: string; attrs?: Record<string, unknown>; content?: Node[]; text?: string };
 export type ReferenceDocument = { type: 'doc'; content: Node[] };
@@ -54,10 +56,10 @@ function stream(seed: number) {
   return { next, prose };
 }
 
-export function referenceDocument(): ReferenceDocument {
+export function referenceDocument(words = WORDS): ReferenceDocument {
   const { next, prose } = stream(20261026);
   const lengths: ['h1' | 'h2' | 'p', number][] = [['h1', 4]];
-  let left = WORDS - 4;
+  let left = words - 4;
   while (left > 0) {
     const heading = Math.min(2 + next(3), left);
     lengths.push(['h2', heading]);
