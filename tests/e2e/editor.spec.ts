@@ -3171,13 +3171,24 @@ test('a code block of 200 KB is coloured where it is scrolled to, and keeps its 
   console.log(`200 KB block: coloured at its top ${Date.now() - pushed} ms after it was sent`);
   expect(await block.evaluate((element) => element.textContent!.length)).toBe(code.length);
 
-  /** The classes at the start of the lines seen at four heights of the window. */
+  /**
+   * The classes at the start of the lines seen at four heights of the window. The line is read, and not the
+   * pixel: a keyword's box is shorter than its line, so a point between two coloured lines is on neither,
+   * and which points fall there changes with every change of the layout above the block.
+   */
   const seen = () =>
     block.evaluate((element) => {
       const left = element.getBoundingClientRect().left + 4;
-      return [0.2, 0.4, 0.6, 0.8].map(
-        (at) => document.elementFromPoint(left, window.innerHeight * at)?.className ?? 'nothing',
-      );
+      const half = Number.parseFloat(getComputedStyle(element).lineHeight) / 2;
+      const starts = [...element.querySelectorAll('.hljs-keyword')]
+        .map((keyword) => keyword.getBoundingClientRect())
+        .filter((box) => box.left <= left && left <= box.right);
+      return [0.2, 0.4, 0.6, 0.8].map((at) => {
+        const height = window.innerHeight * at;
+        return starts.some((box) => Math.abs((box.top + box.bottom) / 2 - height) <= half)
+          ? 'hljs-keyword'
+          : (document.elementFromPoint(left, height)?.className ?? 'nothing');
+      });
     });
   /** Scrolls whatever holds the block so that the part `fraction` of the way down it is in the middle of the window. */
   const scrollTo = (fraction: number) =>
