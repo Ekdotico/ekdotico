@@ -181,10 +181,15 @@
 
 /* The status of the connection takes what the row leaves and wraps inside it, so that a long label ("Syncing.
    ..." while a change is unsent) never pushes the status onto a second row of the header: the row would then
-   lose a line when the label turns to "In sync", and the page below it would move under the pointer. */
+   lose a line when the label turns to "In sync", and the page below it would move under the pointer.
+
+   It is never narrower than the longest word of any label with its mark: where the row leaves less (320 wide,
+   with people present), the status takes a line of its own, and the label wraps there. The floor is one size
+   for every label, so the status is on the same line whatever it says. With no floor it was squeezed to less
+   than a word and ran past the screen. */
 .statusSlot {
   flex: 1 1 0;
-  min-inline-size: 0;
+  min-inline-size: var(--sp-12);
 }
 
 /* The same, of a title set as the heading of its page. */

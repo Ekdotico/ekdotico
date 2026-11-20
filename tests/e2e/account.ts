@@ -194,11 +194,23 @@ export function watchOrigins(page: Page): string[] {
 export async function expectNoSidewaysScroll(page: Page): Promise<void> {
   const size = page.viewportSize()!;
   await page.setViewportSize({ width: 320, height: 640 });
-  const [content, viewport] = await page.evaluate(() => [
-    document.documentElement.scrollWidth,
-    document.documentElement.clientWidth,
-  ]);
-  expect(content).toBeLessThanOrEqual(viewport!);
+  const [content, viewport, past] = await page.evaluate(() => {
+    const width = document.documentElement.clientWidth;
+    // What reaches past the viewport, so that a failure names it: the innermost such elements first.
+    const past = [...document.querySelectorAll('body *')]
+      .filter((element) => element.getBoundingClientRect().right > width + 0.5)
+      .reverse()
+      .slice(0, 8)
+      .map((element) => {
+        const box = element.getBoundingClientRect();
+        const name = `${element.tagName.toLowerCase()}.${String(element.getAttribute('class') ?? '')}`;
+        return `${name.slice(0, 80)} ${Math.round(box.left)} to ${Math.round(box.right)}, ${getComputedStyle(element).position}`;
+      });
+    return [document.documentElement.scrollWidth, width, past] as const;
+  });
+  expect(content, `Past the viewport of ${viewport}: ${past.join('; ') || 'no element'}`).toBeLessThanOrEqual(
+    viewport,
+  );
   await page.setViewportSize(size);
 }
 

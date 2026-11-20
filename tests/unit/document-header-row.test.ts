@@ -34,7 +34,9 @@ describe('the document header row (modernisation A2)', () => {
   it('lets the status wrap inside the row, so that a long label never adds a row', () => {
     expect(page).toContain('styles.statusSlot');
     const css = readFileSync('src/app/pages.module.css', 'utf8');
-    expect(css).toMatch(/\.statusSlot\s*\{[^}]*flex:\s*1 1 0;[^}]*min-inline-size:\s*0;/);
+    // A floor of one size for every label, never one taken from the label: the status is then on the same line
+    // whatever it says, and is never squeezed to less than a word (it ran past a 320 screen with a floor of 0).
+    expect(css).toMatch(/\.statusSlot\s*\{[^}]*flex:\s*1 1 0;[^}]*min-inline-size:\s*var\(--sp-12\);/);
   });
 
   it('puts the sync status in its slot in the header', () => {

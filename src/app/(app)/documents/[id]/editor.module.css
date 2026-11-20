@@ -137,6 +137,15 @@
   margin-block: var(--sp-2);
 }
 
+/* The code of a code block is never what the browser holds the page to while
+   the layout changes. Its colours are redrawn as it is scrolled (D193,
+   code-colours.ts), which replaces the text the reader is looking at; a
+   browser that held the page to that text followed it to where the redrawn
+   piece began, and threw the reader to the end of the document. */
+.code {
+  overflow-anchor: none;
+}
+
 /* A table with its caption: the browser's own margins of a figure are not the document's. */
 .table {
   margin: var(--sp-0);
