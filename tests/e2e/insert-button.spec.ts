@@ -3,6 +3,7 @@
 import { expect, test, type Page } from './fixtures.ts';
 import { newPerson, signUp } from './account.ts';
 import { startCollab, stopCollab } from './collab.ts';
+import { layoutState } from './layout-state.ts';
 import { accept, CONFIRMATION, invite, shareNew } from './sharing.ts';
 
 test.describe.configure({ mode: 'serial' });
@@ -105,7 +106,12 @@ test('the control does not move the layout as the cursor moves, and a Viewer has
   await page.goto(`/documents/${id}`);
   await text(page).pressSequentially('One\nTwo\nThree');
   const before = await text(page).boundingBox();
+  const stateBefore = await layoutState(text(page));
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
-  expect(await text(page).boundingBox()).toEqual(before);
+  // A failure names what moved: the scroll, the tops, and what stands above the text, before and after.
+  expect(
+    await text(page).boundingBox(),
+    `Before: ${stateBefore}. After: ${await layoutState(text(page))}`,
+  ).toEqual(before);
 });
