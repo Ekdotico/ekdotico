@@ -155,13 +155,15 @@ test('an account whose documents are not shared clears them at once: the control
     await screens(page, 'clearing-done');
     // The screen did ask to be read again, once: if the app stops doing so, the hold proves nothing.
     await expect.poll(() => holding).toBe(1);
-    // Force the quick case: the held read of the screen is released only once the server's own page, which counts the
-    // account's documents as the held read does, no longer offers to clear any (the list of documents drops a
-    // document when it is claimed, a little before it is deleted permanently). This request is not the held one.
+    // Force the quick case: the held read of the screen is released only once the server's own page no longer says
+    // that the account owns a document. That sentence follows the count of the rows the account owns, as the page
+    // that offers the deletion does; "Clear all documents" follows the list of documents, which drops a document
+    // when it is claimed, before the row is deleted, so it would release the hold while the count still said 1.
+    // This request is not the held one.
     await expect
       .poll(
         async () =>
-          (await (await page.request.get('/settings/delete-account')).text()).includes('Clear all documents'),
+          (await (await page.request.get('/settings/delete-account')).text()).includes('This account owns'),
         { timeout: 20_000 },
       )
       .toBe(false);
