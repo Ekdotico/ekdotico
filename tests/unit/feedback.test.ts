@@ -340,8 +340,8 @@ describe('the body of the browser', () => {
     ['DEL', '\u007F'],
     ['a C1 control', '\u0085'],
     ['the last C1 control', '\u009F'],
-    ['a bidirectional override', '‮'],
-    ['an isolate', '⁧'],
+    ['a bidirectional override', '\u202E'],
+    ['an isolate', '\u2067'],
   ])('refuses %s in the message', (_name, character) => {
     expect(rules({ ...valid, message: `a${character}b` })).toEqual([
       { field: 'message', rule: 'forbidden_character' },
@@ -352,10 +352,10 @@ describe('the body of the browser', () => {
     ['a tab', '\t'],
     ['a line feed', '\n'],
     ['a carriage return', '\r'],
-    ['a zero-width space', '​'],
-    ['a zero-width joiner', '‍'],
-    ['a line separator', ' '],
-    ['a paragraph separator', ' '],
+    ['a zero-width space', '\u200B'],
+    ['a zero-width joiner', '\u200D'],
+    ['a line separator', '\u2028'],
+    ['a paragraph separator', '\u2029'],
   ])('accepts %s inside the message', (_name, character) => {
     expect(validateSubmission({ ...valid, message: `a${character}b` }).ok).toBe(true);
   });
@@ -390,7 +390,7 @@ describe('the body of the browser', () => {
   });
 
   it('holds the identifier to 1 to 64 characters of the URL-safe set', () => {
-    for (const submissionId of ['', 'a'.repeat(65), 'a b', 'é', 5])
+    for (const submissionId of ['', 'a'.repeat(65), 'a b', '\u00E9', 5])
       expect(rules({ ...valid, submissionId })).toEqual([{ field: 'submissionId', rule: 'format' }]);
   });
 });
@@ -593,7 +593,7 @@ describe('POST /api/feedback', () => {
         ],
       },
     });
-    const forbidden = await handleFeedback(request({ ...FIRST, message: 'a‮b' }), dependencies);
+    const forbidden = await handleFeedback(request({ ...FIRST, message: 'a\u202Eb' }), dependencies);
     expect(forbidden.status).toBe(422);
     expect(await forbidden.json()).toMatchObject({
       error: { code: 'forbidden_character', fields: [{ field: 'message', rule: 'forbidden_character' }] },

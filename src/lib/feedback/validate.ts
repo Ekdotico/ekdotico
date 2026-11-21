@@ -29,7 +29,7 @@ export const MAX_REQUEST_BYTES = 20_480;
 // "The refused set": a C0 control other than tab, line feed and carriage return; DEL; a C1 control (U+0080 to
 // U+009F); a bidirectional override, U+202A to U+202E and U+2066 to U+2069. Zero-width characters, U+2028 and
 // U+2029 are allowed.
-const REFUSED = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F‪-‮⁦-⁩]/;
+const REFUSED = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/;
 
 /** Whether `text` carries a character the application and Praktico both refuse. */
 export function hasRefusedCharacter(text: string): boolean {
