@@ -6,34 +6,38 @@
 >
 > The signed form is the admission channel's (`docs/contracts/admission-signature.md`), shared, as the owner decided. That form is itself provisional and Praktico's to own; this page does not declare it final.
 >
-> Draft. Read against the `docs` repository at commit `765c6d9` and its draft pull request 139, which records the four answers below as margin notes. No code accompanies this page: the stub and the client come with the application's slice.
+> Draft, updated for the owner's answers of 21 November 2026 on the paths and the one-time value. Read against the `docs` repository at commit `765c6d9` and its draft pull request 139, which records the four answers below as margin notes. No code accompanies this page: the stub and the client come with the application's slice.
 
 ## What the owner decided, 21 November 2026
 
-| Question        | Answer                                                                                                                                                                                                                                                                     | Where it shows on this page                                    |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| fw-hosting      | Build, then move. The intake is built on Cloudflare Workers now and only the founding team uses it until Praktico has moved to Frankfurt; D78 stands as the destination                                                                                                    | Not a wire matter; the paths below are the same on either host |
-| fw-switch-scope | `FEEDBACK_INTAKE_ENABLED` is one switch: it shows the widget, opens the sending route, and turns on deletion step (c)                                                                                                                                                      | "Browser to application", "Deletion"                           |
-| fw-signature    | The signature covers a one-time value, the method, the path, the time, and the body, in one form shared with the admission channel. This replaces "time and body" in FR-AU-75                                                                                              | "The signed form"                                              |
-| fw-retry-id     | When a send fails, the failure answer returns the server-issued submission identifier; the browser sends it back on the retry; Praktico matches on identifier and account together. FR-AU-69 allows this one further field; FR-AU-68 (f), FR-AU-76, and FR-AU-77 stay true | "Browser to application", "The retry"                          |
+| Question        | Answer                                                                                                                                                                                                                                                                                  | Where it shows on this page                                    |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| fw-hosting      | Build, then move. The intake is built on Cloudflare Workers now and only the founding team uses it until Praktico has moved to Frankfurt; D78 stands as the destination                                                                                                                 | Not a wire matter; the paths below are the same on either host |
+| fw-switch-scope | `FEEDBACK_INTAKE_ENABLED` is one switch: it shows the widget, opens the sending route, and turns on deletion step (c)                                                                                                                                                                   | "Browser to application", "Deletion"                           |
+| fw-signature    | The signature covers a one-time value, the method, the path, the time, and the body, in one form shared with the admission channel. This replaces "time and body" in FR-AU-75                                                                                                           | "The signed form"                                              |
+| fw-retry-id     | When a send fails, the failure answer returns the server-issued submission identifier; the browser sends it back on the retry; Praktico matches on identifier and account together. FR-AU-69 allows this one further field; FR-AU-68 (f), FR-AU-76, and FR-AU-77 stay true              | "Browser to application", "The retry"                          |
+| fw-intake-path  | Praktico's two routes are `POST /api/feedback/intake` and `POST /api/feedback/pseudonymise`, under the tool's base path, which is `/praktico`. The signed path is therefore `/praktico/api/feedback/intake` and `/praktico/api/feedback/pseudonymise`, on the host `internal.ekdoti.co` | "The three requests", "The signed form", the worked examples   |
+| fw-nonce        | Praktico keeps each one-time value for five minutes and refuses a repeat. What removes an expired value is still open (fw-nonce-removal)                                                                                                                                                | "Verification at Praktico", step 4                             |
+| fw-statuses     | The three statuses a submission takes in Praktico are "New", "Read", and "Closed", and a new submission is "New". The status is set by the team in Praktico and is never sent by the application                                                                                        | Not on the wire                                                |
+| fw-privacy-link | The application's privacy notice is written in this engagement, its text goes to the owner for approval, and the widget ships with it. The address of the page is not yet decided                                                                                                       | Not on the wire                                                |
 
 ## What is still open
 
 Each of these is the owner's, and none is settled here. Where this page touches one it says "open, awaits the owner" and names the question.
 
-| Question                                                     | What it leaves open                                                                                                                                                                                                | Where it touches this page                                                          |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| fw-limit-count                                               | Whether a send that fails counts against the 5 in 10 minutes and the 30 in 24 hours of FR-AU-78                                                                                                                    | "Browser to application", step 4                                                    |
-| fw-count-unit                                                | The unit in which the 4,000 characters of FR-AU-66 are counted, and so whether the browser and the server count alike                                                                                              | The `message` field                                                                 |
-| fw-strings                                                   | Every text a reader sees, the `message` of each error body returned to the browser included                                                                                                                        | The error bodies                                                                    |
-| fw-retention                                                 | When feedback is deleted and by what                                                                                                                                                                               | Not on the wire; Praktico's table only                                              |
-| fw-team-access                                               | Who may see the team's list in Praktico                                                                                                                                                                            | Not on the wire                                                                     |
-| fw-statuses                                                  | The names of the three statuses a submission takes in Praktico                                                                                                                                                     | Not on the wire; the status is set by the team and is never sent by the application |
-| fw-privacy-link                                              | The target of the link to the privacy notice                                                                                                                                                                       | Not on the wire                                                                     |
-| fw-notice-version                                            | Whether the version of the Closed α notice is raised when the sentence on feedback returns                                                                                                                         | Not on the wire                                                                     |
-| fw-retry-edit (proposed here, not yet on the Questions page) | The retry rule below keeps the first message the intake accepted. If the user edits the text after a failed send and the first attempt had in fact reached the intake, the edit is dropped. Open, awaits the owner | "The retry"                                                                         |
+| Question          | What it leaves open                                                                                                                                                                                                | Where it touches this page                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| fw-limit-count    | Whether a send that fails counts against the 5 in 10 minutes and the 30 in 24 hours of FR-AU-78                                                                                                                    | "Browser to application", step 4                                                                              |
+| fw-count-unit     | The unit in which the 4,000 characters of FR-AU-66 are counted, and so whether the browser and the server count alike                                                                                              | The `message` field                                                                                           |
+| fw-strings        | Every text a reader sees, the `message` of each error body returned to the browser included                                                                                                                        | The error bodies                                                                                              |
+| fw-retention      | When feedback is deleted and by what                                                                                                                                                                               | Not on the wire; Praktico's table only                                                                        |
+| fw-team-access    | Who may see the team's list in Praktico                                                                                                                                                                            | Not on the wire                                                                                               |
+| fw-notice-version | Whether the version of the Closed α notice is raised when the sentence on feedback returns                                                                                                                         | Not on the wire                                                                                               |
+| fw-retry-edited   | The retry rule below keeps the first message the intake accepted. If the user edits the text after a failed send and the first attempt had in fact reached the intake, the edit is dropped. Open, awaits the owner | "The retry"                                                                                                   |
+| fw-nonce-removal  | What removes a one-time value from Praktico once it has expired                                                                                                                                                    | Not on the wire; Praktico's table of values only                                                              |
+| fw-intake-limit   | What limit Praktico applies to its two signed routes, and what it is keyed by                                                                                                                                      | Not on the wire; any answer a limit causes is Praktico's to state, and the application treats it as a failure |
 
-Two further points are Praktico's to state in its own specification, and this page does not choose them: the path of the section, written `{intake}` below, and any limit Praktico applies to the intake (FR-AU-59: a signed route that carries no session of the team).
+One further point is Praktico's to state in its own specification, and this page does not choose it: any limit Praktico applies to the intake (FR-AU-59: a signed route that carries no session of the team; fw-intake-limit).
 
 ## What the specification fixes
 
@@ -48,13 +52,13 @@ Two further points are Praktico's to state in its own specification, and this pa
 
 ## The three requests
 
-| Request                          | Caller                   | Receiver        | Signed                           |
-| -------------------------------- | ------------------------ | --------------- | -------------------------------- |
-| `POST /api/feedback`             | The browser              | The application | No: the session authenticates it |
-| `POST {intake}/api/intake`       | The application's server | Praktico        | Yes                              |
-| `POST {intake}/api/pseudonymise` | The application's server | Praktico        | Yes                              |
+| Request                                    | Caller                   | Receiver        | Signed                           |
+| ------------------------------------------ | ------------------------ | --------------- | -------------------------------- |
+| `POST /api/feedback`                       | The browser              | The application | No: the session authenticates it |
+| `POST /praktico/api/feedback/intake`       | The application's server | Praktico        | Yes                              |
+| `POST /praktico/api/feedback/pseudonymise` | The application's server | Praktico        | Yes                              |
 
-`{intake}` is the path Praktico gives the section, with the host `internal.ekdoti.co`. It is open and Praktico's. The path that is signed is the path as Praktico receives it, in full, including any base path, so that the two sides agree whatever it is.
+Both paths are under the tool's base path, `/praktico`, on the host `internal.ekdoti.co` (fw-intake-path). The path that is signed is the path as Praktico receives it, in full, base path included: `/praktico/api/feedback/intake` and `/praktico/api/feedback/pseudonymise`, with no query string and no trailing slash.
 
 ## The signed form
 
@@ -90,7 +94,7 @@ A rejected request receives `401` with the body `{ "error": { "code": "unauthori
 
 The limit of 65,536 bytes is a provisional technical bound: 4,000 characters in four-byte form and the escapes of JSON come to well under it. It is not a requirement.
 
-This is the step that asks Praktico for something new: a table of nonces, as the application keeps for admission. It follows from the shared form, and it is Praktico's to specify.
+Praktico refuses a one-time value it has already accepted and keeps each for five minutes, as the application does for admission (decided by the owner on 21 November 2026, fw-nonce). That needs a table of values on Praktico's side, which is Praktico's to specify. What removes an expired value is **open, awaits the owner (fw-nonce-removal)**.
 
 ## Browser to application: `POST /api/feedback`
 
@@ -136,7 +140,7 @@ Every error body is `{ "error": { "code", "message" } }`, the body of the applic
 
 The `422` is never returned for the identifier alone in a way that tells the browser whether the intake holds it. The application cannot know that.
 
-## Application to intake: `POST {intake}/api/intake`
+## Application to intake: `POST /praktico/api/feedback/intake`
 
 Signed as above. `Content-Type: application/json`. The body is exactly these nine fields, in any order, and no other (FR-AU-75, API design):
 
@@ -170,7 +174,7 @@ A submission is held when the intake has a row with the same `submissionId` **an
 
 The application treats **only** `200` or `201` with a body whose `accepted` is exactly `true` as success. A `5xx`, a `4xx`, a body of another shape, a closed connection, and no answer within 10 seconds are one failure to it, and it answers the browser `502`.
 
-## Application to intake: `POST {intake}/api/pseudonymise`
+## Application to intake: `POST /praktico/api/feedback/pseudonymise`
 
 Signed as above. The body is exactly one field: `{ "accountId": "…" }`, as bounded above.
 
@@ -191,7 +195,7 @@ Only the account identifier changes. The kind, the message, the context, and the
 6. A `429` carries no identifier, because nothing was attempted. A retry after it carries none.
 7. The application does not queue a submission, and the browser does not send a second one by itself.
 
-**Open, awaits the owner (fw-retry-edit).** The rule keeps the first message the intake accepted. If the user changes the text between the two attempts and the first had reached the intake, the change is dropped without the user being told. The alternatives, to update the row, to keep both, or to drop the identifier once the text changes, each need an owner's answer; this page chooses none.
+**Open, awaits the owner (fw-retry-edited).** The rule keeps the first message the intake accepted. If the user changes the text between the two attempts and the first had reached the intake, the change is dropped without the user being told. The alternatives, to update the row, to keep both, or to drop the identifier once the text changes, each need an owner's answer; this page chooses none.
 
 **Open, awaits the owner (fw-limit-count).** Whether the second attempt, or a failed first one, uses up a place in the allowance of FR-AU-78.
 
@@ -220,12 +224,12 @@ Praktico's routes, with the application's client or a test caller:
 
 ## Two worked examples
 
-With the secret `test-secret-not-for-use`, which is too short to be accepted as a real one and exists only for these two vectors, the time `1791450000`, the path `/intake-path/api/<route>` (a stand-in for the open `{intake}`), and a nonce for each, in place of a random one:
+With the secret `test-secret-not-for-use`, which is too short to be accepted as a real one and exists only for these two vectors, the time `1791450000`, the paths of the two routes, and a nonce for each, in place of a random one:
 
-| Request                                                                                                       | Nonce                              | `X-Ekdotico-Signature`                                             |
-| ------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------ |
-| `POST /intake-path/api/intake` with the 345-byte body below                                                   | `00112233445566778899aabbccddeeff` | `fd0cc23eba20b06e6d5d8dbb6794fe9f29e2dc06777de1cfa4457fc9a3a50aac` |
-| `POST /intake-path/api/pseudonymise` with the 48-byte body `{"accountId":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}` | `ffeeddccbbaa99887766554433221100` | `145f0965428ea2619f7b862a1f8935713e9843b0f387fab2ddc64fd0a784dc80` |
+| Request                                                                                                             | Nonce                              | `X-Ekdotico-Signature`                                             |
+| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------ |
+| `POST /praktico/api/feedback/intake` with the 345-byte body below                                                   | `00112233445566778899aabbccddeeff` | `07a07f3dbd9a7ac3140183024cdad7d70d8709ec9696933de2b391b365e751ef` |
+| `POST /praktico/api/feedback/pseudonymise` with the 48-byte body `{"accountId":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}` | `ffeeddccbbaa99887766554433221100` | `b517b78a219de72537fe151a9f3eb7fbe840d779a8b5bb61745f2da933fb8dd1` |
 
 The first body, written as one line with no white space between its tokens:
 
@@ -247,4 +251,4 @@ Both values were computed twice, by Node's `createHmac` and by Web Crypto, on 21
 
 ## Not on this page
 
-The list page, the three statuses, who may open it, the deletion of one submission, and the removal of feedback after its retention are Praktico's, and the owner's questions fw-team-access, fw-statuses, and fw-retention are open. The texts the widget and Praktico show are the owner's (fw-strings). The privacy notice and the notice version are the owner's (fw-privacy-link, fw-notice-version).
+The list page, who may open it, the deletion of one submission, and the removal of feedback after its retention are Praktico's, and the owner's questions fw-team-access and fw-retention are open. The three statuses are decided (fw-statuses) and are not sent on the wire. The texts the widget and Praktico show are the owner's (fw-strings). The privacy notice is being written for the owner's approval (fw-privacy-link), and the notice version is the owner's (fw-notice-version).
