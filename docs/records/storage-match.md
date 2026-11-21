@@ -70,10 +70,10 @@ Every column of every table is named, in the one row it belongs to; there is no 
 
 ## C. Object storage
 
-| Prefix    | Where                                              | Row     | Note                                                                                                                      |
-| --------- | -------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `images`  | The bucket of the images, DigitalOcean Spaces AMS3 | images  | `images/<document>/<random>`; versioned or copied each day to a second bucket, the owner's choice (procedure 6)           |
-| `backups` | The bucket of the copies, Scaleway, an EEA region  | backups | `backups/<year>/<month>/<time>-<random>.ekdbak`, sealed; the 4 weeks are a rule of the bucket (docs/operations/backup.md) |
+| Prefix    | Where                                              | Row     | Note                                                                                                                                                    |
+| --------- | -------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `images`  | The bucket of the images, DigitalOcean Spaces AMS3 | images  | `images/<document>/<random>`; versioned, with non-current versions kept for 30 days by a lifecycle rule of the bucket; no second bucket (register D394) |
+| `backups` | The bucket of the copies, Scaleway, an EEA region  | backups | `backups/<year>/<month>/<time>-<random>.ekdbak`, sealed; the 4 weeks are a rule of the bucket (docs/operations/backup.md)                               |
 
 ## D. Valkey
 
