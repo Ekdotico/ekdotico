@@ -4,13 +4,14 @@
 import { randomUUID } from 'node:crypto';
 import pkg from '../../../../package.json';
 import { feedbackIntakeEnabled } from '../../../lib/account/feedback-step.ts';
-import { fault, notAdmitted, refusedOrigin } from '../../../lib/auth/route-answers.ts';
+import { inDeletion } from '../../../lib/account/in-deletion.ts';
+import { fault, notAdmitted, refusedOrigin, unauthenticated } from '../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../lib/auth/session.ts';
 import { deliver } from '../../../lib/feedback/client.ts';
 import { handleFeedback } from '../../../lib/feedback/submit.ts';
 import { readJson } from '../../../lib/http.ts';
 import { onboardingDue } from '../../../lib/onboarding.ts';
-import { checkLimit, logLimitReached, takeLimit } from '../../../lib/rate-limit.ts';
+import { logLimitReached, takeLimitReturnable } from '../../../lib/rate-limit.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,8 +29,8 @@ export async function POST(request: Request): Promise<Response> {
         return { userId: null, denied: await notAdmitted(validation) };
       },
       noticeAcknowledged: async (userId) => !(await onboardingDue(userId)),
-      checkLimit,
-      takeLimit,
+      reserve: takeLimitReturnable,
+      stillAllowed: async (userId) => ((await inDeletion(userId)) ? unauthenticated() : null),
       limitReached: (name, userId, seconds) => logLimitReached(name, userId, seconds, userId),
       readJson,
       deliver: (body) => deliver(body),

@@ -336,6 +336,8 @@ describe('the body of the browser', () => {
 
   it.each([
     ['a C0 control', '\u0001'],
+    ['a vertical tab, which trimming would remove', '\u000Bhello'],
+    ['a form feed at the end, which trimming would remove', 'hello\u000C'],
     ['NUL', '\u0000'],
     ['DEL', '\u007F'],
     ['a C1 control', '\u0085'],
@@ -435,15 +437,21 @@ describe('POST /api/feedback', () => {
       enabled: () => true,
       session: async () => ({ userId: 'acc-1' }),
       noticeAcknowledged: async () => true,
-      checkLimit: async (name, key) => {
-        calls.push(`check ${name}`);
+      // A place taken now and given back, as `takeLimitReturnable` does: the check and the count are one step.
+      reserve: async (name, key) => {
+        calls.push(`reserve ${name}`);
+        const slot = `${name}:${key}`;
         const max = name === 'FEEDBACK_SHORT_PER_USER' ? 5 : 30;
-        return (used.get(`${name}:${key}`) ?? 0) >= max ? { ok: false, retryAfterSeconds: 42 } : { ok: true };
+        if ((used.get(slot) ?? 0) >= max) return { ok: false, retryAfterSeconds: 42 };
+        used.set(slot, (used.get(slot) ?? 0) + 1);
+        return {
+          ok: true,
+          giveBack: async () => {
+            used.set(slot, used.get(slot)! - 1);
+          },
+        };
       },
-      takeLimit: async (name, key) => {
-        calls.push(`take ${name}`);
-        used.set(`${name}:${key}`, (used.get(`${name}:${key}`) ?? 0) + 1);
-      },
+      stillAllowed: async () => null,
       limitReached: async () => {},
       readJson: async (req) => (await req.json()) as unknown,
       deliver: (sent) => deliver(sent, { fetch: double.fetch, now: () => NOW, secret: () => SECRET }),
@@ -533,7 +541,7 @@ describe('POST /api/feedback', () => {
     const answer = await response.json();
     expect(answer.error.code).toBe('not_sent');
     expect(answer.submissionId).toBe('6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35');
-    expect(used.size).toBe(0);
+    expect([...used.values()]).toEqual([0, 0]);
     expect(logs).toEqual(['feedback 6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35: not sent']);
   });
 
@@ -577,7 +585,80 @@ describe('POST /api/feedback', () => {
     await handleFeedback(request({ ...FIRST, message: '' }), dependencies);
     double.failWith = 'throw';
     await handleFeedback(request(), dependencies);
-    expect(used.size).toBe(0);
+    expect([...used.values()]).toEqual([0, 0]);
+  });
+
+  it('fires a burst at once and accepts no more than five in 10 minutes (E1)', async () => {
+    let issued = 0;
+    const { dependencies, double, used } = setup({ newId: () => `burst-${++issued}` });
+    const answers = await Promise.all(
+      Array.from({ length: 12 }, () => handleFeedback(request(), dependencies)),
+    );
+    expect(answers.filter(({ status }) => status === 201)).toHaveLength(5);
+    expect(answers.filter(({ status }) => status === 429)).toHaveLength(7);
+    expect(double.held).toHaveLength(5);
+    expect(double.requests).toHaveLength(5);
+    expect(used.get('FEEDBACK_SHORT_PER_USER:acc-1')).toBe(5);
+  });
+
+  it('gives the first place back where the second limit refuses', async () => {
+    const { dependencies, used } = setup();
+    used.set('FEEDBACK_DAY_PER_USER:acc-1', 30);
+    expect((await handleFeedback(request(), dependencies)).status).toBe(429);
+    expect(used.get('FEEDBACK_SHORT_PER_USER:acc-1')).toBe(0);
+  });
+
+  it('gives every place back where something throws, and the error is not swallowed', async () => {
+    const { dependencies, used } = setup({
+      deliver: async () => {
+        throw new Error('configuration');
+      },
+    });
+    await expect(handleFeedback(request(), dependencies)).rejects.toThrow('configuration');
+    expect([...used.values()]).toEqual([0, 0]);
+  });
+
+  it('a place that cannot be given back is said and does not hide the answer', async () => {
+    const { dependencies, double, logs } = setup({
+      reserve: async () => ({
+        ok: true,
+        giveBack: async () => {
+          throw new Error('valkey down');
+        },
+      }),
+    });
+    double.failWith = 500;
+    expect((await handleFeedback(request(), dependencies)).status).toBe(502);
+    expect(logs).toContain('feedback: place not given back');
+  });
+
+  it('refuses as a signed-out caller where the account’s deletion was confirmed since the session was read (E2)', async () => {
+    const { dependencies, double, used } = setup({
+      stillAllowed: async () => new Response(null, { status: 401 }),
+    });
+    expect((await handleFeedback(request(), dependencies)).status).toBe(401);
+    expect(double.requests).toHaveLength(0);
+    expect([...used.values()]).toEqual([0, 0]);
+  });
+
+  it('asks about the deletion after the body is read and before anything is sent', async () => {
+    const order: string[] = [];
+    const { dependencies } = setup({
+      readJson: async (req) => {
+        order.push('body');
+        return (await req.json()) as unknown;
+      },
+      stillAllowed: async () => {
+        order.push('asked');
+        return null;
+      },
+      deliver: async () => {
+        order.push('sent');
+        return true;
+      },
+    });
+    await handleFeedback(request(), dependencies);
+    expect(order).toEqual(['body', 'asked', 'sent']);
   });
 
   it('answers 422 invalid with the fields, and forbidden_character for a refused character', async () => {
@@ -630,16 +711,5 @@ describe('POST /api/feedback', () => {
     await handleFeedback(request({ ...FIRST, message: 'private words' }), dependencies);
     expect(logs.join('\n')).not.toContain('acc-1');
     expect(logs.join('\n')).not.toContain('private words');
-  });
-
-  it('answers 201 although a counter cannot be written, since the intake holds the submission', async () => {
-    const { dependencies, double, logs } = setup({
-      takeLimit: async () => {
-        throw new Error('valkey down');
-      },
-    });
-    expect((await handleFeedback(request(), dependencies)).status).toBe(201);
-    expect(double.held).toHaveLength(1);
-    expect(logs).toContain('feedback: limit not counted');
   });
 });

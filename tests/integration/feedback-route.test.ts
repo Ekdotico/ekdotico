@@ -105,4 +105,20 @@ describe('POST /api/feedback', () => {
     expect(limited.status).toBe(429);
     expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0);
   });
+
+  it('fires a burst at once and accepts no more than five, against the real counters (E1)', async () => {
+    const who = await person();
+    const answers = await Promise.all(Array.from({ length: 12 }, () => post(who.cookie, FIRST)));
+    expect(answers.filter(({ status }) => status === 201)).toHaveLength(5);
+    expect(answers.filter(({ status }) => status === 429)).toHaveLength(7);
+    expect(double.held).toHaveLength(5);
+  });
+
+  it('gives the places back when the intake does not accept a burst, so the account can still send', async () => {
+    const who = await person();
+    double.failWith = 500;
+    await Promise.all(Array.from({ length: 5 }, () => post(who.cookie, FIRST)));
+    double.failWith = null;
+    for (let n = 0; n < 5; n += 1) expect((await post(who.cookie, FIRST)).status).toBe(201);
+  });
 });

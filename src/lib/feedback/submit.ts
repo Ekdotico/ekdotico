@@ -9,7 +9,7 @@ import type { IntakeBody } from './client.ts';
 import { MAX_REQUEST_BYTES, validateSubmission } from './validate.ts';
 import type { LimitName } from '../settings.ts';
 
-type LimitAnswer = { ok: true } | { ok: false; retryAfterSeconds: number };
+type Reservation = { ok: true; giveBack: () => Promise<void> } | { ok: false; retryAfterSeconds: number };
 
 /** What the route supplies: the session and the notice, the limits, the delivery, and the clock. */
 export interface Dependencies {
@@ -17,8 +17,10 @@ export interface Dependencies {
   /** The account of the verified session; otherwise the answer of the other routes (`notAdmitted`): 401, or 403 for a session the founding-team gate stops. */
   session: (headers: Headers) => Promise<{ userId: string } | { userId: null; denied: Response }>;
   noticeAcknowledged: (userId: string) => Promise<boolean>;
-  checkLimit: (name: LimitName, key: string) => Promise<LimitAnswer>;
-  takeLimit: (name: LimitName, key: string) => Promise<unknown>;
+  /** Takes one place of the limit now, to be given back (`takeLimitReturnable`). */
+  reserve: (name: LimitName, key: string) => Promise<Reservation>;
+  /** Null where the account may still send; otherwise the answer of a signed-out caller (its deletion is confirmed). */
+  stillAllowed: (userId: string) => Promise<Response | null>;
   /** Writes the entry of a limit reached (NFR-SE-19). */
   limitReached: (name: LimitName, userId: string, seconds: number) => Promise<void>;
   readJson: (request: Request, maxBytes: number) => Promise<unknown>;
@@ -75,54 +77,64 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
   const { userId } = session;
   // 3. The Closed α notice.
   if (!(await d.noticeAcknowledged(userId))) return refuse(403, 'notice_not_acknowledged');
-  // 4. The limits, asked and not counted: only an accepted submission counts (fw-limit-count).
-  for (const name of FEEDBACK_LIMITS) {
-    const result = await d.checkLimit(name, userId);
-    if (!result.ok) {
-      const seconds = result.retryAfterSeconds;
-      await d.limitReached(name, userId, seconds);
-      return refuse(
-        429,
-        'rate_limited',
-        { retryAfterSeconds: seconds },
-        {},
-        { 'Retry-After': String(seconds) },
-      );
+  // 4. The limits. A place is taken before anything is sent, so that a burst cannot read "0 of 5" together and
+  // be accepted together, and is given back on every path that does not end in an accepted send, a thrown error
+  // included: so only an accepted submission stays counted (fw-limit-count).
+  const held: (() => Promise<void>)[] = [];
+  let accepted = false;
+  try {
+    for (const name of FEEDBACK_LIMITS) {
+      const place = await d.reserve(name, userId);
+      if (!place.ok) {
+        const seconds = place.retryAfterSeconds;
+        await d.limitReached(name, userId, seconds);
+        return refuse(
+          429,
+          'rate_limited',
+          { retryAfterSeconds: seconds },
+          {},
+          { 'Retry-After': String(seconds) },
+        );
+      }
+      held.push(place.giveBack);
+    }
+    // 5. The body.
+    const parsed = await d.readJson(request, MAX_REQUEST_BYTES);
+    const checked = validateSubmission(parsed);
+    if (!checked.ok) {
+      const { faults } = checked;
+      const code = faults.some(({ rule }) => rule === 'forbidden_character')
+        ? 'forbidden_character'
+        : 'invalid';
+      return refuse(422, code, { fields: faults });
+    }
+    const { value } = checked;
+    // The deletion of the account may have been confirmed since the session was read (FR-AU-79): the body and the
+    // limits take time. Asked again just before the send, and refused as a signed-out caller is.
+    const gone = await d.stillAllowed(userId);
+    if (gone) return gone;
+    // 6. The delivery. The identifier is the browser's on a retry and the server's otherwise (fw-retry-id).
+    const submissionId = value.submissionId ?? d.newId();
+    accepted = await d.deliver({
+      submissionId,
+      submittedAt: d.now().toISOString(),
+      kind: value.kind,
+      message: value.message,
+      route: value.route,
+      appVersion: d.appVersion,
+      browser: browserOf(request.headers.get('user-agent')),
+      viewport: value.viewport,
+      accountId: userId,
+    });
+    if (!accepted) {
+      d.log(`feedback ${submissionId}: not sent`);
+      return refuse(502, 'not_sent', {}, { submissionId });
+    }
+    d.log(`feedback ${submissionId}: sent`);
+    return Response.json({ sent: true }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
+  } finally {
+    if (!accepted) {
+      for (const giveBack of held) await giveBack().catch(() => d.log('feedback: place not given back'));
     }
   }
-  // 5. The body.
-  const parsed = await d.readJson(request, MAX_REQUEST_BYTES);
-  const checked = validateSubmission(parsed);
-  if (!checked.ok) {
-    const { faults } = checked;
-    const code = faults.some(({ rule }) => rule === 'forbidden_character')
-      ? 'forbidden_character'
-      : 'invalid';
-    return refuse(422, code, { fields: faults });
-  }
-  const { value } = checked;
-  // 6. The delivery. The identifier is the browser's on a retry and the server's otherwise (fw-retry-id).
-  const submissionId = value.submissionId ?? d.newId();
-  const accepted = await d.deliver({
-    submissionId,
-    submittedAt: d.now().toISOString(),
-    kind: value.kind,
-    message: value.message,
-    route: value.route,
-    appVersion: d.appVersion,
-    browser: browserOf(request.headers.get('user-agent')),
-    viewport: value.viewport,
-    accountId: userId,
-  });
-  if (!accepted) {
-    d.log(`feedback ${submissionId}: not sent`);
-    return refuse(502, 'not_sent', {}, { submissionId });
-  }
-  d.log(`feedback ${submissionId}: sent`);
-  // The acceptance is told, and counted. A counter that cannot be written does not turn it into a failure:
-  // the user would send again, and the intake would hold two.
-  for (const name of FEEDBACK_LIMITS) {
-    await d.takeLimit(name, userId).catch(() => d.log('feedback: limit not counted'));
-  }
-  return Response.json({ sent: true }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
 }

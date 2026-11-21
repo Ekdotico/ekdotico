@@ -75,7 +75,7 @@ export function validateSubmission(
   else if (typeof message !== 'string') faults.push({ field: 'message', rule: 'format' });
   else {
     trimmed = message.trim();
-    if (hasRefusedCharacter(trimmed)) faults.push({ field: 'message', rule: 'forbidden_character' });
+    if (hasRefusedCharacter(message)) faults.push({ field: 'message', rule: 'forbidden_character' });
     else if (trimmed === '') faults.push({ field: 'message', rule: 'empty' });
     else if (codePoints(trimmed) > MAX_MESSAGE_CODE_POINTS)
       faults.push({ field: 'message', rule: 'too_long' });
