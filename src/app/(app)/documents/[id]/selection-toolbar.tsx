@@ -1,7 +1,9 @@
 // The toolbar on the selection, for the nine marks of FR-ED-02 (the owner's
 // decision E3 of 8 October 2026). Every control is the design package's; what
 // the package leaves to the application is here: where the toolbar is placed,
-// when it is shown, the key that reaches it and the key that leaves it
+// when it is shown (once the person stops selecting: at the release of the
+// pointer, or at once for the keyboard), the key that reaches it and the key
+// that leaves it
 // (`@ekdotico/domico`, "The toolbar and the toggle button").
 'use client';
 
@@ -111,9 +113,12 @@ function LinkForm({ editor, onDone }: { editor: Editor; onDone: () => void }) {
 }
 
 /**
- * Shown while text is selected in a document that can be edited, and the focus
- * is in the text, in the toolbar, or in the dialog of a link. `surface` is the
- * positioned element the editor stands in.
+ * Shown when text is selected in a document that can be edited, and the focus
+ * is in the text, in the toolbar, or in the dialog of a link. It opens when the
+ * selecting ends: a selection made with the keyboard opens it at once, and one
+ * made with the pointer (a drag, a double or a triple click) opens it when the
+ * button is released, wherever that is; while the button is held it is hidden.
+ * `surface` is the positioned element the editor stands in.
  *
  * The toolbar never takes the focus by itself, so the selection is not lost
  * when it appears: a pointer press on a control is kept from moving the focus,
@@ -170,6 +175,27 @@ export function SelectionToolbar({
     };
   }, [editor, rowRef]);
 
+  // Not while a selection is made with the pointer: the toolbar waits for the
+  // release, wherever it is, and then stands over the selection as it ends.
+  // A press on the toolbar or in the dialog of a link is not in the text, and
+  // changes nothing.
+  const [selecting, setSelecting] = useState(false);
+  useEffect(() => {
+    const text = editor.view.dom;
+    const press = (event: PointerEvent) => {
+      if (event.button === 0) setSelecting(true);
+    };
+    const release = () => setSelecting(false);
+    text.addEventListener('pointerdown', press);
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    return () => {
+      text.removeEventListener('pointerdown', press);
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+    };
+  }, [editor]);
+
   // FR-ED-13: Ctrl or Cmd, and K, pressed in the text, opens the same dialog (./shortcuts.ts).
   useEffect(() => {
     const within = surface.current;
@@ -181,7 +207,7 @@ export function SelectionToolbar({
     return () => within?.removeEventListener(EDIT_LINK, edit);
   }, [surface]);
 
-  const shown = editable && selection.shown && (inText || inRow || linking);
+  const shown = editable && selection.shown && !selecting && (inText || inRow || linking);
 
   // Above the start of the selection, and inside the surface at any width.
   useLayoutEffect(() => {

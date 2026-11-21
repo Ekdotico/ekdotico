@@ -382,6 +382,40 @@ test('every block and every mark, the controls inside each block, and the toolba
   await expect(doc.locator('tr')).toHaveCount(3);
 });
 
+test('the toolbar on the selection opens when the selecting ends: at the release of the pointer, or at once from the keyboard', async ({
+  page,
+}) => {
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Selected by a drag of the pointer.');
+  const words = text(page).locator('p').first();
+  const box = (await words.boundingBox())!;
+  const y = box.y + box.height / 2;
+
+  // Hidden while the button is held, however far the selection has gone.
+  await page.mouse.move(box.x + 2, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, y, { steps: 5 });
+  await expect.poll(() => page.evaluate(() => window.getSelection()!.toString().length)).toBeGreaterThan(0);
+  await expect(toolbar(page)).toHaveCount(0);
+  // Released outside the text: the toolbar opens over the selection.
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height + 200, { steps: 5 });
+  await expect(toolbar(page)).toHaveCount(0);
+  await page.mouse.up();
+  await expect(toolbar(page)).toBeVisible();
+
+  // A double click opens it at the release too.
+  await words.dblclick();
+  await expect(toolbar(page)).toBeVisible();
+
+  // The keyboard: a press in the text closes it, and Shift and an arrow open it at once.
+  await page.mouse.click(box.x + box.width - 2, y);
+  await expect(toolbar(page)).toHaveCount(0);
+  await page.keyboard.press('Shift+ArrowLeft');
+  await expect(toolbar(page)).toBeVisible();
+});
+
 test('two browsers that edit one document converge', async ({ page, browser }) => {
   const person = await enter(page);
   await openNew(page);
