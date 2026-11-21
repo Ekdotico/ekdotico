@@ -25,7 +25,7 @@ export async function POST(request: Request): Promise<Response> {
       session: async (headers) => {
         const validation = await validateSessionRow(headers);
         if (validation.session) return { userId: validation.session.userId };
-        return { userId: null, stopped: validation.stopped ? await notAdmitted(validation) : null };
+        return { userId: null, denied: await notAdmitted(validation) };
       },
       noticeAcknowledged: async (userId) => !(await onboardingDue(userId)),
       checkLimit,

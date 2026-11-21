@@ -473,7 +473,8 @@ describe('POST /api/feedback', () => {
       (
         await handleFeedback(
           request(),
-          setup({ session: async () => ({ userId: null, stopped: null }) }).dependencies,
+          setup({ session: async () => ({ userId: null, denied: new Response(null, { status: 401 }) }) })
+            .dependencies,
         )
       ).status,
     ).toBe(401);
@@ -482,7 +483,7 @@ describe('POST /api/feedback', () => {
       (
         await handleFeedback(
           request(),
-          setup({ session: async () => ({ userId: null, stopped }) }).dependencies,
+          setup({ session: async () => ({ userId: null, denied: stopped }) }).dependencies,
         )
       ).status,
     ).toBe(403);

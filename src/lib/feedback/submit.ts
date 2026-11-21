@@ -14,8 +14,8 @@ type LimitAnswer = { ok: true } | { ok: false; retryAfterSeconds: number };
 /** What the route supplies: the session and the notice, the limits, the delivery, and the clock. */
 export interface Dependencies {
   enabled: () => boolean;
-  /** The account of the verified session; null for none. `stopped` says a session the founding-team gate stops. */
-  session: (headers: Headers) => Promise<{ userId: string } | { userId: null; stopped: Response | null }>;
+  /** The account of the verified session; otherwise the answer of the other routes (`notAdmitted`): 401, or 403 for a session the founding-team gate stops. */
+  session: (headers: Headers) => Promise<{ userId: string } | { userId: null; denied: Response }>;
   noticeAcknowledged: (userId: string) => Promise<boolean>;
   checkLimit: (name: LimitName, key: string) => Promise<LimitAnswer>;
   takeLimit: (name: LimitName, key: string) => Promise<unknown>;
@@ -71,7 +71,7 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
   if (!d.enabled()) return refuse(404, 'not_found');
   // 2. A signed-in session.
   const session = await d.session(request.headers);
-  if (session.userId === null) return session.stopped ?? refuse(401, 'unauthorised');
+  if (session.userId === null) return session.denied;
   const { userId } = session;
   // 3. The Closed α notice.
   if (!(await d.noticeAcknowledged(userId))) return refuse(403, 'notice_not_acknowledged');

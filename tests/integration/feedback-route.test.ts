@@ -76,8 +76,10 @@ describe('POST /api/feedback', () => {
     expect(double.requests).toHaveLength(0);
   });
 
-  it('answers 401 without a session, and 403 for an account that has not acknowledged the notice', async () => {
-    expect((await post(undefined, FIRST)).status).toBe(401);
+  it('answers 401 unauthenticated without a session, and 403 for an account that has not acknowledged the notice', async () => {
+    const signedOut = await post(undefined, FIRST);
+    expect(signedOut.status).toBe(401);
+    expect((await signedOut.json()).error.code).toBe('unauthenticated');
     const who = await person(false);
     const response = await post(who.cookie, FIRST);
     expect(response.status).toBe(403);
