@@ -75,6 +75,17 @@ It is the form of `docs/contracts/admission-signature.md`, with the feedback sec
 
 The feedback secret is held only in the server environment of the application and of Praktico, differs for each environment, and is never the admission secret or any other secret (NFR-SE-17 (e)). Its setting name, and its length and character set, are the application's slice to fix and are not wire matters; the application's rule for the admission secret (at least 43 characters of `[A-Za-z0-9_-]`, 256 bits from a cryptographically secure source) is the one to follow.
 
+### Changing the secret
+
+The secret is changed in this order, so that no send is lost (fw-secret-rotation). Praktico is given the new secret first and keeps the old one beside it; the application is given the new secret second; the old one is removed from Praktico last.
+
+1. Make the new secret, of the form above and different from every other secret.
+2. On Praktico, set `FEEDBACK_SECRET` to the new value and `FEEDBACK_SECRET_PREVIOUS` to the old one. Praktico accepts a request signed with either.
+3. On the application, set `FEEDBACK_SECRET` to the new value and restart it. The application signs with that one value. It holds no second value and needs none.
+4. More than 5 minutes after the application has started with the new value (the window of a signature), remove `FEEDBACK_SECRET_PREVIOUS` from Praktico.
+
+Done in another order, the change loses sends: an application given the new value before Praktico is refused on every request until Praktico has it. Setting and removing a secret is the owner's.
+
 ### The three headers
 
 Each occurs exactly once on a signed request.
@@ -123,7 +134,7 @@ The application adds, from the server and never from the body: the application v
 
 ### The refused characters
 
-The owner decided on 21 November 2026 (fw-count-unit, fw-refused-set) that the 4,000 are counted in code points and that a message with an invisible control character is refused. The refused set is: a C0 control other than tab (U+0009), line feed (U+000A) and carriage return (U+000D); DEL (U+007F); a C1 control (U+0080 to U+009F); and a bidirectional override, U+202A to U+202E and U+2066 to U+2069. The zero-width characters and the line and paragraph separators (U+2028 and U+2029) are allowed. The application and Praktico refuse the same set.
+The owner decided on 21 November 2026 (fw-count-unit, fw-refused-set) that the 4,000 are counted in code points and that a message with an invisible control character is refused. The refused set is: a C0 control other than tab (U+0009), line feed (U+000A) and carriage return (U+000D); DEL (U+007F); a C1 control (U+0080 to U+009F); and a bidirectional override, U+202A to U+202E and U+2066 to U+2069. A lone surrogate, that is text that is not well-formed, is refused as well (fw-surrogate). The zero-width characters and the line and paragraph separators (U+2028 and U+2029) are allowed. The application and Praktico refuse the same set.
 
 ### The order of the checks
 

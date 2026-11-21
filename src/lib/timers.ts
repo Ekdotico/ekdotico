@@ -74,11 +74,12 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // NFR-RE-15, "the steps of an account deletion in Closed α" (FR-AU-58): a step that failed is
   // repeated here until it succeeds, under the claim of the deletion (it needs a claim to be safe
   // on two instances, which the others above do not); says how many steps it carried out.
-  // A deletion stuck at the feedback step for 24 hours raises the alarm: the check of the timers is told it
-  // failed, and the service emails the owner (fw-detach-wait). It names no account.
+  // A deletion stuck at a call to the feedback intake for 24 hours (fw-detach-wait) raises the alarm at a check of
+  // its own, HEALTHCHECK_DELETION_URL: each run checks in there while none is stuck and calls `/fail` while one is,
+  // so the service emails the owner and the timers' own check carries nothing of it. It names no account.
   'account-deletion-steps': async () => {
     const outcome = await carryOutDeletions();
-    if (outcome.stuckAtFeedback > 0) void checkIn(checkInSettings()?.healthcheckTimersUrl, 'fail');
+    await checkInDeletion(outcome.stuckAtFeedback);
     return outcome.steps;
   },
   // NFR-RE-15, "the clearing of all of an account's documents" (FR-AU-91): the permanent deletion of each document
@@ -160,6 +161,14 @@ export async function checkInEmail(): Promise<void> {
     // Without a count nothing is known, so nothing checks in.
     console.error(`timer failed: email-health (${faultOf(error)})`);
   }
+}
+
+/**
+ * The check of the deletions: `/fail` where a confirmed deletion has been stuck at a call to the feedback intake
+ * for 24 hours, a check-in otherwise. Never rejects; calls nothing where HEALTHCHECK_DELETION_URL is not set.
+ */
+export async function checkInDeletion(stuck: number): Promise<void> {
+  await checkIn(checkInSettings()?.healthcheckDeletionUrl, stuck > 0 ? 'fail' : 'ok');
 }
 
 function retryDocumentEmails(): void {

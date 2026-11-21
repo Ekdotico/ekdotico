@@ -228,6 +228,7 @@ export interface Settings {
   healthcheckTimersUrl: string | undefined;
   /** D274, D320: the ping address of the check of email health. Absent: nothing is called. */
   healthcheckEmailUrl: string | undefined;
+  healthcheckDeletionUrl: string | undefined;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -682,6 +683,7 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     exportNameMaxChars: exportNameMaxChars(env),
     healthcheckTimersUrl: checkInUrl(env, 'HEALTHCHECK_TIMERS_URL'),
     healthcheckEmailUrl: checkInUrl(env, 'HEALTHCHECK_EMAIL_URL'),
+    healthcheckDeletionUrl: checkInUrl(env, 'HEALTHCHECK_DELETION_URL'),
     limits,
   };
 }

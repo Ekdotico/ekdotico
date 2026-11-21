@@ -88,6 +88,26 @@ export async function feedbackStep(
   if (!enabled()) return 'skipped';
   // Before the call, and not a timeout on it (fw-detach-wait).
   await wait(DETACH_DELAY_MS);
+  await detach(accountId, intake);
+  return 'done';
+}
+
+/** fw-late-write: the second call is made no sooner than this after the first, 301 seconds (the window of the signature is 300). */
+export const DETACH_AGAIN_MS = 301_000;
+
+/**
+ * Step (g), the second call to the intake (fw-late-write): the same instruction, made once step (c) is at least
+ * `DETACH_AGAIN_MS` old, so that a submission that was in flight at (c) and stored after it is detached too. No
+ * wait here: the runner decides when it is due. Throws where it was not acknowledged, and is repeated.
+ */
+export async function feedbackAgain(
+  accountId: string,
+  { intake = feedbackIntake() }: { intake?: FeedbackIntake } = {},
+): Promise<void> {
+  await detach(accountId, intake);
+}
+
+async function detach(accountId: string, intake: FeedbackIntake): Promise<void> {
   let acknowledged = false;
   try {
     acknowledged = await intake.pseudonymise(accountId);
@@ -98,5 +118,4 @@ export async function feedbackStep(
     });
   }
   if (!acknowledged) throw new FeedbackNotAcknowledged('The feedback intake did not acknowledge.');
-  return 'done';
 }

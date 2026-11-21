@@ -5,7 +5,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { sign } from '../../src/lib/admission/signature.ts';
 import {
+  DETACH_AGAIN_MS,
   DETACH_DELAY_MS,
+  feedbackAgain,
   feedbackStep,
   FeedbackNotAcknowledged,
 } from '../../src/lib/account/feedback-step.ts';
@@ -260,6 +262,38 @@ describe('step (c) of a deletion', () => {
   });
 });
 
+describe('the second call to the intake, step (g) (fw-late-write)', () => {
+  it('is the same instruction, and is due 301 seconds after the first', async () => {
+    expect(DETACH_AGAIN_MS).toBe(301_000);
+    const pseudonymise = vi.fn(async () => true);
+    await feedbackAgain('acc-1', { intake: { pseudonymise } });
+    expect(pseudonymise).toHaveBeenCalledExactlyOnceWith('acc-1');
+  });
+
+  it('throws where the intake did not acknowledge, so that it is repeated', async () => {
+    await expect(
+      feedbackAgain('acc-1', { intake: { pseudonymise: async () => false } }),
+    ).rejects.toBeInstanceOf(FeedbackNotAcknowledged);
+    await expect(
+      feedbackAgain('acc-1', {
+        intake: {
+          pseudonymise: async () => {
+            throw new Error('down');
+          },
+        },
+      }),
+    ).rejects.toBeInstanceOf(FeedbackNotAcknowledged);
+  });
+
+  it('is signed with a nonce and a time of its own, against the one secret the application holds', async () => {
+    const double = praktico(SECRET, () => NOW);
+    const intake = feedbackIntake({ fetch: double.fetch, now: () => NOW, secret: () => SECRET });
+    await feedbackAgain('acc-1', { intake });
+    await feedbackAgain('acc-1', { intake });
+    expect(double.nonces.size).toBe(2);
+  });
+});
+
 describe('the secret', () => {
   const GOOD = 'A'.repeat(43);
   it('is read at the call and not at load: a module that imports it reads nothing', () => {
@@ -336,6 +370,9 @@ describe('the body of the browser', () => {
 
   it.each([
     ['a C0 control', '\u0001'],
+    ['a lone high surrogate', 'a\uD800b'],
+    ['a lone low surrogate', 'a\uDC00b'],
+    ['a high surrogate at the end', 'hello\uD83D'],
     ['a vertical tab, which trimming would remove', '\u000Bhello'],
     ['a form feed at the end, which trimming would remove', 'hello\u000C'],
     ['NUL', '\u0000'],
@@ -358,6 +395,7 @@ describe('the body of the browser', () => {
     ['a zero-width joiner', '\u200D'],
     ['a line separator', '\u2028'],
     ['a paragraph separator', '\u2029'],
+    ['a surrogate pair, one character', '\uD83D\uDE00'],
   ])('accepts %s inside the message', (_name, character) => {
     expect(validateSubmission({ ...valid, message: `a${character}b` }).ok).toBe(true);
   });

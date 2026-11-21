@@ -664,6 +664,12 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
     expect(settings.healthcheckEmailUrl).toBeUndefined();
     expect(loadSettings({ ...env, HEALTHCHECK_EMAIL_URL: ping }).healthcheckEmailUrl).toBe(ping);
     expect(() => loadSettings({ ...env, HEALTHCHECK_EMAIL_URL: wrong })).toThrow(/HEALTHCHECK_EMAIL_URL/);
+    // The alarm of a deletion stuck at a detach call has its own check, of the same form.
+    expect(settings.healthcheckDeletionUrl).toBeUndefined();
+    expect(loadSettings({ ...env, HEALTHCHECK_DELETION_URL: ping }).healthcheckDeletionUrl).toBe(ping);
+    expect(() => loadSettings({ ...env, HEALTHCHECK_DELETION_URL: wrong })).toThrow(
+      /HEALTHCHECK_DELETION_URL/,
+    );
   });
 
   // FR-ED-41: "at least once every 60 seconds": a setting may make it more often and never less.

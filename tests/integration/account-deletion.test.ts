@@ -730,6 +730,26 @@ describe('the steps, in order, each repeated until it succeeds (FR-AU-58; NFR-RE
     update(`"completedAt" = now()`);
   });
 
+  it('holds the second call to the intake to its place: after (c) was done and the rows, and before the end', async () => {
+    const who = await person();
+    await confirm(who.id);
+    const update = (set: string) =>
+      database.sql(`UPDATE "AccountDeletion" SET ${set} WHERE "userId" = '${who.id}'`);
+    update(`"istoricoDoneAt" = now()`);
+    // Not after a skipped step (c), and not before the rows.
+    expect(() => update(`"feedbackSkippedAt" = now(), "feedbackAgainDoneAt" = now()`)).toThrow(
+      /AccountDeletion_feedback_again_after_rows/,
+    );
+    update(`"feedbackDoneAt" = now(), "credentialsDoneAt" = now()`);
+    expect(() => update(`"feedbackAgainDoneAt" = now()`)).toThrow(
+      /AccountDeletion_feedback_again_after_rows/,
+    );
+    update(`"rowsDoneAt" = now()`);
+    // A deletion whose (c) made its call is not complete without the second.
+    expect(() => update(`"completedAt" = now()`)).toThrow(/AccountDeletion_completed_after_feedback_again/);
+    update(`"feedbackAgainDoneAt" = now(), "completedAt" = now()`);
+  });
+
   it('is taken by one run when two reach it together: the other does nothing and says nothing', async () => {
     const who = await person();
     await confirm(who.id);
@@ -965,14 +985,105 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
     const outcome = await carryOutDeletions(new Date(), {
       feedback: { wait: async () => {}, intake: intake(true) },
     });
-    expect(outcome).toMatchObject({ steps: 4, completed: 1 });
+    // Four steps, and the deletion is not complete: the second call (g) is owed 301 seconds after (c).
+    expect(outcome).toMatchObject({ steps: 4, completed: 0, failed: 0 });
     expect(calls).toEqual([who.id]);
     const record = (await recordOf(who.id))!;
     expect(record.feedbackDoneAt).not.toBeNull();
     expect(record.feedbackSkippedAt).toBeNull();
+    expect(record.rowsDoneAt).not.toBeNull();
+    expect(record.completedAt).toBeNull();
+    expect(record.feedbackAgainDoneAt).toBeNull();
     const kinds = await entries(who.id);
     expect(kinds).toContain('account_deletion_feedback_pseudonymised');
     expect(kinds).not.toContain('account_deletion_feedback_skipped');
+    expect(kinds).not.toContain('account_deletion_feedback_repeated');
+  });
+
+  // fw-late-write: the second call, step (g), the last.
+  describe('the second call to the intake, step (g)', () => {
+    const second = async () => {
+      process.env.FEEDBACK_INTAKE_ENABLED = 'true';
+      const who = await person();
+      await confirm(who.id);
+      await carryOutDeletions(new Date(), { feedback: { wait: async () => {}, intake: intake(true) } });
+      calls.length = 0;
+      return who;
+    };
+
+    it('is not made before 301 seconds after (c), and is no failure that it waits', async () => {
+      const who = await second();
+      const early = await carryOutDeletions(new Date(Date.now() + 300_000), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(early).toMatchObject({ steps: 0, completed: 0, failed: 0 });
+      expect(calls).toEqual([]);
+      expect((await recordOf(who.id))!.completedAt).toBeNull();
+    });
+
+    it('is made once 301 seconds have passed, the same instruction, and completes the deletion with its entry', async () => {
+      const who = await second();
+      const due = await carryOutDeletions(new Date(Date.now() + 302_000), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(due).toMatchObject({ steps: 1, completed: 1, failed: 0 });
+      expect(calls).toEqual([who.id]);
+      const record = (await recordOf(who.id))!;
+      expect(record.feedbackAgainDoneAt).not.toBeNull();
+      expect(record.completedAt).not.toBeNull();
+      expect(await entries(who.id)).toContain('account_deletion_feedback_repeated');
+      // Done: a later run calls nothing more.
+      await carryOutDeletions(new Date(Date.now() + 400_000), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(calls).toEqual([who.id]);
+    });
+
+    it.each([
+      ['does not acknowledge', false],
+      ['does not answer', 'rejects'],
+    ] as const)(
+      'is repeated where the intake %s, and the deletion stays open until it succeeds',
+      async (_l, how) => {
+        const who = await second();
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const later = () => new Date(Date.now() + 302_000);
+        const failed = await carryOutDeletions(later(), {
+          feedback: { wait: async () => {}, intake: intake(how) },
+        });
+        expect(failed).toMatchObject({ steps: 0, completed: 0, failed: 1 });
+        let record = (await recordOf(who.id))!;
+        expect(record.feedbackAgainDoneAt).toBeNull();
+        expect(record.completedAt).toBeNull();
+        const done = await carryOutDeletions(later(), {
+          feedback: { wait: async () => {}, intake: intake(true) },
+        });
+        expect(done).toMatchObject({ steps: 1, completed: 1, failed: 0 });
+        expect(calls).toEqual([who.id, who.id]);
+        record = (await recordOf(who.id))!;
+        expect(record.completedAt).not.toBeNull();
+      },
+    );
+
+    it('is covered by the alarm of 24 hours, counted once and naming no account', async () => {
+      const who = await second();
+      await db().accountDeletion.update({
+        where: { userId: who.id },
+        data: {
+          requestedAt: new Date(Date.now() - 49 * 3600_000),
+          feedbackDoneAt: new Date(Date.now() - 25 * 3600_000),
+        },
+      });
+      const written: string[] = [];
+      vi.spyOn(console, 'error').mockImplementation(
+        (...parts: unknown[]) => void written.push(parts.join(' ')),
+      );
+      const stuck = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(false) },
+      });
+      expect(stuck).toMatchObject({ failed: 1, stuckAtFeedback: 1 });
+      expect(written.join('\n')).not.toContain(who.id);
+    });
   });
 
   it.each([
@@ -999,7 +1110,8 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       const again = await carryOutDeletions(new Date(), {
         feedback: { wait: async () => {}, intake: intake(true) },
       });
-      expect(again).toMatchObject({ steps: 3, completed: 1 });
+      // (c), (d) and (e) with (f); the deletion waits for the second call (g).
+      expect(again).toMatchObject({ steps: 3, completed: 0 });
       expect(calls).toEqual([who.id, who.id]);
       record = (await recordOf(who.id))!;
       expect(record.feedbackDoneAt).not.toBeNull();
@@ -1520,7 +1632,9 @@ describe('the one-month limit (NFR-DP-06) and the log (NFR-SE-19)', () => {
     });
     expect((await carryOutDeletions(new Date(), intake(false))).completed).toBe(0);
     expect((await carryOutDeletions(new Date(), intake(false))).completed).toBe(0);
-    expect((await carryOutDeletions(new Date(), intake(true))).completed).toBe(1);
+    // The call of (c) succeeded: the deletion is complete only after the second call (g), 301 seconds later.
+    expect((await carryOutDeletions(new Date(), intake(true))).completed).toBe(0);
+    expect((await carryOutDeletions(new Date(Date.now() + 302_000), intake(true))).completed).toBe(1);
     const record = (await recordOf(who.id))!;
     expect(record.completedAt!.getTime()).toBeLessThan(oneMonthAfter(record.requestedAt).getTime());
   });
