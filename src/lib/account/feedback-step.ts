@@ -12,16 +12,18 @@
 // the switch must be turned on in the release that adds it, and the owner told
 // before anything else is done (Q26).
 //
-// What is NOT here, because the Feedback Widget is not in α 0.1.0 (D84; CLAUDE.md:
-// "no feedback secret, feedback limit, or call to Praktico"): the client of the
-// request. FR-AU-79 and API design ("Feedback intake") give it: a request signed
-// with the feedback secret to `/{intake}/api/pseudonymise` with the account's
-// identifier, accepted with the number of submissions changed. The release that
-// adds the widget replaces `unbuilt` below with that client and adds the setting
-// of the secret and the address; the step, its record and its tests need no change.
-// Until then a switch turned on does not pretend: the step fails, is repeated,
-// and holds the deletion back, as an intake that does not answer would.
+// With the switch on the step waits 15 seconds and then makes one signed call,
+// `pseudonymise`, through the client of src/lib/feedback/client.ts (FR-AU-79;
+// docs/contracts/feedback-intake.md, fw-detach-wait). The wait is a delay BEFORE the
+// call, longer than the 10 seconds a send may take (FR-AU-77), so that a message sent
+// in the same second as the deletion cannot arrive after the detach. It is not a
+// timeout on the answer. A call that is not acknowledged, or a secret that is not set
+// or not usable, fails the step, which is repeated and holds the deletion back.
 import { faultOf } from '../fault.ts';
+import { feedbackIntake } from '../feedback/client.ts';
+
+/** fw-detach-wait: the delay before the call. */
+export const DETACH_DELAY_MS = 15_000;
 
 /**
  * The instruction to the intake of Praktico (FR-AU-79). Resolves to whether it was acknowledged:
@@ -40,23 +42,12 @@ export interface FeedbackIntake {
 export class FeedbackSwitchInvalid extends Error {
   name = 'FeedbackSwitchInvalid';
 }
-/** The switch is on and the client of the request is not built: it arrives with the Feedback Widget. */
-export class FeedbackIntakeUnbuilt extends Error {
-  name = 'FeedbackIntakeUnbuilt';
-}
-/** The intake did not acknowledge: it refused, did not answer, or answered that it had not changed the account's feedback. */
+/** The intake did not acknowledge: it refused, did not answer, or answered in a form that is not an acknowledgement. */
 export class FeedbackNotAcknowledged extends Error {
   name = 'FeedbackNotAcknowledged';
 }
 
-/** The client the release that adds the Feedback Widget brings. Until then there is none, and a call says so. */
-const unbuilt: FeedbackIntake = {
-  async pseudonymise() {
-    throw new FeedbackIntakeUnbuilt(
-      'The feedback intake client is built with the Feedback Widget; FEEDBACK_INTAKE_ENABLED must stay off until then.',
-    );
-  },
-};
+const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 /**
  * Whether the switch is on. Off where it is not set, empty, or `false`; on for `true` and for nothing
@@ -86,15 +77,17 @@ export async function feedbackStep(
   accountId: string,
   {
     enabled = feedbackIntakeEnabled,
-    intake = unbuilt,
-  }: { enabled?: () => boolean; intake?: FeedbackIntake } = {},
+    intake = feedbackIntake(),
+    wait = sleep,
+  }: { enabled?: () => boolean; intake?: FeedbackIntake; wait?: (milliseconds: number) => Promise<void> } = {},
 ): Promise<FeedbackOutcome> {
   if (!enabled()) return 'skipped';
+  // Before the call, and not a timeout on it (fw-detach-wait).
+  await wait(DETACH_DELAY_MS);
   let acknowledged = false;
   try {
     acknowledged = await intake.pseudonymise(accountId);
   } catch (error) {
-    if (error instanceof FeedbackIntakeUnbuilt) throw error;
     // The class and the code of the intake's own fault go on as the cause (`faultOf` reads a code there).
     throw new FeedbackNotAcknowledged(`The feedback intake did not acknowledge (${faultOf(error)}).`, {
       cause: error,

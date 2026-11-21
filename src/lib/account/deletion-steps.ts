@@ -360,7 +360,12 @@ export interface RunOutcome {
   failed: number;
   /** Deletions still open a month after their confirmation (NFR-DP-06). */
   overdue: number;
+  /** Deletions stuck at step (c) for 24 hours (fw-detach-wait): the alarm. Counts only; no account is named. */
+  stuckAtFeedback: number;
 }
+
+/** fw-detach-wait: an alarm is raised when a deletion has been stuck at step (c) this long. */
+export const FEEDBACK_ALARM_MS = 24 * 60 * 60 * 1000;
 
 /** One calendar month after a time: the limit of NFR-DP-06 ("within one month of receipt"). */
 export function oneMonthAfter(time: Date): Date {
@@ -448,11 +453,11 @@ export async function carryOutDeletions(
   const began = Date.now();
   const open = await db().accountDeletion.findMany({
     where: { completedAt: null },
-    select: { id: true, requestedAt: true },
+    select: { id: true, requestedAt: true, istoricoDoneAt: true, feedbackDoneAt: true, feedbackSkippedAt: true },
     orderBy: [{ requestedAt: 'asc' }, { id: 'asc' }],
   });
-  const outcome: RunOutcome = { steps: 0, completed: 0, failed: 0, overdue: 0 };
-  for (const { id, requestedAt } of open) {
+  const outcome: RunOutcome = { steps: 0, completed: 0, failed: 0, overdue: 0, stuckAtFeedback: 0 };
+  for (const { id, requestedAt, istoricoDoneAt, feedbackDoneAt, feedbackSkippedAt } of open) {
     const claim = new Date(now.getTime() + Date.now() - began);
     let completed = false;
     try {
@@ -468,6 +473,23 @@ export async function carryOutDeletions(
       outcome.failed += 1;
     }
     if (!completed && oneMonthAfter(requestedAt) <= now) outcome.overdue += 1;
+    // Stuck at (c): the steps before it are recorded, it is not, and the deletion is a day old. `completed`
+    // alone is not read: a run that did the step this time has fixed it.
+    if (
+      !completed &&
+      istoricoDoneAt !== null &&
+      feedbackDoneAt === null &&
+      feedbackSkippedAt === null &&
+      requestedAt.getTime() + FEEDBACK_ALARM_MS <= now.getTime() &&
+      (await db().accountDeletion.count({ where: { id, feedbackDoneAt: null, feedbackSkippedAt: null } })) === 1
+    ) {
+      outcome.stuckAtFeedback += 1;
+    }
+  }
+  if (outcome.stuckAtFeedback > 0) {
+    console.error(
+      `account deletion: ${outcome.stuckAtFeedback} confirmed deletion${outcome.stuckAtFeedback === 1 ? ' has' : 's have'} been stuck at the feedback step for 24 hours`,
+    );
   }
   if (outcome.overdue > 0) {
     console.error(

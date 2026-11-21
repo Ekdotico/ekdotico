@@ -567,6 +567,8 @@ describe('loadSettings: the initial values (FR-AU-84, NFR-SE-07, NFR-SE-17, NFR-
       CONFIRMATION_EMAIL_PER_USER: { max: 3, windowSeconds: 3600 },
       ADMISSION: { max: 60, windowSeconds: 60 },
       // The owner's decision of 12 October 2026: a row to be added to NFR-SE-07.
+      FEEDBACK_SHORT_PER_USER: { max: 5, windowSeconds: 600 },
+      FEEDBACK_DAY_PER_USER: { max: 30, windowSeconds: 86400 },
       COLLAB_MESSAGES_PER_USER: { max: 600, windowSeconds: 60 },
     });
   });

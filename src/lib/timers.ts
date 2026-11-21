@@ -74,7 +74,13 @@ export const TIMERS: Readonly<Record<string, () => Promise<number>>> = {
   // NFR-RE-15, "the steps of an account deletion in Closed α" (FR-AU-58): a step that failed is
   // repeated here until it succeeds, under the claim of the deletion (it needs a claim to be safe
   // on two instances, which the others above do not); says how many steps it carried out.
-  'account-deletion-steps': async () => (await carryOutDeletions()).steps,
+  // A deletion stuck at the feedback step for 24 hours raises the alarm: the check of the timers is told it
+  // failed, and the service emails the owner (fw-detach-wait). It names no account.
+  'account-deletion-steps': async () => {
+    const outcome = await carryOutDeletions();
+    if (outcome.stuckAtFeedback > 0) void checkIn(checkInSettings()?.healthcheckTimersUrl, 'fail');
+    return outcome.steps;
+  },
   // NFR-RE-15, "the clearing of all of an account's documents" (FR-AU-91): the permanent deletion of each document
   // a clearing confirmed, "idempotent and repeated on a timer ... until every one of them is deleted" (a shared one
   // from its day on), under the document's own claim; says how many documents it deleted.
