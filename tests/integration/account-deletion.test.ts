@@ -1164,7 +1164,7 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       data: { requestedAt: new Date(Date.now() - 25 * hour) },
     });
     expect(await carryOutDeletions(new Date(), refusing)).toMatchObject({ failed: 1, stuckAtFeedback: 1 });
-    expect(written.filter((line) => line.includes('stuck at the feedback step'))).toHaveLength(1);
+    expect(written.filter((line) => line.includes('stuck at a call to the feedback intake'))).toHaveLength(1);
     expect(written.join('\n')).not.toContain(who.id);
     expect(written.join('\n')).not.toContain(who.email);
     // Once the step is done it is no longer stuck.
