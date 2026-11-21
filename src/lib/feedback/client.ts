@@ -36,7 +36,11 @@ export interface Dependencies {
   secret?: () => string;
 }
 
-async function post(path: string, payload: unknown, { fetch: send = fetch, now = Date.now, secret = feedbackSecret } = {}) {
+async function post(
+  path: string,
+  payload: unknown,
+  { fetch: send = fetch, now = Date.now, secret = feedbackSecret } = {},
+) {
   const key = secret();
   // The caller signs the bytes it sends; a body written out again would not verify.
   const body = Buffer.from(JSON.stringify(payload), 'utf8');

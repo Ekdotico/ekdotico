@@ -61,7 +61,8 @@ export function validateSubmission(
   if (!isObject(body)) return { ok: false, faults: [{ field: 'body', rule: 'format' }] };
   const faults: FieldFault[] = [];
   const allowed = ['kind', 'message', 'route', 'viewport', 'submissionId'];
-  if (Object.keys(body).some((key) => !allowed.includes(key))) faults.push({ field: 'body', rule: 'unknown' });
+  if (Object.keys(body).some((key) => !allowed.includes(key)))
+    faults.push({ field: 'body', rule: 'unknown' });
 
   const { kind, message, route, viewport, submissionId } = body;
 
@@ -76,7 +77,8 @@ export function validateSubmission(
     trimmed = message.trim();
     if (hasRefusedCharacter(trimmed)) faults.push({ field: 'message', rule: 'forbidden_character' });
     else if (trimmed === '') faults.push({ field: 'message', rule: 'empty' });
-    else if (codePoints(trimmed) > MAX_MESSAGE_CODE_POINTS) faults.push({ field: 'message', rule: 'too_long' });
+    else if (codePoints(trimmed) > MAX_MESSAGE_CODE_POINTS)
+      faults.push({ field: 'message', rule: 'too_long' });
   }
 
   if (route === undefined) faults.push({ field: 'route', rule: 'required' });

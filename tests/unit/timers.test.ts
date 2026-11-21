@@ -171,7 +171,13 @@ it('runs the steps of an account deletion at start and each hour, and says how m
   await vi.advanceTimersByTimeAsync(0);
   expect(carryOutDeletions).toHaveBeenCalledTimes(1);
   expect(stdout).not.toHaveBeenCalled();
-  carryOutDeletions.mockResolvedValueOnce({ steps: 3, completed: 1, failed: 0, overdue: 0, stuckAtFeedback: 0 });
+  carryOutDeletions.mockResolvedValueOnce({
+    steps: 3,
+    completed: 1,
+    failed: 0,
+    overdue: 0,
+    stuckAtFeedback: 0,
+  });
   await vi.advanceTimersByTimeAsync(HOUR_MS);
   expect(carryOutDeletions).toHaveBeenCalledTimes(2);
   // It deletes nothing it counts: it carried out steps.

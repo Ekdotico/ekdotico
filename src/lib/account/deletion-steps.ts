@@ -453,7 +453,13 @@ export async function carryOutDeletions(
   const began = Date.now();
   const open = await db().accountDeletion.findMany({
     where: { completedAt: null },
-    select: { id: true, requestedAt: true, istoricoDoneAt: true, feedbackDoneAt: true, feedbackSkippedAt: true },
+    select: {
+      id: true,
+      requestedAt: true,
+      istoricoDoneAt: true,
+      feedbackDoneAt: true,
+      feedbackSkippedAt: true,
+    },
     orderBy: [{ requestedAt: 'asc' }, { id: 'asc' }],
   });
   const outcome: RunOutcome = { steps: 0, completed: 0, failed: 0, overdue: 0, stuckAtFeedback: 0 };
@@ -481,7 +487,8 @@ export async function carryOutDeletions(
       feedbackDoneAt === null &&
       feedbackSkippedAt === null &&
       requestedAt.getTime() + FEEDBACK_ALARM_MS <= now.getTime() &&
-      (await db().accountDeletion.count({ where: { id, feedbackDoneAt: null, feedbackSkippedAt: null } })) === 1
+      (await db().accountDeletion.count({ where: { id, feedbackDoneAt: null, feedbackSkippedAt: null } })) ===
+        1
     ) {
       outcome.stuckAtFeedback += 1;
     }

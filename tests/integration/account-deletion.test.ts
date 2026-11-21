@@ -944,7 +944,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       if (value !== undefined) process.env.FEEDBACK_INTAKE_ENABLED = value;
       const who = await person();
       await confirm(who.id);
-      const outcome = await carryOutDeletions(new Date(), { feedback: { wait: async () => {}, intake: intake(true) } });
+      const outcome = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
       expect(outcome).toMatchObject({ steps: 4, completed: 1 });
       expect(calls).toEqual([]);
       const record = (await recordOf(who.id))!;
@@ -960,7 +962,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
     process.env.FEEDBACK_INTAKE_ENABLED = 'true';
     const who = await person();
     await confirm(who.id);
-    const outcome = await carryOutDeletions(new Date(), { feedback: { wait: async () => {}, intake: intake(true) } });
+    const outcome = await carryOutDeletions(new Date(), {
+      feedback: { wait: async () => {}, intake: intake(true) },
+    });
     expect(outcome).toMatchObject({ steps: 4, completed: 1 });
     expect(calls).toEqual([who.id]);
     const record = (await recordOf(who.id))!;
@@ -981,7 +985,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       const who = await person();
       await confirm(who.id);
       vi.spyOn(console, 'error').mockImplementation(() => {});
-      const held = await carryOutDeletions(new Date(), { feedback: { wait: async () => {}, intake: intake(how) } });
+      const held = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(how) },
+      });
       expect(held).toMatchObject({ steps: 1, completed: 0, failed: 1 });
       let record = (await recordOf(who.id))!;
       expect(record.istoricoDoneAt).not.toBeNull();
@@ -990,7 +996,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       // Owed, not skipped: nothing after it has run.
       expect(record.credentialsDoneAt).toBeNull();
       expect(await db().session.count({ where: { userId: who.id } })).toBeGreaterThan(0);
-      const again = await carryOutDeletions(new Date(), { feedback: { wait: async () => {}, intake: intake(true) } });
+      const again = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
       expect(again).toMatchObject({ steps: 3, completed: 1 });
       expect(calls).toEqual([who.id, who.id]);
       record = (await recordOf(who.id))!;
@@ -1003,7 +1011,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
     const who = await person();
     await confirm(who.id);
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const outcome = await carryOutDeletions(new Date(), { feedback: { wait: async () => {}, intake: intake(true) } });
+    const outcome = await carryOutDeletions(new Date(), {
+      feedback: { wait: async () => {}, intake: intake(true) },
+    });
     expect(outcome).toMatchObject({ steps: 1, completed: 0, failed: 1 });
     expect(calls).toEqual([]);
     expect((await recordOf(who.id))!.feedbackSkippedAt).toBeNull();
@@ -1023,7 +1033,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
   it('raises the alarm for a deletion stuck at (c) for 24 hours, and not before, and names no account', async () => {
     process.env.FEEDBACK_INTAKE_ENABLED = 'true';
     const written: string[] = [];
-    vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => void written.push(parts.join(' ')));
+    vi.spyOn(console, 'error').mockImplementation(
+      (...parts: unknown[]) => void written.push(parts.join(' ')),
+    );
     const who = await person();
     await confirm(who.id);
     const refusing = { feedback: { wait: async () => {}, intake: { pseudonymise: async () => false } } };
@@ -1737,9 +1749,9 @@ describe('step (c) says which way it failed, in its line of the log (NFR-SE-19)'
         throw Object.assign(new Error('connect ECONNREFUSED praktico.example:443'), { code: 'ECONNREFUSED' });
       },
     };
-    expect(feedbackLine(await lines('true', { feedback: { wait: async () => {}, intake: refusing } }))).toEqual([
-      expect.stringMatching(/\(FeedbackNotAcknowledged\)$/),
-    ]);
+    expect(
+      feedbackLine(await lines('true', { feedback: { wait: async () => {}, intake: refusing } })),
+    ).toEqual([expect.stringMatching(/\(FeedbackNotAcknowledged\)$/)]);
     const written = await lines('true', { feedback: { wait: async () => {}, intake: down } });
     expect(feedbackLine(written)).toEqual([
       expect.stringMatching(/\(FeedbackNotAcknowledged ECONNREFUSED\)$/),

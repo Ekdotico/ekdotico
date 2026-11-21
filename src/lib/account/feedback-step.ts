@@ -79,7 +79,11 @@ export async function feedbackStep(
     enabled = feedbackIntakeEnabled,
     intake = feedbackIntake(),
     wait = sleep,
-  }: { enabled?: () => boolean; intake?: FeedbackIntake; wait?: (milliseconds: number) => Promise<void> } = {},
+  }: {
+    enabled?: () => boolean;
+    intake?: FeedbackIntake;
+    wait?: (milliseconds: number) => Promise<void>;
+  } = {},
 ): Promise<FeedbackOutcome> {
   if (!enabled()) return 'skipped';
   // Before the call, and not a timeout on it (fw-detach-wait).

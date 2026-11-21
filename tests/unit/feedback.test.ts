@@ -4,7 +4,11 @@
 // tests/fixtures/praktico-double.ts.
 import { describe, expect, it, vi } from 'vitest';
 import { sign } from '../../src/lib/admission/signature.ts';
-import { DETACH_DELAY_MS, feedbackStep, FeedbackNotAcknowledged } from '../../src/lib/account/feedback-step.ts';
+import {
+  DETACH_DELAY_MS,
+  feedbackStep,
+  FeedbackNotAcknowledged,
+} from '../../src/lib/account/feedback-step.ts';
 import {
   deliver,
   feedbackIntake,
@@ -40,16 +44,16 @@ describe('the signed form (the contract’s two worked examples)', () => {
   it('signs the intake body as the page does', () => {
     const body = Buffer.from(INTAKE_VECTOR);
     expect(body.byteLength).toBe(345);
-    expect(sign(VECTOR_SECRET, VECTOR_TIME, '00112233445566778899aabbccddeeff', 'POST', INTAKE_PATH, body)).toBe(
-      '07a07f3dbd9a7ac3140183024cdad7d70d8709ec9696933de2b391b365e751ef',
-    );
+    expect(
+      sign(VECTOR_SECRET, VECTOR_TIME, '00112233445566778899aabbccddeeff', 'POST', INTAKE_PATH, body),
+    ).toBe('07a07f3dbd9a7ac3140183024cdad7d70d8709ec9696933de2b391b365e751ef');
   });
   it('signs the pseudonymise body as the page does', () => {
     const body = Buffer.from(PSEUDONYMISE_VECTOR);
     expect(body.byteLength).toBe(48);
-    expect(sign(VECTOR_SECRET, VECTOR_TIME, 'ffeeddccbbaa99887766554433221100', 'POST', PSEUDONYMISE_PATH, body)).toBe(
-      'b517b78a219de72537fe151a9f3eb7fbe840d779a8b5bb61745f2da933fb8dd1',
-    );
+    expect(
+      sign(VECTOR_SECRET, VECTOR_TIME, 'ffeeddccbbaa99887766554433221100', 'POST', PSEUDONYMISE_PATH, body),
+    ).toBe('b517b78a219de72537fe151a9f3eb7fbe840d779a8b5bb61745f2da933fb8dd1');
   });
 });
 
@@ -75,19 +79,17 @@ describe('the client of the intake', () => {
   it('sends exactly the nine fields, as the bytes it signed', async () => {
     const { double, dependencies } = setup();
     await deliver(body(), dependencies);
-    expect(Object.keys(JSON.parse(double.requests[0]!.body) as object).sort()).toEqual(
-      [
-        'accountId',
-        'appVersion',
-        'browser',
-        'kind',
-        'message',
-        'route',
-        'submissionId',
-        'submittedAt',
-        'viewport',
-      ],
-    );
+    expect(Object.keys(JSON.parse(double.requests[0]!.body) as object).sort()).toEqual([
+      'accountId',
+      'appVersion',
+      'browser',
+      'kind',
+      'message',
+      'route',
+      'submissionId',
+      'submittedAt',
+      'viewport',
+    ]);
   });
 
   it('makes a new nonce and signature on every attempt and keeps the identifier; the intake holds one row', async () => {
@@ -238,9 +240,9 @@ describe('step (c) of a deletion', () => {
   it('neither waits nor calls with the switch off', async () => {
     const wait = vi.fn(async () => {});
     const pseudonymise = vi.fn(async () => true);
-    await expect(feedbackStep('acc-1', { enabled: () => false, wait, intake: { pseudonymise } })).resolves.toBe(
-      'skipped',
-    );
+    await expect(
+      feedbackStep('acc-1', { enabled: () => false, wait, intake: { pseudonymise } }),
+    ).resolves.toBe('skipped');
     expect(wait).not.toHaveBeenCalled();
     expect(pseudonymise).not.toHaveBeenCalled();
   });
@@ -249,9 +251,9 @@ describe('step (c) of a deletion', () => {
     const before = process.env.FEEDBACK_SECRET;
     delete process.env.FEEDBACK_SECRET;
     try {
-      await expect(feedbackStep('acc-1', { enabled: () => true, wait: async () => {} })).rejects.toBeInstanceOf(
-        FeedbackNotAcknowledged,
-      );
+      await expect(
+        feedbackStep('acc-1', { enabled: () => true, wait: async () => {} }),
+      ).rejects.toBeInstanceOf(FeedbackNotAcknowledged);
     } finally {
       if (before !== undefined) process.env.FEEDBACK_SECRET = before;
     }
@@ -327,7 +329,9 @@ describe('the body of the browser', () => {
     expect(fits.length).toBe(8000);
     expect(codePoints(fits)).toBe(4000);
     expect(validateSubmission({ ...valid, message: fits }).ok).toBe(true);
-    expect(rules({ ...valid, message: emoji.repeat(4001) })).toEqual([{ field: 'message', rule: 'too_long' }]);
+    expect(rules({ ...valid, message: emoji.repeat(4001) })).toEqual([
+      { field: 'message', rule: 'too_long' },
+    ]);
   });
 
   it.each([
@@ -357,7 +361,17 @@ describe('the body of the browser', () => {
   });
 
   it('holds the route to a pattern: no query, no fragment, no scheme, no raw path', () => {
-    for (const route of ['/a?b=1', '/a#b', 'a', 'https://x.test/', '//x', '/a b', '/a/', '', '/'.padEnd(201, 'a')])
+    for (const route of [
+      '/a?b=1',
+      '/a#b',
+      'a',
+      'https://x.test/',
+      '//x',
+      '/a b',
+      '/a/',
+      '',
+      '/'.padEnd(201, 'a'),
+    ])
       expect(rules({ ...valid, route }), route).toEqual([{ field: 'route', rule: 'format' }]);
     expect(validateSubmission({ ...valid, route: '/' }).ok).toBe(true);
   });
@@ -388,14 +402,23 @@ describe('the browser the application names', () => {
     ).toEqual({ name: 'Firefox', major: 140, osFamily: 'macOS' });
   });
   it('gives unknown for an agent it cannot name, a crafted one included', () => {
-    expect(browserOf('<script>alert(1)</script>')).toEqual({ name: 'unknown', major: null, osFamily: 'unknown' });
+    expect(browserOf('<script>alert(1)</script>')).toEqual({
+      name: 'unknown',
+      major: null,
+      osFamily: 'unknown',
+    });
     expect(browserOf(null)).toEqual({ name: 'unknown', major: null, osFamily: 'unknown' });
   });
 });
 
 // The route's rules, with the pieces of the application replaced by fakes, in the order of "The order of the checks".
 describe('POST /api/feedback', () => {
-  const FIRST = { kind: 'problem', message: 'It broke', route: '/documents/[id]', viewport: { width: 800, height: 600 } };
+  const FIRST = {
+    kind: 'problem',
+    message: 'It broke',
+    route: '/documents/[id]',
+    viewport: { width: 800, height: 600 },
+  };
   const request = (payload: unknown = FIRST, headers: Record<string, string> = {}) =>
     new Request('https://app.test/api/feedback', {
       method: 'POST',
@@ -447,13 +470,21 @@ describe('POST /api/feedback', () => {
 
   it('answers 401 without a session, and the answer of the gate for an account it stops', async () => {
     expect(
-      (await handleFeedback(request(), setup({ session: async () => ({ userId: null, stopped: null }) }).dependencies))
-        .status,
+      (
+        await handleFeedback(
+          request(),
+          setup({ session: async () => ({ userId: null, stopped: null }) }).dependencies,
+        )
+      ).status,
     ).toBe(401);
     const stopped = new Response(null, { status: 403 });
     expect(
-      (await handleFeedback(request(), setup({ session: async () => ({ userId: null, stopped }) }).dependencies))
-        .status,
+      (
+        await handleFeedback(
+          request(),
+          setup({ session: async () => ({ userId: null, stopped }) }).dependencies,
+        )
+      ).status,
     ).toBe(403);
   });
 
@@ -512,8 +543,12 @@ describe('POST /api/feedback', () => {
     expect(failed.status).toBe(502);
     expect((await failed.json()).submissionId).toBe('issued-1');
     double.failWith = null;
-    expect((await handleFeedback(request({ ...FIRST, submissionId: 'issued-1' }), dependencies)).status).toBe(201);
-    expect((await handleFeedback(request({ ...FIRST, submissionId: 'issued-1' }), dependencies)).status).toBe(201);
+    expect((await handleFeedback(request({ ...FIRST, submissionId: 'issued-1' }), dependencies)).status).toBe(
+      201,
+    );
+    expect((await handleFeedback(request({ ...FIRST, submissionId: 'issued-1' }), dependencies)).status).toBe(
+      201,
+    );
     expect(double.held).toHaveLength(1);
     expect(double.held[0]!.submissionId).toBe('issued-1');
     // The second acceptance of the same pair is an acknowledgement of one the intake held: it counts, once each.
@@ -575,7 +610,10 @@ describe('POST /api/feedback', () => {
     const { dependencies, double } = setup();
     const answers = [
       await handleFeedback(request({ ...FIRST, message: 'secret text\u0001' }), dependencies),
-      await handleFeedback(request({ ...FIRST, message: 'secret text' }), setup({ noticeAcknowledged: async () => false }).dependencies),
+      await handleFeedback(
+        request({ ...FIRST, message: 'secret text' }),
+        setup({ noticeAcknowledged: async () => false }).dependencies,
+      ),
     ];
     double.failWith = 500;
     answers.push(await handleFeedback(request({ ...FIRST, message: 'secret text' }), dependencies));

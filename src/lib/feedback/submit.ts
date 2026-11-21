@@ -81,7 +81,13 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
     if (!result.ok) {
       const seconds = result.retryAfterSeconds;
       await d.limitReached(name, userId, seconds);
-      return refuse(429, 'rate_limited', { retryAfterSeconds: seconds }, {}, { 'Retry-After': String(seconds) });
+      return refuse(
+        429,
+        'rate_limited',
+        { retryAfterSeconds: seconds },
+        {},
+        { 'Retry-After': String(seconds) },
+      );
     }
   }
   // 5. The body.
@@ -89,7 +95,9 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
   const checked = validateSubmission(parsed);
   if (!checked.ok) {
     const { faults } = checked;
-    const code = faults.some(({ rule }) => rule === 'forbidden_character') ? 'forbidden_character' : 'invalid';
+    const code = faults.some(({ rule }) => rule === 'forbidden_character')
+      ? 'forbidden_character'
+      : 'invalid';
     return refuse(422, code, { fields: faults });
   }
   const { value } = checked;
