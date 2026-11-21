@@ -10,28 +10,28 @@
 
 ## What the owner decided, 21 November 2026
 
-| Question | Answer | Where it shows on this page |
-|---|---|---|
-| fw-hosting | Build, then move. The intake is built on Cloudflare Workers now and only the founding team uses it until Praktico has moved to Frankfurt; D78 stands as the destination | Not a wire matter; the paths below are the same on either host |
-| fw-switch-scope | `FEEDBACK_INTAKE_ENABLED` is one switch: it shows the widget, opens the sending route, and turns on deletion step (c) | "Browser to application", "Deletion" |
-| fw-signature | The signature covers a one-time value, the method, the path, the time, and the body, in one form shared with the admission channel. This replaces "time and body" in FR-AU-75 | "The signed form" |
-| fw-retry-id | When a send fails, the failure answer returns the server-issued submission identifier; the browser sends it back on the retry; Praktico matches on identifier and account together. FR-AU-69 allows this one further field; FR-AU-68 (f), FR-AU-76, and FR-AU-77 stay true | "Browser to application", "The retry" |
+| Question        | Answer                                                                                                                                                                                                                                                                     | Where it shows on this page                                    |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| fw-hosting      | Build, then move. The intake is built on Cloudflare Workers now and only the founding team uses it until Praktico has moved to Frankfurt; D78 stands as the destination                                                                                                    | Not a wire matter; the paths below are the same on either host |
+| fw-switch-scope | `FEEDBACK_INTAKE_ENABLED` is one switch: it shows the widget, opens the sending route, and turns on deletion step (c)                                                                                                                                                      | "Browser to application", "Deletion"                           |
+| fw-signature    | The signature covers a one-time value, the method, the path, the time, and the body, in one form shared with the admission channel. This replaces "time and body" in FR-AU-75                                                                                              | "The signed form"                                              |
+| fw-retry-id     | When a send fails, the failure answer returns the server-issued submission identifier; the browser sends it back on the retry; Praktico matches on identifier and account together. FR-AU-69 allows this one further field; FR-AU-68 (f), FR-AU-76, and FR-AU-77 stay true | "Browser to application", "The retry"                          |
 
 ## What is still open
 
 Each of these is the owner's, and none is settled here. Where this page touches one it says "open, awaits the owner" and names the question.
 
-| Question | What it leaves open | Where it touches this page |
-|---|---|---|
-| fw-limit-count | Whether a send that fails counts against the 5 in 10 minutes and the 30 in 24 hours of FR-AU-78 | "Browser to application", step 4 |
-| fw-count-unit | The unit in which the 4,000 characters of FR-AU-66 are counted, and so whether the browser and the server count alike | The `message` field |
-| fw-strings | Every text a reader sees, the `message` of each error body returned to the browser included | The error bodies |
-| fw-retention | When feedback is deleted and by what | Not on the wire; Praktico's table only |
-| fw-team-access | Who may see the team's list in Praktico | Not on the wire |
-| fw-statuses | The names of the three statuses a submission takes in Praktico | Not on the wire; the status is set by the team and is never sent by the application |
-| fw-privacy-link | The target of the link to the privacy notice | Not on the wire |
-| fw-notice-version | Whether the version of the Closed α notice is raised when the sentence on feedback returns | Not on the wire |
-| fw-retry-edit (proposed here, not yet on the Questions page) | The retry rule below keeps the first message the intake accepted. If the user edits the text after a failed send and the first attempt had in fact reached the intake, the edit is dropped. Open, awaits the owner | "The retry" |
+| Question                                                     | What it leaves open                                                                                                                                                                                                | Where it touches this page                                                          |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| fw-limit-count                                               | Whether a send that fails counts against the 5 in 10 minutes and the 30 in 24 hours of FR-AU-78                                                                                                                    | "Browser to application", step 4                                                    |
+| fw-count-unit                                                | The unit in which the 4,000 characters of FR-AU-66 are counted, and so whether the browser and the server count alike                                                                                              | The `message` field                                                                 |
+| fw-strings                                                   | Every text a reader sees, the `message` of each error body returned to the browser included                                                                                                                        | The error bodies                                                                    |
+| fw-retention                                                 | When feedback is deleted and by what                                                                                                                                                                               | Not on the wire; Praktico's table only                                              |
+| fw-team-access                                               | Who may see the team's list in Praktico                                                                                                                                                                            | Not on the wire                                                                     |
+| fw-statuses                                                  | The names of the three statuses a submission takes in Praktico                                                                                                                                                     | Not on the wire; the status is set by the team and is never sent by the application |
+| fw-privacy-link                                              | The target of the link to the privacy notice                                                                                                                                                                       | Not on the wire                                                                     |
+| fw-notice-version                                            | Whether the version of the Closed α notice is raised when the sentence on feedback returns                                                                                                                         | Not on the wire                                                                     |
+| fw-retry-edit (proposed here, not yet on the Questions page) | The retry rule below keeps the first message the intake accepted. If the user edits the text after a failed send and the first attempt had in fact reached the intake, the edit is dropped. Open, awaits the owner | "The retry"                                                                         |
 
 Two further points are Praktico's to state in its own specification, and this page does not choose them: the path of the section, written `{intake}` below, and any limit Praktico applies to the intake (FR-AU-59: a signed route that carries no session of the team).
 
@@ -48,11 +48,11 @@ Two further points are Praktico's to state in its own specification, and this pa
 
 ## The three requests
 
-| Request | Caller | Receiver | Signed |
-|---|---|---|---|
-| `POST /api/feedback` | The browser | The application | No: the session authenticates it |
-| `POST {intake}/api/intake` | The application's server | Praktico | Yes |
-| `POST {intake}/api/pseudonymise` | The application's server | Praktico | Yes |
+| Request                          | Caller                   | Receiver        | Signed                           |
+| -------------------------------- | ------------------------ | --------------- | -------------------------------- |
+| `POST /api/feedback`             | The browser              | The application | No: the session authenticates it |
+| `POST {intake}/api/intake`       | The application's server | Praktico        | Yes                              |
+| `POST {intake}/api/pseudonymise` | The application's server | Praktico        | Yes                              |
 
 `{intake}` is the path Praktico gives the section, with the host `internal.ekdoti.co`. It is open and Praktico's. The path that is signed is the path as Praktico receives it, in full, including any base path, so that the two sides agree whatever it is.
 
@@ -68,11 +68,11 @@ The feedback secret is held only in the server environment of the application an
 
 Each occurs exactly once on a signed request.
 
-| Header | Value |
-|---|---|
-| `X-Ekdotico-Timestamp` | The request time in whole seconds since the Unix epoch: exactly ten decimal digits, `^[1-9][0-9]{9}$` |
-| `X-Ekdotico-Nonce` | The one-time value: 32 to 64 lower-case hexadecimal digits, `^[0-9a-f]{32,64}$`, made for this request from a cryptographic random source and never used for another |
-| `X-Ekdotico-Signature` | Exactly 64 lower-case hexadecimal digits, `^[0-9a-f]{64}$`; upper case is rejected, not folded |
+| Header                 | Value                                                                                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `X-Ekdotico-Timestamp` | The request time in whole seconds since the Unix epoch: exactly ten decimal digits, `^[1-9][0-9]{9}$`                                                                |
+| `X-Ekdotico-Nonce`     | The one-time value: 32 to 64 lower-case hexadecimal digits, `^[0-9a-f]{32,64}$`, made for this request from a cryptographic random source and never used for another |
+| `X-Ekdotico-Signature` | Exactly 64 lower-case hexadecimal digits, `^[0-9a-f]{64}$`; upper case is rejected, not folded                                                                       |
 
 ### The signed message
 
@@ -100,13 +100,13 @@ Same origin, `Content-Type: application/json`. As for every state-changing route
 
 Exactly these fields; any other is refused (FR-AU-69). Nothing the browser sends is trusted beyond its shape.
 
-| Field | Type | Bounds | Notes |
-|---|---|---|---|
-| `kind` | string | `problem`, `idea`, or `other` | None is preselected in the widget (FR-AU-65) |
-| `message` | string | 1 to 4,000 characters after leading and trailing white space is removed; the unit of count is **open, awaits the owner (fw-count-unit)** | Plain text; sent as typed (FR-AU-71) |
-| `route` | string | 1 to 200 characters, begins with `/`, no `?`, no `#`, identifiers replaced by their placeholders, as in `/workspaces/[id]` (an illustration, not a real route); the application checks it against a fixed shape (FR-AU-69) | The route pattern of the page the widget was opened from (FR-AU-68 (a)) |
-| `viewport` | object | `width` and `height`, each an integer from 1 to 32,767, in CSS pixels | Read when the widget is opened (FR-AU-68 (d)) |
-| `submissionId` | string, **optional** | Present on a second attempt only, and only the identifier that the failure answer of the first attempt returned. 1 to 64 characters of `[A-Za-z0-9_-]` | The one further field FR-AU-69 allows (fw-retry-id). Never made in the browser |
+| Field          | Type                 | Bounds                                                                                                                                                                                                                     | Notes                                                                          |
+| -------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `kind`         | string               | `problem`, `idea`, or `other`                                                                                                                                                                                              | None is preselected in the widget (FR-AU-65)                                   |
+| `message`      | string               | 1 to 4,000 characters after leading and trailing white space is removed; the unit of count is **open, awaits the owner (fw-count-unit)**                                                                                   | Plain text; sent as typed (FR-AU-71)                                           |
+| `route`        | string               | 1 to 200 characters, begins with `/`, no `?`, no `#`, identifiers replaced by their placeholders, as in `/workspaces/[id]` (an illustration, not a real route); the application checks it against a fixed shape (FR-AU-69) | The route pattern of the page the widget was opened from (FR-AU-68 (a))        |
+| `viewport`     | object               | `width` and `height`, each an integer from 1 to 32,767, in CSS pixels                                                                                                                                                      | Read when the widget is opened (FR-AU-68 (d))                                  |
+| `submissionId` | string, **optional** | Present on a second attempt only, and only the identifier that the failure answer of the first attempt returned. 1 to 64 characters of `[A-Za-z0-9_-]`                                                                     | The one further field FR-AU-69 allows (fw-retry-id). Never made in the browser |
 
 The application adds, from the server and never from the body: the application version (FR-AU-68 (b)); the browser name, its major version, and the operating system family, derived from the `User-Agent` header, which is itself neither stored nor sent (FR-AU-68 (c)); the account identifier of the verified session (FR-AU-68 (e)); and, unless the browser sent one, a submission identifier, and the time (FR-AU-68 (f)).
 
@@ -123,16 +123,16 @@ The application adds, from the server and never from the body: the application v
 
 Every error body is `{ "error": { "code", "message" } }`, the body of the application's other routes. The `message` of each is a text for a reader and is **open, awaits the owner (fw-strings)**; the `code` values below are not texts.
 
-| Status | When | Body beyond `error` |
-|---|---|---|
-| `201` | The intake acknowledged the submission, as new or as one it already held | `{ "sent": true }` |
-| `401`, code `unauthorised` | No signed-in session | none |
-| `403`, code `notice_not_acknowledged` | The account has not acknowledged the notice | none |
-| `404`, code `not_found` | The switch is off. The form of the answer when the route is closed is the contract's provisional choice | none |
-| `422`, code `invalid` | The body is not as above | `error.fields`: a list of `{ "field", "rule" }`, where `field` is one of `kind`, `message`, `route`, `viewport`, `submissionId`, and `rule` is one of `required`, `unknown`, `empty`, `too_long`, `format`. The widget states a fault in text beside the field it concerns (FR-AU-80 (d)). The list is the contract's proposal |
-| `429`, code `rate_limited` | Over a limit of FR-AU-78 | A `Retry-After` header in whole seconds, and `error.retryAfterSeconds`. No identifier is returned: nothing was attempted |
-| `502`, code `not_sent` | The intake did not answer within 10 seconds, or answered with anything other than acceptance | **`submissionId`: the identifier the server issued for this attempt**, beside `error` (fw-retry-id) |
-| `500`, code `internal` | A fault of the application itself | none |
+| Status                                | When                                                                                                    | Body beyond `error`                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `201`                                 | The intake acknowledged the submission, as new or as one it already held                                | `{ "sent": true }`                                                                                                                                                                                                                                                                                                             |
+| `401`, code `unauthorised`            | No signed-in session                                                                                    | none                                                                                                                                                                                                                                                                                                                           |
+| `403`, code `notice_not_acknowledged` | The account has not acknowledged the notice                                                             | none                                                                                                                                                                                                                                                                                                                           |
+| `404`, code `not_found`               | The switch is off. The form of the answer when the route is closed is the contract's provisional choice | none                                                                                                                                                                                                                                                                                                                           |
+| `422`, code `invalid`                 | The body is not as above                                                                                | `error.fields`: a list of `{ "field", "rule" }`, where `field` is one of `kind`, `message`, `route`, `viewport`, `submissionId`, and `rule` is one of `required`, `unknown`, `empty`, `too_long`, `format`. The widget states a fault in text beside the field it concerns (FR-AU-80 (d)). The list is the contract's proposal |
+| `429`, code `rate_limited`            | Over a limit of FR-AU-78                                                                                | A `Retry-After` header in whole seconds, and `error.retryAfterSeconds`. No identifier is returned: nothing was attempted                                                                                                                                                                                                       |
+| `502`, code `not_sent`                | The intake did not answer within 10 seconds, or answered with anything other than acceptance            | **`submissionId`: the identifier the server issued for this attempt**, beside `error` (fw-retry-id)                                                                                                                                                                                                                            |
+| `500`, code `internal`                | A fault of the application itself                                                                       | none                                                                                                                                                                                                                                                                                                                           |
 
 The `422` is never returned for the identifier alone in a way that tells the browser whether the intake holds it. The application cannot know that.
 
@@ -140,17 +140,17 @@ The `422` is never returned for the identifier alone in a way that tells the bro
 
 Signed as above. `Content-Type: application/json`. The body is exactly these nine fields, in any order, and no other (FR-AU-75, API design):
 
-| Field | Type | Bounds | Notes |
-|---|---|---|---|
-| `submissionId` | string | 1 to 64 characters of `[A-Za-z0-9_-]`. The application issues a version 4 UUID in its lower-case 36-character form; the intake accepts the wider bound | Issued by the server (FR-AU-68 (f)), or the one the browser returned on a retry |
-| `submittedAt` | string | ISO 8601 in UTC with milliseconds and `Z`, as `2026-10-08T09:00:00.000Z` | The time of the attempt that carries it. On a repeat the intake keeps the time of the first it accepted |
-| `kind` | string | `problem`, `idea`, `other` | |
-| `message` | string | 1 to 4,000 characters; the unit is **open, awaits the owner (fw-count-unit)** | Already trimmed by the application; the intake does not trim or alter it |
-| `route` | string | As in the browser's field | |
-| `appVersion` | string | 1 to 64 characters of `[0-9A-Za-z.+-]`, as `0.1.0` | |
-| `browser` | object | `name`: string, 1 to 64 characters; `major`: integer from 0 to 9,999, or `null` where it is unknown; `osFamily`: string, 1 to 64 characters. An agent the application cannot name has `name` and `osFamily` equal to `unknown` | The names of the three keys are the contract's choice; the specification gives the three parts and no names |
-| `viewport` | object | `width` and `height`, integers from 1 to 32,767 | |
-| `accountId` | string | 1 to 64 characters of `[A-Za-z0-9_-]` | The application's own user identifier; never an email address (FR-AU-68 (e)) |
+| Field          | Type   | Bounds                                                                                                                                                                                                                         | Notes                                                                                                       |
+| -------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `submissionId` | string | 1 to 64 characters of `[A-Za-z0-9_-]`. The application issues a version 4 UUID in its lower-case 36-character form; the intake accepts the wider bound                                                                         | Issued by the server (FR-AU-68 (f)), or the one the browser returned on a retry                             |
+| `submittedAt`  | string | ISO 8601 in UTC with milliseconds and `Z`, as `2026-10-08T09:00:00.000Z`                                                                                                                                                       | The time of the attempt that carries it. On a repeat the intake keeps the time of the first it accepted     |
+| `kind`         | string | `problem`, `idea`, `other`                                                                                                                                                                                                     |                                                                                                             |
+| `message`      | string | 1 to 4,000 characters; the unit is **open, awaits the owner (fw-count-unit)**                                                                                                                                                  | Already trimmed by the application; the intake does not trim or alter it                                    |
+| `route`        | string | As in the browser's field                                                                                                                                                                                                      |                                                                                                             |
+| `appVersion`   | string | 1 to 64 characters of `[0-9A-Za-z.+-]`, as `0.1.0`                                                                                                                                                                             |                                                                                                             |
+| `browser`      | object | `name`: string, 1 to 64 characters; `major`: integer from 0 to 9,999, or `null` where it is unknown; `osFamily`: string, 1 to 64 characters. An agent the application cannot name has `name` and `osFamily` equal to `unknown` | The names of the three keys are the contract's choice; the specification gives the three parts and no names |
+| `viewport`     | object | `width` and `height`, integers from 1 to 32,767                                                                                                                                                                                |                                                                                                             |
+| `accountId`    | string | 1 to 64 characters of `[A-Za-z0-9_-]`                                                                                                                                                                                          | The application's own user identifier; never an email address (FR-AU-68 (e))                                |
 
 A body with a missing field, a field of another type, a value outside its bounds, a field not listed, or a repeated key is invalid. Validation is strict.
 
@@ -160,13 +160,13 @@ A submission is held when the intake has a row with the same `submissionId` **an
 
 ### The answers
 
-| Status | When | Body |
-|---|---|---|
-| `201` | The submission is new and is stored | `{ "accepted": true, "duplicate": false }` |
-| `200` | The pair is held. Nothing is stored again, even where the kind or the message differs (FR-AU-75; see "The retry") | `{ "accepted": true, "duplicate": true }` |
-| `401`, code `unauthorised` | A check of "Verification at Praktico" failed before step 5 | the error body |
-| `422`, code `invalid` | Step 5: the body is not as above, or `Content-Type` is not `application/json` | the error body |
-| any other | A limit or a fault on Praktico's side. Whether Praktico limits the route, and with what, is Praktico's to state | |
+| Status                     | When                                                                                                              | Body                                       |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `201`                      | The submission is new and is stored                                                                               | `{ "accepted": true, "duplicate": false }` |
+| `200`                      | The pair is held. Nothing is stored again, even where the kind or the message differs (FR-AU-75; see "The retry") | `{ "accepted": true, "duplicate": true }`  |
+| `401`, code `unauthorised` | A check of "Verification at Praktico" failed before step 5                                                        | the error body                             |
+| `422`, code `invalid`      | Step 5: the body is not as above, or `Content-Type` is not `application/json`                                     | the error body                             |
+| any other                  | A limit or a fault on Praktico's side. Whether Praktico limits the route, and with what, is Praktico's to state   |                                            |
 
 The application treats **only** `200` or `201` with a body whose `accepted` is exactly `true` as success. A `5xx`, a `4xx`, a body of another shape, a closed connection, and no answer within 10 seconds are one failure to it, and it answers the browser `502`.
 
@@ -174,10 +174,10 @@ The application treats **only** `200` or `201` with a body whose `accepted` is e
 
 Signed as above. The body is exactly one field: `{ "accountId": "…" }`, as bounded above.
 
-| Status | When | Body |
-|---|---|---|
-| `200` | Praktico set `accountId` to null on every submission that carried it. The count may be zero, and then the call still succeeds (FR-AU-79) | `{ "accepted": true, "changed": 0 }`, where `changed` is a whole number from 0 up |
-| `401`, `422` | As above | the error body |
+| Status       | When                                                                                                                                     | Body                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `200`        | Praktico set `accountId` to null on every submission that carried it. The count may be zero, and then the call still succeeds (FR-AU-79) | `{ "accepted": true, "changed": 0 }`, where `changed` is a whole number from 0 up |
+| `401`, `422` | As above                                                                                                                                 | the error body                                                                    |
 
 Only the account identifier changes. The kind, the message, the context, and the status stay (FR-AU-79). The call is safe to repeat: the second answer is `200` with `changed` 0. The application treats only `200` with `accepted` exactly `true` and a whole-number `changed` as acknowledgement, and otherwise records the step as owed and repeats it on its timer, each repeat a new request with a new nonce (FR-AU-58, NFR-RE-15). How long one attempt waits is not stated by the specification and is the application's slice to fix.
 
@@ -222,15 +222,25 @@ Praktico's routes, with the application's client or a test caller:
 
 With the secret `test-secret-not-for-use`, which is too short to be accepted as a real one and exists only for these two vectors, the time `1791450000`, the path `/intake-path/api/<route>` (a stand-in for the open `{intake}`), and a nonce for each, in place of a random one:
 
-| Request | Nonce | `X-Ekdotico-Signature` |
-|---|---|---|
-| `POST /intake-path/api/intake` with the 345-byte body below | `00112233445566778899aabbccddeeff` | `fd0cc23eba20b06e6d5d8dbb6794fe9f29e2dc06777de1cfa4457fc9a3a50aac` |
+| Request                                                                                                       | Nonce                              | `X-Ekdotico-Signature`                                             |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------ |
+| `POST /intake-path/api/intake` with the 345-byte body below                                                   | `00112233445566778899aabbccddeeff` | `fd0cc23eba20b06e6d5d8dbb6794fe9f29e2dc06777de1cfa4457fc9a3a50aac` |
 | `POST /intake-path/api/pseudonymise` with the 48-byte body `{"accountId":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}` | `ffeeddccbbaa99887766554433221100` | `145f0965428ea2619f7b862a1f8935713e9843b0f387fab2ddc64fd0a784dc80` |
 
 The first body, written as one line with no white space between its tokens:
 
 ```json
-{"submissionId":"6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35","submittedAt":"2026-10-08T09:00:00.000Z","kind":"problem","message":"The page does not scroll.","route":"/workspaces/[id]","appVersion":"0.1.0","browser":{"name":"Firefox","major":140,"osFamily":"macOS"},"viewport":{"width":1440,"height":900},"accountId":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}
+{
+  "submissionId": "6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35",
+  "submittedAt": "2026-10-08T09:00:00.000Z",
+  "kind": "problem",
+  "message": "The page does not scroll.",
+  "route": "/workspaces/[id]",
+  "appVersion": "0.1.0",
+  "browser": { "name": "Firefox", "major": 140, "osFamily": "macOS" },
+  "viewport": { "width": 1440, "height": 900 },
+  "accountId": "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+}
 ```
 
 Both values were computed twice, by Node's `createHmac` and by Web Crypto, on 21 November 2026, and agree. Those are two code paths in one language, not two languages; a second implementation in another language is the better check, and Praktico's tests are the natural place for it.
