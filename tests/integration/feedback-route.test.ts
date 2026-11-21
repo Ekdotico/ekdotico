@@ -6,7 +6,7 @@ import { praktico } from '../fixtures/praktico-double.ts';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
 const SECRET = 'S'.repeat(43);
-const database = prepare('feedback-route', { FEEDBACK_SECRET: SECRET });
+const database = prepare('feedbackroute', { FEEDBACK_SECRET: SECRET });
 const loaded = await load();
 const { auth, db, valkey } = loaded;
 const route = await import('../../src/app/api/feedback/route.ts');
