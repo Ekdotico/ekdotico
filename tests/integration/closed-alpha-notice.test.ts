@@ -8,7 +8,8 @@ import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './ident
 const database = prepare('closed-alpha-notice', { TRUSTED_PROXY_COUNT: '1' });
 const { auth, db, valkey } = await load();
 const { proxy } = await import('../../src/proxy.ts');
-const { closedAlphaNoticeDue, CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/closed-alpha-notice.ts');
+const { closedAlphaNoticeDue, CLOSED_ALPHA_NOTICE_VERSION } =
+  await import('../../src/lib/closed-alpha-notice.ts');
 const { GET } = await import('../../src/app/api/account/closed-alpha-notice/route.ts');
 const { POST } = await import('../../src/app/api/account/closed-alpha-notice/acknowledgement/route.ts');
 

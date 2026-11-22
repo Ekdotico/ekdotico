@@ -14,7 +14,9 @@ export async function GET(request: Request): Promise<Response> {
     const { session } = validation;
     // FR-AU-83: 403 for an account the founding-team gate stops; 401 without a session.
     if (!session) return await notAdmitted(validation);
-    return Response.json(await closedAlphaNotice(session.userId), { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json(await closedAlphaNotice(session.userId), {
+      headers: { 'Cache-Control': 'no-store' },
+    });
   } catch (error) {
     return fault('closed-alpha-notice', error);
   }

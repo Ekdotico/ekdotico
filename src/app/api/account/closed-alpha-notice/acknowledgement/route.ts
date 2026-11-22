@@ -48,7 +48,9 @@ export async function POST(request: Request): Promise<Response> {
     if (!(await acknowledgeNotice(session.userId, version))) {
       return errorResponse(409, 'notice_version_not_current', MESSAGES.notCurrent);
     }
-    return Response.json(await closedAlphaNotice(session.userId), { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json(await closedAlphaNotice(session.userId), {
+      headers: { 'Cache-Control': 'no-store' },
+    });
   } catch (error) {
     return fault('closed-alpha-notice', error);
   }
