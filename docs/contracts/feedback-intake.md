@@ -80,9 +80,9 @@ The feedback secret is held only in the server environment of the application an
 The secret is changed in this order, so that no send is lost (fw-secret-rotation). Praktico is given the new secret first and keeps the old one beside it; the application is given the new secret second; the old one is removed from Praktico last.
 
 1. Make the new secret, of the form above and different from every other secret.
-2. On Praktico, set `FEEDBACK_SECRET` to the new value and `FEEDBACK_SECRET_PREVIOUS` to the old one. Praktico accepts a request signed with either.
+2. On Praktico, set `FEEDBACK_SECRET_PREVIOUS` to the old value first, and then `FEEDBACK_SECRET` to the new value, or set both in one operation. Praktico then accepts a request signed with either.
 3. On the application, set `FEEDBACK_SECRET` to the new value and restart it. The application signs with that one value. It holds no second value and needs none.
-4. More than 5 minutes after the application has started with the new value (the window of a signature), remove `FEEDBACK_SECRET_PREVIOUS` from Praktico.
+4. At least 11 minutes after the last instance of the application has started with the new value, remove `FEEDBACK_SECRET_PREVIOUS` from Praktico. Praktico accepts a signed time up to 300 seconds ahead of its own clock and up to 300 seconds behind it, so a request signed with the old value can stay valid for about 601 seconds.
 
 Done in another order, the change loses sends: an application given the new value before Praktico is refused on every request until Praktico has it. Setting and removing a secret is the owner's.
 

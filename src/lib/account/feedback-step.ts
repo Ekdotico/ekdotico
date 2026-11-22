@@ -92,8 +92,8 @@ export async function feedbackStep(
   return 'done';
 }
 
-/** fw-late-write: the second call is made no sooner than this after the first, 301 seconds (the window of the signature is 300). */
-export const DETACH_AGAIN_MS = 301_000;
+/** fw-late-write: the second call is due this long after the first, 360 seconds. The rule is at least 301 seconds (the window of the signature is 300); the rest allows for the application's clock running ahead of the intake's. */
+export const DETACH_AGAIN_MS = 360_000;
 
 /**
  * Step (g), the second call to the intake (fw-late-write): the same instruction, made once step (c) is at least

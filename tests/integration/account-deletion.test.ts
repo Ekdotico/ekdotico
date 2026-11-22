@@ -985,7 +985,7 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
     const outcome = await carryOutDeletions(new Date(), {
       feedback: { wait: async () => {}, intake: intake(true) },
     });
-    // Four steps, and the deletion is not complete: the second call (g) is owed 301 seconds after (c).
+    // Four steps, and the deletion is not complete: the second call (g) is owed 360 seconds after (c).
     expect(outcome).toMatchObject({ steps: 4, completed: 0, failed: 0 });
     expect(calls).toEqual([who.id]);
     const record = (await recordOf(who.id))!;
@@ -1011,9 +1011,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       return who;
     };
 
-    it('is not made before 301 seconds after (c), and is no failure that it waits', async () => {
+    it('is not made before 360 seconds after (c), and is no failure that it waits', async () => {
       const who = await second();
-      const early = await carryOutDeletions(new Date(Date.now() + 300_000), {
+      const early = await carryOutDeletions(new Date(Date.now() + 359_000), {
         feedback: { wait: async () => {}, intake: intake(true) },
       });
       expect(early).toMatchObject({ steps: 0, completed: 0, failed: 0 });
@@ -1021,9 +1021,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       expect((await recordOf(who.id))!.completedAt).toBeNull();
     });
 
-    it('is made once 301 seconds have passed, the same instruction, and completes the deletion with its entry', async () => {
+    it('is made once 360 seconds have passed, the same instruction, and completes the deletion with its entry', async () => {
       const who = await second();
-      const due = await carryOutDeletions(new Date(Date.now() + 302_000), {
+      const due = await carryOutDeletions(new Date(Date.now() + 361_000), {
         feedback: { wait: async () => {}, intake: intake(true) },
       });
       expect(due).toMatchObject({ steps: 1, completed: 1, failed: 0 });
@@ -1047,7 +1047,7 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       async (_l, how) => {
         const who = await second();
         vi.spyOn(console, 'error').mockImplementation(() => {});
-        const later = () => new Date(Date.now() + 302_000);
+        const later = () => new Date(Date.now() + 361_000);
         const failed = await carryOutDeletions(later(), {
           feedback: { wait: async () => {}, intake: intake(how) },
         });
@@ -1632,9 +1632,9 @@ describe('the one-month limit (NFR-DP-06) and the log (NFR-SE-19)', () => {
     });
     expect((await carryOutDeletions(new Date(), intake(false))).completed).toBe(0);
     expect((await carryOutDeletions(new Date(), intake(false))).completed).toBe(0);
-    // The call of (c) succeeded: the deletion is complete only after the second call (g), 301 seconds later.
+    // The call of (c) succeeded: the deletion is complete only after the second call (g), 360 seconds later.
     expect((await carryOutDeletions(new Date(), intake(true))).completed).toBe(0);
-    expect((await carryOutDeletions(new Date(Date.now() + 302_000), intake(true))).completed).toBe(1);
+    expect((await carryOutDeletions(new Date(Date.now() + 361_000), intake(true))).completed).toBe(1);
     const record = (await recordOf(who.id))!;
     expect(record.completedAt!.getTime()).toBeLessThan(oneMonthAfter(record.requestedAt).getTime());
   });

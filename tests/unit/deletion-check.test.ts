@@ -75,7 +75,7 @@ describe('a deletion stuck at a call to the intake', () => {
   it('is one at (g): (c) done a day ago, the rows done, the second call not made', () => {
     const atSecond = { ...row, feedbackDoneAt: ago(FEEDBACK_ALARM_MS + 1), rowsDoneAt: ago(1) };
     expect(stuckAtDetach(atSecond, NOW)).toBe(true);
-    // Not before a day from (c): it only waits its 301 seconds.
+    // Not before a day from (c): it only waits its 360 seconds.
     expect(stuckAtDetach({ ...atSecond, feedbackDoneAt: ago(FEEDBACK_ALARM_MS - 1000) }, NOW)).toBe(false);
     // Not while the rows are not done (the stuck step is another).
     expect(stuckAtDetach({ ...atSecond, rowsDoneAt: null }, NOW)).toBe(false);

@@ -263,8 +263,9 @@ describe('step (c) of a deletion', () => {
 });
 
 describe('the second call to the intake, step (g) (fw-late-write)', () => {
-  it('is the same instruction, and is due 301 seconds after the first', async () => {
-    expect(DETACH_AGAIN_MS).toBe(301_000);
+  it('is the same instruction, and is due 360 seconds after the first, which keeps the rule of at least 301', async () => {
+    expect(DETACH_AGAIN_MS).toBe(360_000);
+    expect(DETACH_AGAIN_MS).toBeGreaterThanOrEqual(301_000);
     const pseudonymise = vi.fn(async () => true);
     await feedbackAgain('acc-1', { intake: { pseudonymise } });
     expect(pseudonymise).toHaveBeenCalledExactlyOnceWith('acc-1');

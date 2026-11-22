@@ -441,7 +441,7 @@ export function stuckAtDetach(
   const atFirst =
     row.istoricoDoneAt !== null && row.feedbackDoneAt === null && row.feedbackSkippedAt === null;
   // The second call is owed from the day (c) was done: a day after it, and not a day after the confirmation,
-  // so that a deletion whose (c) only just succeeded is not reported while it waits for its 301 seconds.
+  // so that a deletion whose (c) only just succeeded is not reported while it waits for its 360 seconds.
   const atSecond =
     row.feedbackDoneAt !== null &&
     row.rowsDoneAt !== null &&
