@@ -202,7 +202,9 @@ describe('the screen in the source', () => {
 
   it('is built from the package alone: no class of its own and no `.ekd-` class borrowed', () => {
     expect(dialog).not.toMatch(/ekd-/);
-    expect(dialog).not.toMatch(/className=/);
+    // The one class is the reset's `sr-only`, for the spoken words of the privacy link.
+    expect(dialog.match(/className=/g)).toHaveLength(1);
+    expect(dialog).toMatch(/className="sr-only"/);
     expect(dialog).not.toMatch(/from '\.\.\/pages\.module\.css'/);
   });
 
@@ -237,6 +239,8 @@ describe('the screen in the source', () => {
 
   it('opens the privacy link in a new tab, so a half-written message is kept (FR-AU-80 (f))', () => {
     expect(dialog).toMatch(/<a href=\{PRIVACY_HREF\} target="_blank" rel="noopener noreferrer">/);
+    // The spoken words of the rule for links that open a new tab, whole.
+    expect(dialog).toMatch(/<span className="sr-only"> \(opens in a new tab\)<\/span>/);
   });
 
   it('lets the dialog out by a visible Close button and takes the focus to it once sent', () => {

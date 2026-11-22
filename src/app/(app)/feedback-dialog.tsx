@@ -217,11 +217,13 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
             required
             hint={
               <>
-                {/* A new tab, so that a half-written message is not lost by following the link (FR-AU-80 (f)),
-                    as the links of a document open (extensions.tsx). No new words: the specification gives none. */}
+                {/* The owner's written exception of 23 November 2026 to the rule that an internal link stays in
+                    the same tab: this one opens a new tab, so that a half-written message is kept (FR-AU-80 (f)).
+                    The spoken words are the ones of the rule for external links. */}
                 {NOTICE}{' '}
                 <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer">
                   {WIDGET_TEXT.privacyLink}
+                  <span className="sr-only"> (opens in a new tab)</span>
                 </a>
               </>
             }
