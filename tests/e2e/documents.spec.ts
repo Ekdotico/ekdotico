@@ -294,11 +294,14 @@ test('a new account is given the Onboarding paper once, as an ordinary document 
   // It opens as any document does, and holds the paper.
   await page.getByRole('link', { name: 'Onboarding' }).click();
   await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
-  // The editor is a textbox, whose content is not in the tree of roles: found as editor.spec.ts finds it.
-  await expect(
-    page
-      .getByRole('textbox', { name: 'Document text' })
-      .locator('h2')
-      .filter({ hasText: 'Welcome to Ekdotico α' }),
-  ).toBeVisible();
+  // The editor is a textbox, whose content is not in the tree of roles: found as editor.spec.ts finds it, and
+  // after the connection has brought the stored state (openNew of editor.spec.ts waits for the same two).
+  const editor = page.getByRole('textbox', { name: 'Document text' });
+  await expect(editor).toBeVisible();
+  await expect(page.getByRole('button', { name: 'In sync' })).toBeVisible();
+  // The document is shown: not the statement that its content could not be built.
+  await expect(page.getByText('This document could not be shown')).toHaveCount(0);
+  await expect(editor.locator('h2').filter({ hasText: 'Welcome to Ekdotico α' })).toBeVisible({
+    timeout: 15_000,
+  });
 });

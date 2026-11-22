@@ -5,7 +5,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
-const database = prepare('onboarding-paper', { TRUSTED_PROXY_COUNT: '1' });
+const database = prepare('onboarding_paper', { TRUSTED_PROXY_COUNT: '1' });
 const { auth, db, valkey } = await load();
 const { ensureOnboardingPaper, ONBOARDING_TITLE, onboardingState } =
   await import('../../src/lib/documents/onboarding-paper.ts');

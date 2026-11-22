@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { collecting } from '../../src/lib/after-response.ts';
+import { db } from '../../src/lib/db.ts';
 import { createDatabase } from './database.ts';
 
 export const ORIGIN = 'https://app.example.test';
@@ -70,7 +71,8 @@ export async function createAccount(auth: Auth, email: string, emailVerified = t
     password: await context.password.hash(PASSWORD),
   });
   if (!paper) {
-    const { db } = await import('../../src/lib/db.ts');
+    // The client of this file's own import, which `vi.resetModules` of a test does not replace: a fresh one made after
+    // a test had pointed the environment at a database that is not there (auth-config.test.ts) would keep that address.
     await db().user.update({ where: { id: user.id }, data: { onboardingPaperSeededAt: new Date() } });
   }
   return user.id;
