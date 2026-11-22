@@ -144,6 +144,27 @@ jobs:
         working-directory: ${{ runner.temp }}
       - name: Size
         run: ls -l "$RUNNER_TEMP/release"; cat "$RUNNER_TEMP/release/release.json"
+      # What the archive is made of, to judge what the server never runs. It only reads the built tree and prints
+      # sizes: nothing it does changes what is packed, sealed, uploaded or deployed. It names directories and
+      # package folders only, never a file's content. Sizes of parts are gzip-compressed (what is uploaded); the
+      # packages are listed by their size on disk, since compressing each would repeat the pack.
+      - name: What the archive is made of
+        run: |
+          set -eu
+          echo "archive: $(stat -c %s "$RUNNER_TEMP/release/release.tgz") bytes (release.tgz, as sealed and uploaded)"
+          echo '--- top-level directories: on disk (KiB), gzip-compressed (KiB)'
+          for d in $(find . -maxdepth 1 -mindepth 1 -type d ! -name .git | sort); do
+            raw=$(du -sk "$d" | cut -f1)
+            gz=$(tar --exclude=./.next/cache --exclude=./node_modules/.cache -cf - "$d" | gzip -c | wc -c)
+            echo "$raw $((gz / 1024)) $d"
+          done | sort -rn | head -20
+          echo '--- node_modules/.pnpm: the 30 largest packages on disk (KiB)'
+          du -sk node_modules/.pnpm/* | sort -rn | head -30 | sed -e 's#node_modules/.pnpm/##' -e 's#_.*##'
+          echo '--- node_modules/.pnpm: total (KiB) and number of packages'
+          du -sk node_modules/.pnpm | cut -f1
+          ls node_modules/.pnpm | wc -l
+          echo '--- .next: its largest parts (KiB)'
+          du -sk .next/* | grep -v '/cache$' | sort -rn | head -10
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ env.SHA }}
