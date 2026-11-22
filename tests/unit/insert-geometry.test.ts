@@ -9,7 +9,9 @@ const rule = (selector: string) => css.slice(css.indexOf(`${selector} {`)).match
 describe('the target of the Insert control', () => {
   it('is at least 24px square around a 20px box with a 1px border', () => {
     const own = rule('.insertButton');
-    const size = Number(/--insert-box: (\d+)px/.exec(rule('.writable'))![1]);
+    // 20px at --scale: 1, and scaled with the design package's icon inside it (a fixed box let a 24px plus
+    // at 1.5 overflow it, 3px low). At any scale the target grows with the box, so 1 is the smallest case.
+    const size = Number(/--insert-box: calc\((\d+)px \* var\(--scale\)\)/.exec(rule('.writable'))![1]);
     const border = Number(/border: (\d+)px/.exec(own)![1]);
     const inset = Number(/inset: -(\d+)px/.exec(rule('.insertButton::before'))![1]);
     expect(size).toBe(20);
