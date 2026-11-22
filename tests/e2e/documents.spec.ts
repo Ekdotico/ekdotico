@@ -294,5 +294,11 @@ test('a new account is given the Onboarding paper once, as an ordinary document 
   // It opens as any document does, and holds the paper.
   await page.getByRole('link', { name: 'Onboarding' }).click();
   await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
-  await expect(page.getByRole('heading', { level: 2, name: 'Welcome to Ekdotico α' })).toBeVisible();
+  // The editor is a textbox, whose content is not in the tree of roles: found as editor.spec.ts finds it.
+  await expect(
+    page
+      .getByRole('textbox', { name: 'Document text' })
+      .locator('h2')
+      .filter({ hasText: 'Welcome to Ekdotico α' }),
+  ).toBeVisible();
 });

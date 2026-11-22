@@ -27,8 +27,9 @@ const firstScreen = { level: 1, name: 'Documents' } as const;
 // hold (FR-AU-55). The list of documents is drawn in the browser, so its data
 // holds the list handed to it and not the words drawn from it.
 const CONTENT: [path: string, headers: Record<string, string>, content: string][] = [
-  ['/', {}, 'No documents yet'],
-  ['/', { RSC: '1' }, '"documents":[]'],
+  // A new account holds the Onboarding paper (FR-ED-49): its list is not empty.
+  ['/', {}, 'Onboarding'],
+  ['/', { RSC: '1' }, 'Onboarding'],
   ['/anything', {}, 'No page of Ekdotico has this address'],
   ['/anything', { RSC: '1' }, 'No page of Ekdotico has this address'],
 ];
@@ -149,7 +150,9 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   // The content the notice stood in place of is in the response now.
   const acknowledged = await (await page.request.get('/')).text();
   expect(acknowledged).toContain('New document');
-  expect(acknowledged).toContain('No documents yet');
+  // FR-ED-49: the list of a new account holds the Onboarding paper, and is not empty.
+  expect(acknowledged).toContain('Onboarding');
+  expect(acknowledged).not.toContain('No documents yet');
   await expect(page.getByText(NOTICE_BODY)).toHaveCount(0);
   await expectNoSidewaysScroll(page);
   await screens(page, 'first-screen');
