@@ -57,6 +57,13 @@ describe('the approved texts, each pinned whole', () => {
     expect(tooLongText(7)).toBe(
       'The message is 7 characters over the limit of 4,000. Shorten it and send it again.',
     );
+    // fw-toolong-singular
+    expect(tooLongText(1)).toBe(
+      'The message is 1 character over the limit of 4,000. Shorten it and send it again.',
+    );
+    expect(tooLongText(2)).toBe(
+      'The message is 2 characters over the limit of 4,000. Shorten it and send it again.',
+    );
     expect(rateLimitedText('{time}')).toBe(
       'You have sent too much feedback for now. Your message is still here. Send it again after {time}.',
     );

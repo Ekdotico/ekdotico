@@ -55,7 +55,7 @@ export function clockTime(retryAfterSeconds: number, now: Date, timeZone?: strin
 
 /** Too long (fw-strings): `over` is how many code points are past 4,000. */
 export function tooLongText(over: number): string {
-  return `The message is ${over} characters over the limit of 4,000. Shorten it and send it again.`;
+  return `The message is ${over} ${over === 1 ? 'character' : 'characters'} over the limit of 4,000. Shorten it and send it again.`;
 }
 
 /** Too many sent (fw-strings). `time` is `clockTime` (fw-time-format). */
