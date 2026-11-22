@@ -145,6 +145,27 @@ const UNSHOWN = {
 // How long the region of a refusal stands empty before its words are written:
 // long enough for a screen reader to have seen it empty.
 const HEARD_AFTER_MS = 150;
+
+/**
+ * What a screen reader is given of the statements about the document (capacity,
+ * a role or its permissions changed, a clearing, a change that could not be
+ * repaired): one region that is in the page throughout, emptied and then written
+ * at each change, as `heard` is for a refusal. A region created in the same
+ * render as its words is not certain to be spoken (WCAG 4.1.3). `again` changes
+ * when the same words are to be said again.
+ */
+function Heard({ words, again }: { words: string; again: string }) {
+  const region = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const element = region.current;
+    if (!element) return;
+    element.textContent = '';
+    if (!words) return;
+    const timer = setTimeout(() => (element.textContent = words), HEARD_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [words, again]);
+  return <span ref={region} role="status" className="sr-only" />;
+}
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
 // Before it, the sentence that tells of the slash palette (`SLASH_HINT`): the
@@ -566,15 +587,35 @@ function OpenDocument({
   const mayEdit = state.canEdit ?? canEdit;
   // FR-AU-91: the day of the deletion as the server last said it, until it has said, the one the page was opened with.
   const deletedOn = state.deletedOn !== undefined ? state.deletedOn : initialDeletedOn;
+  // The words of the statements below that are heard, and what makes the same words be said again.
+  const spoken: string[] = [];
+  const again: string[] = [];
+  if (state.phase === 'capacity') spoken.push(AT_CAPACITY);
+  if (unrepaired) spoken.push(UNREPAIRED);
+  if (deletedOn) {
+    spoken.push(clearingStatement(alreadyDeleted, dateText(new Date(deletedOn))));
+    again.push(deletedOn);
+  } else if (state.clearingEnded) {
+    spoken.push(CLEARING_ENDED(mayEdit));
+    again.push(`ended ${mayEdit}`);
+  } else if (state.notice) {
+    spoken.push(ROLE_NOW(state.notice.role, state.notice.canEdit));
+    again.push(`${state.notice.role} ${state.notice.canEdit}`);
+  }
+  if (state.permissions) {
+    spoken.push(PERMISSIONS_NOW(ROLE_NAME[state.permissions.role]));
+    again.push(String(state.permissions.changes));
+  }
   return (
     <Stack gap={4}>
+      <Heard words={spoken.join(' ')} again={again.join('|')} />
       {/* FR-ED-17: drawn in the header of the page, beside "Sharing" (./people-row.tsx). */}
       <PeopleRow people={state.people} />
       {state.phase === 'held' && state.held ? (
         <HeldChange held={state.held} text={() => editor.current?.getText() ?? ''} />
       ) : state.phase === 'capacity' ? (
         // FR-ED-18: "neither the reconnecting state nor the error state".
-        <FormFault tone="neutral" announce="polite">
+        <FormFault tone="neutral" announce="off">
           <p>{AT_CAPACITY}</p>
         </FormFault>
       ) : (
@@ -595,19 +636,19 @@ function OpenDocument({
         )
       )}
       {unrepaired ? (
-        <FormFault tone="neutral" announce="polite">
+        <FormFault tone="neutral" announce="off">
           <p>{UNREPAIRED}</p>
         </FormFault>
       ) : null}
       {deletedOn ? (
         // FR-AU-91, FR-ED-40 (i): the fixed statement, "in place of its editing controls", said again for a new day.
-        <FormFault key={deletedOn} tone="neutral" announce="polite" autoFocus={false}>
+        <FormFault key={deletedOn} tone="neutral" announce="off" autoFocus={false}>
           <p>{clearingStatement(alreadyDeleted, dateText(new Date(deletedOn)))}</p>
           {state.unsaved ? <Unsaved text={state.unsaved.text} because={CLEARING_UNSAVED} /> : null}
         </FormFault>
       ) : state.clearingEnded ? (
         // The clearing was cancelled for the document, or its ownership passed: it will not be deleted.
-        <FormFault key={`ended ${mayEdit}`} tone="neutral" announce="polite" autoFocus={false}>
+        <FormFault key={`ended ${mayEdit}`} tone="neutral" announce="off" autoFocus={false}>
           <p>{CLEARING_ENDED(mayEdit)}</p>
         </FormFault>
       ) : state.notice ? (
@@ -615,7 +656,7 @@ function OpenDocument({
         <FormFault
           key={`${state.notice.role} ${state.notice.canEdit}`}
           tone="neutral"
-          announce="polite"
+          announce="off"
           autoFocus={false}
         >
           <p>{ROLE_NOW(state.notice.role, state.notice.canEdit)}</p>
@@ -625,7 +666,7 @@ function OpenDocument({
       {state.permissions ? (
         // FR-ED-40 (g): "states that the permissions of the role have changed". Said again for each
         // change, and not an error: the connection is as it was.
-        <FormFault key={state.permissions.changes} tone="neutral" announce="polite" autoFocus={false}>
+        <FormFault key={state.permissions.changes} tone="neutral" announce="off" autoFocus={false}>
           <p>{PERMISSIONS_NOW(ROLE_NAME[state.permissions.role])}</p>
         </FormFault>
       ) : null}
