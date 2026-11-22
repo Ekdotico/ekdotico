@@ -141,6 +141,22 @@
   overflow-wrap: anywhere;
 }
 
+/* Long-form reading, as the package sets it: the reading serif at 17px (`--fs-md`) on the prose line height, in the
+   measure. The notice of privacy. */
+.reading {
+  margin: var(--sp-0);
+  max-inline-size: var(--measure);
+  overflow-wrap: anywhere;
+  font-family: var(--font-serif);
+  font-size: var(--fs-md);
+  line-height: var(--lh-prose);
+}
+
+/* Greek never comes from the serif, which has no Greek (the package's AGENTS.md): the α of "Closed α" is the sans. */
+.greek {
+  font-family: var(--font-sans);
+}
+
 /* A short list of statements, one under another, with the marks of a list. */
 .statements {
   margin: var(--sp-0);
