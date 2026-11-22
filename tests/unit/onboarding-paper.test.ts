@@ -8,6 +8,7 @@ import * as Y from 'yjs';
 import { FRAGMENT_NAME } from '../../src/lib/collab/protocol.ts';
 import { MAX_ELEMENT_DEPTH, MAX_STATE_BYTES, applyState, elementDepth } from '../../src/lib/collab/state.ts';
 import {
+  buildOnboardingState,
   ONBOARDING_TITLE,
   onboardingPaper,
   onboardingState,
@@ -187,7 +188,13 @@ describe('the Onboarding paper', () => {
   });
 
   it('is the same bytes on every run, and a state that loads', () => {
-    expect(Buffer.from(onboardingState()).equals(Buffer.from(onboardingState()))).toBe(true);
+    // Built again from the JSON each time, not the cached bytes read twice.
+    expect(Buffer.from(buildOnboardingState()).equals(Buffer.from(buildOnboardingState()))).toBe(true);
+    expect(Buffer.from(onboardingState()).equals(Buffer.from(buildOnboardingState()))).toBe(true);
+    // A copy for each caller: what one does to its bytes is not seen by the next.
+    const first = onboardingState();
+    first.fill(0);
+    expect(onboardingState()).not.toEqual(first);
     const document = new Y.Doc();
     expect(() => applyState(document, onboardingState())).not.toThrow();
   });

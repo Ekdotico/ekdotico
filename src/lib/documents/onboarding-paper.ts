@@ -69,17 +69,22 @@ function element(node: PaperNode): Y.XmlElement {
   return made;
 }
 
-/** The first content of the document, as the server stores it. Built once for the life of the process. */
-let built: Uint8Array<ArrayBuffer> | undefined;
-export function onboardingState(): Uint8Array<ArrayBuffer> {
-  if (built) return built;
+/** The state, built from the JSON each time it is called: what `onboardingState` caches, and what a test asks again. */
+export function buildOnboardingState(): Uint8Array<ArrayBuffer> {
   const document = new Y.Doc();
   document.clientID = CLIENT_ID;
   const blocks = (onboardingPaper.content ?? []).map(element);
   document.getXmlFragment(FRAGMENT_NAME).insert(0, blocks);
-  built = encodeState(document);
+  const state = encodeState(document);
   document.destroy();
-  return built;
+  return state;
+}
+
+let built: Uint8Array<ArrayBuffer> | undefined;
+/** The first content of the document, as the server stores it. Built once for the life of the process; each caller gets its own copy. */
+export function onboardingState(): Uint8Array<ArrayBuffer> {
+  built ??= buildOnboardingState();
+  return built.slice();
 }
 
 /**
