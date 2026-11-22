@@ -35,7 +35,9 @@ How to reach the team. [contact address]`;
 
 const decode = (text: string) =>
   text.replaceAll('&#x27;', "'").replaceAll('&quot;', '"').replaceAll('&amp;', '&');
-const strip = (html: string) => decode(html.replace(/<[^>]+>/g, ''));
+// The words for a link that opens a new tab are the rule's (the owner, 23 November 2026), not the notice's: left out of the notice's text.
+const strip = (html: string) =>
+  decode(html.replace(/<span class="sr-only">.*?<\/span>/g, '').replace(/<[^>]+>/g, ''));
 const render = () => renderToStaticMarkup(createElement(Privacy));
 const all = (html: string, tag: string) =>
   [...html.matchAll(new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 'gs'))].map(([, inner]) => strip(inner!));
@@ -90,7 +92,9 @@ describe('the privacy notice', () => {
 
   it('gives the contact address as a link, and nothing else in that section', () => {
     const html = render();
-    expect(html).toContain(`<a href="mailto:${ADDRESS}">${ADDRESS}</a>`);
+    expect(html).toContain(
+      `<a href="mailto:${ADDRESS}" target="_blank" rel="noopener noreferrer">${ADDRESS}<span class="sr-only"> (opens in a new tab)</span></a>`,
+    );
   });
 
   it('cannot add a field to the mail through the local part of the address (review, low)', () => {

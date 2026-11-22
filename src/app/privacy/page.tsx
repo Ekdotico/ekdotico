@@ -56,7 +56,11 @@ export default function Privacy() {
             <Stack gap={2}>
               <h2 className={styles.heading}>{PRIVACY_CONTACT_HEADING}</h2>
               <p className={styles.reading}>
-                <a href={`mailto:${mailtoOf(contactAddress)}`}>{contactAddress}</a>
+                {/* A link that leaves the site opens in a new tab (the owner's rule of 23 November 2026), as on the page for a visitor. */}
+                <a href={`mailto:${mailtoOf(contactAddress)}`} target="_blank" rel="noopener noreferrer">
+                  {contactAddress}
+                  <span className="sr-only"> (opens in a new tab)</span>
+                </a>
               </p>
             </Stack>
           </section>
