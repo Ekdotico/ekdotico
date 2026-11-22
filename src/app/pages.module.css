@@ -113,6 +113,7 @@
   margin: var(--sp-0);
   padding: var(--sp-0);
   list-style: none;
+  border-block-start: 1px solid var(--rule-soft);
 }
 
 .item {
