@@ -101,7 +101,7 @@ export function OpenInvitation({
   expiresAt: string;
 }) {
   const router = useRouter();
-  const [sending, setSending] = useState(false);
+  const [sending, setSending] = useState<'accept' | 'decline' | null>(null);
   const [fault, setFault] = useState<Fault | null>(null);
   const [declined, setDeclined] = useState<string | null>(null);
   const said = useRef<HTMLParagraphElement>(null);
@@ -111,10 +111,11 @@ export function OpenInvitation({
   }, [declined]);
 
   async function answer(chosen: 'accept' | 'decline') {
-    setSending(true);
+    if (sending) return;
+    setSending(chosen);
     setFault(null);
     const sent = await sendFor(`${path}/${chosen}`);
-    setSending(false);
+    setSending(null);
     if ('fault' in sent) return setFault(sent.fault);
     const { documentId, message } = (sent.answer ?? {}) as { documentId?: string; message?: string };
     if (chosen === 'accept' && documentId) return router.push(`/documents/${documentId}`);
@@ -142,10 +143,20 @@ export function OpenInvitation({
         </p>
       ) : (
         <Cluster gap={3}>
-          <Button variant="primary" pending={sending} onClick={() => void answer('accept')}>
+          <Button
+            variant="primary"
+            pending={sending === 'accept'}
+            disabled={sending === 'decline'}
+            onClick={() => void answer('accept')}
+          >
             Accept
           </Button>
-          <Button variant="quiet" pending={sending} onClick={() => void answer('decline')}>
+          <Button
+            variant="quiet"
+            pending={sending === 'decline'}
+            disabled={sending === 'accept'}
+            onClick={() => void answer('decline')}
+          >
             Decline
           </Button>
         </Cluster>
