@@ -43,7 +43,7 @@ import { declineOffersTo } from '../documents/ownership.ts';
 import { endInvitationsOfAccount } from '../documents/sharing.ts';
 import { istorico, type IstoricoPort } from '../istorico/index.ts';
 import { securityLogIn, securityLogManyIn } from '../security-log.ts';
-import { feedbackStep, type FeedbackOutcome } from './feedback-step.ts';
+import { DETACH_AGAIN_MS, feedbackAgain, feedbackStep, type FeedbackOutcome } from './feedback-step.ts';
 
 type Tx = Prisma.TransactionClient;
 
@@ -81,7 +81,12 @@ async function holdClaim(tx: Tx, { id, claim }: Held): Promise<void> {
 }
 
 type StepTime =
-  'istoricoDoneAt' | 'feedbackDoneAt' | 'feedbackSkippedAt' | 'credentialsDoneAt' | 'rowsDoneAt';
+  | 'istoricoDoneAt'
+  | 'feedbackDoneAt'
+  | 'feedbackSkippedAt'
+  | 'credentialsDoneAt'
+  | 'rowsDoneAt'
+  | 'feedbackAgainDoneAt';
 
 /**
  * Last in the transaction of a step: the step's time, only where it has none and the claim is this
@@ -338,14 +343,66 @@ async function stepRows(held: Held, now: () => Date): Promise<void> {
     });
 
     await record(tx, held, 'rowsDoneAt', at);
-    // The deletion is complete with its last step. The claim goes with it.
+    // The deletion is complete with its last step. Where step (c) made its call, the last step is the second
+    // call (g), which completes it (`stepFeedbackAgain`); where (c) was skipped, there is no second call and
+    // this is the last. The claim goes with the completion.
     const completed = await tx.accountDeletion.updateMany({
-      where: { id: held.id, claimedAt: held.claim, completedAt: null, rowsDoneAt: { not: null } },
+      where: {
+        id: held.id,
+        claimedAt: held.claim,
+        completedAt: null,
+        rowsDoneAt: { not: null },
+        feedbackSkippedAt: { not: null },
+      },
+      data: { completedAt: at, claimedAt: null },
+    });
+    if (completed.count === 0) {
+      // Not complete: the claim must still be this run's, as it was when the step began.
+      await holdClaim(tx, held);
+    }
+    await securityLogIn(tx, { kind: 'account_deletion_user_pseudonymised', userId });
+    await securityLogIn(tx, { kind: 'account_deletion_roles_ended', userId });
+  });
+}
+
+// ── (g) The second call to the feedback intake ──────────────────────────────
+
+/**
+ * Step (g), the last (fw-late-write): the intake is told again to pseudonymise the account's feedback, at least
+ * 301 seconds after step (c) did, so that a submission that was in flight at (c) and stored after it is detached
+ * too. It is owed only where (c) made its call; with (c) skipped the deletion was completed by (e) and (f). The
+ * deletion is complete when this is done, and not before. Resolves to `'later'` where it is not yet due, which
+ * leaves the deletion open for a later run and is no failure; throws where the intake did not acknowledge, and is
+ * repeated like (c).
+ */
+async function stepFeedbackAgain(
+  held: Held,
+  options: Dependencies['feedback'],
+  now: () => Date,
+): Promise<'later' | 'nothing' | void> {
+  const row = await db().accountDeletion.findUniqueOrThrow({
+    where: { id: held.id },
+    select: { feedbackDoneAt: true, completedAt: true },
+  });
+  if (row.completedAt) return 'nothing';
+  if (!row.feedbackDoneAt || now().getTime() < row.feedbackDoneAt.getTime() + DETACH_AGAIN_MS) return 'later';
+  await feedbackAgain(held.userId, options);
+  await db().$transaction(async (tx) => {
+    await holdClaim(tx, held);
+    const at = now();
+    await record(tx, held, 'feedbackAgainDoneAt', at);
+    const completed = await tx.accountDeletion.updateMany({
+      where: {
+        id: held.id,
+        claimedAt: held.claim,
+        completedAt: null,
+        rowsDoneAt: { not: null },
+        feedbackAgainDoneAt: { not: null },
+      },
       data: { completedAt: at, claimedAt: null },
     });
     if (completed.count !== 1) throw new ClaimLost();
-    await securityLogIn(tx, { kind: 'account_deletion_user_pseudonymised', userId });
-    await securityLogIn(tx, { kind: 'account_deletion_roles_ended', userId });
+    await securityLogIn(tx, { kind: 'account_deletion_feedback_repeated', userId: held.userId });
   });
 }
 
@@ -360,6 +417,37 @@ export interface RunOutcome {
   failed: number;
   /** Deletions still open a month after their confirmation (NFR-DP-06). */
   overdue: number;
+  /** Deletions stuck at step (c) for 24 hours (fw-detach-wait): the alarm. Counts only; no account is named. */
+  stuckAtFeedback: number;
+}
+
+/** fw-detach-wait: an alarm is raised when a deletion has been stuck at a call to the intake this long. */
+export const FEEDBACK_ALARM_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether an open deletion is waiting on a call to the feedback intake: at (c), the steps before it done and it not
+ * done or skipped; or at (g), (c) done, the application's rows done, and the second call not made.
+ */
+export function stuckAtDetach(
+  row: {
+    istoricoDoneAt: Date | null;
+    feedbackDoneAt: Date | null;
+    feedbackSkippedAt: Date | null;
+    rowsDoneAt: Date | null;
+    feedbackAgainDoneAt: Date | null;
+  },
+  now: Date,
+): boolean {
+  const atFirst =
+    row.istoricoDoneAt !== null && row.feedbackDoneAt === null && row.feedbackSkippedAt === null;
+  // The second call is owed from the day (c) was done: a day after it, and not a day after the confirmation,
+  // so that a deletion whose (c) only just succeeded is not reported while it waits for its 360 seconds.
+  const atSecond =
+    row.feedbackDoneAt !== null &&
+    row.rowsDoneAt !== null &&
+    row.feedbackAgainDoneAt === null &&
+    row.feedbackDoneAt.getTime() + FEEDBACK_ALARM_MS <= now.getTime();
+  return atFirst || atSecond;
 }
 
 /** One calendar month after a time: the limit of NFR-DP-06 ("within one month of receipt"). */
@@ -398,7 +486,7 @@ async function carryOut(
   try {
     const row = await db().accountDeletion.findUniqueOrThrow({ where: { id } });
     const held: Held = { id, userId: row.userId, claim };
-    const plan: [name: string, done: boolean, run: () => Promise<void>][] = [
+    const plan: [name: string, done: boolean, run: () => Promise<'later' | 'nothing' | void>][] = [
       ['istorico', row.istoricoDoneAt !== null, () => stepIstorico(held, port, now)],
       [
         'feedback',
@@ -407,11 +495,21 @@ async function carryOut(
       ],
       ['credentials', row.credentialsDoneAt !== null, () => stepCredentials(held, now)],
       ['rows', row.rowsDoneAt !== null, () => stepRows(held, now)],
+      // (g), the last: owed only where (c) made its call, and not before the second call is due.
+      [
+        'feedback again',
+        row.feedbackSkippedAt !== null || row.feedbackAgainDoneAt !== null,
+        () => stepFeedbackAgain(held, dependencies.feedback, now),
+      ],
     ];
     for (const [name, done, run] of plan) {
       if (done) continue;
       try {
-        await run();
+        const result = await run();
+        // Not yet due: the deletion stays open for a later run, which is no failure.
+        if (result === 'later') return { steps, completed: false, failed: false };
+        // Nothing was owed after all (the deletion was completed by the step before): not a step.
+        if (result === 'nothing') continue;
       } catch (error) {
         // The claim was taken over: nothing was written under it, and the run that took it goes on.
         if (error instanceof ClaimLost) return { steps, completed: false, failed: false };
@@ -451,7 +549,7 @@ export async function carryOutDeletions(
     select: { id: true, requestedAt: true },
     orderBy: [{ requestedAt: 'asc' }, { id: 'asc' }],
   });
-  const outcome: RunOutcome = { steps: 0, completed: 0, failed: 0, overdue: 0 };
+  const outcome: RunOutcome = { steps: 0, completed: 0, failed: 0, overdue: 0, stuckAtFeedback: 0 };
   for (const { id, requestedAt } of open) {
     const claim = new Date(now.getTime() + Date.now() - began);
     let completed = false;
@@ -468,6 +566,27 @@ export async function carryOutDeletions(
       outcome.failed += 1;
     }
     if (!completed && oneMonthAfter(requestedAt) <= now) outcome.overdue += 1;
+    // Stuck at a call to the feedback intake, (c) or its repeat (g), for a day. The row is read again, after
+    // this run: a run that did the step has fixed it.
+    if (!completed && requestedAt.getTime() + FEEDBACK_ALARM_MS <= now.getTime()) {
+      const row = await db().accountDeletion.findUnique({
+        where: { id },
+        select: {
+          completedAt: true,
+          istoricoDoneAt: true,
+          feedbackDoneAt: true,
+          feedbackSkippedAt: true,
+          rowsDoneAt: true,
+          feedbackAgainDoneAt: true,
+        },
+      });
+      if (row && row.completedAt === null && stuckAtDetach(row, now)) outcome.stuckAtFeedback += 1;
+    }
+  }
+  if (outcome.stuckAtFeedback > 0) {
+    console.error(
+      `account deletion: ${outcome.stuckAtFeedback} confirmed deletion${outcome.stuckAtFeedback === 1 ? ' has' : 's have'} been stuck at a call to the feedback intake for 24 hours`,
+    );
   }
   if (outcome.overdue > 0) {
     console.error(
