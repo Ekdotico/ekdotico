@@ -7,7 +7,7 @@
 import { fault, notAdmitted, refusedOrigin } from '../../../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../../../lib/auth/session.ts';
 import { errorResponse, notJson, readJson } from '../../../../../lib/http.ts';
-import { acknowledgeNotice, onboarding } from '../../../../../lib/onboarding.ts';
+import { acknowledgeNotice, closedAlphaNotice } from '../../../../../lib/closed-alpha-notice.ts';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,8 +48,8 @@ export async function POST(request: Request): Promise<Response> {
     if (!(await acknowledgeNotice(session.userId, version))) {
       return errorResponse(409, 'notice_version_not_current', MESSAGES.notCurrent);
     }
-    return Response.json(await onboarding(session.userId), { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json(await closedAlphaNotice(session.userId), { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return fault('onboarding', error);
+    return fault('closed-alpha-notice', error);
   }
 }
