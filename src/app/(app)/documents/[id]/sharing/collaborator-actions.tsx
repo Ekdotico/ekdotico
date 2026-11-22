@@ -230,6 +230,11 @@ export function LeaveDocument({ documentId }: { documentId: string }) {
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
 
+  /** Closing forgets a refusal, so the next opening starts clean (WCAG 3.3.1). */
+  function close() {
+    setFault(null);
+    setOpen(false);
+  }
   async function confirm() {
     setPending(true);
     const sent = await sendFor(`/api/documents/${documentId}/leave`);
@@ -256,7 +261,7 @@ export function LeaveDocument({ documentId }: { documentId: string }) {
       </Cluster>
       <Dialog
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={close}
         title="Leave document"
         aria-describedby="leave-statement"
         initialFocusRef={cancel}
@@ -275,7 +280,7 @@ export function LeaveDocument({ documentId }: { documentId: string }) {
             >
               Leave document
             </Button>
-            <Button id={LEAVE_CANCEL_ID} onClick={() => setOpen(false)}>
+            <Button id={LEAVE_CANCEL_ID} onClick={close}>
               Cancel
             </Button>
           </Cluster>
