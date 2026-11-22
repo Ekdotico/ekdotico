@@ -48,7 +48,7 @@ jobs:
   quick:
     # Adding a label other than ci:full starts a run that does nothing.
     if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'ci:full'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
     env:
       # Reads @ekdotico/domico from GitHub Packages. The package has to grant
@@ -88,7 +88,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
       github.event.label.name == 'ci:full' && !github.event.pull_request.draft)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
@@ -164,7 +164,7 @@ jobs:
           - part: end-to-end
             e2e: true
             run: pnpm test:e2e
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     # Measured on GitHub's runners on 18 November 2026, over 14 runs: the integration tests alone took 18 to
     # 25 minutes and the end-to-end tests 10 to 12 (with their build). 40 leaves room for each part alone and
     # still stops a run that hangs.
@@ -269,7 +269,7 @@ jobs:
     needs: [quick, changes, suite]
     # Runs wherever the full tier was asked for, whatever happened before it, so that it fails rather than skips.
     if: always() && needs.changes.result != 'skipped'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - env:
