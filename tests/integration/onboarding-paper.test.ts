@@ -52,6 +52,50 @@ describe('the Onboarding paper', () => {
     expect(await marker(id)).toBeInstanceOf(Date);
   });
 
+  it('loads and is authorised as an ordinary document is, with the same rows and permissions', async () => {
+    const { authorise } = await import('../../src/lib/documents/access.ts');
+    const { createDocument } = await import('../../src/lib/documents/documents.ts');
+    const { loadState } = await import('../../src/lib/collab/state.ts');
+    const { applyState } = await import('../../src/lib/collab/state.ts');
+    const Y = await import('yjs');
+    const { id } = await person();
+    await ensureOnboardingPaper(id);
+    const [paper] = await documentsOf(id);
+    const ordinary = await createDocument(id);
+    // The load of the collaboration server (src/collab/server.ts, onLoadDocument): the state applies.
+    const state = await loadState(paper!.id);
+    expect(state).not.toBeNull();
+    expect(() => applyState(new Y.Doc(), state!)).not.toThrow();
+    expect(await loadState(ordinary.id)).toBeNull();
+    // The page and the handshake ask the same question of both: the account is the Owner, may view and edit.
+    for (const documentId of [paper!.id, ordinary.id]) {
+      const answer = await authorise(id, documentId, 'document.content.edit');
+      expect(answer.outcome).toBe('allowed');
+    }
+    // The rows beside the document: the same columns hold the same kind of value for both.
+    const rows = await db().document.findMany({
+      where: { id: { in: [paper!.id, ordinary.id] } },
+      select: {
+        id: true,
+        ownerId: true,
+        workspaceId: true,
+        permissionSet: true,
+        clearingAt: true,
+        deletedAt: true,
+      },
+    });
+    const [one, two] = rows;
+    expect(one!.ownerId).toBe(two!.ownerId);
+    expect(one!.workspaceId).toBe(two!.workspaceId);
+    expect(one!.permissionSet).toEqual(two!.permissionSet);
+    expect([one!.clearingAt, one!.deletedAt, two!.clearingAt, two!.deletedAt]).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
   it('is made once where two requests ask at once', async () => {
     const { id } = await person();
     await Promise.all(Array.from({ length: 8 }, () => ensureOnboardingPaper(id)));
