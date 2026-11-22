@@ -164,7 +164,7 @@ function Heard({ words, again }: { words: string; again: string }) {
     const timer = setTimeout(() => (element.textContent = words), HEARD_AFTER_MS);
     return () => clearTimeout(timer);
   }, [words, again]);
-  return <span ref={region} role="status" className="sr-only" />;
+  return <span ref={region} role="status" className="sr-only" data-heard="statements" />;
 }
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
@@ -379,7 +379,7 @@ function Text({
             <p>{refusal.words}</p>
           </FormFault>
         ) : null}
-        <span ref={heard} role="status" className="sr-only" />
+        <span ref={heard} role="status" className="sr-only" data-heard="refusal" />
         {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
         {editable && !reads ? (
           <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
