@@ -1432,6 +1432,7 @@ describe('steps (e) and (f), the tombstone and what refers to the account (FR-AU
         'lockedUntil',
         'closedAlphaNoticeAcknowledgedAt',
         'closedAlphaNoticeVersion',
+        'onboardingPaperSeededAt',
         'erasedAt',
         'createdAt',
         'updatedAt',
@@ -1445,6 +1446,8 @@ describe('steps (e) and (f), the tombstone and what refers to the account (FR-AU
       emailVerified: false,
       twoFactorEnabled: false,
       lockedUntil: null,
+      // FR-AU-58 (e), D242: nothing is kept but what is named below.
+      onboardingPaperSeededAt: null,
     });
     expect(row.erasedAt).toBeInstanceOf(Date);
     // Kept: the identifier, the time of the deletion, the acknowledgement and its version (FR-AU-56).

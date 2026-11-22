@@ -29,6 +29,8 @@ const WITHOUT_NOTICE: Record<string, string> = {
     'FR-AU-86; NFR-SE-05 (a): the link of a password reset, opened without a session',
   'src/app/(auth)/sign-in/link/[token]/page.tsx':
     'FR-AU-81; NFR-SE-05 (a): the sign-in link of a lock email, opened without a session',
+  'src/app/privacy/page.tsx':
+    'FR-AU-72; NFR-SE-05 (a); fw-privacy-page: the privacy notice, readable without signing in; it reads nothing of the request, shows nothing of the visitor, and is the same signed in or out, so no Closed α notice stands in place of it',
   'src/app/(auth)/confirm-address/[token]/page.tsx':
     'FR-AU-03; NFR-SE-05 (a): the link that confirms a changed address, which shows a browser without a session of the account neither the address nor the control',
 };

@@ -1,7 +1,7 @@
 // `POST /api/feedback` (FR-AU-74 to FR-AU-78; docs/contracts/feedback-intake.md, "Browser to application").
 // The route checks the origin before this runs (src/app/api/feedback/route.ts). The checks here run in the
 // contract's order: the switch, the session, the notice, the limits, the body, the
-// delivery. Every answer is a code: no text for a reader is written here (fw-strings is open), so each error
+// delivery. Every answer is a code: no text for a reader is written here (fw-strings (D482), fw-refused-text), so each error
 // body carries an empty `message`. The application keeps no copy of a submission and logs only its identifier
 // and the outcome, never the account (FR-AU-76, appsec rule 12).
 import { describeUserAgent } from '../user-agent.ts';
