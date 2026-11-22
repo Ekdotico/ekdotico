@@ -186,7 +186,7 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   await expect(page).toHaveURL('/sign-in/two-factor?return=%2F');
   await expect(page).toHaveTitle('Enter code – Ekdotico');
   await expect(page.getByRole('heading', secondStep)).toBeVisible();
-  expect((await page.request.get('/api/account/onboarding')).status()).toBe(401);
+  expect((await page.request.get('/api/account/closed-alpha-notice')).status()).toBe(401);
   const code = page.getByLabel('Six-digit code');
   await expect(code).toHaveAttribute('autocomplete', 'one-time-code');
   await expectNoSidewaysScroll(page);
@@ -197,7 +197,7 @@ test('two-factor authentication is turned on in the settings, asked for at each 
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(alertOn(page)).toHaveText(CODE_REFUSED);
   await expect(alertOn(page)).toBeFocused();
-  expect((await page.request.get('/api/account/onboarding')).status()).toBe(401);
+  expect((await page.request.get('/api/account/closed-alpha-notice')).status()).toBe(401);
   await screens(page, 'second-step-fault');
   // The right one, by keyboard alone (FR-AU-88).
   await code.fill(await freshCode(secret));
@@ -388,10 +388,10 @@ test('an account of the founding team meets the enrolment first, then the notice
     expect(await page.content()).not.toContain('Account settings');
   }
   // …and every API route refuses the account.
-  const refused = await page.request.get('/api/account/onboarding');
+  const refused = await page.request.get('/api/account/closed-alpha-notice');
   expect(refused.status()).toBe(403);
   expect((await refused.json()).error.code).toBe('two_factor_required');
-  const acknowledged = await page.request.post('/api/account/onboarding/acknowledgement', {
+  const acknowledged = await page.request.post('/api/account/closed-alpha-notice/acknowledgement', {
     data: { version: 1 },
     headers: { origin: new URL(page.url()).origin },
   });

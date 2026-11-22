@@ -39,7 +39,7 @@ const database = prepare('route_origin');
 const { auth, db, valkey } = await load();
 const { proxy } = await import('../../src/proxy.ts');
 const { createDocument } = await import('../../src/lib/documents/documents.ts');
-const { CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/onboarding.ts');
+const { CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/closed-alpha-notice.ts');
 const { hashToken } = await import('../../src/lib/token.ts');
 // Every handler that changes state and must check the origin, by `route METHOD`,
 // read from the route files (tests/routes.ts): a new one has no case below, and fails.
@@ -189,10 +189,10 @@ const CASES: Case[] = [
     status: 200,
   },
   {
-    handler: 'src/app/api/account/onboarding/acknowledgement/route.ts POST',
+    handler: 'src/app/api/account/closed-alpha-notice/acknowledgement/route.ts POST',
     body: { version: CLOSED_ALPHA_NOTICE_VERSION },
     arrange: async () => '',
-    path: () => '/api/account/onboarding/acknowledgement',
+    path: () => '/api/account/closed-alpha-notice/acknowledgement',
     state: (owner) =>
       db().user.findUniqueOrThrow({
         where: { id: owner.id },

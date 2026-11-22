@@ -7,7 +7,7 @@ import {
   CLOSED_ALPHA_NOTICE_BODY,
   CLOSED_ALPHA_NOTICE_TITLE,
   CLOSED_ALPHA_NOTICE_VERSION,
-} from '../../src/lib/onboarding.ts';
+} from '../../src/lib/closed-alpha-notice.ts';
 
 const ALPHA = 'α';
 
