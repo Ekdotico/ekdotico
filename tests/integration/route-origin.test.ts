@@ -66,6 +66,8 @@ const ELSEWHERE: Record<string, string> = {
   // It sends the file of an archive, and reads no body.
   'src/app/api/documents/[id]/export/draft/route.ts POST':
     'tests/integration/export.test.ts: "checks the origin before anything is locked, counted or read"',
+  'src/app/api/feedback/route.ts POST':
+    'tests/integration/feedback-route.test.ts: "refuses a request of another origin 403 and sends nothing"',
 };
 
 // The proxy's answer, byte for byte (src/lib/auth/route-answers.ts).
