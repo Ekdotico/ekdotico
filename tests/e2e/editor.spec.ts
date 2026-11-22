@@ -382,6 +382,9 @@ test('every block and every mark, the controls inside each block, and the toolba
   await expect(doc.locator('tr')).toHaveCount(3);
 });
 
+/** Longer than the 500ms in which the editor counts presses as one double or triple click. */
+const CLICK_WINDOW = 600;
+
 test('the toolbar on the selection opens when the selecting ends: at the release of the pointer, or at once from the keyboard', async ({
   page,
 }) => {
@@ -405,11 +408,25 @@ test('the toolbar on the selection opens when the selecting ends: at the release
   await page.mouse.up();
   await expect(toolbar(page)).toBeVisible();
 
-  // A double click opens it at the release too.
-  await words.dblclick();
+  // A double click opens it at the release too. On the first word, not the paragraph's middle: the paragraph
+  // is as wide as the text area, so its middle can be blank space past the sentence, where what a double
+  // click selects depends on the font.
+  const first = await words.evaluate((paragraph) => {
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild!, 0);
+    range.setEnd(paragraph.firstChild!, 'Selected'.length);
+    const word = range.getBoundingClientRect();
+    return { x: word.left + word.width / 2, y: word.top + word.height / 2 };
+  });
+  // A press within half a second of the last is counted by the editor as the next click of a double or
+  // triple click, so each gesture here waits that long first, as a person's separate gestures do.
+  await page.waitForTimeout(CLICK_WINDOW);
+  await page.mouse.dblclick(first.x, first.y);
+  await expect.poll(() => page.evaluate(() => window.getSelection()!.toString().trim())).toBe('Selected');
   await expect(toolbar(page)).toBeVisible();
 
   // The keyboard: a press in the text closes it, and Shift and an arrow open it at once.
+  await page.waitForTimeout(CLICK_WINDOW);
   await page.mouse.click(box.x + box.width - 2, y);
   await expect(toolbar(page)).toHaveCount(0);
   await page.keyboard.press('Shift+ArrowLeft');
