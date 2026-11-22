@@ -51,8 +51,13 @@ export async function load() {
 
 type Auth = Awaited<ReturnType<typeof load>>['auth'];
 
-/** Creates an account as the admission of FR-AU-90 will: there is no public sign-up. */
-export async function createAccount(auth: Auth, email: string, emailVerified = true) {
+/**
+ * Creates an account as the admission of FR-AU-90 will: there is no public sign-up.
+ *
+ * It is marked as already given its Onboarding paper (src/lib/documents/onboarding-paper.ts), so that a
+ * test about something else meets the list it made. `paper: true` leaves it to be given one.
+ */
+export async function createAccount(auth: Auth, email: string, emailVerified = true, paper = false) {
   const context = await auth().$context;
   const user = await context.internalAdapter.createUser(
     { email, name: 'A Person', emailVerified },
@@ -64,6 +69,10 @@ export async function createAccount(auth: Auth, email: string, emailVerified = t
     accountId: user.id,
     password: await context.password.hash(PASSWORD),
   });
+  if (!paper) {
+    const { db } = await import('../../src/lib/db.ts');
+    await db().user.update({ where: { id: user.id }, data: { onboardingPaperSeededAt: new Date() } });
+  }
   return user.id;
 }
 

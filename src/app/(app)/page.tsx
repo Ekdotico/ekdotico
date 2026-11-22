@@ -1,6 +1,7 @@
 // The first screen after sign-in: the documents of the account (FR-ED-35),
 // with the means to create one, to rename one, and to delete one (FR-ED-36).
 import { listDocuments } from '../../lib/documents/documents.ts';
+import { ensureOnboardingPaper } from '../../lib/documents/onboarding-paper.ts';
 import { settings } from '../../lib/settings.ts';
 import { reading } from '../page-fault.ts';
 import { currentAccount, titled } from './account.ts';
@@ -14,7 +15,10 @@ export default async function Home() {
   // own: nothing of the request chooses whose documents are read.
   const { userId } = await currentAccount();
   // A fault of the read is the page of a fault, and one line (page-fault.ts).
-  const documents = await reading(() => listDocuments(userId));
+  const documents = await reading(async () => {
+    await ensureOnboardingPaper(userId); // never throws
+    return listDocuments(userId);
+  });
   return (
     <Documents
       documents={documents.map(({ id, title, recording, createdAt, canRename, canDelete, clearingAt }) => ({

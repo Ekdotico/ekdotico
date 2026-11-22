@@ -44,6 +44,11 @@ model User {
   closedAlphaNoticeAcknowledgedAt DateTime?
   closedAlphaNoticeVersion        Int?
 
+  // When the Onboarding paper was made for this account, once and for ever: set in the
+  // transaction that inserts it, and never cleared, so that a paper the person deleted is not
+  // made again (src/lib/documents/onboarding-paper.ts). Null until then.
+  onboardingPaperSeededAt DateTime?
+
   // FR-AU-58 (e): when the personal fields of the row were cleared. Null for an
   // account in use. With its `id` and the two columns above, it is what the
   // tombstone keeps; `createdAt` and `updatedAt` are the table's own and cannot

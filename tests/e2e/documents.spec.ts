@@ -274,3 +274,25 @@ test('a second account sees nothing of the first’s documents (NFR-SE-04)', asy
   await page.reload();
   await expect(page.getByRole('listitem').locator('bdi')).toHaveText(DEFAULT_TITLE);
 });
+
+test('a new account is given the Onboarding paper once, as an ordinary document of its own', async ({
+  page,
+}) => {
+  test.slow();
+  await signUp(page, newPerson(), undefined, { paper: true });
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  const row = page.getByRole('listitem');
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('Onboarding');
+  await expect(page.getByText('No documents yet.')).toHaveCount(0);
+
+  // Once: a reload does not make a second.
+  await page.reload();
+  await expect(page.getByRole('listitem')).toHaveCount(1);
+
+  // It opens as any document does, and holds the paper.
+  await page.getByRole('link', { name: 'Onboarding' }).click();
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  await expect(page.getByRole('heading', { level: 2, name: 'Welcome to Ekdotico α' })).toBeVisible();
+});
