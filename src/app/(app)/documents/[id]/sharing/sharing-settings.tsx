@@ -83,6 +83,8 @@ export function SharingSettings({
   // Q49 (3): off unless the person turns it on.
   const [hideTitle, setHideTitle] = useState(false);
   const [sending, setSending] = useState(false);
+  /** Which button was pressed, so that it alone shows busy; the others only wait. */
+  const [pressed, setPressed] = useState<string | null>(null);
   const [fault, setFault] = useState<Fault | null>(null);
   // What the last action answered: the confirmations of FR-ED-21, or a statement.
   const [said, setSaid] = useState<string[]>([]);
@@ -109,13 +111,16 @@ export function SharingSettings({
     router.refresh();
   }
 
-  async function act(path: string, body?: unknown, method: 'POST' | 'DELETE' = 'POST') {
+  async function act(who: string, path: string, body?: unknown, method: 'POST' | 'DELETE' = 'POST') {
+    if (sending) return false;
+    setPressed(who);
     setSending(true);
     setFault(null);
     setPeopleFault(null);
     setSaid([]);
     const sent = await sendFor(path, body, method);
     setSending(false);
+    setPressed(null);
     if ('fault' in sent) {
       setFault(sent.fault);
       // A refusal of the addresses is the field's own: focus goes to the field,
@@ -138,7 +143,13 @@ export function SharingSettings({
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    if (await act(`/api/documents/${view.documentId}/invitations`, { emails: entered, role, hideTitle })) {
+    if (
+      await act('invite', `/api/documents/${view.documentId}/invitations`, {
+        emails: entered,
+        role,
+        hideTitle,
+      })
+    ) {
       setEmails('');
       // Q49 (3): off unless the person turns it on, for each batch of invitations.
       setHideTitle(false);
@@ -182,8 +193,7 @@ export function SharingSettings({
                 {collaborator.mayRemove ? (
                   <Button
                     variant="quiet"
-                    disabled={!ready}
-                    pending={sending}
+                    disabled={!ready || sending}
                     // The visible words are "Remove"; the name begins with them and names the person (WCAG 2.5.3, 2.4.6).
                     aria-label={`Remove ${collaborator.name}`}
                     onClick={() => setRemoving({ id: collaborator.id, name: collaborator.name })}
@@ -245,7 +255,11 @@ export function SharingSettings({
                 onChange={(event) => setHideTitle(event.target.checked)}
               />
               <Cluster>
-                <Button type="submit" disabled={!ready} pending={sending}>
+                <Button
+                  type="submit"
+                  disabled={!ready || (sending && pressed !== 'invite')}
+                  pending={pressed === 'invite'}
+                >
                   Invite
                 </Button>
               </Cluster>
@@ -292,19 +306,28 @@ export function SharingSettings({
                         <Cluster gap={2}>
                           <Button
                             variant="quiet"
-                            disabled={!ready}
-                            pending={sending}
+                            disabled={!ready || (sending && pressed !== `revoke-${invitation.id}`)}
+                            pending={pressed === `revoke-${invitation.id}`}
                             aria-describedby={`invitation-${invitation.id}`}
-                            onClick={() => void act(`${base}/${invitation.id}`, undefined, 'DELETE')}
+                            onClick={() =>
+                              void act(
+                                `revoke-${invitation.id}`,
+                                `${base}/${invitation.id}`,
+                                undefined,
+                                'DELETE',
+                              )
+                            }
                           >
                             Revoke
                           </Button>
                           <Button
                             variant="quiet"
-                            disabled={!ready}
-                            pending={sending}
+                            disabled={!ready || (sending && pressed !== `resend-${invitation.id}`)}
+                            pending={pressed === `resend-${invitation.id}`}
                             aria-describedby={`invitation-${invitation.id}`}
-                            onClick={() => void act(`${base}/${invitation.id}/resend`)}
+                            onClick={() =>
+                              void act(`resend-${invitation.id}`, `${base}/${invitation.id}/resend`)
+                            }
                           >
                             Send again
                           </Button>
