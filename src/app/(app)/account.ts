@@ -11,7 +11,7 @@ import { cache } from 'react';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { validateSession, type ValidSession } from '../../lib/auth/session.ts';
-import { CLOSED_ALPHA_NOTICE_TITLE, onboardingDue } from '../../lib/onboarding.ts';
+import { CLOSED_ALPHA_NOTICE_TITLE, closedAlphaNoticeDue } from '../../lib/closed-alpha-notice.ts';
 import { ensurePersonalWorkspace } from '../../lib/workspace.ts';
 import { SIGN_IN_PATH } from '../../proxy.ts';
 import { reading } from '../page-fault.ts';
@@ -63,7 +63,7 @@ export const currentAccount = cache(async (): Promise<CurrentAccount> => {
   return {
     ...session,
     enrolmentDue: false,
-    noticeDue: await reading(() => onboardingDue(session.userId)),
+    noticeDue: await reading(() => closedAlphaNoticeDue(session.userId)),
   };
 });
 
