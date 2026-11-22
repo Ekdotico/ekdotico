@@ -36,7 +36,7 @@ export default function Visitors() {
       <p className={styles.text}>{VISITORS_INTRO}</p>
       <p className={styles.text}>
         {ask.before}
-        {contactAddress ? <a href={`mailto:${contactAddress}`}>{contactAddress}</a> : null}
+        {contactAddress ? <a href={`mailto:${contactAddress}`} target="_blank" rel="noopener noreferrer">{contactAddress}<span className="sr-only"> (opens in a new tab)</span></a> : null}
         {ask.after}
       </p>
       <p className={styles.text}>
