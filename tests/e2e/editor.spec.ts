@@ -2924,9 +2924,9 @@ test('the words of a refusal are heard at each refusal, and go when the document
   await place(doc.locator('figure figure td').first());
   // Everything the region a screen reader hears is given, from here on.
   await page.evaluate(() => {
-    const region = [...document.querySelectorAll('[role="status"]')].find(
-      (each) => !each.closest('[role="textbox"]') && each.classList.contains('sr-only'),
-    )!;
+    // The region of refusals. A second standing region, for the statements about the document, is
+    // in the page too (141), so "the first status that is visually hidden" no longer names it.
+    const region = document.querySelector('[role="status"][data-heard="refusal"]')!;
     const heard = ((window as unknown as { heard: string[] }).heard = [] as string[]);
     new MutationObserver(() => heard.push(region.textContent ?? '')).observe(region, {
       childList: true,
