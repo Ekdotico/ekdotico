@@ -182,7 +182,8 @@ export function SharingSettings({
                 {collaborator.mayRemove ? (
                   <Button
                     variant="quiet"
-                    disabled={!ready || sending}
+                    disabled={!ready}
+                    pending={sending}
                     // The visible words are "Remove"; the name begins with them and names the person (WCAG 2.5.3, 2.4.6).
                     aria-label={`Remove ${collaborator.name}`}
                     onClick={() => setRemoving({ id: collaborator.id, name: collaborator.name })}
@@ -244,7 +245,7 @@ export function SharingSettings({
                 onChange={(event) => setHideTitle(event.target.checked)}
               />
               <Cluster>
-                <Button type="submit" disabled={!ready || sending}>
+                <Button type="submit" disabled={!ready} pending={sending}>
                   Invite
                 </Button>
               </Cluster>
@@ -291,7 +292,8 @@ export function SharingSettings({
                         <Cluster gap={2}>
                           <Button
                             variant="quiet"
-                            disabled={!ready || sending}
+                            disabled={!ready}
+                            pending={sending}
                             aria-describedby={`invitation-${invitation.id}`}
                             onClick={() => void act(`${base}/${invitation.id}`, undefined, 'DELETE')}
                           >
@@ -299,7 +301,8 @@ export function SharingSettings({
                           </Button>
                           <Button
                             variant="quiet"
-                            disabled={!ready || sending}
+                            disabled={!ready}
+                            pending={sending}
                             aria-describedby={`invitation-${invitation.id}`}
                             onClick={() => void act(`${base}/${invitation.id}/resend`)}
                           >
