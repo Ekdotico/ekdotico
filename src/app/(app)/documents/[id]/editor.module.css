@@ -287,3 +287,22 @@
 .selection10 {
   background-color: var(--collab-10-soft);
 }
+
+/* In forced colours the browser drops every background, so another person's selection, which is a wash and
+   nothing else, would not show at all (WCAG 1.4.11). It is drawn as the system's selection, as the design
+   package draws its own (appearance.css). The label above the caret still names whose it is. */
+@media (forced-colors: active) {
+  .selection1,
+  .selection2,
+  .selection3,
+  .selection4,
+  .selection5,
+  .selection6,
+  .selection7,
+  .selection8,
+  .selection9,
+  .selection10 {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}
