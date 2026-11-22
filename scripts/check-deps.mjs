@@ -9,6 +9,11 @@ import { readFileSync } from 'node:fs';
 const FREE = new Set(['MIT', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0', 'ISC', 'CC0-1.0']);
 // Reviewed: package name -> the licence that was reviewed and where the review is recorded.
 const REVIEWED = {
+  '@axe-core/playwright': {
+    license: 'MPL-2.0',
+    record:
+      'Owner approval of one development dependency for the automated accessibility check, 22 November 2026; weak file-level copyleft, used only by the end-to-end tests and never shipped',
+  },
   '@ekdotico/domico': {
     license: 'AGPL-3.0-only AND LicenseRef-Ekdotico-Brand',
     record: 'Build phases, entry criteria (register D19); the logo terms from 0.43.2 (register D365, D373)',

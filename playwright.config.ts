@@ -90,6 +90,13 @@ export default defineConfig({
       testMatch: '**/insert-button.spec.ts',
       dependencies: ['export'],
     },
+    {
+      // Starts the collaboration server of its own, as the files above do, so it waits for the last of them.
+      name: 'accessibility',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: '**/accessibility.spec.ts',
+      dependencies: ['insert'],
+    },
   ],
   webServer: {
     // Built here, in CI too, and not in a step before: the build holds the
