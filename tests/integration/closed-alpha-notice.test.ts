@@ -1,19 +1,20 @@
-// The Closed α notice on the server (FR-AU-55, FR-AU-56): whether the wizard
+// The Closed α notice on the server (FR-AU-55, FR-AU-56): whether the notice
 // is due, and the record of an acknowledgement. The two routes are called as
 // Next.js calls them, behind the proxy, against a provisioned database.
 import { NextRequest } from 'next/server';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
-const database = prepare('onboarding', { TRUSTED_PROXY_COUNT: '1' });
+const database = prepare('closed_alpha_notice', { TRUSTED_PROXY_COUNT: '1' });
 const { auth, db, valkey } = await load();
 const { proxy } = await import('../../src/proxy.ts');
-const { onboardingDue, CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/onboarding.ts');
-const { GET } = await import('../../src/app/api/account/onboarding/route.ts');
-const { POST } = await import('../../src/app/api/account/onboarding/acknowledgement/route.ts');
+const { closedAlphaNoticeDue, CLOSED_ALPHA_NOTICE_VERSION } =
+  await import('../../src/lib/closed-alpha-notice.ts');
+const { GET } = await import('../../src/app/api/account/closed-alpha-notice/route.ts');
+const { POST } = await import('../../src/app/api/account/closed-alpha-notice/acknowledgement/route.ts');
 
-const READ = '/api/account/onboarding';
-const WRITE = '/api/account/onboarding/acknowledgement';
+const READ = '/api/account/closed-alpha-notice';
+const WRITE = '/api/account/closed-alpha-notice/acknowledgement';
 const passed = (response: Response) => response.headers.get('x-middleware-next') === '1';
 
 const read = (cookie?: string) => GET(new Request(`${ORIGIN}${READ}`, { headers: cookie ? { cookie } : {} }));
@@ -55,10 +56,10 @@ afterAll(async () => {
   database.drop();
 });
 
-describe('whether the wizard is due (FR-AU-55, FR-AU-56)', () => {
+describe('whether the notice is due (FR-AU-55, FR-AU-56)', () => {
   it('is due for an account that has acknowledged nothing, and reports so', async () => {
     const { id, cookie } = await person();
-    expect(await onboardingDue(id)).toBe(true);
+    expect(await closedAlphaNoticeDue(id)).toBe(true);
     const response = await read(cookie);
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
@@ -72,7 +73,7 @@ describe('whether the wizard is due (FR-AU-55, FR-AU-56)', () => {
   it('is not due once the current version is acknowledged, in any session of the account', async () => {
     const { id, email, cookie } = await person();
     expect((await write(cookie, { version: 1 })).status).toBe(200);
-    expect(await onboardingDue(id)).toBe(false);
+    expect(await closedAlphaNoticeDue(id)).toBe(false);
     // Another session, as on another device.
     const other = cookiesOf(await signIn(auth, email));
     const { acknowledgedVersion, acknowledgedAt } = await (await read(other)).json();
@@ -92,17 +93,17 @@ describe('whether the wizard is due (FR-AU-55, FR-AU-56)', () => {
         },
       });
     await set(CLOSED_ALPHA_NOTICE_VERSION - 1);
-    expect(await onboardingDue(id)).toBe(true);
+    expect(await closedAlphaNoticeDue(id)).toBe(true);
     await set(CLOSED_ALPHA_NOTICE_VERSION);
-    expect(await onboardingDue(id)).toBe(false);
+    expect(await closedAlphaNoticeDue(id)).toBe(false);
     await set(CLOSED_ALPHA_NOTICE_VERSION + 1);
-    expect(await onboardingDue(id)).toBe(false);
+    expect(await closedAlphaNoticeDue(id)).toBe(false);
     await set(null);
-    expect(await onboardingDue(id)).toBe(true);
+    expect(await closedAlphaNoticeDue(id)).toBe(true);
   });
 
   it('is due where nothing can be read of the account', async () => {
-    expect(await onboardingDue('no-such-user')).toBe(true);
+    expect(await closedAlphaNoticeDue('no-such-user')).toBe(true);
   });
 });
 
@@ -127,7 +128,7 @@ describe('the acknowledgement (FR-AU-56)', () => {
       closedAlphaNoticeVersion: null,
       closedAlphaNoticeAcknowledgedAt: null,
     });
-    expect(await onboardingDue(two.id)).toBe(true);
+    expect(await closedAlphaNoticeDue(two.id)).toBe(true);
   });
 
   it('takes the account from the session and the time from the server, never from the request', async () => {
@@ -181,7 +182,7 @@ describe('the acknowledgement (FR-AU-56)', () => {
       closedAlphaNoticeVersion: null,
       closedAlphaNoticeAcknowledgedAt: null,
     });
-    expect(await onboardingDue(id)).toBe(true);
+    expect(await closedAlphaNoticeDue(id)).toBe(true);
   });
 
   it('refuses a body that is not exactly a version with a 422, and records nothing', async () => {
@@ -269,7 +270,7 @@ describe('the session of the two routes (NFR-SE-02, FR-AU-07)', () => {
     expect((await recorded(id)).closedAlphaNoticeVersion).toBeNull();
   });
 
-  it('does not ask whether the notice is acknowledged: the wizard gates pages, not API routes', async () => {
+  it('does not ask whether the notice is acknowledged: the notice gates pages, not API routes', async () => {
     const { cookie } = await person();
     // Unacknowledged, and both routes answer.
     expect((await read(cookie)).status).toBe(200);
@@ -290,8 +291,8 @@ describe('the session of the two routes (NFR-SE-02, FR-AU-07)', () => {
       );
     }
     expect(errors.mock.calls).toEqual([
-      ['onboarding: request failed (Error)'],
-      ['onboarding: request failed (Error)'],
+      ['closed-alpha-notice: request failed (Error)'],
+      ['closed-alpha-notice: request failed (Error)'],
     ]);
   });
 });

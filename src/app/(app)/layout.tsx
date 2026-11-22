@@ -9,7 +9,7 @@ import {
   CLOSED_ALPHA_NOTICE_BODY,
   CLOSED_ALPHA_NOTICE_TITLE,
   CLOSED_ALPHA_NOTICE_VERSION,
-} from '../../lib/onboarding.ts';
+} from '../../lib/closed-alpha-notice.ts';
 import { reading } from '../page-fault.ts';
 import styles from '../pages.module.css';
 import { currentAccount, ENROLMENT_TITLE } from './account.ts';
