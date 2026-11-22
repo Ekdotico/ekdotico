@@ -382,6 +382,57 @@ test('every block and every mark, the controls inside each block, and the toolba
   await expect(doc.locator('tr')).toHaveCount(3);
 });
 
+/** Longer than the 500ms in which the editor counts presses as one double or triple click. */
+const CLICK_WINDOW = 600;
+
+test('the toolbar on the selection opens when the selecting ends: at the release of the pointer, or at once from the keyboard', async ({
+  page,
+}) => {
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('Selected by a drag of the pointer.');
+  const words = text(page).locator('p').first();
+  const box = (await words.boundingBox())!;
+  const y = box.y + box.height / 2;
+
+  // Hidden while the button is held, however far the selection has gone.
+  await page.mouse.move(box.x + 2, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, y, { steps: 5 });
+  await expect.poll(() => page.evaluate(() => window.getSelection()!.toString().length)).toBeGreaterThan(0);
+  await expect(toolbar(page)).toHaveCount(0);
+  // Released outside the text: the toolbar opens over the selection.
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height + 200, { steps: 5 });
+  await expect(toolbar(page)).toHaveCount(0);
+  await page.mouse.up();
+  await expect(toolbar(page)).toBeVisible();
+
+  // A double click opens it at the release too. On the first word, not the paragraph's middle: the paragraph
+  // is as wide as the text area, so its middle can be blank space past the sentence, where what a double
+  // click selects depends on the font.
+  const first = await words.evaluate((paragraph) => {
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild!, 0);
+    range.setEnd(paragraph.firstChild!, 'Selected'.length);
+    const word = range.getBoundingClientRect();
+    return { x: word.left + word.width / 2, y: word.top + word.height / 2 };
+  });
+  // A press within half a second of the last is counted by the editor as the next click of a double or
+  // triple click, so each gesture here waits that long first, as a person's separate gestures do.
+  await page.waitForTimeout(CLICK_WINDOW);
+  await page.mouse.dblclick(first.x, first.y);
+  await expect.poll(() => page.evaluate(() => window.getSelection()!.toString().trim())).toBe('Selected');
+  await expect(toolbar(page)).toBeVisible();
+
+  // The keyboard: a press in the text closes it, and Shift and an arrow open it at once.
+  await page.waitForTimeout(CLICK_WINDOW);
+  await page.mouse.click(box.x + box.width - 2, y);
+  await expect(toolbar(page)).toHaveCount(0);
+  await page.keyboard.press('Shift+ArrowLeft');
+  await expect(toolbar(page)).toBeVisible();
+});
+
 test('two browsers that edit one document converge', async ({ page, browser }) => {
   const person = await enter(page);
   await openNew(page);

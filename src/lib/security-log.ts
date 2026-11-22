@@ -50,6 +50,8 @@ const KINDS = [
   // Step (c) with the switch off: it "is recorded as skipped" (FR-AU-58 (c)), and NFR-SE-19 logs
   // "each step". Written with the record of the skip, in its transaction (docs/plan/slice-22.md, S22-8).
   'account_deletion_feedback_skipped',
+  // Step (g), the second call to the feedback intake (fw-late-write).
+  'account_deletion_feedback_repeated',
   'account_deletion_credentials_deleted',
   'account_deletion_user_pseudonymised',
   'account_deletion_roles_ended',
@@ -85,6 +87,7 @@ export type ChangeKind = Extract<
   | 'account_deletion_istorico_pseudonymised'
   | 'account_deletion_feedback_pseudonymised'
   | 'account_deletion_feedback_skipped'
+  | 'account_deletion_feedback_repeated'
   | 'account_deletion_credentials_deleted'
   | 'account_deletion_user_pseudonymised'
   | 'account_deletion_roles_ended'

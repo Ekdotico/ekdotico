@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, FormFault, PageHeading, Stack } from '@ekdotico/domico/components';
 import { useReady } from '../../../../components/ready.ts';
 import { send, type Fault } from '../../../../components/send.ts';
@@ -66,6 +66,13 @@ export function ConfirmForm({ token, newEmail }: { token: string; newEmail: stri
   const [pending, setPending] = useState(false);
   const ready = useReady();
   const [done, setDone] = useState(false);
+  const statement = useRef<HTMLParagraphElement>(null);
+
+  // The statement takes the form's place and takes focus: the button that was
+  // pressed is gone, and a screen reader reads what focus lands on (WCAG 2.4.3).
+  useEffect(() => {
+    if (done) statement.current?.focus();
+  }, [done]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -87,7 +94,7 @@ export function ConfirmForm({ token, newEmail }: { token: string; newEmail: stri
       {done ? (
         <>
           {/* FR-AU-03: what the change did, and what follows from it. */}
-          <p className={styles.text}>
+          <p className={styles.text} ref={statement} tabIndex={-1}>
             The email address of the Ekdotico account is now {newEmail}. Sign-in uses this address. Every
             other session of the account has ended.
           </p>

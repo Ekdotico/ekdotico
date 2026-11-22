@@ -58,6 +58,10 @@ const LIMITS = {
   CONFIRMATION_EMAIL_PER_USER: [3, 3600],
   /** Requests to the admission endpoints, in all. */
   ADMISSION: [60, 60],
+  /** FR-AU-78: feedback the intake accepted, for each account: 5 in any 10 minutes. */
+  FEEDBACK_SHORT_PER_USER: [5, 600],
+  /** FR-AU-78: feedback the intake accepted, for each account: 30 in any 24 hours. */
+  FEEDBACK_DAY_PER_USER: [30, 86400],
   /**
    * Messages that carry an update of a document, for each authenticated user
    * on one collaboration server. No row of NFR-SE-07 yet: the owner's decision
@@ -224,6 +228,7 @@ export interface Settings {
   healthcheckTimersUrl: string | undefined;
   /** D274, D320: the ping address of the check of email health. Absent: nothing is called. */
   healthcheckEmailUrl: string | undefined;
+  healthcheckDeletionUrl: string | undefined;
   limits: Readonly<Record<LimitName, Limit>>;
 }
 
@@ -288,6 +293,24 @@ function admissionSecret(env: Env): string | undefined {
   if (value === undefined || value === '') return undefined;
   if (!/^[A-Za-z0-9_-]{43,}$/.test(value)) {
     throw new Error('ADMISSION_SECRET must be at least 43 characters of A to Z, a to z, 0 to 9, - and _.');
+  }
+  return value;
+}
+
+/**
+ * The key of the signed requests to the feedback intake (FR-AU-75, NFR-SE-17 (e); docs/contracts/feedback-intake.md,
+ * "The secret"): the form of the admission secret, and neither it nor the authentication secret. Read when the
+ * first request is signed and never at load, so that a bad value stops feedback and nothing else. Throws without
+ * quoting the value.
+ */
+export function feedbackSecret(env: Env = process.env): string {
+  const value = env.FEEDBACK_SECRET;
+  if (value === undefined || value === '') throw new Error('FEEDBACK_SECRET is not set.');
+  if (!/^[A-Za-z0-9_-]{43,}$/.test(value)) {
+    throw new Error('FEEDBACK_SECRET must be at least 43 characters of A to Z, a to z, 0 to 9, - and _.');
+  }
+  if (value === env.ADMISSION_SECRET || value === env.AUTH_SECRET) {
+    throw new Error('FEEDBACK_SECRET must differ from ADMISSION_SECRET and AUTH_SECRET.');
   }
   return value;
 }
@@ -660,6 +683,7 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
     exportNameMaxChars: exportNameMaxChars(env),
     healthcheckTimersUrl: checkInUrl(env, 'HEALTHCHECK_TIMERS_URL'),
     healthcheckEmailUrl: checkInUrl(env, 'HEALTHCHECK_EMAIL_URL'),
+    healthcheckDeletionUrl: checkInUrl(env, 'HEALTHCHECK_DELETION_URL'),
     limits,
   };
 }

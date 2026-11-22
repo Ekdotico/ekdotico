@@ -85,6 +85,36 @@ test('the control is not seen at rest, appears under the pointer and on focus, a
   await expect(text(page).locator('h1')).toHaveCount(1);
 });
 
+test('on a very wide screen the box grows with the interface scale, and the plus stays at its middle', async ({
+  page,
+}) => {
+  // 2200px and wider sets --scale: 1.5 (src/app/scale.css), which enlarges the design package's icons.
+  await page.setViewportSize({ width: 2400, height: 1000 });
+  await enter(page);
+  await shareNew(page);
+  await page.goBack();
+  const button = page.getByRole('button', { name: NAME });
+  await expect(button).toBeVisible();
+  const { box, plus } = await button.evaluate((element) => {
+    const own = element.getBoundingClientRect();
+    const icon = element.querySelector('svg')!.getBoundingClientRect();
+    return {
+      box: { width: own.width, height: own.height },
+      plus: {
+        width: icon.width,
+        height: icon.height,
+        dx: icon.left + icon.width / 2 - (own.left + own.width / 2),
+        dy: icon.top + icon.height / 2 - (own.top + own.height / 2),
+      },
+    };
+  });
+  // 20 by 20 at 1.5 is 30 by 30, and the icon keeps its own 24 by 24 inside it, square and centred.
+  expect(box).toEqual({ width: 30, height: 30 });
+  expect(plus.width).toBe(plus.height);
+  expect(Math.abs(plus.dx)).toBeLessThan(0.5);
+  expect(Math.abs(plus.dy)).toBeLessThan(0.5);
+});
+
 test('the control does not move the layout as the cursor moves, and a Viewer has none', async ({
   page,
   browser,

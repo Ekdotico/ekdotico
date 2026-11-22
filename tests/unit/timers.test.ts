@@ -42,7 +42,7 @@ vi.mock('../../src/lib/images/deletion.ts', () => ({ deleteExpiredImagesNow }));
 // NFR-RE-15, FR-AU-58: the steps of an account deletion, which run beside them
 // (tests/integration/account-deletion.test.ts runs them against a database).
 const carryOutDeletions = vi.hoisted(() =>
-  vi.fn(async () => ({ steps: 0, completed: 0, failed: 0, overdue: 0 })),
+  vi.fn(async () => ({ steps: 0, completed: 0, failed: 0, overdue: 0, stuckAtFeedback: 0 })),
 );
 vi.mock('../../src/lib/account/deletion-steps.ts', () => ({ carryOutDeletions }));
 
@@ -171,7 +171,13 @@ it('runs the steps of an account deletion at start and each hour, and says how m
   await vi.advanceTimersByTimeAsync(0);
   expect(carryOutDeletions).toHaveBeenCalledTimes(1);
   expect(stdout).not.toHaveBeenCalled();
-  carryOutDeletions.mockResolvedValueOnce({ steps: 3, completed: 1, failed: 0, overdue: 0 });
+  carryOutDeletions.mockResolvedValueOnce({
+    steps: 3,
+    completed: 1,
+    failed: 0,
+    overdue: 0,
+    stuckAtFeedback: 0,
+  });
   await vi.advanceTimersByTimeAsync(HOUR_MS);
   expect(carryOutDeletions).toHaveBeenCalledTimes(2);
   // It deletes nothing it counts: it carried out steps.

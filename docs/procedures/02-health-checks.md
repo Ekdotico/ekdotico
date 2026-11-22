@@ -23,7 +23,7 @@ Two alerts are tested, each with its own window: the one of Healthchecks.io, whi
 
 ## Met when
 
-Each of the two stops raised an email to the owner from Healthchecks.io that names the check, no later than the period and the grace time recorded in step 2 after the last check-in, which is three minutes at most (one minute of period and two of grace), and, from the DigitalOcean checks, an alert to the owner no earlier than the second failed check and no later than the third; and the hour of step 5 raised no alert from either.
+Each of the two stops raised an email to the owner from Healthchecks.io that names the check, no later than five minutes after the last check-in (one minute of period and two of grace, as recorded in step 2, and up to two minutes for the service to send the email and for it to arrive; register D395), and, from the DigitalOcean checks, an alert to the owner no earlier than the second failed check and no later than the third; and the hour of step 5 raised no alert from either.
 
 ## Result
 
