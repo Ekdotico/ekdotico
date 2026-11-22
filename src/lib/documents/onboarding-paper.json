@@ -12,7 +12,7 @@
       "content": [
         {
           "type": "text",
-          "text": "This is Ekdotico α. α (alpha) is the first release of Ekdotico, made for a small group of people to try. This document teaches the editor, and it is also an example of it: each block you read here is a block you can change. The document belongs to your account, so you can edit it, rename it, or delete it."
+          "text": "This is Ekdotico α. α (alpha) is an early version of Ekdotico, made for a small group of people to try. This document teaches the editor, and it is also an example of it: each block you read here is a block you can change. The document belongs to your account, so you can edit it, rename it, or delete it."
         }
       ]
     },
@@ -25,7 +25,7 @@
           "content": [
             {
               "type": "text",
-              "text": "Changes are saved as you type. The indicator beside the title says when the working version is in sync."
+              "text": "The document saves itself. The indicator in the row of controls under the title says whether the working version is in sync."
             }
           ]
         }
@@ -41,7 +41,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Select some words. A toolbar appears with nine controls. This sentence shows each one: "
+          "text": "Select some words. A toolbar named Formatting appears with nine controls. This sentence shows each one: "
         },
         { "type": "text", "marks": [{ "type": "bold" }], "text": "bold" },
         { "type": "text", "text": ", " },
@@ -98,7 +98,7 @@
                   "content": [
                     {
                       "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Effect on selected text" }]
+                      "content": [{ "type": "text", "text": "What it does" }]
                     }
                   ]
                 }
@@ -120,7 +120,10 @@
                 {
                   "type": "tableCell",
                   "content": [
-                    { "type": "paragraph", "content": [{ "type": "text", "text": "Makes the text bold" }] }
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Makes the selected text bold" }]
+                    }
                   ]
                 }
               ]
@@ -141,7 +144,10 @@
                 {
                   "type": "tableCell",
                   "content": [
-                    { "type": "paragraph", "content": [{ "type": "text", "text": "Makes the text italic" }] }
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Makes the selected text italic" }]
+                    }
                   ]
                 }
               ]
@@ -162,7 +168,10 @@
                 {
                   "type": "tableCell",
                   "content": [
-                    { "type": "paragraph", "content": [{ "type": "text", "text": "Underlines the text" }] }
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Underlines the selected text" }]
+                    }
                   ]
                 }
               ]
@@ -187,7 +196,7 @@
                   "content": [
                     {
                       "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Strikes the text through" }]
+                      "content": [{ "type": "text", "text": "Strikes the selected text through" }]
                     }
                   ]
                 }
@@ -209,7 +218,10 @@
                 {
                   "type": "tableCell",
                   "content": [
-                    { "type": "paragraph", "content": [{ "type": "text", "text": "Sets the text as code" }] }
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Sets the selected text as code" }]
+                    }
                   ]
                 }
               ]
@@ -353,7 +365,7 @@
       "content": [
         {
           "type": "text",
-          "text": "A block is one piece of a document, such as a paragraph, a list, or a table. To add one, type / at the start of a line. A list of blocks opens. Type letters to narrow it, then choose a block."
+          "text": "A block is one piece of a document, such as a paragraph, a list, or a table. To add one, type / at the start of a line. A list named Blocks opens. Type letters to narrow it, then choose a block."
         }
       ]
     },
@@ -362,7 +374,7 @@
       "content": [
         {
           "type": "text",
-          "text": "A plus button also appears beside the cursor at the end of a line when the pointer is near it. Pressing it opens the same list."
+          "text": "A plus button named Insert a block also appears beside the cursor at the end of a line when the pointer is near it. Pressing it opens the same list."
         }
       ]
     },
@@ -375,14 +387,26 @@
           "content": [
             {
               "type": "paragraph",
-              "content": [{ "type": "text", "text": "Text, Heading 1, Heading 2, Heading 3" }]
+              "content": [{ "type": "text", "text": "Text" }]
             }
           ]
         },
         {
           "type": "listItem",
           "content": [
-            { "type": "paragraph", "content": [{ "type": "text", "text": "Bullet list and Numbered list" }] }
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Heading 1, Heading 2, and Heading 3" }]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Bulleted list and Numbered list" }]
+            }
           ]
         },
         {
@@ -395,7 +419,7 @@
         },
         {
           "type": "listItem",
-          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Code" }] }]
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Code block" }] }]
         },
         {
           "type": "listItem",
@@ -460,7 +484,7 @@
                 { "type": "text", "marks": [{ "type": "code" }], "text": "-" },
                 { "type": "text", "text": " or " },
                 { "type": "text", "marks": [{ "type": "code" }], "text": "*" },
-                { "type": "text", "text": " and a space make a bullet list." }
+                { "type": "text", "text": " and a space make a bulleted list." }
               ]
             }
           ]
@@ -528,9 +552,9 @@
             {
               "type": "paragraph",
               "content": [
-                { "type": "text", "text": "Select the line, type " },
+                { "type": "text", "text": "Type " },
                 { "type": "text", "marks": [{ "type": "code" }], "text": "1." },
-                { "type": "text", "text": " and a space." }
+                { "type": "text", "text": " and a space at the start of a line." }
               ]
             }
           ]
@@ -567,7 +591,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Choose Table from the list to add a table of three rows and three columns. Place the cursor in a cell to open the table menu, where you can add or delete rows and columns, merge or split cells, and add a header row. A header row names the columns, which a screen reader reads aloud."
+          "text": "Choose Table from the list to add a table of three rows and three columns. Each table has a menu named Table. It holds actions to add or delete rows and columns, merge or split cells, and add a header row. A header row names the columns, which a screen reader reads aloud."
         }
       ]
     },
@@ -623,7 +647,7 @@
         { "type": "footnoteReference", "attrs": { "id": "0123456789abcdef01234567" } },
         {
           "type": "text",
-          "text": " To add an image, choose Image, then pick a PNG, JPEG, or WebP file of up to 20 MB. Give each image alt text, which is a short description for people who cannot see it."
+          "text": " To add an image, choose Image from the list of blocks. A file picker opens. Pick a PNG, JPEG, or WebP file of up to 20 MB. Give each image alt text, which is a short description for people who cannot see it."
         }
       ]
     },
@@ -638,7 +662,7 @@
       "content": [
         {
           "type": "text",
-          "text": "The Sharing button above the title opens the sharing page. There the Owner of a document invites people and gives each an Editor or Viewer role. An Editor can change the document. A Viewer can read it. When several people have a document open, each person's cursor shows in a colour, and their initials appear beside the Sharing button."
+          "text": "The Sharing button above the document opens the sharing page. There the Owner of a document invites people and gives each an Editor or Viewer role. An Editor can change the document. A Viewer can read it. When several people have a document open, each person's cursor shows in a colour, and their initials appear beside the Sharing button."
         }
       ]
     },
@@ -648,7 +672,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Choose Export as Markdown to download the document as a Markdown file, with its images, in one archive. Markdown is a plain-text way of writing that other tools can read."
+          "text": "Choose Export as Markdown to save the document as a Markdown file, with its images, in one archive. Markdown is a plain-text way of writing that other tools can read."
         }
       ]
     },
@@ -657,7 +681,7 @@
       "content": [
         {
           "type": "text",
-          "text": "In the list of documents, Rename changes a title and Delete document removes a document. A deleted document stays in Deleted documents for 30 days, and can be restored there."
+          "text": "In the list of documents, Rename changes a title and Delete document removes a document. A deleted document is kept for a time in Deleted documents, and can be restored there."
         }
       ]
     },

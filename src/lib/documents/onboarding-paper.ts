@@ -69,15 +69,17 @@ function element(node: PaperNode): Y.XmlElement {
   return made;
 }
 
-/** The first content of the document, as the server stores it. */
+/** The first content of the document, as the server stores it. Built once for the life of the process. */
+let built: Uint8Array<ArrayBuffer> | undefined;
 export function onboardingState(): Uint8Array<ArrayBuffer> {
+  if (built) return built;
   const document = new Y.Doc();
   document.clientID = CLIENT_ID;
   const blocks = (onboardingPaper.content ?? []).map(element);
   document.getXmlFragment(FRAGMENT_NAME).insert(0, blocks);
-  const state = encodeState(document);
+  built = encodeState(document);
   document.destroy();
-  return state;
+  return built;
 }
 
 /**
@@ -94,6 +96,13 @@ export function onboardingState(): Uint8Array<ArrayBuffer> {
  */
 export async function ensureOnboardingPaper(userId: string): Promise<void> {
   try {
+    // The early exit of every list after the first: one read of the marker, before the workspace is
+    // looked up or the state built. Only a shortcut: the claim below is what makes it once.
+    const known = await db().user.findUnique({
+      where: { id: userId },
+      select: { onboardingPaperSeededAt: true },
+    });
+    if (!known || known.onboardingPaperSeededAt) return;
     const personal = await ensurePersonalWorkspace(userId);
     const recording = istorico().capabilities().recording;
     const state = onboardingState();
