@@ -134,6 +134,10 @@ test('the control does not move the layout as the cursor moves, and a Viewer has
   await expect(his.getByRole('button', { name: NAME })).toHaveCount(0);
 
   await page.goto(`/documents/${id}`);
+  // The page is measured once it has settled: the status in the header and the people beside it change as the
+  // connection opens (openNew of editor.spec.ts waits for the same two).
+  await expect(text(page)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'In sync' })).toBeVisible();
   await text(page).pressSequentially('One\nTwo\nThree');
   const before = await text(page).boundingBox();
   const stateBefore = await layoutState(text(page));
