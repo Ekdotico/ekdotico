@@ -185,6 +185,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       return (
         <Link
           id={`open-${notification.id}`}
+          aria-describedby={`words-${notification.id}`}
           href={`/invitations/received/${encodeURIComponent(notification.invitationId)}`}
         >
           Open the invitation
@@ -193,7 +194,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
     case 'ownership_offer_ended':
       if (notification.inTrash) {
         return (
-          <Link id={`open-${notification.id}`} href="/deleted">
+          <Link id={`open-${notification.id}`} aria-describedby={`words-${notification.id}`} href="/deleted">
             Open the deleted documents
           </Link>
         );
@@ -205,6 +206,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       return (
         <Link
           id={`open-${notification.id}`}
+          aria-describedby={`words-${notification.id}`}
           href={`/documents/${encodeURIComponent(notification.documentId)}`}
         >
           Open the document
@@ -214,6 +216,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       return (
         <Link
           id={`open-${notification.id}`}
+          aria-describedby={`words-${notification.id}`}
           href={`/ownership-offers/${encodeURIComponent(notification.offerId)}`}
         >
           Open the offer
@@ -221,7 +224,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       );
     case 'two_factor_offer':
       return (
-        <Link id={`open-${notification.id}`} href="/settings">
+        <Link id={`open-${notification.id}`} aria-describedby={`words-${notification.id}`} href="/settings">
           Open the settings
         </Link>
       );
@@ -282,7 +285,8 @@ export function NotificationList({ notifications }: { notifications: Notificatio
                   {notification.read ? null : (
                     <Button
                       variant="quiet"
-                      disabled={marking !== null}
+                      pending={marking !== null}
+                      aria-describedby={`words-${notification.id}`}
                       onClick={() => void markRead(notification.id)}
                     >
                       Mark as read
