@@ -84,3 +84,7 @@ Do not guess, stub, or "fill the gap", and do not build a Not decided row behind
 - Points to observe in user testing are kept in `docs/user-testing/open-issues.md`; add to it when the owner decides something provisionally.
 - Do not auto-commit while the owner is reviewing as they go. Merge a pull request only when asked, and never the Release PR.
 - UI copy follows the Expression Guidelines in `@ekdotico/domico`; British spelling; the controlled vocabulary names one term per concept ("research workspace assistant", "Task tracker", "planning canvas", "auto-add", "enrolment").
+
+## External links open in a new tab
+
+Every link that leaves the site opens in a new tab: `http(s):` to another origin (sister sites included), `mailto:` and `tel:`. Write `target="_blank" rel="noopener noreferrer"` and `<span className="sr-only"> (opens in a new tab)</span>`, or put the same words in the `aria-label` of an icon-only link. Internal links stay in the same tab. The owner decided this on 2026-11-23. The pattern is in `node_modules/@ekdotico/domico/AGENTS.md`.
