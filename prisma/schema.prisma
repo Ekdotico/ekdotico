@@ -561,6 +561,7 @@ model AccountDeletion {
   istoricoDoneAt    DateTime?
   feedbackDoneAt    DateTime?
   feedbackSkippedAt DateTime?
+  feedbackAgainDoneAt DateTime?
   credentialsDoneAt DateTime?
   rowsDoneAt        DateTime?
   completedAt       DateTime?

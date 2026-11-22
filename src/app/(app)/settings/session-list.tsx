@@ -71,7 +71,7 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
   return (
     <Stack gap={5}>
       {fault ? <FormFault title={fault.message} focusKey={attempt} headingLevel={3} /> : null}
-      <ul className={styles.list}>
+      <ul className={styles.sessionList}>
         {sessions.map((session) => (
           <li key={session.id} className={styles.item}>
             <Stack gap={3}>

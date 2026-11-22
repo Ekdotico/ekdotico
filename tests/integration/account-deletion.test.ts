@@ -44,7 +44,6 @@ const { makeOffer, deliverOffer } = await import('../../src/lib/documents/owners
 const { remindInvitations } = await import('../../src/lib/documents/invitation-timers.ts');
 const { findOpenReset } = await import('../../src/lib/auth/password.ts');
 const { hashToken, newToken } = await import('../../src/lib/token.ts');
-const { FeedbackIntakeUnbuilt } = await import('../../src/lib/account/feedback-step.ts');
 const { ensurePersonalWorkspace } = await import('../../src/lib/workspace.ts');
 const { defaultPermissionSet } = await import('../../src/lib/documents/permissions.ts');
 const { confirmDeletion, ownedDocuments } = await import('../../src/lib/account/deletion.ts');
@@ -630,7 +629,7 @@ describe('the steps, in order, each repeated until it succeeds (FR-AU-58; NFR-RE
     const who = await person();
     await signIn(auth, who.email, PASSWORD, net());
     await confirm(who.id);
-    const outcome = await carryOutDeletions();
+    const outcome = await carryOutDeletions(new Date(), { feedback: { wait: async () => {} } });
     expect(outcome).toMatchObject({ steps: 4, completed: 1, failed: 0, overdue: 0 });
     const record = (await recordOf(who.id))!;
     const times = [
@@ -729,6 +728,26 @@ describe('the steps, in order, each repeated until it succeeds (FR-AU-58; NFR-RE
     update(`"credentialsDoneAt" = now()`);
     update(`"rowsDoneAt" = now()`);
     update(`"completedAt" = now()`);
+  });
+
+  it('holds the second call to the intake to its place: after (c) was done and the rows, and before the end', async () => {
+    const who = await person();
+    await confirm(who.id);
+    const update = (set: string) =>
+      database.sql(`UPDATE "AccountDeletion" SET ${set} WHERE "userId" = '${who.id}'`);
+    update(`"istoricoDoneAt" = now()`);
+    // Not after a skipped step (c), and not before the rows.
+    expect(() => update(`"feedbackSkippedAt" = now(), "feedbackAgainDoneAt" = now()`)).toThrow(
+      /AccountDeletion_feedback_again_after_rows/,
+    );
+    update(`"feedbackDoneAt" = now(), "credentialsDoneAt" = now()`);
+    expect(() => update(`"feedbackAgainDoneAt" = now()`)).toThrow(
+      /AccountDeletion_feedback_again_after_rows/,
+    );
+    update(`"rowsDoneAt" = now()`);
+    // A deletion whose (c) made its call is not complete without the second.
+    expect(() => update(`"completedAt" = now()`)).toThrow(/AccountDeletion_completed_after_feedback_again/);
+    update(`"feedbackAgainDoneAt" = now(), "completedAt" = now()`);
   });
 
   it('is taken by one run when two reach it together: the other does nothing and says nothing', async () => {
@@ -945,7 +964,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       if (value !== undefined) process.env.FEEDBACK_INTAKE_ENABLED = value;
       const who = await person();
       await confirm(who.id);
-      const outcome = await carryOutDeletions(new Date(), { feedback: { intake: intake(true) } });
+      const outcome = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
       expect(outcome).toMatchObject({ steps: 4, completed: 1 });
       expect(calls).toEqual([]);
       const record = (await recordOf(who.id))!;
@@ -961,15 +982,126 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
     process.env.FEEDBACK_INTAKE_ENABLED = 'true';
     const who = await person();
     await confirm(who.id);
-    const outcome = await carryOutDeletions(new Date(), { feedback: { intake: intake(true) } });
-    expect(outcome).toMatchObject({ steps: 4, completed: 1 });
+    const outcome = await carryOutDeletions(new Date(), {
+      feedback: { wait: async () => {}, intake: intake(true) },
+    });
+    // Four steps, and the deletion is not complete: the second call (g) is owed 360 seconds after (c).
+    expect(outcome).toMatchObject({ steps: 4, completed: 0, failed: 0 });
     expect(calls).toEqual([who.id]);
     const record = (await recordOf(who.id))!;
     expect(record.feedbackDoneAt).not.toBeNull();
     expect(record.feedbackSkippedAt).toBeNull();
+    expect(record.rowsDoneAt).not.toBeNull();
+    expect(record.completedAt).toBeNull();
+    expect(record.feedbackAgainDoneAt).toBeNull();
     const kinds = await entries(who.id);
     expect(kinds).toContain('account_deletion_feedback_pseudonymised');
     expect(kinds).not.toContain('account_deletion_feedback_skipped');
+    expect(kinds).not.toContain('account_deletion_feedback_repeated');
+  });
+
+  // fw-late-write: the second call, step (g), the last.
+  describe('the second call to the intake, step (g)', () => {
+    const second = async () => {
+      process.env.FEEDBACK_INTAKE_ENABLED = 'true';
+      const who = await person();
+      await confirm(who.id);
+      await carryOutDeletions(new Date(), { feedback: { wait: async () => {}, intake: intake(true) } });
+      calls.length = 0;
+      return who;
+    };
+
+    it('is not made before 360 seconds after (c), and is no failure that it waits', async () => {
+      const who = await second();
+      const early = await carryOutDeletions(new Date(Date.now() + 359_000), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(early).toMatchObject({ steps: 0, completed: 0, failed: 0 });
+      expect(calls).toEqual([]);
+      expect((await recordOf(who.id))!.completedAt).toBeNull();
+    });
+
+    it('is made once 360 seconds have passed, the same instruction, and completes the deletion with its entry', async () => {
+      const who = await second();
+      const due = await carryOutDeletions(new Date(Date.now() + 361_000), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(due).toMatchObject({ steps: 1, completed: 1, failed: 0 });
+      expect(calls).toEqual([who.id]);
+      const record = (await recordOf(who.id))!;
+      expect(record.feedbackAgainDoneAt).not.toBeNull();
+      expect(record.completedAt).not.toBeNull();
+      expect(await entries(who.id)).toContain('account_deletion_feedback_repeated');
+      // Done: a later run calls nothing more.
+      await carryOutDeletions(new Date(Date.now() + 400_000), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(calls).toEqual([who.id]);
+    });
+
+    it.each([
+      ['does not acknowledge', false],
+      ['does not answer', 'rejects'],
+    ] as const)(
+      'is repeated where the intake %s, and the deletion stays open until it succeeds',
+      async (_l, how) => {
+        const who = await second();
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const later = () => new Date(Date.now() + 361_000);
+        const failed = await carryOutDeletions(later(), {
+          feedback: { wait: async () => {}, intake: intake(how) },
+        });
+        expect(failed).toMatchObject({ steps: 0, completed: 0, failed: 1 });
+        let record = (await recordOf(who.id))!;
+        expect(record.feedbackAgainDoneAt).toBeNull();
+        expect(record.completedAt).toBeNull();
+        const done = await carryOutDeletions(later(), {
+          feedback: { wait: async () => {}, intake: intake(true) },
+        });
+        expect(done).toMatchObject({ steps: 1, completed: 1, failed: 0 });
+        expect(calls).toEqual([who.id, who.id]);
+        record = (await recordOf(who.id))!;
+        expect(record.completedAt).not.toBeNull();
+      },
+    );
+
+    it('is owed with the switch turned off after (c): the call is still made, and a failure leaves the deletion open (fw-detach-switch)', async () => {
+      const who = await second();
+      process.env.FEEDBACK_INTAKE_ENABLED = 'false';
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const later = () => new Date(Date.now() + 361_000);
+      const failed = await carryOutDeletions(later(), {
+        feedback: { wait: async () => {}, intake: intake(false) },
+      });
+      expect(calls).toEqual([who.id]);
+      expect(failed).toMatchObject({ steps: 0, completed: 0, failed: 1 });
+      expect((await recordOf(who.id))!.completedAt).toBeNull();
+      const done = await carryOutDeletions(later(), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(done).toMatchObject({ steps: 1, completed: 1, failed: 0 });
+      expect(calls).toEqual([who.id, who.id]);
+    });
+
+    it('is covered by the alarm of 24 hours, counted once and naming no account', async () => {
+      const who = await second();
+      await db().accountDeletion.update({
+        where: { userId: who.id },
+        data: {
+          requestedAt: new Date(Date.now() - 49 * 3600_000),
+          feedbackDoneAt: new Date(Date.now() - 25 * 3600_000),
+        },
+      });
+      const written: string[] = [];
+      vi.spyOn(console, 'error').mockImplementation(
+        (...parts: unknown[]) => void written.push(parts.join(' ')),
+      );
+      const stuck = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(false) },
+      });
+      expect(stuck).toMatchObject({ failed: 1, stuckAtFeedback: 1 });
+      expect(written.join('\n')).not.toContain(who.id);
+    });
   });
 
   it.each([
@@ -982,7 +1114,9 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       const who = await person();
       await confirm(who.id);
       vi.spyOn(console, 'error').mockImplementation(() => {});
-      const held = await carryOutDeletions(new Date(), { feedback: { intake: intake(how) } });
+      const held = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(how) },
+      });
       expect(held).toMatchObject({ steps: 1, completed: 0, failed: 1 });
       let record = (await recordOf(who.id))!;
       expect(record.istoricoDoneAt).not.toBeNull();
@@ -991,8 +1125,11 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       // Owed, not skipped: nothing after it has run.
       expect(record.credentialsDoneAt).toBeNull();
       expect(await db().session.count({ where: { userId: who.id } })).toBeGreaterThan(0);
-      const again = await carryOutDeletions(new Date(), { feedback: { intake: intake(true) } });
-      expect(again).toMatchObject({ steps: 3, completed: 1 });
+      const again = await carryOutDeletions(new Date(), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      // (c), (d) and (e) with (f); the deletion waits for the second call (g).
+      expect(again).toMatchObject({ steps: 3, completed: 0 });
       expect(calls).toEqual([who.id, who.id]);
       record = (await recordOf(who.id))!;
       expect(record.feedbackDoneAt).not.toBeNull();
@@ -1004,21 +1141,53 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
     const who = await person();
     await confirm(who.id);
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const outcome = await carryOutDeletions(new Date(), { feedback: { intake: intake(true) } });
+    const outcome = await carryOutDeletions(new Date(), {
+      feedback: { wait: async () => {}, intake: intake(true) },
+    });
     expect(outcome).toMatchObject({ steps: 1, completed: 0, failed: 1 });
     expect(calls).toEqual([]);
     expect((await recordOf(who.id))!.feedbackSkippedAt).toBeNull();
   });
 
-  it('with the switch on and the client the widget will bring not yet built, fails and repeats, and pretends nothing', async () => {
+  it('with the switch on and no usable secret, fails and repeats, and pretends nothing', async () => {
     process.env.FEEDBACK_INTAKE_ENABLED = 'true';
     const who = await person();
     await confirm(who.id);
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const outcome = await carryOutDeletions();
+    const outcome = await carryOutDeletions(new Date(), { feedback: { wait: async () => {} } });
     expect(outcome).toMatchObject({ steps: 1, completed: 0, failed: 1 });
     expect((await recordOf(who.id))!.feedbackDoneAt).toBeNull();
     expect((await db().user.findUniqueOrThrow({ where: { id: who.id } })).email).toBe(who.email);
+  });
+
+  it('raises the alarm for a deletion stuck at (c) for 24 hours, and not before, and names no account', async () => {
+    process.env.FEEDBACK_INTAKE_ENABLED = 'true';
+    const written: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation(
+      (...parts: unknown[]) => void written.push(parts.join(' ')),
+    );
+    const who = await person();
+    await confirm(who.id);
+    const refusing = { feedback: { wait: async () => {}, intake: { pseudonymise: async () => false } } };
+    const hour = 60 * 60 * 1000;
+    // 23 hours old: stuck, but not for a day.
+    await db().accountDeletion.update({
+      where: { userId: who.id },
+      data: { requestedAt: new Date(Date.now() - 23 * hour) },
+    });
+    expect(await carryOutDeletions(new Date(), refusing)).toMatchObject({ failed: 1, stuckAtFeedback: 0 });
+    // 25 hours old.
+    await db().accountDeletion.update({
+      where: { userId: who.id },
+      data: { requestedAt: new Date(Date.now() - 25 * hour) },
+    });
+    expect(await carryOutDeletions(new Date(), refusing)).toMatchObject({ failed: 1, stuckAtFeedback: 1 });
+    expect(written.filter((line) => line.includes('stuck at a call to the feedback intake'))).toHaveLength(1);
+    expect(written.join('\n')).not.toContain(who.id);
+    expect(written.join('\n')).not.toContain(who.email);
+    // Once the step is done it is no longer stuck.
+    const done = { feedback: { wait: async () => {}, intake: { pseudonymise: async () => true } } };
+    expect(await carryOutDeletions(new Date(), done)).toMatchObject({ stuckAtFeedback: 0 });
   });
 });
 
@@ -1480,11 +1649,13 @@ describe('the one-month limit (NFR-DP-06) and the log (NFR-SE-19)', () => {
     await confirm(who.id);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const intake = (acknowledged: boolean) => ({
-      feedback: { intake: { pseudonymise: async () => acknowledged } },
+      feedback: { wait: async () => {}, intake: { pseudonymise: async () => acknowledged } },
     });
     expect((await carryOutDeletions(new Date(), intake(false))).completed).toBe(0);
     expect((await carryOutDeletions(new Date(), intake(false))).completed).toBe(0);
-    expect((await carryOutDeletions(new Date(), intake(true))).completed).toBe(1);
+    // The call of (c) succeeded: the deletion is complete only after the second call (g), 360 seconds later.
+    expect((await carryOutDeletions(new Date(), intake(true))).completed).toBe(0);
+    expect((await carryOutDeletions(new Date(Date.now() + 361_000), intake(true))).completed).toBe(1);
     const record = (await recordOf(who.id))!;
     expect(record.completedAt!.getTime()).toBeLessThan(oneMonthAfter(record.requestedAt).getTime());
   });
@@ -1501,7 +1672,7 @@ describe('the one-month limit (NFR-DP-06) and the log (NFR-SE-19)', () => {
     });
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const outcome = await carryOutDeletions(new Date(), {
-      feedback: { intake: { pseudonymise: async () => false } },
+      feedback: { wait: async () => {}, intake: { pseudonymise: async () => false } },
     });
     expect(outcome).toMatchObject({ failed: 2, overdue: 1 });
     const lines = error.mock.calls.map(([line]) => String(line));
@@ -1523,7 +1694,7 @@ describe('the one-month limit (NFR-DP-06) and the log (NFR-SE-19)', () => {
       vi.spyOn(console, method).mockImplementation((...parts: unknown[]) => void lines.push(parts.join(' ')));
     }
     process.env.FEEDBACK_INTAKE_ENABLED = 'true';
-    await carryOutDeletions(); // fails at (c): the unbuilt client, one line
+    await carryOutDeletions(new Date(), { feedback: { wait: async () => {} } }); // fails at (c): no secret, one line
     delete process.env.FEEDBACK_INTAKE_ENABLED;
     await carryOutDeletions();
     expect(lines.length).toBeGreaterThan(0);
@@ -1700,11 +1871,10 @@ describe('step (c) says which way it failed, in its line of the log (NFR-SE-19)'
     ]);
   });
 
-  it('names a client that is not built', async () => {
-    expect(feedbackLine(await lines('true'))).toEqual([
-      expect.stringMatching(/^account deletion \S+: step feedback not done \(FeedbackIntakeUnbuilt\)$/),
+  it('names a secret that is not set or not usable', async () => {
+    expect(feedbackLine(await lines('true', { feedback: { wait: async () => {} } }))).toEqual([
+      expect.stringMatching(/^account deletion \S+: step feedback not done \(FeedbackNotAcknowledged\)$/),
     ]);
-    expect(new FeedbackIntakeUnbuilt('x').name).toBe('FeedbackIntakeUnbuilt');
   });
 
   it('names an intake that did not acknowledge, with the code of its own fault where it has one', async () => {
@@ -1714,10 +1884,10 @@ describe('step (c) says which way it failed, in its line of the log (NFR-SE-19)'
         throw Object.assign(new Error('connect ECONNREFUSED praktico.example:443'), { code: 'ECONNREFUSED' });
       },
     };
-    expect(feedbackLine(await lines('true', { feedback: { intake: refusing } }))).toEqual([
-      expect.stringMatching(/\(FeedbackNotAcknowledged\)$/),
-    ]);
-    const written = await lines('true', { feedback: { intake: down } });
+    expect(
+      feedbackLine(await lines('true', { feedback: { wait: async () => {}, intake: refusing } })),
+    ).toEqual([expect.stringMatching(/\(FeedbackNotAcknowledged\)$/)]);
+    const written = await lines('true', { feedback: { wait: async () => {}, intake: down } });
     expect(feedbackLine(written)).toEqual([
       expect.stringMatching(/\(FeedbackNotAcknowledged ECONNREFUSED\)$/),
     ]);

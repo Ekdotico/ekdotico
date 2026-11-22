@@ -4,7 +4,7 @@ name: ci
 # commit, with the release in the comment.
 #
 # `quick` (about two minutes) runs on every pull request and every push to main: install, the check of the
-# dependencies, format, lint, typecheck and the unit tests.
+# dependencies, format, lint, typecheck, the unit tests and the build.
 #
 # The full tier runs only on a push to main, by hand (workflow_dispatch), or when the label `ci:full` is added
 # to a pull request that is not a draft. A later push to that pull request runs `quick` alone, and the full run
@@ -76,6 +76,9 @@ jobs:
       - run: pnpm typecheck
       # The unit tests set their own fake database and Valkey addresses: no service is started for them.
       - run: pnpm test
+      # The build, so that a broken stylesheet or import fails here, in minutes, and not in the suite or the
+      # release. It needs no setting: the release workflow builds the same way.
+      - run: pnpm build
 
   # Whether the change needs the full tier. Its `if` is the one place that says when the full tier is asked
   # for at all: the jobs after it run only where it did not skip.
