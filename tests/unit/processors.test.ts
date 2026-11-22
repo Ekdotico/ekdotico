@@ -122,10 +122,10 @@ describe('the code against the record', () => {
     expect(found).toEqual([join('src', 'lib', 'settings.ts')]);
   });
 
-  it('sends nothing to Praktico', () => {
+  it('sends to Praktico from the one client of the feedback intake and nowhere else', () => {
     const found = sources('src')
       .filter(([, text]) => /internal\.ekdoti\.co/.test(text))
       .map(([path]) => path);
-    expect(found).toEqual([]);
+    expect(found).toEqual([join('src', 'lib', 'feedback', 'client.ts')]);
   });
 });

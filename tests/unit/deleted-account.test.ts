@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { DELETED_ACCOUNT } from '../../src/lib/account/deleted-account.ts';
 import {
-  FeedbackIntakeUnbuilt,
   FeedbackNotAcknowledged,
   FeedbackSwitchInvalid,
   feedbackIntakeEnabled,
@@ -103,16 +102,18 @@ describe('the switch of step (c) (FR-AU-58 (c); D112)', () => {
 
   it('makes one call for the account with the switch on, and is done only on an acknowledgement', async () => {
     const pseudonymise = vi.fn(async () => true);
-    await expect(feedbackStep('user-1', { enabled: () => true, intake: { pseudonymise } })).resolves.toBe(
-      'done',
-    );
+    const wait = async () => {};
+    await expect(
+      feedbackStep('user-1', { enabled: () => true, wait, intake: { pseudonymise } }),
+    ).resolves.toBe('done');
     expect(pseudonymise).toHaveBeenCalledExactlyOnceWith('user-1');
     await expect(
-      feedbackStep('user-1', { enabled: () => true, intake: { pseudonymise: async () => false } }),
+      feedbackStep('user-1', { enabled: () => true, wait, intake: { pseudonymise: async () => false } }),
     ).rejects.toThrow('The feedback intake did not acknowledge.');
     await expect(
       feedbackStep('user-1', {
         enabled: () => true,
+        wait,
         intake: {
           pseudonymise: async () => {
             throw new Error('down');
@@ -120,11 +121,5 @@ describe('the switch of step (c) (FR-AU-58 (c); D112)', () => {
         },
       }),
     ).rejects.toBeInstanceOf(FeedbackNotAcknowledged);
-  });
-
-  it('has no client until the Feedback Widget brings one: a switch turned on fails, and does not pretend', async () => {
-    await expect(feedbackStep('user-1', { enabled: () => true })).rejects.toBeInstanceOf(
-      FeedbackIntakeUnbuilt,
-    );
   });
 });
