@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button, Cluster, Dialog, FormFault, RadioGroup, Select, Stack } from '@ekdotico/domico/components';
@@ -116,6 +116,13 @@ export function TransferDocuments({
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState('');
   const formRef = useRef<HTMLFormElement>(null);
+  const statement = useRef<HTMLParagraphElement>(null);
+  const [said, setSaid] = useState(0);
+  // The offer was made, and the control that opened the dialog may be gone with the offers it was for: the
+  // statement of what was done takes the focus, as for a clearing (WCAG 2.4.3).
+  useEffect(() => {
+    if (said > 0) statement.current?.focus();
+  }, [said]);
 
   // The person chosen, as the list now holds them: one who has left it is no longer chosen, and none is put in their
   // place (src/lib/account/transfer-choice.ts); the action waits until a person is chosen again.
@@ -169,6 +176,7 @@ export function TransferDocuments({
     setStatus(
       answer ? offeredStatement(answer) : offeredStatement({ offered: counted.offered, kept: counted.kept }),
     );
+    setSaid((count) => count + 1);
     router.refresh();
   }
 
@@ -177,7 +185,7 @@ export function TransferDocuments({
       <h2 className={styles.heading}>{TRANSFER_SCREEN.heading}</h2>
       <p className={styles.text}>{TRANSFER_SCREEN.lead}</p>
       {/* Present from the first paint and empty until something is done: a status that arrives with its text is not announced. */}
-      <p role="status" className={styles.text}>
+      <p role="status" ref={statement} tabIndex={-1} className={styles.text}>
         {status}
       </p>
 

@@ -36,8 +36,14 @@ const handlers = (
   )
 ).flat();
 
-const ask = (route: string, method: string, handler: Handler, cookie?: string) =>
-  handler(
+// The one route that is closed while its switch is off (docs/contracts/feedback-intake.md, "The order of the
+// checks"): its cases here are asked with the switch on, and it is the one route that answers an account that has
+// not acknowledged the Closed α notice 403 `notice_not_acknowledged`, which no other does.
+const FEEDBACK = 'src/app/api/feedback/route.ts';
+
+const ask = (route: string, method: string, handler: Handler, cookie?: string) => {
+  if (route === FEEDBACK) process.env.FEEDBACK_INTAKE_ENABLED = 'true';
+  return handler(
     new Request(addressOf(route), {
       method,
       headers: { origin: ORIGIN, 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
@@ -45,8 +51,10 @@ const ask = (route: string, method: string, handler: Handler, cookie?: string) =
     }),
     { params: Promise.resolve({}) },
   );
+};
 
 afterAll(async () => {
+  delete process.env.FEEDBACK_INTAKE_ENABLED;
   await db().$disconnect();
   valkey().disconnect();
   database.drop();
@@ -84,7 +92,13 @@ describe('the route handlers, asked by an account the founding-team gate stops (
       expect((await stopped.json()).error.code).toBe('two_factor_required');
 
       const other = await ask(route, method, handler, await cookieOf('person@example.com'));
-      expect([401, 403]).not.toContain(other.status);
+      if (route === FEEDBACK) {
+        // An account that has acknowledged nothing: the one 403 of this route that is not the gate's.
+        expect(other.status).toBe(403);
+        expect((await other.json()).error.code).toBe('notice_not_acknowledged');
+      } else {
+        expect([401, 403]).not.toContain(other.status);
+      }
     },
   );
 });
