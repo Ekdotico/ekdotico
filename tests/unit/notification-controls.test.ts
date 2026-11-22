@@ -15,7 +15,8 @@ describe('the controls of a notification', () => {
   });
 
   it('keep the focus on Mark as read while it is sent', () => {
-    expect(source).not.toMatch(/disabled=\{marking/);
-    expect(source).toMatch(/pending=\{marking !== null\}/);
+    expect(source).not.toMatch(/disabled=\{marking !== null\}/);
+    expect(source).toMatch(/pending=\{marking === notification\.id\}/);
+    expect(source).toMatch(/if \(marking !== null\) return;/);
   });
 });

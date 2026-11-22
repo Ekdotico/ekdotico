@@ -245,6 +245,7 @@ export function NotificationList({ notifications }: { notifications: Notificatio
   const [marking, setMarking] = useState<string | null>(null);
 
   async function markRead(id: string) {
+    if (marking !== null) return;
     setMarking(id);
     setFault(null);
     const refused = await send(`/api/notifications/${encodeURIComponent(id)}`, undefined, 'PATCH');
@@ -285,7 +286,8 @@ export function NotificationList({ notifications }: { notifications: Notificatio
                   {notification.read ? null : (
                     <Button
                       variant="quiet"
-                      pending={marking !== null}
+                      pending={marking === notification.id}
+                      disabled={marking !== null && marking !== notification.id}
                       aria-describedby={`words-${notification.id}`}
                       onClick={() => void markRead(notification.id)}
                     >
