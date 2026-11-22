@@ -1,7 +1,7 @@
 // Creating, listing and renaming a document (FR-ED-35), and the rule of a
 // title. Whether a caller may do any of it is not decided here: the routes ask
 // ./access.ts first. Nothing here is of Next.js.
-import type { Document } from '../../generated/prisma/client.ts';
+import type { Document, Prisma } from '../../generated/prisma/client.ts';
 import { AccountInDeletion, holdOwnableAccount } from '../account/in-deletion.ts';
 import { db } from '../db.ts';
 import { fieldText } from '../field-text.ts';
@@ -83,46 +83,77 @@ export async function createDocument(userId: string): Promise<DocumentSummary> {
   const port = istorico();
   const recording = port.capabilities().recording;
 
-  const document = await db().$transaction(async (tx) => {
-    // FR-AU-58: "no deleted account is ever the Owner of a document". The account's row is held
-    // against the confirmation of its deletion, which counts the documents under the same row
-    // (src/lib/account/in-deletion.ts): of a creation and a confirmation at once, one waits for the
-    // other and reads what it left.
-    if (!(await holdOwnableAccount(tx, userId))) throw new AccountInDeletion();
-    return tx.document.create({
-      data: {
-        workspaceId: personal,
-        ownerId: userId,
-        title: DEFAULT_TITLE,
-        permissionSet: defaultPermissionSet(),
-        recording: recording ? 'RECORDED' : 'UNRECORDED',
-        // An edit, the first: see `renameDocument`.
-        updatedAt: new Date(),
-      },
-    });
-  });
-
-  // Contract IC-50, the extension point "Document creation": after the commit,
-  // behind the capability. Not reached in α 0.1.0. Creation "never fails or
-  // waits because Istorico is unavailable" (FR-ED-35), so the call is not
-  // awaited. The port does not throw (IC-10), and the creation does not rest
-  // on that: an adapter that throws or rejects all the same fails nothing
-  // here. Nothing is logged of it (NFR-SE-19: an error could quote its input).
-  // The outbox that repeats the call arrives with the release that links
-  // Istorico (IC-27, IC-18).
-  if (recording) {
-    const input = {
-      documentId: document.id,
-      ownerUserId: userId,
-      workspaceKind: 'personal' as const,
-      workspaceId: personal,
-      createdAt: document.createdAt.toISOString(),
-    };
-    void Promise.resolve()
-      .then(() => port.registerDocument(input))
-      .catch(() => {});
-  }
+  const document = await db().$transaction((tx) =>
+    insertDocument(tx, { userId, workspaceId: personal, title: DEFAULT_TITLE, recording }),
+  );
+  registerDocument(document, userId, personal, recording);
   return summary(document);
+}
+
+/**
+ * The one insert of a document, for the creation above and for the Onboarding paper
+ * (./onboarding-paper.ts): the only place besides ownership.ts that writes `Document.ownerId`
+ * (tests/unit/ownership-source.test.ts). `state` is the first content of the document, where it has
+ * any; null is an empty document.
+ *
+ * FR-AU-58: "no deleted account is ever the Owner of a document". The account's row is held
+ * against the confirmation of its deletion, which counts the documents under the same row
+ * (src/lib/account/in-deletion.ts): of a creation and a confirmation at once, one waits for the
+ * other and reads what it left. It throws `AccountInDeletion` where the account may not own one.
+ */
+export async function insertDocument(
+  tx: Parameters<typeof holdOwnableAccount>[0] & Pick<Prisma.TransactionClient, 'document'>,
+  input: {
+    userId: string;
+    workspaceId: string;
+    title: string;
+    recording: boolean;
+    state?: Uint8Array<ArrayBuffer> | null;
+  },
+) {
+  if (!(await holdOwnableAccount(tx, input.userId))) throw new AccountInDeletion();
+  return tx.document.create({
+    data: {
+      workspaceId: input.workspaceId,
+      ownerId: input.userId,
+      title: input.title,
+      permissionSet: defaultPermissionSet(),
+      recording: input.recording ? 'RECORDED' : 'UNRECORDED',
+      ...(input.state ? { yjsState: input.state } : {}),
+      // An edit, the first: see `renameDocument`.
+      updatedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Contract IC-50, the extension point "Document creation": after the commit,
+ * behind the capability. Not reached in α 0.1.0. Creation "never fails or
+ * waits because Istorico is unavailable" (FR-ED-35), so the call is not
+ * awaited. The port does not throw (IC-10), and the creation does not rest
+ * on that: an adapter that throws or rejects all the same fails nothing
+ * here. Nothing is logged of it (NFR-SE-19: an error could quote its input).
+ * The outbox that repeats the call arrives with the release that links
+ * Istorico (IC-27, IC-18).
+ */
+export function registerDocument(
+  document: Pick<Document, 'id' | 'createdAt'>,
+  userId: string,
+  workspaceId: string,
+  recording: boolean,
+): void {
+  if (!recording) return;
+  const input = {
+    documentId: document.id,
+    ownerUserId: userId,
+    workspaceKind: 'personal' as const,
+    workspaceId,
+    createdAt: document.createdAt.toISOString(),
+  };
+  const port = istorico();
+  void Promise.resolve()
+    .then(() => port.registerDocument(input))
+    .catch(() => {});
 }
 
 /**

@@ -1,0 +1,699 @@
+{
+  "type": "doc",
+  "content": [
+    { "type": "tableOfContents", "attrs": { "depth": 3 } },
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "Welcome to Ekdotico α" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "This is Ekdotico α. α (alpha) is an early version of Ekdotico, made for a small group of people to try. This document teaches the editor, and it is also an example of it: each block you read here is a block you can change. The document belongs to your account, so you can edit it, rename it, or delete it."
+        }
+      ]
+    },
+    {
+      "type": "callout",
+      "attrs": { "type": "note" },
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "The document saves itself. The indicator in the row of controls under the title says whether the working version is in sync."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "Write and format text" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Select some words. A toolbar named Formatting appears with nine controls. This sentence shows each one: "
+        },
+        { "type": "text", "marks": [{ "type": "bold" }], "text": "bold" },
+        { "type": "text", "text": ", " },
+        { "type": "text", "marks": [{ "type": "italic" }], "text": "italic" },
+        { "type": "text", "text": ", " },
+        { "type": "text", "marks": [{ "type": "underline" }], "text": "underline" },
+        { "type": "text", "text": ", " },
+        { "type": "text", "marks": [{ "type": "strike" }], "text": "strikethrough" },
+        { "type": "text", "text": ", " },
+        { "type": "text", "marks": [{ "type": "code" }], "text": "inline code" },
+        { "type": "text", "text": ", a superscript (x" },
+        { "type": "text", "marks": [{ "type": "superscript" }], "text": "2" },
+        { "type": "text", "text": "), a subscript (H" },
+        { "type": "text", "marks": [{ "type": "subscript" }], "text": "2" },
+        { "type": "text", "text": "O), a " },
+        {
+          "type": "text",
+          "marks": [{ "type": "link", "attrs": { "href": "https://ekdoti.co" } }],
+          "text": "link"
+        },
+        { "type": "text", "text": ", and " },
+        { "type": "text", "marks": [{ "type": "highlight" }], "text": "highlight" },
+        { "type": "text", "text": "." }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "To reach the toolbar with the keyboard, press Alt+F10 while text is selected. Escape returns to the text."
+        }
+      ]
+    },
+    {
+      "type": "tableBlock",
+      "content": [
+        {
+          "type": "table",
+          "content": [
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableHeader",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Action" }] }]
+                },
+                {
+                  "type": "tableHeader",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Shortcut" }] }]
+                },
+                {
+                  "type": "tableHeader",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "What it does" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Bold" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+B" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Makes the selected text bold" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Italic" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+I" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Makes the selected text italic" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Underline" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+U" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Underlines the selected text" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Strikethrough" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+Shift+S" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Strikes the selected text through" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Inline code" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+`" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Sets the selected text as code" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Link" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+K" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Opens the link address field" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Undo" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+Z" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Reverses your last change" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Redo" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Cmd or Ctrl+Shift+Z" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Restores a change you undid" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Indent list item" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Tab" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Moves the item one level in" }]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [
+                    { "type": "paragraph", "content": [{ "type": "text", "text": "Outdent list item" }] }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Shift+Tab" }] }]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Moves the item one level out" }]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tableCaption",
+          "content": [
+            {
+              "type": "text",
+              "text": "Keyboard shortcuts for formatting. Use Cmd on a Mac and Ctrl on other computers."
+            }
+          ]
+        }
+      ]
+    },
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Add blocks" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "A block is one piece of a document, such as a paragraph, a list, or a table. To add one, type / at the start of a line. A list named Blocks opens. Type letters to narrow it, then choose a block."
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "A plus button named Insert a block also appears beside the cursor at the end of a line when the pointer is near it. Pressing it opens the same list."
+        }
+      ]
+    },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "The list holds these blocks:" }] },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Text" }]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Heading 1, Heading 2, and Heading 3" }]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Bulleted list and Numbered list" }]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Quote" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Table" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Code block" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Image" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Callout" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Footnote" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Table of contents" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Divider" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Page break" }] }]
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "You can also type the Markdown sign for a block, which is a short mark that stands for it. These work at the start of an empty line:"
+        }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "marks": [{ "type": "code" }], "text": "#" },
+                { "type": "text", "text": ", " },
+                { "type": "text", "marks": [{ "type": "code" }], "text": "##" },
+                { "type": "text", "text": ", or " },
+                { "type": "text", "marks": [{ "type": "code" }], "text": "###" },
+                { "type": "text", "text": " and a space make a heading." }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "marks": [{ "type": "code" }], "text": "-" },
+                { "type": "text", "text": " or " },
+                { "type": "text", "marks": [{ "type": "code" }], "text": "*" },
+                { "type": "text", "text": " and a space make a bulleted list." }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "marks": [{ "type": "code" }], "text": "1." },
+                { "type": "text", "text": " and a space make a numbered list." }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "marks": [{ "type": "code" }], "text": ">" },
+                { "type": "text", "text": " and a space make a quote." }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "marks": [{ "type": "code" }], "text": "---" },
+                { "type": "text", "text": " and Enter make a divider." }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Three backticks and Enter make a code block." }]
+            }
+          ]
+        }
+      ]
+    },
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Organise ideas" }] },
+    {
+      "type": "heading",
+      "attrs": { "level": 3 },
+      "content": [{ "type": "text", "text": "Lists and quotes" }]
+    },
+    {
+      "type": "orderedList",
+      "attrs": { "start": 1 },
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                { "type": "text", "text": "Type " },
+                { "type": "text", "marks": [{ "type": "code" }], "text": "1." },
+                { "type": "text", "text": " and a space at the start of a line." }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Write an item and press Enter." }] }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Press Tab to move an item one level in." }]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "blockquote",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "text", "text": "A quote is set apart from the text around it." }]
+        }
+      ]
+    },
+    { "type": "heading", "attrs": { "level": 3 }, "content": [{ "type": "text", "text": "Tables" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Choose Table from the list to add a table of three rows and three columns. Each table has a menu named Table. It holds actions to add or delete rows and columns, merge or split cells, and add a header row. A header row names the columns, which a screen reader reads aloud."
+        }
+      ]
+    },
+    { "type": "heading", "attrs": { "level": 3 }, "content": [{ "type": "text", "text": "Code" }] },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "javascript" },
+      "content": [{ "type": "text", "text": "const greeting = 'Hello, Ekdotico';" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Each code block has a language list and a Copy button. Code is not spell-checked."
+        }
+      ]
+    },
+    { "type": "heading", "attrs": { "level": 3 }, "content": [{ "type": "text", "text": "Callouts" }] },
+    {
+      "type": "callout",
+      "attrs": { "type": "note" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "A note gives background." }] }
+      ]
+    },
+    {
+      "type": "callout",
+      "attrs": { "type": "tip" },
+      "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "A tip suggests a way to work." }] }
+      ]
+    },
+    {
+      "type": "callout",
+      "attrs": { "type": "warning" },
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "text", "text": "A warning names something that can go wrong." }]
+        }
+      ]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 3 },
+      "content": [{ "type": "text", "text": "Footnotes and images" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "A footnote adds a numbered note at the end of the document." },
+        { "type": "footnoteReference", "attrs": { "id": "0123456789abcdef01234567" } },
+        {
+          "type": "text",
+          "text": " To add an image, choose Image from the list of blocks. A file picker opens. Pick a PNG, JPEG, or WebP file of up to 20 MB. Give each image alt text, which is a short description for people who cannot see it."
+        }
+      ]
+    },
+    { "type": "horizontalRule" },
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "Work with others" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "The Sharing button above the document opens the sharing page. There the Owner of a document invites people and gives each an Editor or Viewer role. An Editor can change the document. A Viewer can read it. When several people have a document open, each person's cursor shows in a colour, and their initials appear beside the Sharing button."
+        }
+      ]
+    },
+    { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Keep your work" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Choose Export as Markdown to save the document as a Markdown file, with its images, in one archive. Markdown is a plain-text way of writing that other tools can read."
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "In the list of documents, Rename changes a title and Delete document removes a document. A deleted document is kept for a time in Deleted documents, and can be restored there."
+        }
+      ]
+    },
+    {
+      "type": "footnotes",
+      "content": [
+        {
+          "type": "footnote",
+          "attrs": { "id": "0123456789abcdef01234567" },
+          "content": [{ "type": "text", "text": "Footnotes are numbered in the order their markers appear." }]
+        }
+      ]
+    }
+  ]
+}
