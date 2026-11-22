@@ -114,7 +114,7 @@ describe('whom the gate stops (FR-AU-83)', () => {
       expect(validation.session?.userId).toBe(id);
       expect(validation.stopped).toBeNull();
     }
-    expect(passed(await call('GET', '/api/account/onboarding', { cookie }))).toBe(true);
+    expect(passed(await call('GET', '/api/account/closed-alpha-notice', { cookie }))).toBe(true);
     browser.headers = new Headers({ cookie });
     expect(await currentAccount()).toMatchObject({ userId: id, enrolmentDue: false, noticeDue: true });
   });
@@ -129,7 +129,7 @@ describe('whom the gate stops (FR-AU-83)', () => {
     };
     const response = await call(
       'GET',
-      '/api/account/onboarding?twoFactorEnabled=true&foundingTeam=false',
+      '/api/account/closed-alpha-notice?twoFactorEnabled=true&foundingTeam=false',
       claims,
     );
     expect(response.status).toBe(403);
@@ -143,7 +143,7 @@ describe('whom the gate stops (FR-AU-83)', () => {
     );
     expect(await db().twoFactor.count({ where: { userId: id } })).toBe(1);
     expect((await validateSessionRow(new Headers({ cookie }))).stopped?.userId).toBe(id);
-    expect((await call('GET', '/api/account/onboarding', { cookie })).status).toBe(403);
+    expect((await call('GET', '/api/account/closed-alpha-notice', { cookie })).status).toBe(403);
   });
 });
 
@@ -151,9 +151,9 @@ describe('the gate at the proxy (FR-AU-83; the owner’s answer to Q8)', () => {
   it('answers 403 to every API route and to everything that changes state, with its entry in the security log', async () => {
     const { id, cookie } = await founder();
     const refusals = [
-      ['GET', '/api/account/onboarding'],
-      ['HEAD', '/api/account/onboarding'],
-      ['POST', '/api/account/onboarding/acknowledgement'],
+      ['GET', '/api/account/closed-alpha-notice'],
+      ['HEAD', '/api/account/closed-alpha-notice'],
+      ['POST', '/api/account/closed-alpha-notice/acknowledgement'],
       ['GET', '/api/documents'],
       ['POST', '/api/documents'],
       ['DELETE', '/api/account'],
@@ -273,8 +273,8 @@ describe('the gate with the proxy skipped: the endpoints of the identity library
       expect(validation.stopped).toBeNull();
     }
     for (const [method, path] of [
-      ['GET', '/api/account/onboarding'],
-      ['POST', '/api/account/onboarding/acknowledgement'],
+      ['GET', '/api/account/closed-alpha-notice'],
+      ['POST', '/api/account/closed-alpha-notice/acknowledgement'],
       ['POST', '/api/auth/change-password'],
     ] as const) {
       expect(passed(await call(method, path, { cookie: enrolled.cookie })), path).toBe(true);

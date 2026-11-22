@@ -155,12 +155,35 @@ export async function mailFor(email: string, pattern: RegExp): Promise<{ found: 
 }
 
 /** Opens the invitation and creates the account. The person ends on the Closed α notice. */
-export async function signUp(page: Page, person: Person, link?: string): Promise<void> {
+export async function signUp(
+  page: Page,
+  person: Person,
+  link?: string,
+  /** `paper: true` leaves the account to be given its Onboarding paper at its first list, as a person's is. */
+  options: { paper?: boolean } = {},
+): Promise<void> {
   await page.goto(link ?? (await invite(person.email)));
   await page.getByLabel('Name').fill(person.name);
   await page.getByLabel('Password', { exact: true }).fill(person.password);
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByRole('heading', { level: 1, name: NOTICE_TITLE })).toBeVisible();
+  // The list is not read until the notice is acknowledged, so the mark is in time. Every test but
+  // the ones of the paper is about a list of the documents it makes.
+  if (!options.paper) {
+    const ran = spawnSync('node', ['tests/e2e/mark-paper-given.ts', person.email], {
+      env: {
+        ...process.env,
+        FOUNDING_TEAM_EMAILS: '',
+        APP_ORIGIN,
+        DATABASE_URL: process.env.E2E_DATABASE_URL,
+        VALKEY_URL: process.env.VALKEY_URL ?? 'redis://localhost:6379',
+        AUTH_SECRET,
+      },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    expect(ran.status, ran.stderr).toBe(0);
+  }
 }
 
 export async function signIn(page: Page, person: Person, password = person.password): Promise<void> {
