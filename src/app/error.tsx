@@ -38,8 +38,9 @@ export default function PageFault({ error, reset }: { error?: unknown; reset?: (
     <main className={styles.column}>
       {/* A client error boundary cannot export metadata, and the layout's title
           template does not reach a title rendered here: React puts this one in
-          the head, whole, so the tab reads as the heading does. */}
-      <title>Page not shown</title>
+          the head, whole, so it is written out in the template's own form
+          (src/app/layout.tsx): the heading, an en dash, the product's name. */}
+      <title>Page not shown – Ekdotico</title>
       <Stack gap={6}>
         <Logo />
         <PageHeading>Page not shown</PageHeading>

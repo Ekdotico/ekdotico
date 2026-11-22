@@ -60,7 +60,7 @@ describe('the page of a fault', () => {
 
   it('offers to try again and to go to the documents, after the statement, and titles the tab', () => {
     const markup = shown(fault('2788174031'));
-    expect(markup).toContain('<title>Page not shown</title>');
+    expect(markup).toContain('<title>Page not shown – Ekdotico</title>');
     expect(markup).toMatch(/<button[^>]*>Try again<\/button>/);
     expect(markup).toMatch(/<a [^>]*href="\/"[^>]*>\s*Documents\s*<\/a>/);
     // The statement itself says "Try again in a few minutes", so find the button by its tag.
