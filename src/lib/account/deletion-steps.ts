@@ -332,6 +332,9 @@ async function stepRows(held: Held, now: () => Date): Promise<void> {
         emailVerified: false,
         twoFactorEnabled: false,
         lockedUntil: null,
+        // FR-AU-58 (e), D242: the tombstone keeps the identifier, the time of the deletion and the
+        // acknowledgement, and "nothing else is kept". The time the Onboarding paper was given is none of them.
+        onboardingPaperSeededAt: null,
         // The time of the deletion is the first: a step repeated after a crash does not move it.
         erasedAt: user.erasedAt ?? at,
       },
