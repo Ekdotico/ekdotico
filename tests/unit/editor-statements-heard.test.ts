@@ -15,6 +15,12 @@ describe('the statements about the open document', () => {
     expect(open).toMatch(/<Heard words=\{spoken\.join\(' '\)\} again=\{again\.join\('\|'\)\} \/>/);
   });
 
+  it('and the region of refusals are told apart by name, for a test that watches one of them', () => {
+    // tests/e2e/editor.spec.ts watches the refusal region; two hidden status regions stand in the page.
+    expect(source).toContain('data-heard="refusal"');
+    expect(source).toContain('data-heard="statements"');
+  });
+
   it('are not announced a second time by their visible copy', () => {
     for (const mark of [
       'AT_CAPACITY',
