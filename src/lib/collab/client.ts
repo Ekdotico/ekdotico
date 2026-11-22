@@ -515,7 +515,30 @@ export class DocumentConnection {
   private set(change: Partial<ConnectionState>): void {
     if (this.over()) return;
     this.state = { ...this.state, ...change };
+    this.warnWhileUnsent();
     for (const listener of this.listeners) listener();
+  }
+
+  /** The browser's own warning on closing, reloading or leaving the site: asked for only while `unsent` is true. */
+  private warning = false;
+  private warn = (event: BeforeUnloadEvent): void => {
+    event.preventDefault();
+    // Some browsers ask only where a return value is set.
+    event.returnValue = '';
+  };
+
+  /**
+   * Owner's decision of 22 November 2026: the same truth as the sync indicator (`state.unsent`) decides.
+   * Registered only while changes are unsent and taken off as soon as none are, so a page in sync has no
+   * `beforeunload` listener and keeps the back-forward cache.
+   */
+  private warnWhileUnsent(): void {
+    if (typeof window === 'undefined') return;
+    const want = this.started && this.state.unsent;
+    if (want === this.warning) return;
+    this.warning = want;
+    if (want) window.addEventListener('beforeunload', this.warn);
+    else window.removeEventListener('beforeunload', this.warn);
   }
 
   /** FR-ED-23: the error state, where no connection is made within the period. */
@@ -648,6 +671,7 @@ export class DocumentConnection {
   stop(): void {
     if (!this.started) return;
     this.started = false;
+    this.warnWhileUnsent();
     this.clearTimers();
     if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.flush);
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.hidden);

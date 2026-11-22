@@ -919,3 +919,77 @@ describe('awareness (FR-ED-17)', () => {
     connection.stop();
   });
 });
+
+// The owner's decision of 22 November 2026: the browser's own warning on closing,
+// reloading or leaving the site, only while changes are unsent, on the same truth
+// as the sync indicator (`state.unsent`). A page in sync has no listener at all.
+describe('the browser warns on leaving only while changes are unsent', () => {
+  function page() {
+    const window = new EventTarget();
+    const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    vi.stubGlobal('window', window);
+    vi.stubGlobal('document', document);
+    const added: string[] = [];
+    const removed: string[] = [];
+    const add = window.addEventListener.bind(window);
+    const remove = window.removeEventListener.bind(window);
+    window.addEventListener = (type: string, ...rest: [never]) => (added.push(type), add(type, ...rest));
+    window.removeEventListener = (type: string, ...rest: [never]) => (
+      removed.push(type),
+      remove(type, ...rest)
+    );
+    /** What a browser does on leaving: the event, and whether a listener asked for the warning. */
+    const leave = () => {
+      const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    return { added, removed, leave };
+  }
+
+  it('has no beforeunload listener while the page is in sync, and asks while a change is unsent', async () => {
+    const { added, removed, leave } = page();
+    const { connection, socket, changes } = await opened();
+    // The opening handshake has one message of its own that waits for its acknowledgement (the indicator shows it too): what counts is after it.
+    added.length = 0;
+    removed.length = 0;
+    expect(added).not.toContain('beforeunload');
+    expect(leave()).toBe(false);
+
+    changes.push(['one']);
+    await vi.advanceTimersByTimeAsync(BATCH_MS);
+    expect(connection.getState().unsent).toBe(true);
+    expect(added.filter((type) => type === 'beforeunload')).toHaveLength(1);
+    expect(leave()).toBe(true);
+
+    // Acknowledged: nothing is unsent, and the listener is gone.
+    socket.receive(toFrame(8, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.getState().unsent).toBe(false);
+    expect(removed).toContain('beforeunload');
+    expect(leave()).toBe(false);
+    connection.stop();
+  });
+
+  it('registers once however many changes are unsent', async () => {
+    const { added } = page();
+    const { connection, changes } = await opened();
+    added.length = 0;
+    for (let n = 0; n < 5; n += 1) {
+      changes.push([`key ${n}`]);
+      await vi.advanceTimersByTimeAsync(BATCH_MS);
+    }
+    expect(added.filter((type) => type === 'beforeunload')).toHaveLength(1);
+    connection.stop();
+  });
+
+  it('is taken off when the connection is stopped with changes still unsent', async () => {
+    const { leave } = page();
+    const { connection, changes } = await opened();
+    changes.push(['unsent']);
+    await vi.advanceTimersByTimeAsync(BATCH_MS);
+    expect(leave()).toBe(true);
+    connection.stop();
+    expect(leave()).toBe(false);
+  });
+});
