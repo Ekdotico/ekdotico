@@ -32,10 +32,10 @@ describe('the page of a fault', () => {
     const markup = shown(fault('2788174031'));
     expect(words(markup)).toContain(`${STATEMENT} ${QUOTE} Reference: 2788174031 `);
     // Inside the statement that a screen reader is told of.
-    const alert = markup.slice(markup.indexOf('role="alert"'));
+    const alert = markup.slice(markup.indexOf('role="alert"'), markup.indexOf('ekd-cluster'));
     expect(alert).toContain('<p>Reference: 2788174031</p>');
     // Text and nothing else: no link, nothing to press, nothing hidden or kept from being selected.
-    expect(markup).not.toMatch(/<button|<a |<input/);
+    expect(alert).not.toMatch(/<button|<a |<input/);
     expect(alert).not.toMatch(/style=|aria-hidden/);
   });
 
@@ -54,8 +54,19 @@ describe('the page of a fault', () => {
       const markup = shown(error);
       expect(markup).not.toContain('Reference');
       expect(markup).not.toContain(QUOTE);
-      expect(markup).not.toMatch(/<button|<a /);
+      expect(markup).not.toMatch(/<input/);
     }
+  });
+
+  it('offers to try again and to go to the documents, after the statement, and titles the tab', () => {
+    const markup = shown(fault('2788174031'));
+    expect(markup).toContain('<title>Page not shown</title>');
+    expect(markup).toMatch(/<button[^>]*>Try again<\/button>/);
+    expect(markup).toMatch(/<a [^>]*href="\/"[^>]*>\s*Documents\s*<\/a>/);
+    // The statement itself says "Try again in a few minutes", so find the button by its tag.
+    const button = markup.indexOf('>Try again</button>');
+    expect(button).toBeGreaterThan(markup.indexOf('Reference: 2788174031'));
+    expect(markup.indexOf('>Documents</a>')).toBeGreaterThan(button);
   });
 
   it.each([
