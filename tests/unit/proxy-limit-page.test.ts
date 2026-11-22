@@ -5,6 +5,8 @@ import { NextRequest } from 'next/server';
 import { describe, expect, it, vi } from 'vitest';
 
 const SENTENCE = 'Too many requests were made in a short time. Try again in 7 seconds.';
+const COOKIES = ['renewed=1; Path=/; HttpOnly'];
+const logged = vi.fn(async () => {});
 const HTML = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
 
 async function refused(path: string, method = 'GET', headers: Record<string, string> = {}) {
@@ -14,9 +16,11 @@ async function refused(path: string, method = 'GET', headers: Record<string, str
   }));
   vi.doMock('../../src/lib/rate-limit.ts', () => ({
     takeLimit: async () => ({ ok: false, retryAfterSeconds: 7 }),
-    logLimitReached: async () => {},
+    logLimitReached: logged,
   }));
-  vi.doMock('../../src/lib/auth/session.ts', () => ({ validateSession: async () => ({ session: null }) }));
+  vi.doMock('../../src/lib/auth/session.ts', () => ({
+    validateSession: async () => ({ session: null, stopped: null, setCookie: COOKIES }),
+  }));
   vi.doMock('../../src/lib/auth/auth.ts', () => ({ IDENTITY_BASE_PATH: '/api/auth' }));
   vi.doMock('../../src/lib/security-log.ts', () => ({ securityLog: async () => {} }));
   const { proxy } = await import('../../src/proxy.ts');
@@ -42,6 +46,25 @@ describe('a limit reached by a person without a session (UX-8)', () => {
     expect(page).toContain(`<p role="alert">${SENTENCE}</p>`);
     // No script, style, link, image or form: it loads nothing, so it costs no further request.
     expect(page).not.toMatch(/<(script|style|link|img|form|iframe)|src=|href=/i);
+  });
+
+  it('keeps 429, Retry-After, no-store, the policy and the renewed cookie on the page of the visitor path "/"', async () => {
+    const response = await refused('/', 'GET', { accept: HTML });
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('7');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(response.headers.getSetCookie()).toEqual(COOKIES);
+    expect(await response.text()).toContain(`<p role="alert">${SENTENCE}</p>`);
+  });
+
+  it('writes the log entry of the limit exactly once for a page answer', async () => {
+    logged.mockClear();
+    await refused('/sign-in', 'GET', { accept: HTML });
+    expect(logged).toHaveBeenCalledTimes(1);
+    logged.mockClear();
+    await refused('/', 'GET', { accept: HTML });
+    expect(logged).toHaveBeenCalledTimes(1);
   });
 
   it('says "1 second" in the singular', async () => {
