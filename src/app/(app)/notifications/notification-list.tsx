@@ -185,6 +185,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       return (
         <Link
           id={`open-${notification.id}`}
+          aria-describedby={`words-${notification.id}`}
           href={`/invitations/received/${encodeURIComponent(notification.invitationId)}`}
         >
           Open the invitation
@@ -193,7 +194,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
     case 'ownership_offer_ended':
       if (notification.inTrash) {
         return (
-          <Link id={`open-${notification.id}`} href="/deleted">
+          <Link id={`open-${notification.id}`} aria-describedby={`words-${notification.id}`} href="/deleted">
             Open the deleted documents
           </Link>
         );
@@ -205,6 +206,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       return (
         <Link
           id={`open-${notification.id}`}
+          aria-describedby={`words-${notification.id}`}
           href={`/documents/${encodeURIComponent(notification.documentId)}`}
         >
           Open the document
@@ -214,6 +216,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       return (
         <Link
           id={`open-${notification.id}`}
+          aria-describedby={`words-${notification.id}`}
           href={`/ownership-offers/${encodeURIComponent(notification.offerId)}`}
         >
           Open the offer
@@ -221,7 +224,7 @@ function Subject({ notification }: { notification: NotificationItem }) {
       );
     case 'two_factor_offer':
       return (
-        <Link id={`open-${notification.id}`} href="/settings">
+        <Link id={`open-${notification.id}`} aria-describedby={`words-${notification.id}`} href="/settings">
           Open the settings
         </Link>
       );
@@ -242,6 +245,7 @@ export function NotificationList({ notifications }: { notifications: Notificatio
   const [marking, setMarking] = useState<string | null>(null);
 
   async function markRead(id: string) {
+    if (marking !== null) return;
     setMarking(id);
     setFault(null);
     const refused = await send(`/api/notifications/${encodeURIComponent(id)}`, undefined, 'PATCH');
@@ -282,7 +286,9 @@ export function NotificationList({ notifications }: { notifications: Notificatio
                   {notification.read ? null : (
                     <Button
                       variant="quiet"
-                      disabled={marking !== null}
+                      pending={marking === notification.id}
+                      disabled={marking !== null && marking !== notification.id}
+                      aria-describedby={`words-${notification.id}`}
                       onClick={() => void markRead(notification.id)}
                     >
                       Mark as read
