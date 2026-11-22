@@ -5,7 +5,7 @@ import { NextRequest } from 'next/server';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { cookiesOf, createAccount, load, ORIGIN, prepare, signIn } from './identity.ts';
 
-const database = prepare('closed-alpha-notice', { TRUSTED_PROXY_COUNT: '1' });
+const database = prepare('closed_alpha_notice', { TRUSTED_PROXY_COUNT: '1' });
 const { auth, db, valkey } = await load();
 const { proxy } = await import('../../src/proxy.ts');
 const { closedAlphaNoticeDue, CLOSED_ALPHA_NOTICE_VERSION } =
