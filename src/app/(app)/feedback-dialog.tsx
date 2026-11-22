@@ -41,7 +41,8 @@ type Status =
   | { state: 'sending' }
   | { state: 'sent' }
   | { state: 'not_sent' }
-  | { state: 'rate_limited'; retryAfterSeconds: number };
+  // `time` is worked out once, when the 429 arrives, so that a later render shows the same moment.
+  | { state: 'rate_limited'; time: string };
 
 export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ready = useReady();
@@ -145,7 +146,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
     } else if (outcome.kind === 'rate_limited') {
       // Nothing was attempted, so no identifier is kept, and the text stays.
       attempt.current = null;
-      setStatus({ state: 'rate_limited', retryAfterSeconds: outcome.retryAfterSeconds });
+      setStatus({ state: 'rate_limited', time: clockTime(outcome.retryAfterSeconds, new Date()) });
     } else {
       attempt.current = outcome.submissionId
         ? { submissionId: outcome.submissionId, kind: chosen, message: text }
@@ -216,7 +217,12 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
             required
             hint={
               <>
-                {NOTICE} <a href={PRIVACY_HREF}>{WIDGET_TEXT.privacyLink}</a>
+                {/* A new tab, so that a half-written message is not lost by following the link (FR-AU-80 (f)),
+                    as the links of a document open (extensions.tsx). No new words: the specification gives none. */}
+                {NOTICE}{' '}
+                <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer">
+                  {WIDGET_TEXT.privacyLink}
+                </a>
               </>
             }
             error={messageFault}
@@ -228,7 +234,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
           ) : null}
           {status.state === 'rate_limited' ? (
             <FormFault autoFocus={false}>
-              <p>{rateLimitedText(clockTime(status.retryAfterSeconds, new Date()))}</p>
+              <p>{rateLimitedText(status.time)}</p>
             </FormFault>
           ) : null}
           <Button

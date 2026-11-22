@@ -179,6 +179,10 @@ test('says when sending is possible again, and keeps the text, on a 429', async 
   await dialog(page).getByRole('button', { name: WIDGET_TEXT.send }).click();
   await expect(dialog(page).getByRole('alert')).toContainText('You have sent too much feedback for now.');
   await expect(dialog(page).getByRole('textbox', { name: WIDGET_TEXT.label })).toHaveValue('too soon');
+  // Typing again does not move the time (a later render shows the same one).
+  const statement = await dialog(page).getByRole('alert').textContent();
+  await dialog(page).getByRole('textbox', { name: WIDGET_TEXT.label }).pressSequentially(' more');
+  await expect(dialog(page).getByRole('alert')).toHaveText(statement ?? '');
 });
 
 test('says not sent when the network is gone', async ({ page }) => {

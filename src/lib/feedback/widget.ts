@@ -58,7 +58,7 @@ export function tooLongText(over: number): string {
   return `The message is ${over} characters over the limit of 4,000. Shorten it and send it again.`;
 }
 
-/** Too many sent (fw-strings). `time` is the format of {time}, which the owner has not yet approved. */
+/** Too many sent (fw-strings). `time` is `clockTime` (fw-time-format). */
 export function rateLimitedText(time: string): string {
   return `You have sent too much feedback for now. Your message is still here. Send it again after ${time}.`;
 }

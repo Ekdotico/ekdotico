@@ -222,6 +222,16 @@ describe('the screen in the source', () => {
     expect(layout.indexOf('<ClosedAlphaNotice')).toBeLessThan(layout.indexOf('<ShellHeader'));
   });
 
+  it('works the time of a 429 out once, when it arrives, and renders that', () => {
+    expect(dialog).toMatch(/time: clockTime\(outcome\.retryAfterSeconds, new Date\(\)\)/);
+    expect(dialog).toMatch(/rateLimitedText\(status\.time\)/);
+    expect(dialog.match(/new Date\(\)/g)).toHaveLength(1);
+  });
+
+  it('opens the privacy link in a new tab, so a half-written message is kept (FR-AU-80 (f))', () => {
+    expect(dialog).toMatch(/<a href=\{PRIVACY_HREF\} target="_blank" rel="noopener noreferrer">/);
+  });
+
   it('lets the dialog out by a visible Close button and takes the focus to it once sent', () => {
     expect(dialog).toMatch(/<Button id=\{CLOSE_ID\} variant="quiet" onClick=\{dismiss\}>/);
     expect(dialog).not.toMatch(/closeLabel=/);
