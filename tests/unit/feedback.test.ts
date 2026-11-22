@@ -271,6 +271,19 @@ describe('the second call to the intake, step (g) (fw-late-write)', () => {
     expect(pseudonymise).toHaveBeenCalledExactlyOnceWith('acc-1');
   });
 
+  it('does not read the switch: it calls the intake with the switch off (fw-detach-switch)', async () => {
+    const before = process.env.FEEDBACK_INTAKE_ENABLED;
+    process.env.FEEDBACK_INTAKE_ENABLED = 'false';
+    try {
+      const pseudonymise = vi.fn(async () => true);
+      await feedbackAgain('acc-1', { intake: { pseudonymise } });
+      expect(pseudonymise).toHaveBeenCalledExactlyOnceWith('acc-1');
+    } finally {
+      if (before === undefined) delete process.env.FEEDBACK_INTAKE_ENABLED;
+      else process.env.FEEDBACK_INTAKE_ENABLED = before;
+    }
+  });
+
   it('throws where the intake did not acknowledge, so that it is repeated', async () => {
     await expect(
       feedbackAgain('acc-1', { intake: { pseudonymise: async () => false } }),

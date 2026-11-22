@@ -99,6 +99,11 @@ export const DETACH_AGAIN_MS = 360_000;
  * Step (g), the second call to the intake (fw-late-write): the same instruction, made once step (c) is at least
  * `DETACH_AGAIN_MS` old, so that a submission that was in flight at (c) and stored after it is detached too. No
  * wait here: the runner decides when it is due. Throws where it was not acknowledged, and is repeated.
+ *
+ * It does not read the switch, and that is deliberate (fw-detach-switch): once step (c) has run, this call is owed
+ * whatever `FEEDBACK_INTAKE_ENABLED` says afterwards. A switch turned off in between does not excuse it; the
+ * deletion stays open, and the alarm fires, until the intake answers. A deletion whose (c) was skipped owes none,
+ * and the runner never asks for it (src/lib/account/deletion-steps.ts).
  */
 export async function feedbackAgain(
   accountId: string,

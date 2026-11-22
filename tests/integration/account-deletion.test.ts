@@ -1065,6 +1065,24 @@ describe('step (c), the feedback intake behind FEEDBACK_INTAKE_ENABLED (FR-AU-58
       },
     );
 
+    it('is owed with the switch turned off after (c): the call is still made, and a failure leaves the deletion open (fw-detach-switch)', async () => {
+      const who = await second();
+      process.env.FEEDBACK_INTAKE_ENABLED = 'false';
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const later = () => new Date(Date.now() + 361_000);
+      const failed = await carryOutDeletions(later(), {
+        feedback: { wait: async () => {}, intake: intake(false) },
+      });
+      expect(calls).toEqual([who.id]);
+      expect(failed).toMatchObject({ steps: 0, completed: 0, failed: 1 });
+      expect((await recordOf(who.id))!.completedAt).toBeNull();
+      const done = await carryOutDeletions(later(), {
+        feedback: { wait: async () => {}, intake: intake(true) },
+      });
+      expect(done).toMatchObject({ steps: 1, completed: 1, failed: 0 });
+      expect(calls).toEqual([who.id, who.id]);
+    });
+
     it('is covered by the alarm of 24 hours, counted once and naming no account', async () => {
       const who = await second();
       await db().accountDeletion.update({
