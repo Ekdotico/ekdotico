@@ -8,7 +8,7 @@ import styles from '../pages.module.css';
 import { SignOutButton } from './sign-out-button.tsx';
 
 /**
- * The onboarding wizard and its one step, the Closed α notice (FR-AU-55,
+ * The Closed α notice (FR-AU-55,
  * FR-AU-56). The layout renders it in place of every page, so it is the page:
  * its own `<main>`, as the package's `AccessGate` is, and not a dialog. Nothing
  * opened it and nothing dismisses it, and a dialog would bring an Escape key
@@ -44,7 +44,7 @@ export function ClosedAlphaNotice({
 
   async function acknowledge() {
     setPending(true);
-    const refused = await send('/api/account/onboarding/acknowledgement', { version });
+    const refused = await send('/api/account/closed-alpha-notice/acknowledgement', { version });
     if (!refused) {
       // "After the acknowledgement the user continues to the address they had
       // asked for" (FR-AU-55): the notice stood in place of that address, so
