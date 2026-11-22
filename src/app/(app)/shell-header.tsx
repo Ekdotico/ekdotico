@@ -3,12 +3,17 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Badge, Cluster, FormFault, Logo, NavDrawer } from '@ekdotico/domico/components';
+import { Badge, Button, Cluster, FormFault, Logo, NavDrawer } from '@ekdotico/domico/components';
 import { AppearanceMenu } from '@ekdotico/domico/theme';
+import { useReady } from '../../components/ready.ts';
 import type { Fault } from '../../components/send.ts';
+import { WIDGET_TEXT } from '../../lib/feedback/widget.ts';
 import styles from '../pages.module.css';
+import { FeedbackDialog } from './feedback-dialog.tsx';
 import { NOTIFICATIONS_CHANGED } from './notifications/changed.ts';
 import { SignOutButton } from './sign-out-button.tsx';
+
+const DRAWER_ID = 'nav-drawer';
 
 /**
  * FR-ED-42: the count of unread notifications, read again at each change of
@@ -54,13 +59,39 @@ export const MENU_TEXT = 'Menu';
  * list of documents, the notification list with its unread count (FR-ED-42),
  * the account settings (FR-AU-85), and the way to sign out (FR-AU-84).
  */
-export function ShellHeader() {
+export function ShellHeader({ feedback }: { feedback: boolean }) {
   const pathname = usePathname();
+  const ready = useReady();
+  // The Feedback Widget (FR-AU-60, amended below 921px): one dialog, opened from the control in the row or from the one in
+  // the drawer. From the drawer the drawer closes first and the dialog opens once it has, so that the dialog is not made
+  // inert by the drawer's own modal surface; on closing, focus goes to the drawer's trigger, which is where the reader was.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackFromDrawer, setFeedbackFromDrawer] = useState(false);
+  const openFeedback = (fromDrawer: boolean) => {
+    setFeedbackFromDrawer(fromDrawer);
+    if (fromDrawer) {
+      setDrawerOpen(false);
+      // After the render that closes the drawer, which lifts its hold on the page.
+      window.setTimeout(() => setFeedbackOpen(true), 0);
+    } else {
+      setFeedbackOpen(true);
+    }
+  };
+  const closeFeedback = () => {
+    setFeedbackOpen(false);
+    if (feedbackFromDrawer) {
+      // After the dialog has returned focus to a control that is hidden now.
+      requestAnimationFrame(() =>
+        document.querySelector<HTMLElement>(`button[aria-controls="${DRAWER_ID}"]`)?.focus(),
+      );
+    }
+  };
   const current = (path: string) =>
     pathname === path || pathname.startsWith(`${path}/`) ? ('page' as const) : undefined;
   const [fault, setFault] = useState<Fault | null>(null);
   const unread = useUnread();
-  const links = (
+  const links = (fromDrawer: boolean) => (
     <>
       <Link href="/" prefetch={false} aria-current={pathname === '/' ? 'page' : undefined}>
         Documents
@@ -77,6 +108,11 @@ export function ShellHeader() {
       <Link href="/settings" prefetch={false} aria-current={current('/settings')}>
         Account settings
       </Link>
+      {feedback ? (
+        <Button variant="quiet" disabled={!ready} onClick={() => openFeedback(fromDrawer)}>
+          {WIDGET_TEXT.control}
+        </Button>
+      ) : null}
       <SignOutButton variant="quiet" onFault={setFault} />
     </>
   );
@@ -94,14 +130,21 @@ export function ShellHeader() {
                 other is display:none, so a screen reader meets one navigation. */}
             <nav aria-label="Main" className={styles.inlineNav}>
               <Cluster gap={4} align="center">
-                {links}
+                {links(false)}
               </Cluster>
             </nav>
             <AppearanceMenu />
             <div className={styles.drawerOnly}>
-              <NavDrawer label={MENU_TEXT} triggerLabel={MENU_TEXT} closeKey={pathname}>
+              <NavDrawer
+                label={MENU_TEXT}
+                triggerLabel={MENU_TEXT}
+                closeKey={pathname}
+                id={DRAWER_ID}
+                open={drawerOpen}
+                onOpenChange={setDrawerOpen}
+              >
                 <nav aria-label="Main" className={styles.drawerNav}>
-                  {links}
+                  {links(true)}
                 </nav>
               </NavDrawer>
             </div>
@@ -115,6 +158,7 @@ export function ShellHeader() {
           <FormFault title={fault.message} autoFocus={false} />
         </div>
       ) : null}
+      {feedback ? <FeedbackDialog open={feedbackOpen} onClose={closeFeedback} /> : null}
     </>
   );
 }

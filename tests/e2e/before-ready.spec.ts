@@ -52,5 +52,9 @@ test('the controls of the first screens work when they are pressed before the pa
   await expect(page).toHaveURL('/sign-in');
 
   // Every request that changed something was made by the page's script, to a route.
-  expect(posted).toEqual(['/api/sign-up', '/api/account/onboarding/acknowledgement', '/api/auth/sign-out']);
+  expect(posted).toEqual([
+    '/api/sign-up',
+    '/api/account/closed-alpha-notice/acknowledgement',
+    '/api/auth/sign-out',
+  ]);
 });
