@@ -63,6 +63,7 @@ export default defineConfig({
         '**/footnotes.spec.ts',
         '**/export.spec.ts',
         '**/insert-button.spec.ts',
+        '**/accessibility.spec.ts',
       ],
     },
     { name: 'editor', use: { ...devices['Desktop Chrome'] }, testMatch: '**/editor.spec.ts' },

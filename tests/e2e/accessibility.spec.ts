@@ -24,7 +24,9 @@ const KNOWN = new Set<string>([]);
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 async function scan(page: Page, name: string, theme: Theme, seen: Set<string>): Promise<string[]> {
-  const { violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
+  const { violations, passes } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
+  // Proof that the rules ran on a page with content, so that a scan that checks nothing cannot pass.
+  expect(passes.length, `${name}: rules that passed`).toBeGreaterThan(10);
   const found: string[] = [];
   for (const violation of violations) {
     for (const node of violation.nodes) {
