@@ -7,6 +7,7 @@ import { AccountInDeletion } from '../../../lib/account/in-deletion.ts';
 import { fault, notAdmitted, refusedOrigin, unauthenticated } from '../../../lib/auth/route-answers.ts';
 import { validateSession, validateSessionRow } from '../../../lib/auth/session.ts';
 import { createDocument, listDocuments } from '../../../lib/documents/documents.ts';
+import { ensureOnboardingPaper } from '../../../lib/documents/onboarding-paper.ts';
 import { errorResponse, notJson, readJson } from '../../../lib/http.ts';
 import { securityLog } from '../../../lib/security-log.ts';
 import { ensurePersonalWorkspace } from '../../../lib/workspace.ts';
@@ -30,6 +31,7 @@ export async function GET(request: Request): Promise<Response> {
     const validation = await validateSession(request.method, request.headers);
     const { session } = validation;
     if (!session) return await notAdmitted(validation);
+    await ensureOnboardingPaper(session.userId); // never throws
     return Response.json({ documents: await listDocuments(session.userId) }, { headers: NO_STORE });
   } catch (error) {
     return fault('documents', error);
