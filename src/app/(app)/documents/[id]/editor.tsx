@@ -35,6 +35,7 @@ import { MARKDOWN_INPUT } from './input-rules.ts';
 import { createPortal } from 'react-dom';
 import { PeopleRow } from './people-row.tsx';
 import { STATUS_SLOT } from './people-slot.ts';
+import { signInAgainHref } from './sign-in-return.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
 
@@ -533,7 +534,12 @@ function OpenDocument({
   }, []);
 
   if (state.phase === 'ended' && state.ending) {
-    const { title, text, href, link } = ENDED[state.ending];
+    const { title, text, link, ...ended } = ENDED[state.ending];
+    // After signing in again, the person returns to this page (FR-AU-07).
+    const href =
+      state.ending === REFUSAL.SESSION_ENDED
+        ? signInAgainHref(window.location.pathname + window.location.search)
+        : ended.href;
     // No fault, and not the error state (FR-ED-41). The text and the control
     // that had the focus are gone, so the statement takes it.
     return (
