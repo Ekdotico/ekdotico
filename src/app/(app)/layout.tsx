@@ -3,6 +3,7 @@
 // the page. The header is the product's name and the way to sign out:
 // navigation joins it with the pages it leads to.
 import { SkipLink } from '@ekdotico/domico/components';
+import { feedbackIntakeEnabled } from '../../lib/account/feedback-step.ts';
 import { db } from '../../lib/db.ts';
 import {
   CLOSED_ALPHA_NOTICE_BODY,
@@ -45,7 +46,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <>
       <SkipLink />
-      <ShellHeader />
+      {/* FR-AU-60, FR-AU-61: the control is in the header only where the switch is on, and the header is not rendered
+          while the Closed α notice shows. The one switch governs the control, the route and step (c) of a deletion. */}
+      <ShellHeader feedback={feedbackIntakeEnabled()} />
       <main id="main-content" className={styles.page}>
         {children}
       </main>
