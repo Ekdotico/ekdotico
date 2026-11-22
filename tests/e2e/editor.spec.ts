@@ -4103,7 +4103,7 @@ test('a session that has ended is stated once, and the page does not connect aga
   context,
 }) => {
   await enter(page);
-  await openNew(page);
+  const id = await openNew(page);
   const other = await context.newPage();
   await other.goto('/');
   await other.getByRole('button', { name: 'Sign out' }).click();
@@ -4116,7 +4116,10 @@ test('a session that has ended is stated once, and the page does not connect aga
   await startCollab();
   const statement = page.getByRole('status').filter({ hasText: 'The session has ended' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
-  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in');
+  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute(
+    'href',
+    `/sign-in?return=${encodeURIComponent(`/documents/${id}`)}`,
+  );
   await expect(text(page)).toHaveCount(0);
   const sockets = countSockets(page);
   await page.waitForTimeout(8000);
@@ -4588,7 +4591,7 @@ test('the re-check ends the connection of a session that was ended in another ta
 }) => {
   test.slow();
   await enter(page);
-  await openNew(page);
+  const id = await openNew(page);
   await text(page).click();
   await page.keyboard.type('Open when the session ends.');
   await expect(status(page, 'In sync')).toBeVisible();
@@ -4602,7 +4605,10 @@ test('the re-check ends the connection of a session that was ended in another ta
   // No handshake was refused and no socket lost: the server closed the connection, as session-ended.
   const statement = page.getByRole('status').filter({ hasText: 'The session has ended' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
-  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in');
+  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute(
+    'href',
+    `/sign-in?return=${encodeURIComponent(`/documents/${id}`)}`,
+  );
   await expect(text(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
   await page.waitForTimeout(8000);
