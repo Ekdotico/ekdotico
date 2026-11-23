@@ -18,7 +18,7 @@ import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { newNonce, NONCE_HEADER, pagePolicy } from './lib/csp.ts';
 import { faultOf } from './lib/fault.ts';
-import { errorResponse, faultPage, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
+import { acceptsHtml, errorResponse, faultPage, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
@@ -53,6 +53,7 @@ export const SESSIONLESS: readonly { group: Group; methods: readonly string[]; p
   { group: 'a', methods: ['GET'], path: '/reset-password' }, // FR-AU-86
   { group: 'a', methods: ['GET'], path: '/reset-password/[token]' }, // FR-AU-86
   { group: 'a', methods: ['GET'], path: '/confirm-address/[token]' }, // FR-AU-03: the page alone, which tells a browser without a session to sign in; the confirmation itself needs a session of the account (the owner's decision of 9 October 2026)
+  { group: 'a', methods: ['GET'], path: '/privacy' }, // FR-AU-72; fw-privacy-page: the privacy notice, readable without signing in, and the same page signed in or out
   // (a) The endpoints of the identity library that a person without a session
   // must reach, one by one and never the prefix: every other endpoint under
   // /api/auth is validated here like any route. Each is also on the list of
@@ -173,6 +174,21 @@ interface Progress {
   stage: 'start' | 'limit' | 'session' | 'origin' | 'gate' | 'log mark';
 }
 
+/**
+ * UX-8: a navigation, which only reads, names HTML in `Accept`, and is not for an API route or a file of
+ * the build. Only such a request is answered with a page; any other keeps the JSON answer.
+ */
+function readsAPage(request: NextRequest): boolean {
+  const { pathname } = request.nextUrl;
+  return (
+    onlyReads(request.method) &&
+    acceptsHtml(request.headers.get('accept')) &&
+    pathname !== '/api' &&
+    !pathname.startsWith('/api/') &&
+    !pathname.startsWith('/_next/')
+  );
+}
+
 async function decide(request: NextRequest, progress: Progress): Promise<Response> {
   const { method, headers } = request;
   const { pathname, search } = request.nextUrl;
@@ -207,7 +223,13 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
     const limit = await takeLimit('SESSIONLESS_PER_ADDRESS', address);
     if (!limit.ok) {
       progress.stage = 'log mark';
-      return await tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds);
+      return await tooManyRequests(
+        'SESSIONLESS_PER_ADDRESS',
+        address,
+        limit.retryAfterSeconds,
+        undefined,
+        readsAPage(request),
+      );
     }
     // NFR-SE-17 (c): "every request that changes state", a sign-in and the
     // acceptance of an invitation among them.
@@ -248,7 +270,13 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
       if (!limit.ok) {
         progress.stage = 'log mark';
         return withCookies(
-          await tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds),
+          await tooManyRequests(
+            'SESSIONLESS_PER_ADDRESS',
+            address,
+            limit.retryAfterSeconds,
+            undefined,
+            readsAPage(request),
+          ),
           setCookie,
         );
       }

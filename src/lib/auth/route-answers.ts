@@ -4,7 +4,7 @@
 // proxy gives for its limits and a route for its own (NFR-SE-07).
 import { addressBucket } from '../client-address.ts';
 import { faultOf } from '../fault.ts';
-import { errorResponse, INTERNAL_FAULT } from '../http.ts';
+import { errorResponse, INTERNAL_FAULT, limitPage, limitStatement } from '../http.ts';
 import { isOwnOrigin } from '../origin.ts';
 import { logLimitReached, oncePer } from '../rate-limit.ts';
 import { securityLog } from '../security-log.ts';
@@ -22,14 +22,11 @@ export async function tooManyRequests(
   key: string,
   seconds: number,
   userId?: string,
+  asPage = false,
 ): Promise<Response> {
   await logLimitReached(limit, key, seconds, userId);
-  return errorResponse(
-    429,
-    'rate_limited',
-    `Too many requests were made in a short time. Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
-    { 'Retry-After': String(seconds) },
-  );
+  if (asPage) return limitPage(seconds);
+  return errorResponse(429, 'rate_limited', limitStatement(seconds), { 'Retry-After': String(seconds) });
 }
 
 /**

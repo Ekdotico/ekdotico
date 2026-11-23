@@ -63,6 +63,7 @@ export default defineConfig({
         '**/footnotes.spec.ts',
         '**/export.spec.ts',
         '**/insert-button.spec.ts',
+        '**/accessibility.spec.ts',
       ],
     },
     { name: 'editor', use: { ...devices['Desktop Chrome'] }, testMatch: '**/editor.spec.ts' },
@@ -89,6 +90,13 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       testMatch: '**/insert-button.spec.ts',
       dependencies: ['export'],
+    },
+    {
+      // Starts the collaboration server of its own, as the files above do, so it waits for the last of them.
+      name: 'accessibility',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: '**/accessibility.spec.ts',
+      dependencies: ['insert'],
     },
   ],
   webServer: {

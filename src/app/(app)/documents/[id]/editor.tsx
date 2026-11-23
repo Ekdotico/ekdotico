@@ -35,6 +35,7 @@ import { MARKDOWN_INPUT } from './input-rules.ts';
 import { createPortal } from 'react-dom';
 import { PeopleRow } from './people-row.tsx';
 import { STATUS_SLOT } from './people-slot.ts';
+import { signInAgainHref } from './sign-in-return.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
 
@@ -164,7 +165,7 @@ function Heard({ words, again }: { words: string; again: string }) {
     const timer = setTimeout(() => (element.textContent = words), HEARD_AFTER_MS);
     return () => clearTimeout(timer);
   }, [words, again]);
-  return <span ref={region} role="status" className="sr-only" />;
+  return <span ref={region} role="status" className="sr-only" data-heard="statements" />;
 }
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
@@ -379,7 +380,7 @@ function Text({
             <p>{refusal.words}</p>
           </FormFault>
         ) : null}
-        <span ref={heard} role="status" className="sr-only" />
+        <span ref={heard} role="status" className="sr-only" data-heard="refusal" />
         {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
         {editable && !reads ? (
           <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
@@ -554,7 +555,12 @@ function OpenDocument({
   }, []);
 
   if (state.phase === 'ended' && state.ending) {
-    const { title, text, href, link } = ENDED[state.ending];
+    const { title, text, link, ...ended } = ENDED[state.ending];
+    // After signing in again, the person returns to this page (FR-AU-07).
+    const href =
+      state.ending === REFUSAL.SESSION_ENDED
+        ? signInAgainHref(window.location.pathname + window.location.search)
+        : ended.href;
     // No fault, and not the error state (FR-ED-41). The text and the control
     // that had the focus are gone, so the statement takes it.
     return (

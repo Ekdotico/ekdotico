@@ -27,7 +27,8 @@ const { useImageStorage } = await import('../../src/lib/images/store.ts');
 const { countScope } = await import('../../src/lib/clearing/clearing.ts');
 const { authorise } = await import('../../src/lib/documents/access.ts');
 const { PERMISSIONS } = await import('../../src/lib/documents/permissions.ts');
-const { acknowledgeNotice, CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/onboarding.ts');
+const { acknowledgeNotice, CLOSED_ALPHA_NOTICE_VERSION } =
+  await import('../../src/lib/closed-alpha-notice.ts');
 const clearRoute = await import('../../src/app/api/account/documents/clear/route.ts');
 const oneRoute = await import('../../src/app/api/account/documents/clear/[documentId]/route.ts');
 const { default: DocumentPage } = await import('../../src/app/(app)/documents/[id]/page.tsx');

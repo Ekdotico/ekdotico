@@ -24,6 +24,32 @@ export const INTERNAL_FAULT =
  * policy of every response is stricter than it needs to be.
  */
 export function faultPage(): Response {
+  return notShownPage(500, INTERNAL_FAULT);
+}
+
+/**
+ * NFR-SE-07, the audit's row UX-8: the statement of a 429, one text for the JSON answer of every limit and
+ * for the page below. `seconds` is a number the limiter computed, never a part of a request.
+ */
+export function limitStatement(seconds: number): string {
+  return `Too many requests were made in a short time. Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`;
+}
+
+/**
+ * The answer to a PAGE request refused for a limit: the page of `faultPage`, with the statement of the
+ * limit and the `Retry-After` header of the JSON answer. It loads nothing, so it costs no further request.
+ */
+export function limitPage(seconds: number): Response {
+  const safe = Math.max(0, Math.trunc(Number(seconds)));
+  return notShownPage(429, limitStatement(safe), { 'Retry-After': String(safe) });
+}
+
+/** Whether the `Accept` header of a request names HTML, which is what a navigation of a browser sends. */
+export function acceptsHtml(accept: string | null): boolean {
+  return (accept ?? '').split(',').some((each) => each.split(';')[0]!.trim().toLowerCase() === 'text/html');
+}
+
+function notShownPage(status: number, statement: string, extra: Record<string, string> = {}): Response {
   const page = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -34,19 +60,20 @@ export function faultPage(): Response {
 <body>
 <main>
 <h1>Page not shown</h1>
-<p role="alert">${INTERNAL_FAULT}</p>
+<p role="alert">${statement}</p>
 </main>
 </body>
 </html>
 `;
   return new Response(page, {
-    status: 500,
+    status,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy':
         "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      ...extra,
     },
   });
 }

@@ -11,7 +11,7 @@ describe('the header (modernisation A3)', () => {
   });
 
   it('opens the package drawer, closed by the route, with no class borrowed', () => {
-    expect(tsx).toMatch(/<NavDrawer [^>]*closeKey=\{pathname\}/);
+    expect(tsx).toMatch(/<NavDrawer\s[^>]*closeKey=\{pathname\}/);
     expect(tsx).not.toMatch(/mobile-nav|ekd-/);
   });
 

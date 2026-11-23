@@ -8,7 +8,8 @@
 // 500. Nothing of the error is logged here, and nothing of it is shown but
 // its reference: its message is not the application's to show
 // (src/app/page-fault.ts).
-import { FormFault, Logo, PageHeading, Stack } from '@ekdotico/domico/components';
+import Link from 'next/link';
+import { Button, Cluster, FormFault, Logo, PageHeading, Stack } from '@ekdotico/domico/components';
 import { INTERNAL_FAULT } from '../lib/http.ts';
 import styles from './pages.module.css';
 
@@ -31,10 +32,15 @@ export const faultReference = (error: unknown): string | null => {
   return typeof digest === 'string' && /^[0-9]{1,10}$/.test(digest) ? digest : null;
 };
 
-export default function PageFault({ error }: { error?: unknown }) {
+export default function PageFault({ error, reset }: { error?: unknown; reset?: () => void }) {
   const reference = faultReference(error);
   return (
     <main className={styles.column}>
+      {/* A client error boundary cannot export metadata, and the layout's title
+          template does not reach a title rendered here: React puts this one in
+          the head, whole, so it is written out in the template's own form
+          (src/app/layout.tsx): the heading, an en dash, the product's name. */}
+      <title>Page not shown – Ekdotico</title>
       <Stack gap={6}>
         <Logo />
         <PageHeading>Page not shown</PageHeading>
@@ -52,6 +58,14 @@ export default function PageFault({ error }: { error?: unknown }) {
             </>
           ) : null}
         </FormFault>
+        {/* After the statement, which holds focus, so the keyboard reaches them
+            in reading order. */}
+        <Cluster gap={3}>
+          <Button onClick={reset}>Try again</Button>
+          <Link href="/" prefetch={false}>
+            Documents
+          </Link>
+        </Cluster>
       </Stack>
     </main>
   );

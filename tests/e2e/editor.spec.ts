@@ -2924,9 +2924,9 @@ test('the words of a refusal are heard at each refusal, and go when the document
   await place(doc.locator('figure figure td').first());
   // Everything the region a screen reader hears is given, from here on.
   await page.evaluate(() => {
-    const region = [...document.querySelectorAll('[role="status"]')].find(
-      (each) => !each.closest('[role="textbox"]') && each.classList.contains('sr-only'),
-    )!;
+    // The region of refusals. A second standing region, for the statements about the document, is
+    // in the page too (141), so "the first status that is visually hidden" no longer names it.
+    const region = document.querySelector('[role="status"][data-heard="refusal"]')!;
     const heard = ((window as unknown as { heard: string[] }).heard = [] as string[]);
     new MutationObserver(() => heard.push(region.textContent ?? '')).observe(region, {
       childList: true,
@@ -4103,7 +4103,7 @@ test('a session that has ended is stated once, and the page does not connect aga
   context,
 }) => {
   await enter(page);
-  await openNew(page);
+  const id = await openNew(page);
   const other = await context.newPage();
   await other.goto('/');
   await other.getByRole('button', { name: 'Sign out' }).click();
@@ -4116,7 +4116,10 @@ test('a session that has ended is stated once, and the page does not connect aga
   await startCollab();
   const statement = page.getByRole('status').filter({ hasText: 'The session has ended' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
-  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in');
+  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute(
+    'href',
+    `/sign-in?return=${encodeURIComponent(`/documents/${id}`)}`,
+  );
   await expect(text(page)).toHaveCount(0);
   const sockets = countSockets(page);
   await page.waitForTimeout(8000);
@@ -4557,7 +4560,7 @@ test('the eleventh connection to a document is refused with the fixed statement,
   const second = await page.context().newPage();
   await second.clock.install();
   await second.goto(`/documents/${id}`);
-  await expect(second.getByText(statement)).toBeVisible();
+  await expect(second.locator('.ekd-fault', { hasText: statement })).toBeVisible();
   // Neither the reconnecting state nor the error state: the indicator is not there at all, nor is the text.
   const indicator = second.getByRole('button', {
     name: /Restoring the connection|Not connected|Opening the document|In sync/,
@@ -4567,14 +4570,14 @@ test('the eleventh connection to a document is refused with the fixed statement,
 
   // The error state would come after 6 seconds in these tests (COLLAB_ERROR_AFTER_MS); 20 seconds on, it has not.
   await second.clock.fastForward(20_000);
-  await expect(second.getByText(statement)).toBeVisible();
+  await expect(second.locator('.ekd-fault', { hasText: statement })).toBeVisible();
   await expect(indicator).toHaveCount(0);
 
   // A place is free, and the next try, at 30 seconds from the refusal, is let in.
   nine[0]!.close();
   await second.clock.fastForward(10_000);
   await expect(status(second, 'In sync')).toBeVisible();
-  await expect(second.getByText(statement)).toHaveCount(0);
+  await expect(second.locator('.ekd-fault', { hasText: statement })).toHaveCount(0);
   await expect(text(second)).toBeVisible();
   for (const each of nine.slice(1)) each.close();
   await second.close();
@@ -4588,7 +4591,7 @@ test('the re-check ends the connection of a session that was ended in another ta
 }) => {
   test.slow();
   await enter(page);
-  await openNew(page);
+  const id = await openNew(page);
   await text(page).click();
   await page.keyboard.type('Open when the session ends.');
   await expect(status(page, 'In sync')).toBeVisible();
@@ -4602,7 +4605,10 @@ test('the re-check ends the connection of a session that was ended in another ta
   // No handshake was refused and no socket lost: the server closed the connection, as session-ended.
   const statement = page.getByRole('status').filter({ hasText: 'The session has ended' });
   await expect(statement).toBeVisible({ timeout: 30_000 });
-  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in');
+  await expect(statement.getByRole('link', { name: 'Sign in again' })).toHaveAttribute(
+    'href',
+    `/sign-in?return=${encodeURIComponent(`/documents/${id}`)}`,
+  );
   await expect(text(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
   await page.waitForTimeout(8000);
@@ -4641,9 +4647,9 @@ test('an Editor whose role becomes Viewer is made read-only in place and told, a
   await expect(text(page)).toContainText('Written as an Editor.');
   const role = (now: string, rest: string) =>
     theirs
-      .getByRole('status')
+      .locator('.ekd-fault')
       .filter({ hasText: `The role of this account on this document is now ${now}. ${rest}` });
-  await expect(theirs.getByRole('status').filter({ hasText: 'The role of this account' })).toHaveCount(0);
+  await expect(theirs.locator('.ekd-fault').filter({ hasText: 'The role of this account' })).toHaveCount(0);
 
   // A Viewer: the text stays, cannot be changed, and is still followed from the Owner's.
   setRole(id, editor.email, 'viewer');
@@ -4658,7 +4664,7 @@ test('an Editor whose role becomes Viewer is made read-only in place and told, a
   await page.keyboard.type(' Owner, meanwhile.');
   await expect(text(theirs)).toContainText('Owner, meanwhile.');
   await expect(text(page)).not.toContainText('Nothing of this.');
-  await expect(page.getByRole('status').filter({ hasText: 'The role of this account' })).toHaveCount(0);
+  await expect(page.locator('.ekd-fault').filter({ hasText: 'The role of this account' })).toHaveCount(0);
 
   // An Editor again: editable in place, and what is written is the Owner's to see.
   setRole(id, editor.email, 'editor');
@@ -4702,9 +4708,9 @@ test('a document in the notice period of a clearing is read-only in every open t
   await expect(text(page)).toContainText('Written before.');
   const statement = (tab: Page) =>
     tab
-      .getByRole('status')
+      .locator('.ekd-fault')
       .filter({ hasText: /This document will be deleted on \d{1,2} \w{3} \d{4}, \d{2}:\d{2}\./ });
-  const ended = (tab: Page, words: string) => tab.getByRole('status').filter({ hasText: words });
+  const ended = (tab: Page, words: string) => tab.locator('.ekd-fault').filter({ hasText: words });
 
   // The Owner confirms the clearing from the deletion screen, in a tab of its own.
   const screen = await page.context().newPage();
@@ -4879,7 +4885,7 @@ test('an Editor whose role is taken while the connection is lost is told that th
   }
 
   const now = theirs
-    .getByRole('status')
+    .locator('.ekd-fault')
     .filter({ hasText: 'The role of this account on this document is now Viewer.' });
   await expect(now).toBeVisible({ timeout: 60_000 });
   await expect(now).toContainText('The document is read-only in this tab.');
@@ -4901,7 +4907,7 @@ test('an Editor whose role is taken while the connection is lost is told that th
   setRole(id, editor.email, 'editor');
   await expect(
     theirs
-      .getByRole('status')
+      .locator('.ekd-fault')
       .filter({ hasText: 'The role of this account on this document is now Editor.' }),
   ).toBeVisible({ timeout: 30_000 });
   await expect(theirs.getByText('Your last changes in this tab were not saved.')).toHaveCount(0);
@@ -4989,7 +4995,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     const sockets = countSockets(theirs);
     const role = (now: string, rest: string) =>
       theirs
-        .getByRole('status')
+        .locator('.ekd-fault')
         .filter({ hasText: `The role of this account on this document is now ${now}. ${rest}` });
     const row = personRow(manage, 'Bea Editor');
 
@@ -5026,7 +5032,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     const { manage, theirs, context } = await owned(page, browser);
     const sockets = countSockets(theirs);
     const statement = theirs
-      .getByRole('status')
+      .locator('.ekd-fault')
       .filter({ hasText: 'The permissions of the Editor role on this document have changed.' });
     await expect(statement).toHaveCount(0);
     const rename = manage.getByRole('checkbox', { name: 'Editor: Rename the document', exact: true });
@@ -5035,14 +5041,18 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     await expect(rename).toBeChecked();
     await expect(manage.getByText('Saved.')).toBeVisible();
     await expect(statement).toBeVisible({ timeout: 5000 });
+    // The same words are given to a screen reader, from the standing region (pull request 141).
+    await expect(theirs.locator('[data-heard="statements"]')).toContainText(
+      'The permissions of the Editor role on this document have changed.',
+    );
     // Still editable, and the same connection: what is written is the Owner's to see, and no role was said.
     await expect(text(theirs)).toHaveAttribute('aria-readonly', 'false');
-    await expect(theirs.getByRole('status').filter({ hasText: 'The role of this account' })).toHaveCount(0);
+    await expect(theirs.locator('.ekd-fault').filter({ hasText: 'The role of this account' })).toHaveCount(0);
     await text(theirs).click();
     await theirs.keyboard.type('Written under the new permissions.');
     await expect(text(page)).toContainText('Written under the new permissions.');
     // The Owner's own page is told nothing: its role's cells do not change.
-    await expect(page.getByRole('status').filter({ hasText: 'The permissions of the' })).toHaveCount(0);
+    await expect(page.locator('.ekd-fault').filter({ hasText: 'The permissions of the' })).toHaveCount(0);
 
     // Taken away: stated again, with nothing closed.
     await rename.click();
@@ -5063,7 +5073,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     const { manage, theirs, context, owner } = await owned(page, browser);
     const sockets = [countSockets(page), countSockets(theirs)];
     const role = (on: Page, now: string) =>
-      on.getByRole('status').filter({
+      on.locator('.ekd-fault').filter({
         hasText: `The role of this account on this document is now ${now}. The document can be edited in this tab.`,
       });
 
