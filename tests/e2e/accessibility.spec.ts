@@ -23,7 +23,25 @@ const KNOWN = new Set<string>([]);
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
+/**
+ * axe reads the colours that a control has at the moment it looks. A control that was disabled until the page's
+ * script took over (src/components/ready.ts) is repainted when it is enabled, and Domico's button fades its
+ * background over 140 ms while its text colour changes at once, so a scan inside that window reads a background
+ * halfway between the two against the final text colour. Scan once nothing that ends is still running.
+ */
+async function settled(page: Page) {
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        (animation) =>
+          animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity,
+      ),
+  );
+}
+
 async function scan(page: Page, name: string, theme: Theme, seen: Set<string>): Promise<string[]> {
+  await settled(page);
   const { violations, passes } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
   // Proof that the rules ran on a page with content, so that a scan that checks nothing cannot pass.
   expect(passes.length, `${name}: rules that passed`).toBeGreaterThan(10);
@@ -52,6 +70,8 @@ for (const theme of ['light', 'dark'] as const) {
     await signUp(page, newPerson());
     await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+    // Disabled until the page's script has run, and axe leaves a disabled control out: scan it enabled.
+    await expect(page.getByRole('button', { name: 'New document' })).toBeEnabled();
     found.push(...(await scan(page, 'document list', theme, seen)));
 
     // shareNew creates a document and opens its sharing settings; the editor is the page before.
