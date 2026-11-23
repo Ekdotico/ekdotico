@@ -63,9 +63,14 @@ export function rateLimitedText(time: string): string {
   return `You have sent too much feedback for now. Your message is still here. Send it again after ${time}.`;
 }
 
-/** Characters remaining in code points, of the message as it will be counted: after leading and trailing white space (FR-AU-66). */
+/** The message as the server counts it, in code points after leading and trailing white space (FR-AU-66, fw-count-unit): the `count` of the field. */
+export function countOf(message: string): number {
+  return codePoints(message.trim());
+}
+
+/** Characters remaining of the 4,000, counted as `countOf` does. */
 export function remainingOf(message: string): number {
-  return MAX_MESSAGE_CODE_POINTS - codePoints(message.trim());
+  return MAX_MESSAGE_CODE_POINTS - countOf(message);
 }
 
 export type KindFault = 'no_kind';
