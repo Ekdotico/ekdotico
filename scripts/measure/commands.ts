@@ -30,12 +30,19 @@ export interface Target {
 /** The `collab` address that serves an origin: the same host, on the web socket scheme. */
 export const collabUrlOf = (origin: string) => `${origin.replace(/^http/, 'ws')}/collab`;
 
-/** Cookies and passwords go to an origin, so it is https, except on a machine's own localhost, and the collaboration address is on its host. */
+const LOCAL = ['localhost', '127.0.0.1'];
+
+/**
+ * Cookies and passwords go to an origin, so it is https, except on a machine's own localhost, and the
+ * collaboration address is on its host, or on this machine's own localhost (a server started beside the command,
+ * as tests/integration/measure-editor.test.ts starts one on a port of its own).
+ */
 export function assertOrigin(origin: string, collabUrl: string = collabUrlOf(origin)): void {
   const { protocol, hostname } = new URL(origin);
-  if (protocol !== 'https:' && !(protocol === 'http:' && ['localhost', '127.0.0.1'].includes(hostname)))
+  if (protocol !== 'https:' && !(protocol === 'http:' && LOCAL.includes(hostname)))
     throw new Error('--origin must use https, except on localhost: cookies and passwords are sent to it.');
-  if (new URL(collabUrl).host !== new URL(origin).host)
+  const collab = new URL(collabUrl);
+  if (collab.host !== new URL(origin).host && !LOCAL.includes(collab.hostname))
     throw new Error('The collaboration address must be on the host of --origin: cookies are sent to it.');
 }
 
