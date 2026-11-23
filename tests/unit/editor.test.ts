@@ -9,6 +9,45 @@ import { LIMIT_REFUSAL, REFUSAL } from '../../src/lib/collab/protocol.ts';
 import { TABLE_PAST_BOUNDS, heldTitle } from '../../src/app/(app)/documents/[id]/block-limits.ts';
 import { MAX_ELEMENT_DEPTH, MAX_STATE_BYTES } from '../../src/lib/collab/state.ts';
 import { linkAddress } from '../../src/lib/editor/link.ts';
+import { returnPath } from '../../src/lib/http.ts';
+import { RETURN_PARAMETER, SIGN_IN_PATH } from '../../src/proxy.ts';
+import { signInAgainHref } from '../../src/app/(app)/documents/[id]/sign-in-return.ts';
+
+// FR-AU-07, owner's decision "ux-sign-in-return": "Sign in again" returns to the document.
+describe('"Sign in again" on the document page', () => {
+  // What the sign-in page does with the address it is opened at.
+  const landing = (href: string) => {
+    const url = new URL(href, 'https://app.example.test');
+    return { path: url.pathname, to: returnPath(url.searchParams.get(RETURN_PARAMETER)) };
+  };
+
+  it('writes the names the proxy reads', () => {
+    expect(signInAgainHref('/documents/1').startsWith(`${SIGN_IN_PATH}?${RETURN_PARAMETER}=`)).toBe(true);
+  });
+
+  it('carries the path of this document, and signing in lands on it', () => {
+    const page = readFileSync('src/app/(app)/documents/[id]/editor.tsx', 'utf8');
+    expect(page).toContain('signInAgainHref(window.location.pathname + window.location.search)');
+    for (const here of ['/documents/abc-1', '/documents/abc-1?tab=sharing&x=%2F']) {
+      expect(landing(signInAgainHref(here))).toEqual({ path: SIGN_IN_PATH, to: here });
+    }
+  });
+
+  it.each([
+    'https://evil.example/documents/1',
+    '//evil.example',
+    '/\\evil.example',
+    '\\\\evil.example',
+    'javascript:alert(1)',
+    '/%2F%2Fevil.example/../x\\y',
+    '/documents/1\\..\\x',
+    '/documents/1\n/x',
+  ])('falls back to the list for %j', (value) => {
+    // Refused when the link is written, and again when the sign-in page reads a crafted address.
+    expect(landing(signInAgainHref(value)).to).toBe('/');
+    expect(landing(`${SIGN_IN_PATH}?${new URLSearchParams({ [RETURN_PARAMETER]: value })}`).to).toBe('/');
+  });
+});
 
 describe('the address of a hyperlink (FR-ED-02; NFR-SE-06, A03)', () => {
   it.each([
