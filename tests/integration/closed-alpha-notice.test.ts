@@ -163,24 +163,24 @@ describe('the acknowledgement (FR-AU-56)', () => {
 
   // fw-notice-version (D463): the sentence on feedback raised the version to 2, so an account that had acknowledged
   // version 1 sees the notice once more, and nothing else about it breaks.
-  it('shows the notice again to an account that acknowledged version 1, and takes only the current version from it', async () => {
-    expect(CLOSED_ALPHA_NOTICE_VERSION).toBe(2);
+  it('shows the notice again to an account that acknowledged the version before, and takes only the current version from it', async () => {
+    const before = CLOSED_ALPHA_NOTICE_VERSION - 1;
     const { id, cookie } = await person();
     const earlier = new Date('2026-01-01T00:00:00Z');
     await db().user.update({
       where: { id },
-      data: { closedAlphaNoticeVersion: 1, closedAlphaNoticeAcknowledgedAt: earlier },
+      data: { closedAlphaNoticeVersion: before, closedAlphaNoticeAcknowledgedAt: earlier },
     });
     expect(await closedAlphaNoticeDue(id)).toBe(true);
-    // Version 1 is no longer the current one: refused, and the record is as it was.
-    await expectError(await write(cookie, { version: 1 }), 409, 'notice_version_not_current');
+    // The version before is no longer the current one (at 2, version 1): refused, and the record is as it was.
+    await expectError(await write(cookie, { version: before }), 409, 'notice_version_not_current');
     const kept = await recorded(id);
-    expect(kept.closedAlphaNoticeVersion).toBe(1);
+    expect(kept.closedAlphaNoticeVersion).toBe(before);
     expect(kept.closedAlphaNoticeAcknowledgedAt).toEqual(earlier);
-    // Version 2 is recorded, with a new time, and the notice is no longer due.
-    expect((await write(cookie, { version: 2 })).status).toBe(200);
+    // The current version is recorded, with a new time, and the notice is no longer due.
+    expect((await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION })).status).toBe(200);
     const row = await recorded(id);
-    expect(row.closedAlphaNoticeVersion).toBe(2);
+    expect(row.closedAlphaNoticeVersion).toBe(CLOSED_ALPHA_NOTICE_VERSION);
     expect(row.closedAlphaNoticeAcknowledgedAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
     expect(await closedAlphaNoticeDue(id)).toBe(false);
   });
@@ -200,7 +200,13 @@ describe('the acknowledgement (FR-AU-56)', () => {
 
   it('refuses a version other than the current one with a 409, and records nothing', async () => {
     const { id, cookie } = await person();
-    for (const version of [0, 1, 3, -1, 1_000_000]) {
+    for (const version of [
+      0,
+      CLOSED_ALPHA_NOTICE_VERSION - 1,
+      CLOSED_ALPHA_NOTICE_VERSION + 1,
+      -1,
+      1_000_000,
+    ]) {
       const message = await expectError(await write(cookie, { version }), 409, 'notice_version_not_current');
       expect(message).toBe(
         'The notice has changed since this page was opened. Reload the page and read the notice again.',
