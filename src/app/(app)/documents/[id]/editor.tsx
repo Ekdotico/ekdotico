@@ -383,7 +383,7 @@ function Text({
         <span ref={heard} role="status" className="sr-only" data-heard="refusal" />
         {/* FR-ED-08: the file picker, which a person who does not drag reaches by keyboard, and what an upload is doing. */}
         {editable && !reads ? (
-          <Button variant="quiet" onClick={() => editor?.commands.chooseImage()}>
+          <Button variant="quiet" edge="start" onClick={() => editor?.commands.chooseImage()}>
             {IMAGE_TEXT.choose}
           </Button>
         ) : null}
