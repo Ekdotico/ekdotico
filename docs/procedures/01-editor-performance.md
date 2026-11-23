@@ -14,7 +14,7 @@ The reference document is `tests/fixtures/reference-document.json`: 5,000 words 
 
 `node scripts/measure-editor.ts auto` does those steps on both documents, and makes no `cookies.json` (step 13 is done: the ten `Cookie` headers are held in memory). Steps 3, 4 and 10 stay yours.
 
-1. Send ten admission invitations with `scripts/admission.ts create`: one for the owner's account, which you sign up by hand and give two-factor authentication (it is on the founding team), and nine for the testers' addresses.
+1. Send nine admission invitations with `scripts/admission.ts create`, one for each tester's address. The owner's account already exists and must already have two-factor authentication on (it is on the founding team).
 2. Make `accounts.json` outside the repository, mode 0600 (`scripts/measure/accounts.example.json` shows it): the owner's email and password, and for each tester an `invitationLink` from its email, or a `password` if the account exists. The runner signs a tester up from the link with a generated password, writes the password into the file in place of the link, and prints neither.
 3. Run `pnpm exec playwright install chromium`, then `node scripts/measure-editor.ts auto --origin https://… --accounts /path/to/accounts.json`. It asks on the terminal for the owner's six-digit code, and takes about half an hour.
 
