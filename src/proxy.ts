@@ -18,7 +18,7 @@ import { validateSession } from './lib/auth/session.ts';
 import { addressBucket } from './lib/client-address.ts';
 import { newNonce, NONCE_HEADER, pagePolicy } from './lib/csp.ts';
 import { faultOf } from './lib/fault.ts';
-import { errorResponse, faultPage, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
+import { acceptsHtml, errorResponse, faultPage, INTERNAL_FAULT, onlyReads, returnPath } from './lib/http.ts';
 import { isOwnOrigin } from './lib/origin.ts';
 import { takeLimit } from './lib/rate-limit.ts';
 import { securityLog } from './lib/security-log.ts';
@@ -174,6 +174,21 @@ interface Progress {
   stage: 'start' | 'limit' | 'session' | 'origin' | 'gate' | 'log mark';
 }
 
+/**
+ * UX-8: a navigation, which only reads, names HTML in `Accept`, and is not for an API route or a file of
+ * the build. Only such a request is answered with a page; any other keeps the JSON answer.
+ */
+function readsAPage(request: NextRequest): boolean {
+  const { pathname } = request.nextUrl;
+  return (
+    onlyReads(request.method) &&
+    acceptsHtml(request.headers.get('accept')) &&
+    pathname !== '/api' &&
+    !pathname.startsWith('/api/') &&
+    !pathname.startsWith('/_next/')
+  );
+}
+
 async function decide(request: NextRequest, progress: Progress): Promise<Response> {
   const { method, headers } = request;
   const { pathname, search } = request.nextUrl;
@@ -208,7 +223,13 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
     const limit = await takeLimit('SESSIONLESS_PER_ADDRESS', address);
     if (!limit.ok) {
       progress.stage = 'log mark';
-      return await tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds);
+      return await tooManyRequests(
+        'SESSIONLESS_PER_ADDRESS',
+        address,
+        limit.retryAfterSeconds,
+        undefined,
+        readsAPage(request),
+      );
     }
     // NFR-SE-17 (c): "every request that changes state", a sign-in and the
     // acceptance of an invitation among them.
@@ -249,7 +270,13 @@ async function decide(request: NextRequest, progress: Progress): Promise<Respons
       if (!limit.ok) {
         progress.stage = 'log mark';
         return withCookies(
-          await tooManyRequests('SESSIONLESS_PER_ADDRESS', address, limit.retryAfterSeconds),
+          await tooManyRequests(
+            'SESSIONLESS_PER_ADDRESS',
+            address,
+            limit.retryAfterSeconds,
+            undefined,
+            readsAPage(request),
+          ),
           setCookie,
         );
       }
