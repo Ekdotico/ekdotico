@@ -93,7 +93,7 @@ test('the page of a fault of the server shows the reference that the server’s 
   // "kdotico", and the name "Ekdotico" once in a visually hidden span.
   await expect(page.getByRole('main')).toHaveText(
     new RegExp(
-      `^kdoticoEkdoticoPage not shown${STATEMENT.replaceAll('.', '\\.')}${QUOTE.replace('.', '\\.')}Reference: ${reference}$`,
+      `^kdoticoEkdoticoPage not shown${STATEMENT.replaceAll('.', '\\.')}${QUOTE.replace('.', '\\.')}Reference: ${reference}Try againDocuments$`,
     ),
   );
 
@@ -104,9 +104,9 @@ test('the page of a fault of the server shows the reference that the server’s 
   // NFR-SE-19: the log holds nothing of the address that was asked for.
   expect(log).not.toContain('A'.repeat(43));
 
-  // Text to select and quote, and no link or control.
-  await expect(page.getByRole('main').getByRole('link')).toHaveCount(0);
-  await expect(page.getByRole('main').getByRole('button')).toHaveCount(0);
+  // Text to select and quote, and the two ways on that the owner approved (22 November 2026): "Try again" and "Documents".
+  await expect(page.getByRole('main').getByRole('link')).toHaveText(['Documents']);
+  await expect(page.getByRole('main').getByRole('button')).toHaveText(['Try again']);
   const selected = await statement
     .locator('p')
     .last()
