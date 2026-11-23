@@ -55,7 +55,7 @@ function notShownPage(status: number, statement: string, extra: Record<string, s
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Page not shown | Ekdotico</title>
+<title>Page not shown – Ekdotico</title>
 </head>
 <body>
 <main>
