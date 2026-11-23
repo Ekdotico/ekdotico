@@ -12,11 +12,11 @@ import { APP_ORIGIN, AUTH_SECRET } from './origin.ts';
 export const NOT_OPEN = 'This invitation is not open. Ask the Ekdotico team for a new one.'; // FR-AU-90
 export const SIGN_IN_REFUSED = 'The email address or the password is not correct.'; // FR-AU-81
 export const NOTICE_TITLE = 'Closed α'; // FR-AU-55
-// FR-AU-55: without the sentence about Send feedback, which a release without
-// the Feedback Widget leaves out, and without the contact address, which does
-// not exist yet.
+// FR-AU-55: with the sentence about Send feedback, which a release with the
+// Feedback Widget shows (notice version 2), and without the contact address,
+// which does not exist yet.
 export const NOTICE_BODY =
-  'Ekdotico is in Closed α. Closed α is an early test release. Only invited people can create an account. This release does not reflect the planned first public version of Ekdotico. It may be unavailable at times, and the Ekdotico team makes no commitment about its availability. The Ekdotico team uses feedback from the people who test this release to design and develop the next steps.';
+  'Ekdotico is in Closed α. Closed α is an early test release. Only invited people can create an account. This release does not reflect the planned first public version of Ekdotico. It may be unavailable at times, and the Ekdotico team makes no commitment about its availability. The Ekdotico team uses feedback from the people who test this release to design and develop the next steps. To send feedback, choose Send feedback at the top of any page.';
 
 const unique = () => randomBytes(9).toString('base64url');
 
