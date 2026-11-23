@@ -4,6 +4,7 @@ import {
   checkInput,
   clockTime,
   countText,
+  countOf,
   NOTICE,
   outcomeOf,
   PRIVACY_HREF,
@@ -85,6 +86,8 @@ describe('{time} (fw-time-format)', () => {
 
 describe('the count', () => {
   it('is in code points, after the white space at both ends (fw-count-unit)', () => {
+    expect(countOf('  ab  ')).toBe(2);
+    expect(countOf('😀'.repeat(4000))).toBe(4000);
     expect(remainingOf('  ab  ')).toBe(3998);
     expect(remainingOf('😀'.repeat(4000))).toBe(0);
     expect(remainingOf('😀'.repeat(4001))).toBe(-1);
