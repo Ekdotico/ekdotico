@@ -433,6 +433,37 @@ test('the toolbar on the selection opens when the selecting ends: at the release
   await expect(toolbar(page)).toBeVisible();
 });
 
+test('the toolbar stands below a selection on the first line, where there is no room above it, and above one further down', async ({
+  page,
+}) => {
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('First line');
+  for (let line = 2; line <= 6; line += 1) {
+    await page.keyboard.press('Enter');
+    await page.keyboard.type(`Line ${line}`);
+  }
+  const paragraphs = text(page).locator('p');
+
+  // First line: the toolbar is under the line, so it covers nothing over the text.
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.press('Shift+End');
+  await expect(toolbar(page)).toBeVisible();
+  const first = (await paragraphs.nth(0).boundingBox())!;
+  expect((await toolbar(page).boundingBox())!.y).toBeGreaterThanOrEqual(first.y + first.height);
+
+  // A line further down: it stays over the line, as before.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Shift+End');
+  await expect(toolbar(page)).toBeVisible();
+  const third = (await paragraphs.nth(2).boundingBox())!;
+  const bar = (await toolbar(page).boundingBox())!;
+  expect(bar.y + bar.height).toBeLessThanOrEqual(third.y);
+});
+
 test('two browsers that edit one document converge', async ({ page, browser }) => {
   const person = await enter(page);
   await openNew(page);

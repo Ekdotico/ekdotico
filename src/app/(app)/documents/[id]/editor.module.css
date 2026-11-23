@@ -45,6 +45,16 @@
   z-index: 1;
   max-inline-size: 100%;
   transform: translateY(calc(-100% - var(--sp-2)));
+  /* The gap, read by the component to judge the room above (an absolute box ignores its bottom margin). */
+  margin-block-end: var(--sp-2);
+}
+
+/* Where the space above the line cannot hold the toolbar without covering what lies over the surface (the
+   hint, the image picker and its status): under the line the selection starts on, by the same gap. The page
+   does not move; the toolbar may cover the next line while it is open. */
+.toolbarBelow {
+  transform: none;
+  margin-block-start: var(--sp-2);
 }
 
 /* The margin that keeps the Insert control inside the surface where the cursor is at the end of a full line,
