@@ -7,6 +7,7 @@ import { useReady } from '../../components/ready.ts';
 import {
   checkInput,
   clockTime,
+  countOf,
   countText,
   NOTICE,
   outcomeOf,
@@ -206,9 +207,10 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
             label={WIDGET_TEXT.label}
             rows={6}
             maximum={MAX_MESSAGE_CODE_POINTS}
-            // The package counts the units of the browser's string; the server counts code points (fw-count-unit), so
-            // the number shown is the one the value gives here.
-            remainingLabel={() => countText(remainingOf(message))}
+            // The server counts code points after the white space at both ends (fw-count-unit): `count` measures the
+            // value so, and the number shown, the invalid state and the announcement all follow it.
+            count={countOf}
+            remainingLabel={countText}
             value={message}
             onChange={(event) => {
               setMessage(event.target.value);
