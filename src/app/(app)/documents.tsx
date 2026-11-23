@@ -288,6 +288,7 @@ export function Documents({
                   {document.canRename ? (
                     <Button
                       variant="quiet"
+                      edge="start"
                       disabled={!ready}
                       aria-describedby={`title-${document.id}`}
                       onClick={() => setRenaming(document)}
@@ -298,6 +299,7 @@ export function Documents({
                   {document.canDelete ? (
                     <Button
                       variant="quiet"
+                      edge="end"
                       disabled={!ready}
                       aria-describedby={`title-${document.id}`}
                       onClick={() => setDeleting(document)}
