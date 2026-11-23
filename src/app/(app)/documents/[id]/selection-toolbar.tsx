@@ -32,6 +32,7 @@ import {
   UnderlineIcon,
 } from '@ekdotico/domico/icons';
 import { linkAddress } from '../../../../lib/editor/link.ts';
+import { toolbarSide } from '../../../../lib/editor/toolbar-side.ts';
 import styles from './editor.module.css';
 import { Editable } from './extensions.tsx';
 import { EDIT_LINK } from './shortcuts.ts';
@@ -139,7 +140,7 @@ export function SelectionToolbar({
   const [inRow, setInRow] = useState(false);
   const [link, setLink] = useState(0);
   const [linking, setLinking] = useState(false);
-  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const [place, setPlace] = useState<{ top: number; left: number; below: boolean } | null>(null);
   // FR-ED-18: the dialog of a link does not outlast the editing it belongs to.
   // Its command would change nothing (`mayApply`), so it is closed, and the
   // text takes the focus (./editor.tsx).
@@ -217,7 +218,16 @@ export function SelectionToolbar({
       const start = editor.view.coordsAtPos(selection.from);
       const box = surface.current.getBoundingClientRect();
       const room = box.width - rowRef.current.offsetWidth;
-      setPlace({ top: start.top - box.top, left: Math.max(0, Math.min(start.left - box.left, room)) });
+      const left = Math.max(0, Math.min(start.left - box.left, room));
+      // The gap is the row's own margin below (editor.module.css), so the one value serves both sides.
+      const gap = parseFloat(getComputedStyle(rowRef.current).marginBlockEnd) || 0;
+      const side = toolbarSide(start.top - box.top, rowRef.current.offsetHeight, gap);
+      // Below, it stands under the line the selection starts on.
+      setPlace({
+        top: (side === 'above' ? start.top : start.bottom) - box.top,
+        left,
+        below: side === 'below',
+      });
     };
     put();
     // The text wraps anew at another width, and the selection moves with it.
@@ -230,8 +240,8 @@ export function SelectionToolbar({
       {shown ? (
         <div
           ref={rowRef}
-          className={styles.toolbar}
-          style={place ?? { visibility: 'hidden' }}
+          className={place?.below ? `${styles.toolbar} ${styles.toolbarBelow}` : styles.toolbar}
+          style={place ? { top: place.top, left: place.left } : { visibility: 'hidden' }}
           onFocus={() => setInRow(true)}
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget)) setInRow(false);
