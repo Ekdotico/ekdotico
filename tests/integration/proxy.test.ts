@@ -561,7 +561,7 @@ describe('where something it depends on fails (NFR-SE-06, A10)', () => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Page not shown | Ekdotico</title>
+<title>Page not shown – Ekdotico</title>
 </head>
 <body>
 <main>

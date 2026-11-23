@@ -41,7 +41,7 @@ describe('a limit reached by a person without a session (UX-8)', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
     const page = await response.text();
-    expect(page).toContain('<title>Page not shown | Ekdotico</title>');
+    expect(page).toContain('<title>Page not shown – Ekdotico</title>');
     expect(page).toContain('<h1>Page not shown</h1>');
     expect(page).toContain(`<p role="alert">${SENTENCE}</p>`);
     // No script, style, link, image or form: it loads nothing, so it costs no further request.
