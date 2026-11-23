@@ -64,7 +64,7 @@ describe('whether the notice is due (FR-AU-55, FR-AU-56)', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({
-      currentVersion: 1,
+      currentVersion: CLOSED_ALPHA_NOTICE_VERSION,
       acknowledgedVersion: null,
       acknowledgedAt: null,
     });
@@ -200,7 +200,7 @@ describe('the acknowledgement (FR-AU-56)', () => {
 
   it('refuses a version other than the current one with a 409, and records nothing', async () => {
     const { id, cookie } = await person();
-    for (const version of [0, 2, -1, 1_000_000]) {
+    for (const version of [0, 1, 3, -1, 1_000_000]) {
       const message = await expectError(await write(cookie, { version }), 409, 'notice_version_not_current');
       expect(message).toBe(
         'The notice has changed since this page was opened. Reload the page and read the notice again.',
