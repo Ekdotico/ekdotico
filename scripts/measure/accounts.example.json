@@ -1,0 +1,38 @@
+{
+  "owner": { "email": "owner@example.test", "password": "the password of the owner's account" },
+  "testers": [
+    {
+      "email": "tester-1@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    },
+    { "email": "tester-2@example.test", "password": "the password of an account that exists" },
+    {
+      "email": "tester-3@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    },
+    {
+      "email": "tester-4@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    },
+    {
+      "email": "tester-5@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    },
+    {
+      "email": "tester-6@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    },
+    {
+      "email": "tester-7@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    },
+    {
+      "email": "tester-8@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    },
+    {
+      "email": "tester-9@example.test",
+      "invitationLink": "https://app.example.test/sign-up/the-token-of-the-invitation"
+    }
+  ]
+}

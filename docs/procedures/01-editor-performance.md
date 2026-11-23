@@ -10,6 +10,16 @@ The reference document is `tests/fixtures/reference-document.json`: 5,000 words 
 - [ ] The tools (register P16, chosen with this test and recorded with their versions): `@playwright/test` driving Chromium, version ____ ; `@hocuspocus/provider`, version ____ ; Node.js ____ . `pnpm exec playwright install chromium` has been run on the laptop.
 - [ ] Ten accounts of the deployment exist and have signed in once. A file outside the repository (mode 0600), `cookies.json`, holds an array of ten strings, the `Cookie` header of each account's session, the first being the account that owns the document. The file is deleted at the end of the run.
 
+## The runner: steps 1, 2, 5 to 9, 11 and 12 in one command
+
+`node scripts/measure-editor.ts auto` does those steps on both documents, and makes no `cookies.json` (step 13 is done: the ten `Cookie` headers are held in memory). Steps 3, 4 and 10 stay yours.
+
+1. Send nine admission invitations with `scripts/admission.ts create`, one for each tester's address. The owner's account already exists and must already have two-factor authentication on (it is on the founding team).
+2. Make `accounts.json` outside the repository, mode 0600 (`scripts/measure/accounts.example.json` shows it): the owner's email and password, and for each tester an `invitationLink` from its email, or a `password` if the account exists. The runner signs a tester up from the link with a generated password, writes the password into the file in place of the link, and prints neither.
+3. Run `pnpm exec playwright install chromium`, then `node scripts/measure-editor.ts auto --origin https://… --accounts /path/to/accounts.json`. It asks on the terminal for the owner's six-digit code, and takes about half an hour.
+
+It writes `result-5k.json` and `result-50k.json` beside `accounts.json`, and prints the figures, the people listed, and the versions of Chromium and Node.js, for the checklist below. It stops at the first failure and names the step. It keeps to the limits of the application and does not work round them: it paces the requests of a person without a session under 20 a minute, a second run within the hour is refused by the 20 invitations an hour (the message says when to try again), and a 50,000-word seed that the server refuses ends the run with the reason. It acknowledges the Closed α notice of the ten accounts, as "Continue" does, since the notice stands in place of the editor until then. The invitations to the two documents are emailed to the nine addresses.
+
 ## Steps
 
 The steps 1 to 10 are run on the document of 5,000 words, with a result file of its own (`result-5k.json`); step 11 runs them again on the document of 50,000 words (`result-50k.json`); step 12 measures the page load.
