@@ -139,6 +139,21 @@ test('the control does not move the layout as the cursor moves, and a Viewer has
   await expect(text(page)).toBeVisible();
   await expect(page.getByRole('button', { name: 'In sync' })).toBeVisible();
   await text(page).pressSequentially('One\nTwo\nThree');
+  // The page settles after the text is typed: in a failed run the text stood 11.5px lower when first measured
+  // than a moment later, with no key pressed in between (run 45086557515). Measure once two reads, 250 ms
+  // apart, agree; the arrow keys below are then the only thing that can move it.
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await text(page).boundingBox());
+        const same = now === last;
+        last = now;
+        return same;
+      },
+      { message: 'the text stands still', intervals: [250], timeout: 10_000 },
+    )
+    .toBe(true);
   const before = await text(page).boundingBox();
   const stateBefore = await layoutState(text(page));
   await page.keyboard.press('ArrowUp');
