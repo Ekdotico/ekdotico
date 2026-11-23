@@ -164,7 +164,8 @@ jobs:
           - part: end-to-end
             e2e: true
             run: pnpm test:e2e
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # The end-to-end part stays on GitHub's runner: on Blacksmith's 2 vCPU it failed different tests each attempt.
+    runs-on: ${{ matrix.e2e && 'ubuntu-latest' || 'blacksmith-2vcpu-ubuntu-2404' }}
     # Measured on GitHub's runners on 18 November 2026, over 14 runs: the integration tests alone took 18 to
     # 25 minutes and the end-to-end tests 10 to 12 (with their build). 40 leaves room for each part alone and
     # still stops a run that hangs.
