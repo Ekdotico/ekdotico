@@ -33,6 +33,7 @@ const { currentAccount, titled } = await import('../../src/app/(app)/account.ts'
 const { default: AppLayout } = await import('../../src/app/(app)/layout.tsx');
 const { EnrolmentGate } = await import('../../src/app/(app)/enrolment-gate.tsx');
 const { ClosedAlphaNotice } = await import('../../src/app/(app)/closed-alpha-notice.tsx');
+const { CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/closed-alpha-notice.ts');
 
 // Written out here and not imported.
 const STOPPED = {
@@ -427,7 +428,10 @@ describe('the gate at the pages, with the proxy skipped (FR-AU-83, FR-AU-90)', (
     expect((await AppLayout({ children: 'THE CONTENT OF A PAGE' })).type).toBe(ClosedAlphaNotice);
     await db().user.update({
       where: { id },
-      data: { closedAlphaNoticeVersion: 1, closedAlphaNoticeAcknowledgedAt: new Date() },
+      data: {
+        closedAlphaNoticeVersion: CLOSED_ALPHA_NOTICE_VERSION,
+        closedAlphaNoticeAcknowledgedAt: new Date(),
+      },
     });
     // `cache` of React holds an answer only inside a request of the framework.
     const page = await AppLayout({ children: 'THE CONTENT OF A PAGE' });

@@ -8,24 +8,25 @@ import { db } from './db.ts';
 /**
  * FR-AU-56: the version of the notice. It "starts at 1 and is raised whenever
  * its fixed text changes", and an account whose recorded version is lower is
- * shown the notice once more. Two changes are already foreseen: the sentence
- * on feedback, added with the Feedback Widget, where whether the version is
- * raised "is decided then" (register D111); and the sentence with the contact
- * address, added before the first test user is admitted (FR-AU-55).
+ * shown the notice once more. Version 2 added the sentence on feedback, with
+ * the Feedback Widget: the owner's answer of 21 November 2026 raised the
+ * version then (fw-notice-version, register D463), so that every account sees
+ * the notice once more. One change is still foreseen: the sentence with the
+ * contact address, added before the first test user is admitted (FR-AU-55).
  */
-export const CLOSED_ALPHA_NOTICE_VERSION = 1;
+export const CLOSED_ALPHA_NOTICE_VERSION = 2;
 
 /** FR-AU-55: the fixed title, verbatim. */
 export const CLOSED_ALPHA_NOTICE_TITLE = 'Closed α';
 
 /**
- * FR-AU-55: the fixed body, verbatim, as a release without the Feedback Widget
+ * FR-AU-55: the fixed body, verbatim, as a release with the Feedback Widget
  * shows it (register D111) and while there is no contact address: the first
- * six sentences. Left out are "To send feedback, choose Send feedback at the
- * top of any page." and "To reach the Ekdotico team, write to [contact address]."
+ * six sentences and "To send feedback, choose Send feedback at the top of any
+ * page." Left out is "To reach the Ekdotico team, write to [contact address]."
  */
 export const CLOSED_ALPHA_NOTICE_BODY =
-  'Ekdotico is in Closed α. Closed α is an early test release. Only invited people can create an account. This release does not reflect the planned first public version of Ekdotico. It may be unavailable at times, and the Ekdotico team makes no commitment about its availability. The Ekdotico team uses feedback from the people who test this release to design and develop the next steps.';
+  'Ekdotico is in Closed α. Closed α is an early test release. Only invited people can create an account. This release does not reflect the planned first public version of Ekdotico. It may be unavailable at times, and the Ekdotico team makes no commitment about its availability. The Ekdotico team uses feedback from the people who test this release to design and develop the next steps. To send feedback, choose Send feedback at the top of any page.';
 
 /** What `GET /api/account/closed-alpha-notice` reports (API design, "Account"). */
 export interface ClosedAlphaNoticeState {

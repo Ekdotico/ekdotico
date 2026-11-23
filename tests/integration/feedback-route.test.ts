@@ -10,6 +10,7 @@ const database = prepare('feedbackroute', { FEEDBACK_SECRET: SECRET });
 const loaded = await load();
 const { auth, db, valkey } = loaded;
 const route = await import('../../src/app/api/feedback/route.ts');
+const { CLOSED_ALPHA_NOTICE_VERSION } = await import('../../src/lib/closed-alpha-notice.ts');
 
 const FIRST = {
   kind: 'idea',
@@ -26,7 +27,10 @@ async function person(acknowledged = true) {
   if (acknowledged)
     await db().user.update({
       where: { id },
-      data: { closedAlphaNoticeVersion: 1, closedAlphaNoticeAcknowledgedAt: new Date() },
+      data: {
+        closedAlphaNoticeVersion: CLOSED_ALPHA_NOTICE_VERSION,
+        closedAlphaNoticeAcknowledgedAt: new Date(),
+      },
     });
   return { id, cookie: cookiesOf(await signIn(auth, email)) };
 }

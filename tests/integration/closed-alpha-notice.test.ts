@@ -64,7 +64,7 @@ describe('whether the notice is due (FR-AU-55, FR-AU-56)', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.json()).toEqual({
-      currentVersion: 1,
+      currentVersion: CLOSED_ALPHA_NOTICE_VERSION,
       acknowledgedVersion: null,
       acknowledgedAt: null,
     });
@@ -72,12 +72,12 @@ describe('whether the notice is due (FR-AU-55, FR-AU-56)', () => {
 
   it('is not due once the current version is acknowledged, in any session of the account', async () => {
     const { id, email, cookie } = await person();
-    expect((await write(cookie, { version: 1 })).status).toBe(200);
+    expect((await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION })).status).toBe(200);
     expect(await closedAlphaNoticeDue(id)).toBe(false);
     // Another session, as on another device.
     const other = cookiesOf(await signIn(auth, email));
     const { acknowledgedVersion, acknowledgedAt } = await (await read(other)).json();
-    expect(acknowledgedVersion).toBe(1);
+    expect(acknowledgedVersion).toBe(CLOSED_ALPHA_NOTICE_VERSION);
     expect(new Date(acknowledgedAt).getTime()).toBeGreaterThan(Date.now() - 60_000);
   });
 
@@ -112,14 +112,14 @@ describe('the acknowledgement (FR-AU-56)', () => {
     const one = await person();
     const two = await person();
     const before = Date.now();
-    const response = await write(one.cookie, { version: 1 });
+    const response = await write(one.cookie, { version: CLOSED_ALPHA_NOTICE_VERSION });
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     const answer = await response.json();
     expect(Object.keys(answer).sort()).toEqual(['acknowledgedAt', 'acknowledgedVersion', 'currentVersion']);
 
     const row = await recorded(one.id);
-    expect(row.closedAlphaNoticeVersion).toBe(1);
+    expect(row.closedAlphaNoticeVersion).toBe(CLOSED_ALPHA_NOTICE_VERSION);
     expect(row.closedAlphaNoticeAcknowledgedAt!.getTime()).toBeGreaterThanOrEqual(before);
     expect(row.closedAlphaNoticeAcknowledgedAt!.getTime()).toBeLessThanOrEqual(Date.now());
     expect(answer.acknowledgedAt).toBe(row.closedAlphaNoticeAcknowledgedAt!.toISOString());
@@ -140,7 +140,11 @@ describe('the acknowledgement (FR-AU-56)', () => {
       { at: 0 },
       { currentVersion: 1 },
     ]) {
-      await expectError(await write(one.cookie, { version: 1, ...extra }), 422, 'invalid_request');
+      await expectError(
+        await write(one.cookie, { version: CLOSED_ALPHA_NOTICE_VERSION, ...extra }),
+        422,
+        'invalid_request',
+      );
     }
     expect((await recorded(one.id)).closedAlphaNoticeVersion).toBeNull();
     expect((await recorded(two.id)).closedAlphaNoticeVersion).toBeNull();
@@ -148,13 +152,37 @@ describe('the acknowledgement (FR-AU-56)', () => {
 
   it('changes nothing when it is repeated: the time is not moved', async () => {
     const { id, cookie } = await person();
-    await write(cookie, { version: 1 });
+    await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION });
     const earlier = new Date('2026-01-01T00:00:00Z');
     await db().user.update({ where: { id }, data: { closedAlphaNoticeAcknowledgedAt: earlier } });
-    const again = await write(cookie, { version: 1 });
+    const again = await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION });
     expect(again.status).toBe(200);
     expect((await again.json()).acknowledgedAt).toBe(earlier.toISOString());
     expect((await recorded(id)).closedAlphaNoticeAcknowledgedAt).toEqual(earlier);
+  });
+
+  // fw-notice-version (D463): the sentence on feedback raised the version to 2, so an account that had acknowledged
+  // version 1 sees the notice once more, and nothing else about it breaks.
+  it('shows the notice again to an account that acknowledged the version before, and takes only the current version from it', async () => {
+    const before = CLOSED_ALPHA_NOTICE_VERSION - 1;
+    const { id, cookie } = await person();
+    const earlier = new Date('2026-01-01T00:00:00Z');
+    await db().user.update({
+      where: { id },
+      data: { closedAlphaNoticeVersion: before, closedAlphaNoticeAcknowledgedAt: earlier },
+    });
+    expect(await closedAlphaNoticeDue(id)).toBe(true);
+    // The version before is no longer the current one (at 2, version 1): refused, and the record is as it was.
+    await expectError(await write(cookie, { version: before }), 409, 'notice_version_not_current');
+    const kept = await recorded(id);
+    expect(kept.closedAlphaNoticeVersion).toBe(before);
+    expect(kept.closedAlphaNoticeAcknowledgedAt).toEqual(earlier);
+    // The current version is recorded, with a new time, and the notice is no longer due.
+    expect((await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION })).status).toBe(200);
+    const row = await recorded(id);
+    expect(row.closedAlphaNoticeVersion).toBe(CLOSED_ALPHA_NOTICE_VERSION);
+    expect(row.closedAlphaNoticeAcknowledgedAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    expect(await closedAlphaNoticeDue(id)).toBe(false);
   });
 
   it('replaces the acknowledgement of a lower version', async () => {
@@ -164,15 +192,21 @@ describe('the acknowledgement (FR-AU-56)', () => {
       where: { id },
       data: { closedAlphaNoticeVersion: 0, closedAlphaNoticeAcknowledgedAt: earlier },
     });
-    expect((await write(cookie, { version: 1 })).status).toBe(200);
+    expect((await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION })).status).toBe(200);
     const row = await recorded(id);
-    expect(row.closedAlphaNoticeVersion).toBe(1);
+    expect(row.closedAlphaNoticeVersion).toBe(CLOSED_ALPHA_NOTICE_VERSION);
     expect(row.closedAlphaNoticeAcknowledgedAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
   });
 
   it('refuses a version other than the current one with a 409, and records nothing', async () => {
     const { id, cookie } = await person();
-    for (const version of [0, 2, -1, 1_000_000]) {
+    for (const version of [
+      0,
+      CLOSED_ALPHA_NOTICE_VERSION - 1,
+      CLOSED_ALPHA_NOTICE_VERSION + 1,
+      -1,
+      1_000_000,
+    ]) {
       const message = await expectError(await write(cookie, { version }), 409, 'notice_version_not_current');
       expect(message).toBe(
         'The notice has changed since this page was opened. Reload the page and read the notice again.',
@@ -208,7 +242,7 @@ describe('the acknowledgement (FR-AU-56)', () => {
   // (src/lib/http.ts, `readJson`). The origin here is the application's own.
   it('refuses the version sent as anything but JSON, or in a body longer than it needs, and records nothing', async () => {
     const { id, cookie } = await person();
-    const sent = (type: string | null, body = '{"version":1}') => {
+    const sent = (type: string | null, body = `{"version":${CLOSED_ALPHA_NOTICE_VERSION}}`) => {
       const request = new Request(`${ORIGIN}${WRITE}`, {
         method: 'POST',
         headers: { origin: ORIGIN, cookie },
@@ -227,13 +261,13 @@ describe('the acknowledgement (FR-AU-56)', () => {
       );
     }
     await expectError(
-      await sent('application/json', `{"version":1${' '.repeat(2000)}}`),
+      await sent('application/json', `{"version":${CLOSED_ALPHA_NOTICE_VERSION}${' '.repeat(2000)}}`),
       422,
       'invalid_request',
     );
     expect((await recorded(id)).closedAlphaNoticeVersion).toBeNull();
     expect((await sent('application/json; charset=utf-8')).status).toBe(200);
-    expect((await recorded(id)).closedAlphaNoticeVersion).toBe(1);
+    expect((await recorded(id)).closedAlphaNoticeVersion).toBe(CLOSED_ALPHA_NOTICE_VERSION);
   });
 });
 
@@ -253,7 +287,7 @@ describe('the session of the two routes (NFR-SE-02, FR-AU-07)', () => {
     await db().session.deleteMany({ where: { userId: id } });
     // The read may still be answered from the signed copy, for up to a minute (NFR-SE-17 (c)).
     expect((await read(cookie)).status).toBe(200);
-    await expectError(await write(cookie, { version: 1 }), 401, 'unauthenticated');
+    await expectError(await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION }), 401, 'unauthenticated');
     expect((await recorded(id)).closedAlphaNoticeVersion).toBeNull();
   });
 
@@ -274,7 +308,7 @@ describe('the session of the two routes (NFR-SE-02, FR-AU-07)', () => {
     const { cookie } = await person();
     // Unacknowledged, and both routes answer.
     expect((await read(cookie)).status).toBe(200);
-    expect((await write(cookie, { version: 1 })).status).toBe(200);
+    expect((await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION })).status).toBe(200);
   });
 
   it('answers a fault without a word of it', async () => {
@@ -284,7 +318,10 @@ describe('the session of the two routes (NFR-SE-02, FR-AU-07)', () => {
     const quoting = new Error('duplicate key: (email)=(person@example.com)');
     vi.spyOn(db().user, 'findUnique').mockRejectedValue(quoting);
     vi.spyOn(db().user, 'updateMany').mockRejectedValue(quoting);
-    for (const response of [await read(cookie), await write(cookie, { version: 1 })]) {
+    for (const response of [
+      await read(cookie),
+      await write(cookie, { version: CLOSED_ALPHA_NOTICE_VERSION }),
+    ]) {
       const message = await expectError(response, 500, 'internal');
       expect(message).toBe(
         'The request could not complete because of a fault on the server. Nothing was changed. Try again in a few minutes.',

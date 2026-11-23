@@ -1,6 +1,6 @@
 // FR-AU-55: the fixed text of the Closed α notice, pinned character for
 // character. The text below was compared with the requirement at Docs commit
-// f4ec614; a change to either side fails here, and a change to the text raises
+// 7887e85; a change to either side fails here, and a change to the text raises
 // the version (FR-AU-56).
 import { describe, expect, it } from 'vitest';
 import {
@@ -19,7 +19,7 @@ describe('the Closed α notice (FR-AU-55)', () => {
     ]);
   });
 
-  it('has the fixed body of a release without the Feedback Widget and without a contact address', () => {
+  it('has the fixed body of a release with the Feedback Widget and without a contact address', () => {
     expect(CLOSED_ALPHA_NOTICE_BODY).toBe(
       [
         `Ekdotico is in Closed ${ALPHA}.`,
@@ -28,9 +28,10 @@ describe('the Closed α notice (FR-AU-55)', () => {
         'This release does not reflect the planned first public version of Ekdotico.',
         'It may be unavailable at times, and the Ekdotico team makes no commitment about its availability.',
         'The Ekdotico team uses feedback from the people who test this release to design and develop the next steps.',
+        'To send feedback, choose Send feedback at the top of any page.',
       ].join(' '),
     );
-    expect(CLOSED_ALPHA_NOTICE_BODY).toHaveLength(384);
+    expect(CLOSED_ALPHA_NOTICE_BODY).toHaveLength(447);
   });
 
   it('holds no character but the letters of the requirement: plain spaces, plain stops, and the Greek α', () => {
@@ -39,13 +40,15 @@ describe('the Closed α notice (FR-AU-55)', () => {
     expect(CLOSED_ALPHA_NOTICE_BODY.match(/α/g)).toHaveLength(2);
   });
 
-  it('leaves out the two sentences that are not yet part of the text (register D111)', () => {
-    expect(CLOSED_ALPHA_NOTICE_BODY).not.toContain('Send feedback');
+  it('ends with the sentence on feedback, and leaves out the sentence with the contact address, which is not yet part of the text (register D111)', () => {
+    expect(
+      CLOSED_ALPHA_NOTICE_BODY.endsWith(' To send feedback, choose Send feedback at the top of any page.'),
+    ).toBe(true);
     expect(CLOSED_ALPHA_NOTICE_BODY).not.toContain('write to');
-    expect(CLOSED_ALPHA_NOTICE_BODY.endsWith('the next steps.')).toBe(true);
+    expect(CLOSED_ALPHA_NOTICE_BODY).not.toContain('contact');
   });
 
-  it('is at version 1 (FR-AU-56)', () => {
-    expect(CLOSED_ALPHA_NOTICE_VERSION).toBe(1);
+  it('is at version 2, raised when the sentence on feedback joined the text (FR-AU-56; fw-notice-version, D463)', () => {
+    expect(CLOSED_ALPHA_NOTICE_VERSION).toBe(2);
   });
 });
