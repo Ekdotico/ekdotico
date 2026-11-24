@@ -4101,6 +4101,10 @@ test('a document deleted while it is open closes with its words, and the page do
   await text(page).click();
   await page.keyboard.type('Open when it is deleted.');
   await expect(status(page, 'In sync')).toBeVisible();
+  // "In sync" is said while the last keys wait their batch (BATCH_MS, 250 ms, in src/lib/collab/client.ts),
+  // and they are unsent from when they leave until the server acknowledges them. This test is of a document
+  // that ends with nothing unsent, so it lets the batch go and be acknowledged first.
+  await page.waitForTimeout(1000);
   const sockets = countSockets(page);
 
   const list = await context.newPage();
