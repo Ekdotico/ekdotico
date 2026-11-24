@@ -5289,7 +5289,10 @@ test('each entry of the contents list leads to its heading, for an Editor and a 
         const target = document.getElementById(
           decodeURIComponent(new URL((entry as HTMLAnchorElement).href).hash.slice(1)),
         );
-        return [entry.textContent, target ? `${target.tagName} ${target.textContent}` : null];
+        return [
+          entry.textContent,
+          target ? `L${target.getAttribute('data-level')} ${target.textContent}` : null,
+        ];
       }),
     );
   const unique = (who: Page) =>
@@ -5298,9 +5301,9 @@ test('each entry of the contents list leads to its heading, for an Editor and a 
       return ids.length === new Set(ids).size;
     });
   const first = [
-    ['Alpha', 'H1 Alpha'],
-    ['Beta', 'H2 Beta'],
-    ['Gamma', 'H1 Gamma'],
+    ['Alpha', 'L1 Alpha'],
+    ['Beta', 'L2 Beta'],
+    ['Gamma', 'L1 Gamma'],
   ];
   await expect.poll(() => found(page)).toEqual(first);
   await expect.poll(() => found(theirs)).toEqual(first);
@@ -5310,7 +5313,7 @@ test('each entry of the contents list leads to its heading, for an Editor and a 
   await page.keyboard.press('Enter');
   await page.keyboard.type('# Zero');
   await expect(text(page).locator('h2[data-level="1"]')).toHaveText(['Zero', 'Alpha', 'Gamma']);
-  const second = [['Zero', 'H1 Zero'], ...first];
+  const second = [['Zero', 'L1 Zero'], ...first];
   await expect.poll(() => found(page)).toEqual(second);
   await expect.poll(() => found(theirs)).toEqual(second);
   expect(await unique(page)).toBe(true);
