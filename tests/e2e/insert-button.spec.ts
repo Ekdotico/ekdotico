@@ -88,8 +88,8 @@ test('the control is not seen at rest, appears under the pointer and on focus, a
 test('on a very wide screen the box grows with the interface scale, and the plus stays at its middle', async ({
   page,
 }) => {
-  // 2200px and wider sets --scale: 1.5 (src/app/scale.css), which enlarges the design package's icons.
-  await page.setViewportSize({ width: 2400, height: 1000 });
+  // 2560px and wider sets --scale: 1.5 (src/app/scale.css, from 1 at 1440px), which enlarges the design package's icons.
+  await page.setViewportSize({ width: 2560, height: 1000 });
   await enter(page);
   await shareNew(page);
   await page.goBack();

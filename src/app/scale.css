@@ -1,9 +1,27 @@
-/* The app at 150% on a very wide screen (a 2K 27-inch monitor is 2560 CSS pixels).
-   Domico 0.46.0 scales its type, spacing, radii, layout lengths and icons by
-   `--scale`; nothing is zoomed, so the editor's measured geometry stays true.
-   The breakpoint is the one the deree and alpha sites use. */
-@media (min-width: 2200px) {
+/* The app grows smoothly on a wide screen: nothing at all below 1440 CSS pixels, then a step of the same
+   proportion for every pixel of width, to exactly 150% at 2560 (a 27-inch 2K monitor), and 150% beyond (the
+   owner's instruction of 24 November 2026). Domico 0.46.0 and later scale their type, spacing, radii, layout
+   lengths and icons by `--scale`; nothing is zoomed, so the editor's measured geometry stays true, and the
+   interface scales as one: every part grows by the same factor, so the proportions are those of today.
+
+   `--scale-start` is the one value to change: the width, in CSS pixels, from which the interface grows.
+
+   `--scale` is a number, and a number cannot be made from a width by `calc` alone (a length divided by a length
+   is not supported everywhere). `tan(atan2(y, x))` is y / x for two lengths and is supported from Chrome 111,
+   Safari 15.4 and Firefox 108; a browser without it keeps the scale of 1 that the design package sets. The
+   width is the viewport's, in CSS pixels, so a person's own zoom shrinks it and brings the scale back down: the
+   zoom and the scale do not stack (WCAG 1.4.4, 1.4.10), and the type in rem still follows their text size. */
+:root {
+  --scale-start: 1440px;
+  --scale-end: 2560px;
+}
+
+@supports (width: calc(1px * tan(atan2(1px, 1px)))) {
   :root {
-    --scale: 1.5;
+    --scale: clamp(
+      1,
+      calc(1 + 0.5 * tan(atan2(100vw - var(--scale-start), var(--scale-end) - var(--scale-start)))),
+      1.5
+    );
   }
 }
