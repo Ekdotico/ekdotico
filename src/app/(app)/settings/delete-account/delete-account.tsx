@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
@@ -45,6 +46,9 @@ const TEXT = {
   codeHint: 'The six-digit code that the authenticator application shows now, or a recovery code.',
   done: 'The account is being deleted. Ekdotico has ended your access and completes the deletion without you. You can close this page.',
 };
+
+// The owner's approved link (23 November 2026), after the final statement.
+export const SIGN_IN_LINK = 'Go to the sign-in page';
 
 const DIALOG_STATEMENT_ID = 'delete-account-statement';
 const CANCEL_ID = 'delete-account-cancel';
@@ -147,6 +151,13 @@ export function DeleteAccount({ email, secondFactor }: { email: string; secondFa
       <p role="status" ref={statement} tabIndex={-1} className={styles.text}>
         {done ? TEXT.done : null}
       </p>
+      {done ? (
+        <p className={styles.text}>
+          <Link href="/sign-in" prefetch={false}>
+            {SIGN_IN_LINK}
+          </Link>
+        </p>
+      ) : null}
       <Dialog
         open={open}
         onClose={close}

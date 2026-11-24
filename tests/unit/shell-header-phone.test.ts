@@ -5,7 +5,8 @@ const tsx = readFileSync('src/app/(app)/shell-header.tsx', 'utf8');
 const css = readFileSync('src/app/pages.module.css', 'utf8');
 
 describe('the header (modernisation A3)', () => {
-  it('pins the trigger word whole, in one constant (PROPOSED: awaiting the owner, ui-mod-texts)', () => {
+  it('pins the trigger word whole, in one constant (approved by the owner on 23 November 2026)', () => {
+    expect(tsx).not.toContain('PROPOSED');
     expect(tsx).toContain("export const MENU_TEXT = 'Menu';");
     expect(tsx.match(/triggerLabel=\{MENU_TEXT\}/g)).toHaveLength(1);
   });

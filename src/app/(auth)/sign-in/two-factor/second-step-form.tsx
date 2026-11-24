@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Cluster, FormFault, OneTimeCodeField, Stack, TextField } from '@ekdotico/domico/components';
 import { useReady } from '../../../../components/ready.ts';
 import { send, type Fault } from '../../../../components/send.ts';
@@ -28,6 +28,11 @@ export function SecondStepForm({ returnTo }: { returnTo: string }) {
   const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState(false);
   const ready = useReady();
+  const toggled = useRef(false);
+  // After the toggle swaps the field, focus goes to the new one; never on first load.
+  useEffect(() => {
+    if (toggled.current) document.getElementById('code')?.focus();
+  }, [recovery]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -98,6 +103,7 @@ export function SecondStepForm({ returnTo }: { returnTo: string }) {
             variant="quiet"
             disabled={!ready}
             onClick={() => {
+              toggled.current = true;
               setRecovery((now) => !now);
               setFault(null);
             }}

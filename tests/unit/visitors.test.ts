@@ -40,6 +40,14 @@ const line = (address: string | undefined) => {
   return `${before}${address ?? ''}${after}`;
 };
 
+describe('the tab title of the page', () => {
+  it('is the approved text alone, with no suffix', () => {
+    const page = readFileSync('src/app/(auth)/visitors-page/page.tsx', 'utf8');
+    expect(VISITORS_TITLE).toBe('Ekdotico is in Closed α');
+    expect(page).toContain('export const metadata: Metadata = { title: { absolute: VISITORS_TITLE } };');
+  });
+});
+
 describe('the approved text of the page (D330)', () => {
   it('is, whole', () => {
     expect({

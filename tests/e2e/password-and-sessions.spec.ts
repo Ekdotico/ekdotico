@@ -245,6 +245,7 @@ test.describe('the account settings', () => {
       .getByRole('button', { name: 'End session' })
       .click();
     await expect(sessions).toHaveCount(1);
+    await expect(page.getByRole('status').filter({ hasText: 'Session ended.' })).toBeFocused();
     await expect(page.getByRole('button', { name: 'End other sessions' })).toHaveCount(0);
 
     // The ended session is refused at once where it would change something,
@@ -313,7 +314,7 @@ test.describe('the account settings', () => {
   test('ending the session in use signs its browser out', async ({ page }) => {
     await ready(page);
     await page.goto('/settings');
-    await page.getByRole('main').getByRole('button', { name: 'End session' }).click();
+    await page.getByRole('main').getByRole('button', { name: 'End this session and sign out' }).click();
     await expect(page).toHaveURL('/sign-in');
     expect((await page.request.get('/api/anything')).status()).toBe(401);
   });
