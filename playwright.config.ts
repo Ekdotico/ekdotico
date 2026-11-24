@@ -49,7 +49,9 @@ export default defineConfig({
   globalTeardown: './tests/e2e/global-teardown.ts',
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? 'github' : 'list',
-  use: { baseURL: APP_ORIGIN },
+  // In CI a failed test keeps its trace (test-results/), which the workflow uploads: an unsteady test is
+  // then read from what the page did, not guessed at. A test that passes keeps nothing.
+  use: { baseURL: APP_ORIGIN, trace: process.env.CI ? 'retain-on-failure' : 'off' },
   // Five files start the collaboration server of their own, on the one port the application's rewrite names
   // (tests/e2e/collab.ts), so they do not run at the same time: the images wait for the editor, the
   // footnotes for the images, the export for the footnotes, and the insert control for the export.

@@ -264,6 +264,16 @@ jobs:
       # (playwright.config.ts, webServer), so the build is tested here, and a build failure fails this job.
       - name: ${{ matrix.part }}
         run: ${{ matrix.run }}
+      # The traces of the end-to-end tests that failed (playwright.config.ts keeps them in CI), for a week.
+      # They hold what the test's own browser did against this run's own database, and nothing of production.
+      - name: Traces of the failed end-to-end tests
+        if: failure() && matrix.e2e
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-traces-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   full:
     needs: [quick, changes, suite]
