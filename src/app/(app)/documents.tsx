@@ -35,6 +35,11 @@ export interface DocumentItem {
   deleteOn: string | null;
 }
 
+export const RENAMED_STATEMENT = 'Document renamed.';
+export const LEFT_STATEMENT = 'You left the document. It is no longer in your list of documents.';
+/** The marker the list of documents is opened with after a leave: no personal data, read once and removed. */
+export const LEFT_MARKER = { name: 'left', value: '1' } as const;
+
 /** Where the list of deleted documents is (FR-ED-36): the application's choice, the Docs name no page. */
 const DELETED_PATH = '/deleted';
 const DELETE_TITLE_ID = 'delete-document-title';
@@ -186,15 +191,26 @@ export function Documents({
   const ready = useReady();
   const [renaming, setRenaming] = useState<DocumentItem | null>(null);
   const [deleting, setDeleting] = useState<DocumentItem | null>(null);
-  // How many documents were deleted from this page: the statement of the last
-  // deletion is shown, and takes focus each time one is made.
-  const [deleted, setDeleted] = useState(0);
-  const statement = useRef<HTMLParagraphElement>(null);
-  // The row of a deleted document is gone, and the control that had focus with
-  // it. Focus goes to the statement of what was done, which is so read out.
+  // The statement of the last thing done from this page (a deletion, a rename, a
+  // leave): the region is there from the first paint and empty, and takes focus
+  // each time something is said in it.
+  const [said, setSaid] = useState({ text: '', count: 0 });
+  const statement = useRef<HTMLDivElement>(null);
+  const say = (text: string) => setSaid((last) => ({ text, count: last.count + 1 }));
+  // The control that had focus is gone (a deleted row), or its dialog has closed.
+  // Focus goes to the statement of what was done, which is so read out.
   useEffect(() => {
-    if (deleted > 0) statement.current?.focus();
-  }, [deleted]);
+    if (said.count > 0) statement.current?.focus();
+  }, [said.count]);
+  // After leaving a document the page is opened with a fixed marker in its address:
+  // it is read once, said, and removed, so a reload does not say it again.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get(LEFT_MARKER.name) !== LEFT_MARKER.value) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    // The address bar is an external system, readable only after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    say(LEFT_STATEMENT);
+  }, []);
   // Where the confirmation opens: on Cancel, which deletes nothing. The
   // package's Button takes no ref (reported), so the control is found by its id.
   const cancel = useMemo(
@@ -243,11 +259,9 @@ export function Documents({
         </Cluster>
       </Cluster>
       {fault ? <FormFault title={fault.message} focusKey={attempt} /> : null}
-      {deleted > 0 ? (
-        <p ref={statement} role="status" tabIndex={-1} className={styles.text}>
-          Document deleted. Ekdotico keeps it for {days(retentionDays)} in the list of deleted documents.
-        </p>
-      ) : null}
+      <div ref={statement} role="status" tabIndex={-1}>
+        {said.text ? <p className={styles.text}>{said.text}</p> : null}
+      </div>
       {documents.length === 0 ? (
         <p className={styles.text}>No documents yet. Choose New document to create the first one.</p>
       ) : (
@@ -321,6 +335,7 @@ export function Documents({
             onCancel={() => setRenaming(null)}
             onRenamed={() => {
               setRenaming(null);
+              say(RENAMED_STATEMENT);
               router.refresh();
             }}
           />
@@ -342,7 +357,9 @@ export function Documents({
             onCancel={() => setDeleting(null)}
             onDeleted={() => {
               setDeleting(null);
-              setDeleted((count) => count + 1);
+              say(
+                `Document deleted. Ekdotico keeps it for ${days(retentionDays)} in the list of deleted documents.`,
+              );
               router.refresh();
             }}
           />
