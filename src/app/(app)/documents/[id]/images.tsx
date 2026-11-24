@@ -31,6 +31,8 @@ import {
 } from '@ekdotico/domico/a11y';
 import { Button, Select, TextField } from '@ekdotico/domico/components';
 import { IMAGE_MESSAGES } from '../../../../lib/images/answers.ts';
+import { useBlockPlace } from './block-place.ts';
+import { imageAltName } from '../../../../lib/editor/block-names.ts';
 import {
   IMAGE_ALT_MOST,
   IMAGE_CAPTION_MOST,
@@ -370,8 +372,9 @@ const WIDTHS = [25, 50, 75, 100];
  * of widths beside the alt text and the caption is the way that needs no
  * dragging (WCAG 2.2, 2.5.7), and writes the same attribute.
  */
-export function ImageBlockView({ node, editor, extension, updateAttributes }: NodeViewProps) {
+export function ImageBlockView({ node, editor, extension, updateAttributes, getPos }: NodeViewProps) {
   const editable = useContext(Editable);
+  const place = useBlockPlace(editor, getPos, 'image');
   const { documentId, unreferencedDays } = extension.options as {
     documentId: string | null;
     unreferencedDays: number;
@@ -460,6 +463,7 @@ export function ImageBlockView({ node, editor, extension, updateAttributes }: No
         <BlockControls editor={editor} className={styles.controls}>
           <TextField
             label={IMAGE_TEXT.altLabel}
+            aria-label={imageAltName(caption, place)}
             hint={IMAGE_TEXT.altHint}
             value={alt}
             maxLength={IMAGE_ALT_MOST}

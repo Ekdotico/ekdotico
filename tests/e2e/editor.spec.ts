@@ -3358,8 +3358,8 @@ test('a code block whose colouring throws is shown without colours, its header s
   await expect(colours(kept).first()).toBeVisible();
   // A statement that stands, with the controls of the header, in no live region.
   await expect(thrown).toMatchAriaSnapshot(`
-    - combobox "Code language"
-    - button "Copy"
+    - combobox /^Code language/
+    - button /^Copy, .*code block \\d+ of \\d+$/
     - status
     - text: ${WORDS}
   `);
@@ -3923,7 +3923,10 @@ test('a clipboard that the browser refuses, or does not offer, is said in words,
     await expect(said, is).toHaveText('Code copied');
     await expect(said, is).toHaveClass(/sr-only/);
     expect(await clipboardText(page)).toBe('some code');
-    await expect(block.getByRole('button', { name: 'Copy', exact: true }), is).toBeVisible();
+    await expect(
+      block.getByRole('button', { name: /^Copy, (.+ )?code block \d+ of \d+$/ }),
+      is,
+    ).toBeVisible();
   }
 
   // The dialog that has just said "Copy the text to keep it, then reload the document from the server" (FR-ED-24).
