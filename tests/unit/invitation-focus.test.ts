@@ -19,6 +19,11 @@ describe('Accept and Decline on an invitation while the answer is sent', () => {
     expect(source).not.toMatch(/disabled=\{sending\}/);
   });
 
+  it('stay busy after an accept until the page has moved, and are freed on a refusal', () => {
+    expect(source).toMatch(/if \('fault' in sent\) \{\s*setSending\(null\);/);
+    expect(source).toMatch(/return router\.push\(`\/documents\/\$\{documentId\}`\);\s*setSending\(null\);/);
+  });
+
   it('refuse a second answer while one is in flight', () => {
     expect(source).toMatch(/if \(sending\) return;/);
   });

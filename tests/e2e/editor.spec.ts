@@ -5155,7 +5155,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
       .getByRole('dialog', { name: 'Leave document' })
       .getByRole('button', { name: 'Leave document' })
       .click();
-    await leaver.waitForURL('**/');
+    await leaver.waitForURL(/\/(\?left=1)?$/);
     await expect(ended(theirs)).toBeVisible({ timeout: 5000 });
     await expect(status(page, 'In sync')).toBeVisible();
     await context.close();

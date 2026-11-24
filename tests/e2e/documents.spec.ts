@@ -105,8 +105,8 @@ test('the list of documents: empty, a document created, renamed, and still there
   await expect(row.locator('bdi')).toHaveText(markup);
   await expect(row.locator('b, script, img')).toHaveCount(0);
   expect(await page.evaluate(() => (window as { marked?: number }).marked)).toBeUndefined();
-  // Focus returns to the control that opened the dialog.
-  await expect(renameButton).toBeFocused();
+  // Focus goes to the statement of what was done.
+  await expect(page.getByRole('status').filter({ hasText: 'Document renamed.' })).toBeFocused();
   await expect(renameButton).toHaveAccessibleDescription(markup);
 
   // Reloaded: the document, its title, its date, and its mark, from the server.
