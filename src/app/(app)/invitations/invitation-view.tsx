@@ -115,10 +115,14 @@ export function OpenInvitation({
     setSending(chosen);
     setFault(null);
     const sent = await sendFor(`${path}/${chosen}`);
-    setSending(null);
-    if ('fault' in sent) return setFault(sent.fault);
+    if ('fault' in sent) {
+      setSending(null);
+      return setFault(sent.fault);
+    }
     const { documentId, message } = (sent.answer ?? {}) as { documentId?: string; message?: string };
+    // The pressed button stays busy and the other disabled until the page has moved.
     if (chosen === 'accept' && documentId) return router.push(`/documents/${documentId}`);
+    setSending(null);
     setDeclined(message ?? '');
   }
 

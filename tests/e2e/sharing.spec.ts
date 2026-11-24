@@ -115,7 +115,19 @@ test('declined, revoked, sent again, and expired invitations', async ({ page, br
 
   // Revoked: the link is no longer open.
   const revokedLink = new URL((await mailFor(revoked.email, INVITATION_LINK)).found).pathname;
-  await pendingRow(page, revoked.email).getByRole('button', { name: 'Revoke' }).click();
+  const revokeButton = pendingRow(page, revoked.email).getByRole('button', { name: 'Revoke' });
+  await revokeButton.click();
+  // It asks first: Cancel is focused, and Cancel changes nothing.
+  const revoking = page.getByRole('dialog', { name: 'Revoke invitation' });
+  await expect(revoking.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await expect(
+    revoking.getByText('The link in the email stops working. You can invite the person again.'),
+  ).toBeVisible();
+  await revoking.getByRole('button', { name: 'Cancel' }).click();
+  await expect(revokeButton).toBeFocused();
+  await expect(pendingRow(page, revoked.email)).toHaveCount(1);
+  await revokeButton.click();
+  await revoking.getByRole('button', { name: 'Revoke invitation' }).click();
   await expect(page.getByRole('status')).toHaveText(`Invitation to ${revoked.email} revoked.`);
   // WCAG 2.4.3: the row and its button are gone; focus is on what was said.
   await expect(page.getByRole('status')).toBeFocused();
@@ -310,9 +322,14 @@ test('the Owner changes a role and removes a collaborator, a collaborator leaves
   await expect(theirs.getByRole('heading', { level: 2, name: 'Leave document' })).toBeVisible();
   await theirs.getByRole('button', { name: 'Leave document' }).click();
   await leaving.getByRole('button', { name: 'Leave document' }).click();
-  await theirs.waitForURL('**/');
+  await theirs.waitForURL(/\/(\?left=1)?$/);
   await expect(theirs.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
   await expect(theirs.getByRole('link', { name: 'Untitled document' })).toHaveCount(0);
+  const left = theirs.getByRole('status').filter({ hasText: 'You left the document.' });
+  await expect(left).toHaveText('You left the document. It is no longer in your list of documents.');
+  await expect(left).toBeFocused();
+  await theirs.reload();
+  await expect(theirs.getByText('You left the document.')).toHaveCount(0);
   await page.reload();
   await expect(page.getByText('2 of 10 people')).toBeVisible();
   await expect(personRow(page, 'Bea Editor')).toHaveCount(0);
@@ -403,7 +420,7 @@ test('a change of role and a removal are notified to the person affected, and ne
     .getByRole('dialog', { name: 'Leave document' })
     .getByRole('button', { name: 'Leave document' })
     .click();
-  await theirs.waitForURL('**/');
+  await theirs.waitForURL(/\/(\?left=1)?$/);
   await notifications(theirs);
   await expect(theirs.getByText(/You no longer have access|Your role on/)).toHaveCount(0);
   await notifications(page);
