@@ -4167,7 +4167,7 @@ test('a session that has ended is stated once, and the page does not connect aga
   const id = await openNew(page);
   const other = await context.newPage();
   await other.goto('/');
-  await other.getByRole('button', { name: 'Sign out' }).click();
+  await other.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(other).toHaveURL(/\/sign-in/);
 
   // The connection is lost here, at once: the server's re-check (FR-ED-41, 3 seconds in these
@@ -4660,7 +4660,7 @@ test('the re-check ends the connection of a session that was ended in another ta
 
   const other = await context.newPage();
   await other.goto('/');
-  await other.getByRole('button', { name: 'Sign out' }).click();
+  await other.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(other).toHaveURL(/\/sign-in/);
 
   // No handshake was refused and no socket lost: the server closed the connection, as session-ended.
@@ -5200,7 +5200,7 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     const sockets = countSockets(theirs);
     const other = await context.newPage();
     await other.goto('/');
-    await other.getByRole('button', { name: 'Sign out' }).click();
+    await other.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(other).toHaveURL(/\/sign-in/);
     const statement = theirs.getByRole('status').filter({ hasText: 'The session has ended' });
     await expect(statement).toBeVisible({ timeout: 5000 });

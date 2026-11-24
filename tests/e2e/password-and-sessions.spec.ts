@@ -51,7 +51,7 @@ test('a password is reset by an emailed link, which works once, and the old pass
   test.slow();
   const elsewhere = watchOrigins(page);
   const person = await ready(page);
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
 
   // FR-AU-86: from the sign-in page to the reset page, which needs no session.
@@ -139,7 +139,7 @@ test('a link that was used while its page was open is answered with the statemen
   browser,
 }) => {
   const person = await ready(page);
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
   await page.goto('/reset-password');
   await page.getByLabel('Email address').fill(person.email);
@@ -301,7 +301,7 @@ test.describe('the account settings', () => {
     // The session in use stands, and the new password signs in.
     await page.reload();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Account settings');
-    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page).toHaveURL('/sign-in');
     await signIn(page, person);
     await expect(alertOn(page)).toHaveText(SIGN_IN_REFUSED);

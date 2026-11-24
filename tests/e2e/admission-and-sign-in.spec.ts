@@ -170,7 +170,7 @@ test('from an invitation to the first screen, out, and in again', async ({ page 
   await page.goto('/');
 
   // FR-AU-84: signing out ends the session at once.
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sign in');
   expect((await page.request.get('/api/anything')).status()).toBe(401);
@@ -434,7 +434,7 @@ test.describe('with an account', () => {
     await page.goto('/sign-in');
     await signIn(page, person);
     await expect(page.getByRole('heading', noticeTitle)).toBeVisible();
-    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page).toHaveURL('/sign-in');
     await signIn(page, person);
     await expect(page.getByRole('heading', noticeTitle)).toBeVisible();

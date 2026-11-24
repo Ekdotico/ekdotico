@@ -66,7 +66,7 @@ test('a locked account is refused like any other, and the link of the email sign
   test.slow();
   const elsewhere = watchOrigins(page);
   const person = await ready(page);
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
 
   const { found: link, text } = await lock(page, person);
@@ -105,7 +105,7 @@ test('a locked account is refused like any other, and the link of the email sign
   await expect(page).toHaveURL('/');
 
   // The link works once.
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
   await page.goto(link);
   await expect(page.getByText(NOT_VALID)).toBeVisible();
@@ -129,7 +129,7 @@ test('the page says where the browser holds a session of another account, and a 
 }) => {
   test.slow();
   const locked = await ready(page);
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
   const { found: link } = await lock(page, locked);
 

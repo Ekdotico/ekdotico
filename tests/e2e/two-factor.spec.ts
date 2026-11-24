@@ -150,7 +150,7 @@ async function enrol(page: Page, person: Person, within = page.locator('body'), 
 }
 
 async function signOut(page: Page) {
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
 }
 
