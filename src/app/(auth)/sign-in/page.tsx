@@ -4,7 +4,8 @@ import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { PageHeading } from '@ekdotico/domico/components';
+import { FormFault, PageHeading } from '@ekdotico/domico/components';
+import { NOT_SIGNED_IN, NOT_SIGNED_IN_MARKER, NOTICE_PARAMETER } from '../../../lib/auth/sign-in-notice.ts';
 import { validateSession } from '../../../lib/auth/session.ts';
 import { returnPath } from '../../../lib/http.ts';
 import { RETURN_PARAMETER } from '../../../proxy.ts';
@@ -23,6 +24,7 @@ export default async function SignIn({
   // for, and only ever to a path of this origin.
   const asked = (await searchParams)[RETURN_PARAMETER];
   const returnTo = returnPath(typeof asked === 'string' ? asked : null);
+  const notice = (await searchParams)[NOTICE_PARAMETER];
 
   // A browser that already holds a session has nothing to do here: it is sent
   // on to where it was going. A read, so the signed copy serves (NFR-SE-02).
@@ -36,6 +38,10 @@ export default async function SignIn({
   return (
     <>
       <PageHeading>Sign in</PageHeading>
+      {/* Part of the page as served, so read in its place and not announced twice. */}
+      {notice === NOT_SIGNED_IN_MARKER ? (
+        <FormFault title={NOT_SIGNED_IN} announce="off" tone="neutral" />
+      ) : null}
       <SignInForm returnTo={returnTo} />
       {/* FR-AU-86. The verb and the noun are those the email of the account
           uses for it, "set a new password from the sign-in page" (FR-AU-87

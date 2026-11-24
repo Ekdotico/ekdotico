@@ -5,6 +5,7 @@ import { Button, FormFault, PageHeading, PasswordField, Stack, TextField } from 
 import { useReady } from '../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../components/send.ts';
 import { NAME_HINT } from '../../../../lib/field-text.ts';
+import { NOT_SIGNED_IN_PATH } from '../../../../lib/auth/sign-in-notice.ts';
 import { INVITATION_NOT_OPEN } from '../../../../lib/admission/statements.ts';
 
 /**
@@ -68,7 +69,7 @@ export function SignUp({
       // in on the sign-in page.
       const signedIn = (sent.answer as { signedIn?: unknown } | null)?.signedIn !== false;
       // A full navigation on purpose: the server renders the next page under the new session.
-      window.location.assign(signedIn ? '/' : '/sign-in');
+      window.location.assign(signedIn ? '/' : NOT_SIGNED_IN_PATH);
       return;
     }
     setFault(sent.fault);

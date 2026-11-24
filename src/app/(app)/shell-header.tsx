@@ -48,9 +48,8 @@ function useUnread(): number {
 }
 
 /**
- * The name of the phone header's trigger, and of the drawer it opens. PROPOSED, NOT YET APPROVED by the
- * owner (question ui-mod-texts): do not push this branch until it is. The drawer's close button keeps the
- * package's own name.
+ * The name of the phone header's trigger, and of the drawer it opens. The owner approved "Menu" on 23
+ * November 2026. The drawer's close button keeps the package's own name.
  */
 export const MENU_TEXT = 'Menu';
 

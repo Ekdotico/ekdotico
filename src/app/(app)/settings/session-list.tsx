@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Badge, Button, Cluster, FormFault, Stack } from '@ekdotico/domico/components';
 import { useReady } from '../../../components/ready.ts';
 import { send, type Fault } from '../../../components/send.ts';
@@ -31,6 +31,11 @@ function LocalTime({ value }: { value: string }) {
 // words at most and no article (Expression Guidelines, functional, rules 1 and 8).
 const UNNAMED = 'Unnamed browser';
 
+// The owner's approved statements (23 November 2026), and the name of the control on the session in use.
+export const SESSION_ENDED = 'Session ended.';
+export const OTHER_SESSIONS_ENDED = 'Other sessions ended.';
+export const END_OWN_SESSION = 'End this session and sign out';
+
 /** "Firefox on macOS": the browser's name and the operating system family (FR-AU-85), as far as each is known. */
 const named = ({ browser, system }: SessionView) =>
   system ? `${browser ?? 'Browser'} on ${system}` : (browser ?? UNNAMED);
@@ -47,10 +52,18 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
   // The identifier of the session being ended, or 'others'.
   const [pending, setPending] = useState<string | null>(null);
   const ready = useReady();
+  // Present from the first paint and empty until something is done: a status that arrives with its text is
+  // not announced. It takes focus once it has its text, since the button that had focus is gone.
+  const statement = useRef<HTMLParagraphElement>(null);
+  const [said, setSaid] = useState({ text: '', count: 0 });
+  useEffect(() => {
+    if (said.count > 0) statement.current?.focus();
+  }, [said]);
 
   async function end(path: string, which: string, body?: unknown, own = false) {
     setPending(which);
     setFault(null);
+    setSaid((now) => ({ ...now, text: '' }));
     const refused = await send(path, body);
     if (refused ? refused.code === 'unauthenticated' : own) {
       // The session in use was ended, here and now or elsewhere before, which
@@ -62,6 +75,11 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
     if (refused) {
       setFault(refused);
       setAttempt((count) => count + 1);
+    } else {
+      setSaid((now) => ({
+        text: which === 'others' ? OTHER_SESSIONS_ENDED : SESSION_ENDED,
+        count: now.count + 1,
+      }));
     }
     // Read again in either case: a session that could not be ended may have ended already.
     router.refresh();
@@ -71,6 +89,9 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
   return (
     <Stack gap={5}>
       {fault ? <FormFault title={fault.message} focusKey={attempt} headingLevel={3} /> : null}
+      <p role="status" ref={statement} tabIndex={-1} className={styles.text}>
+        {said.text}
+      </p>
       <ul className={styles.sessionList}>
         {sessions.map((session) => (
           <li key={session.id} className={styles.item}>
@@ -95,7 +116,7 @@ export function SessionList({ sessions }: { sessions: readonly SessionView[] }) 
                     end('/api/auth/revoke-session', session.id, { id: session.id }, session.current)
                   }
                 >
-                  End session
+                  {session.current ? END_OWN_SESSION : 'End session'}
                 </Button>
               </div>
             </Stack>

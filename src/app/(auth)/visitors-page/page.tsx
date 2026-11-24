@@ -21,7 +21,7 @@ import {
 import { settings } from '../../../lib/settings.ts';
 import styles from '../../pages.module.css';
 
-export const metadata: Metadata = { title: VISITORS_TITLE };
+export const metadata: Metadata = { title: { absolute: VISITORS_TITLE } };
 
 // The address comes from the environment, which is read when the page is
 // rendered and not when the application is built.

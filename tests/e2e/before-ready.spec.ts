@@ -47,8 +47,8 @@ test('the controls of the first screens work when they are pressed before the pa
 
   // The first screen, loaded again by the notice: the way to sign out.
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Sign out' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page).toHaveURL('/sign-in');
 
   // Every request that changed something was made by the page's script, to a route.
