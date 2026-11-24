@@ -113,6 +113,8 @@ export interface ConnectionState {
   canEdit?: boolean;
   /** Changes the server has not acknowledged, which are lost if the tab is closed (FR-ED-18). */
   unsent: boolean;
+  /** Set when the document ends: whether changes were unsent at that moment (`unsent` is then cleared). */
+  hadUnsent?: boolean;
   /**
    * FR-ED-23, NFR-RE-07 (D294): the server holds a change it received and a store of it has failed. Told by the
    * server when the store fails and at every connection made while it still does, and taken away when a store has
@@ -624,7 +626,8 @@ export class DocumentConnection {
   /** FR-ED-41: no further try, and nothing kept of what the server had not acknowledged. */
   private end(ending: Ending): void {
     if (this.over()) return;
-    this.set({ phase: 'ended', ending, unsent: false });
+    // What was unsent is told after (`hadUnsent`): the statement of an ending says the changes were discarded only if there were some.
+    this.set({ phase: 'ended', ending, unsent: false, hadUnsent: this.state.unsent });
     this.stop();
   }
 

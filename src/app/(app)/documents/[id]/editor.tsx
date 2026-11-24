@@ -35,6 +35,8 @@ import { MARKDOWN_INPUT } from './input-rules.ts';
 import { createPortal } from 'react-dom';
 import { PeopleRow } from './people-row.tsx';
 import { STATUS_SLOT } from './people-slot.ts';
+import { closedText } from './ended-text.ts';
+import { HISTORY_DONE, SYNC_HELP } from './spoken.ts';
 import { signInAgainHref } from './sign-in-return.ts';
 import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
@@ -47,14 +49,16 @@ const AT_CAPACITY =
 // The requirements give no words for what follows. Written under the
 // Expression Guidelines; the owner approves them with the pull request (the
 // answer to Q6 of the plan).
-const DISCARDED = 'Ekdotico discarded the changes that it had not yet sent.';
 const TEXT_NOT_COPIED =
   'The text could not be copied. The browser may have refused access to the clipboard. Close this dialog, select the text in the document, and copy it with the keyboard before reloading.';
-const ENDED: Record<Ending, { title: string; text: string; href: string; link: string }> = {
+const ENDED: Record<
+  Ending,
+  { title: string; text: (hadUnsent: boolean | undefined) => string; href: string; link: string }
+> = {
   // FR-ED-41: "a neutral statement that the user's access to the document has ended".
   [REFUSAL.ACCESS_ENDED]: {
     title: 'Access to this document has ended',
-    text: `Ekdotico closed the document in this tab. ${DISCARDED}`,
+    text: closedText,
     href: '/',
     link: 'Documents',
   },
@@ -63,13 +67,13 @@ const ENDED: Record<Ending, { title: string; text: string; href: string; link: s
   // (src/lib/documents/access.ts).
   [REFUSAL.NO_ACCESS]: {
     title: 'No document was found at this address for this account',
-    text: 'Check the address.',
+    text: () => 'Check the address.',
     href: '/',
     link: 'Documents',
   },
   [REFUSAL.SESSION_ENDED]: {
     title: 'The session has ended',
-    text: `Ekdotico closed the document in this tab. ${DISCARDED}`,
+    text: closedText,
     // `SIGN_IN_PATH` of src/proxy.ts, which is a module of the server.
     href: '/sign-in',
     link: 'Sign in again',
@@ -155,7 +159,16 @@ const HEARD_AFTER_MS = 150;
  * render as its words is not certain to be spoken (WCAG 4.1.3). `again` changes
  * when the same words are to be said again.
  */
-function Heard({ words, again }: { words: string; again: string }) {
+function Heard({
+  words,
+  again,
+  kind = 'statements',
+}: {
+  words: string;
+  again: string;
+  /** Which region it is, for a page that has more than one (`data-heard`). */
+  kind?: 'statements' | 'history' | 'upload';
+}) {
   const region = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const element = region.current;
@@ -165,7 +178,7 @@ function Heard({ words, again }: { words: string; again: string }) {
     const timer = setTimeout(() => (element.textContent = words), HEARD_AFTER_MS);
     return () => clearTimeout(timer);
   }, [words, again]);
-  return <span ref={region} role="status" className="sr-only" data-heard="statements" />;
+  return <span ref={region} role="status" className="sr-only" data-heard={kind} />;
 }
 // NFR-IC-19: every control of the editor is reached by keyboard. The package
 // leaves the key to the application; this is the one editors commonly use.
@@ -258,6 +271,8 @@ function Text({
   // What an upload is doing (FR-ED-08), for the region that says so: "Uploading the image…", then "Image added".
   // A refusal of an upload is said where the refusals of the document are (`refuse`).
   const [uploading, setUploading] = useState('');
+  // The words of the last undo or redo, and how many times running, so that a second is heard as the first was.
+  const [history, setHistory] = useState({ words: '', times: 0 });
   const images = useMemo(
     () => ({ documentId, unreferencedDays: imageDays, report: refuse, announce: setUploading }),
     [documentId, imageDays, refuse],
@@ -327,6 +342,21 @@ function Text({
     onEditor(editor);
   }, [onEditor, editor]);
 
+  // The history says what it did (./extensions.tsx, `HISTORY_DONE`), and "Image added" stands only until
+  // the document next changes; a failure stays until the next upload.
+  useEffect(() => {
+    if (!editor) return;
+    const said = (event: Event) =>
+      setHistory((was) => ({ words: (event as CustomEvent<string>).detail, times: was.times + 1 }));
+    const changed = () => setUploading((was) => (was === IMAGE_TEXT.added ? '' : was));
+    editor.view.dom.addEventListener(HISTORY_DONE, said);
+    editor.on('update', changed);
+    return () => {
+      editor.view.dom.removeEventListener(HISTORY_DONE, said);
+      editor.off('update', changed);
+    };
+  }, [editor]);
+
   // A document past a limit already (register D184; ./block-limits.ts): it
   // can only be deleted from until it is back under, and is told so.
   // Read when the editor is told of, and at each transaction after: what the
@@ -387,9 +417,10 @@ function Text({
             {IMAGE_TEXT.choose}
           </Button>
         ) : null}
-        <p role="status" className={pageStyles.meta}>
-          {uploading}
-        </p>
+        {/* Seen here when there are words, and heard from a region that is in the page throughout. */}
+        {uploading ? <p className={pageStyles.meta}>{uploading}</p> : null}
+        <Heard kind="upload" words={uploading} again="" />
+        <Heard kind="history" words={history.words} again={String(history.times)} />
         <div
           ref={surface}
           className={editable && !reads ? `${styles.surface} ${styles.writable}` : styles.surface}
@@ -537,6 +568,7 @@ function OpenDocument({
   useEffect(() => {
     if (toldOfChange) router.refresh();
   }, [toldOfChange, state.permissions, router]);
+  const syncHelp = useId();
   const [check, setCheck] = useState<'checking' | 'in-sync' | 'unconfirmed' | null>(null);
   // Which check the dialog is showing. An answer to a check whose dialog was
   // closed, or that another check replaced, opens nothing and takes no focus.
@@ -565,7 +597,7 @@ function OpenDocument({
     // that had the focus are gone, so the statement takes it.
     return (
       <FormFault tone="neutral" announce="polite" autoFocus title={title}>
-        <p>{text}</p>
+        <p>{text(state.hadUnsent)}</p>
         <p>
           <Link href={href}>{link}</Link>
         </p>
@@ -628,17 +660,23 @@ function OpenDocument({
         // Modernisation A2: in the header's row after the people, where the page has made the place (the editor is
         // made in the browser alone); inline where it has not.
         placeInHeader(
-          <SyncStatus
-            state={status.state}
-            label={status.label}
-            onClick={() => {
-              const mine = (asked.current += 1);
-              setCheck('checking');
-              void connection.verify().then((same) => {
-                if (asked.current === mine) setCheck(same ? 'in-sync' : 'unconfirmed');
-              });
-            }}
-          />,
+          <>
+            <SyncStatus
+              state={status.state}
+              label={status.label}
+              aria-describedby={syncHelp}
+              onClick={() => {
+                const mine = (asked.current += 1);
+                setCheck('checking');
+                void connection.verify().then((same) => {
+                  if (asked.current === mine) setCheck(same ? 'in-sync' : 'unconfirmed');
+                });
+              }}
+            />
+            <span id={syncHelp} className="sr-only">
+              {SYNC_HELP}
+            </span>
+          </>,
         )
       )}
       {unrepaired ? (
@@ -674,6 +712,12 @@ function OpenDocument({
         // change, and not an error: the connection is as it was.
         <FormFault key={state.permissions.changes} tone="neutral" announce="off" autoFocus={false}>
           <p>{PERMISSIONS_NOW(ROLE_NAME[state.permissions.role])}</p>
+        </FormFault>
+      ) : null}
+      {/* The words of the indicator, once more above the text that they are about; the spoken copy is the indicator's. */}
+      {state.phase === 'lost' && state.opened ? (
+        <FormFault tone="neutral" announce="off" autoFocus={false}>
+          <p>{status.label}</p>
         </FormFault>
       ) : null}
       {/* FR-ED-18: read-only in the error state, "until the connection returns". */}

@@ -4047,9 +4047,9 @@ test('a document deleted while it is open closes with its words, and the page do
   // FR-ED-41: a neutral statement, not the error state, and the document is left.
   const statement = page.getByRole('status').filter({ hasText: 'Access to this document has ended' });
   await expect(statement).toBeVisible();
-  await expect(statement).toContainText(
-    'Ekdotico closed the document in this tab. Ekdotico discarded the changes that it had not yet sent.',
-  );
+  // Nothing was unsent when the document closed, so the second sentence is not said.
+  await expect(statement).toContainText('Ekdotico closed the document in this tab.');
+  await expect(statement).not.toContainText('discarded');
   await expect(statement.getByRole('link', { name: 'Documents', exact: true })).toHaveAttribute('href', '/');
   await expect(text(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);

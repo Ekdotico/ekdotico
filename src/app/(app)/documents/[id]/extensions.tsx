@@ -79,6 +79,7 @@ import { limitRefusal, overLimits } from './block-limits.ts';
 import { CODE_NOT_COLOURED, codeColours } from './code-colours.ts';
 import { Cursors } from './cursors.ts';
 import { HeadingIds, headingsOf } from './heading-ids.ts';
+import { HISTORY_DONE, REDONE, UNDONE } from './spoken.ts';
 import {
   TABLE_MOST,
   closeNested,
@@ -284,8 +285,16 @@ function TableOfContentsView({ node, updateAttributes, editor }: NodeViewProps) 
         .setTextSelection(pos + 1)
         .focus(undefined, { scrollIntoView: false })
         .run();
+    const heading = editor.view.nodeDOM(pos) as HTMLElement | null;
     // Without motion of its own: the browser's, which follows the reader's setting.
-    (editor.view.nodeDOM(pos) as HTMLElement | null)?.scrollIntoView({ block: 'start' });
+    heading?.scrollIntoView({ block: 'start' });
+    // A reader's focus goes to the heading too: it takes a tabindex of -1 for as long as it holds the focus,
+    // so the text stays one stop in the Tab order.
+    if (heading && !editor.isEditable) {
+      heading.setAttribute('tabindex', '-1');
+      heading.addEventListener('blur', () => heading.removeAttribute('tabindex'), { once: true });
+      heading.focus({ preventScroll: true });
+    }
   }
 
   return (
@@ -1685,6 +1694,23 @@ export function extensions(
               };
             };
             return plugins;
+          },
+          // The library's keys, and what each one did said to the region that is heard (./spoken.ts).
+          addKeyboardShortcuts() {
+            const keys = this.parent?.() ?? {};
+            const said = (key: string, words: string) => () => {
+              const done = keys[key]?.({ editor: this.editor }) ?? false;
+              if (done) {
+                this.editor.view.dom.dispatchEvent(new CustomEvent(HISTORY_DONE, { detail: words }));
+              }
+              return done;
+            };
+            return {
+              ...keys,
+              'Mod-z': said('Mod-z', UNDONE),
+              'Mod-y': said('Mod-y', REDONE),
+              'Shift-Mod-z': said('Shift-Mod-z', REDONE),
+            };
           },
         }).configure({ document, field: FRAGMENT_NAME }),
     // FR-ED-17: the cursors of the others need the binding above, so a browser that cannot edit has none (S14-1).
