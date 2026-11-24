@@ -191,9 +191,13 @@
   overflow-wrap: anywhere;
 }
 
-/* Where the editor puts the row of the people present, in the header of a document: nothing, and not a gap, until it does. */
-.peopleSlot:empty {
-  display: none;
+/* Where the editor puts the row of the people present, in the header of a document. The place is kept from the
+   first paint at the size of one avatar (the person's own, which the row always holds once the editor is made),
+   so that the avatar arriving does not add to the row, or push the status onto a line of its own, under a
+   person who has begun to read: the text of the document stands still while the page finishes opening. */
+.peopleSlot {
+  min-inline-size: var(--sp-7);
+  min-block-size: var(--sp-7);
 }
 
 /* The status of the connection takes what the row leaves and wraps inside it, so that a long label ("Syncing.
@@ -207,6 +211,12 @@
 .statusSlot {
   flex: 1 1 0;
   min-inline-size: var(--sp-12);
+  /* Two lines of the status's own control (its padding and 1px border, and two lines of the label), kept from the
+     first paint: the label "Syncing. Changes that are not yet sent are lost if this tab is closed." takes two
+     lines in the row's width, and it comes and goes with every change that is sent, so a row that kept one
+     line's height moved the text down and up by a line each time. A label longer than that (a lost connection)
+     is a change of state and may still make the row taller. */
+  min-block-size: calc(2 * var(--fs-sm) * var(--lh-normal) + 2 * (var(--sp-1) + 1px));
 }
 
 /* The same, of a title set as the heading of its page. */

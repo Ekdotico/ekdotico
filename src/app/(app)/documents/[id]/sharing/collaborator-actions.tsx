@@ -7,6 +7,7 @@ import { ROLE_NAME, type DocumentRole } from '../../../../../lib/documents/permi
 import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
 import styles from '../../../../pages.module.css';
+import { LEFT_MARKER } from '../../../documents.tsx';
 
 // FR-ED-38: changing a collaborator's role, removing one, and leaving a
 // document, from the sharing settings. Every refusal is the server's, shown as
@@ -246,7 +247,8 @@ export function LeaveDocument({ documentId }: { documentId: string }) {
     }
     setOpen(false);
     // The document is no longer in the person's list, and this page is of no use to them.
-    router.push('/');
+    // The list says once that the person left (documents.tsx reads the marker and removes it).
+    router.push(`/?${LEFT_MARKER.name}=${LEFT_MARKER.value}`);
     router.refresh();
   }
 

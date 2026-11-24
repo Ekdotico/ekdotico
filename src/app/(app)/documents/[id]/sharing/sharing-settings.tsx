@@ -6,6 +6,7 @@ import {
   Button,
   Checkbox,
   Cluster,
+  Dialog,
   FormFault,
   RadioGroup,
   Stack,
@@ -22,7 +23,60 @@ import { useReady } from '../../../../../components/ready.ts';
 import { sendFor, type Fault } from '../../../../../components/send.ts';
 import styles from '../../../../pages.module.css';
 import { InBrowser, LocalTime } from '../../../local-time.tsx';
-import { LeaveDocument, RemoveDialog, RoleControl, type Answer } from './collaborator-actions.tsx';
+import { LeaveDocument, RemoveDialog, RoleControl, useCancel, type Answer } from './collaborator-actions.tsx';
+
+const REVOKE_CANCEL_ID = 'revoke-cancel';
+export const REVOKE_STATEMENT = 'The link in the email stops working. You can invite the person again.';
+
+function RevokeConfirmation({
+  path,
+  invitation,
+  onRevoked,
+  onCancel,
+}: {
+  path: string;
+  invitation: { id: string; email: string };
+  onRevoked: (message?: string) => void;
+  onCancel: () => void;
+}) {
+  const [fault, setFault] = useState<Fault | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [pending, setPending] = useState(false);
+
+  async function confirm() {
+    setPending(true);
+    const sent = await sendFor(`${path}/${invitation.id}`, undefined, 'DELETE');
+    setPending(false);
+    if ('fault' in sent) {
+      setFault(sent.fault);
+      setAttempt((count) => count + 1);
+      return;
+    }
+    onRevoked((sent.answer as { message?: string } | null)?.message);
+  }
+
+  return (
+    <Stack gap={5}>
+      {fault ? <FormFault title={fault.message} headingLevel={3} focusKey={attempt} /> : null}
+      <p className={styles.text}>
+        <bdi id="revoke-address" className={styles.documentTitle}>
+          {invitation.email}
+        </bdi>
+      </p>
+      <p id="revoke-statement" className={styles.text}>
+        {REVOKE_STATEMENT}
+      </p>
+      <Cluster gap={3}>
+        <Button variant="destructive" pending={pending} onClick={confirm}>
+          Revoke invitation
+        </Button>
+        <Button id={REVOKE_CANCEL_ID} onClick={onCancel}>
+          Cancel
+        </Button>
+      </Cluster>
+    </Stack>
+  );
+}
 
 export interface SharingView {
   documentId: string;
@@ -94,6 +148,8 @@ export function SharingSettings({
   // controls there have been, so that focus goes to what was said once the dialog has closed.
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const [answers, setAnswers] = useState(0);
+  const [revoking, setRevoking] = useState<{ id: string; email: string } | null>(null);
+  const revokeCancel = useCancel(REVOKE_CANCEL_ID);
   // A refusal of a control over a person is stated by itself, and is no error of the field of addresses
   // (the codes `invalid_request` and the others of FIELD_FAULTS name that field's faults).
   const [peopleFault, setPeopleFault] = useState<Fault | null>(null);
@@ -306,17 +362,9 @@ export function SharingSettings({
                         <Cluster gap={2}>
                           <Button
                             variant="quiet"
-                            disabled={!ready || (sending && pressed !== `revoke-${invitation.id}`)}
-                            pending={pressed === `revoke-${invitation.id}`}
+                            disabled={!ready || sending}
                             aria-describedby={`invitation-${invitation.id}`}
-                            onClick={() =>
-                              void act(
-                                `revoke-${invitation.id}`,
-                                `${base}/${invitation.id}`,
-                                undefined,
-                                'DELETE',
-                              )
-                            }
+                            onClick={() => setRevoking({ id: invitation.id, email: invitation.email })}
                           >
                             Revoke
                           </Button>
@@ -343,6 +391,27 @@ export function SharingSettings({
       ) : null}
 
       {section}
+
+      <Dialog
+        open={revoking !== null}
+        onClose={() => setRevoking(null)}
+        title="Revoke invitation"
+        aria-describedby="revoke-address revoke-statement"
+        initialFocusRef={revokeCancel}
+      >
+        {revoking ? (
+          <RevokeConfirmation
+            key={revoking.id}
+            path={base}
+            invitation={revoking}
+            onCancel={() => setRevoking(null)}
+            onRevoked={(message) => {
+              setRevoking(null);
+              answered({ message });
+            }}
+          />
+        ) : null}
+      </Dialog>
 
       {view.mayLeave ? <LeaveDocument documentId={view.documentId} /> : null}
     </Stack>

@@ -7,9 +7,8 @@ import { describe, expect, it } from 'vitest';
 describe('the sharing controls while a request is in flight', () => {
   const source = readFileSync('src/app/(app)/documents/[id]/sharing/sharing-settings.tsx', 'utf8');
 
-  it('mark Invite, Revoke and Send again as pending when they are the one pressed', () => {
+  it('mark Invite and Send again as pending when they are the one pressed (Revoke asks first)', () => {
     expect(source).toContain("pending={pressed === 'invite'}");
-    expect(source).toContain('pending={pressed === `revoke-${invitation.id}`}');
     expect(source).toContain('pending={pressed === `resend-${invitation.id}`}');
     expect(source).not.toContain('pending={sending}');
   });
