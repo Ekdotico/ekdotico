@@ -5034,9 +5034,9 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     // Neither the re-check (60 seconds here) nor a reconnection: the notice, and the close it asks for.
     for (const closed of [theirs, second]) {
       await expect(ended(closed)).toBeVisible({ timeout: 5000 });
-      await expect(ended(closed)).toContainText(
-        'Ekdotico closed the document in this tab. Ekdotico discarded the changes that it had not yet sent.',
-      );
+      await expect(ended(closed)).toContainText('Ekdotico closed the document in this tab.');
+      // Nothing was typed in these pages, so nothing was unsent, and the sentence about discarded changes is not said (ux-discarded-sentence).
+      await expect(ended(closed)).not.toContainText('discarded the changes');
       await expect(text(closed)).toHaveCount(0);
       await expect(closed.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
     }
