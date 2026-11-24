@@ -82,7 +82,7 @@ test('the control is not seen at rest, appears under the pointer and on focus, a
   await button.click();
   await expect(palette(page)).toBeVisible();
   await page.getByRole('option', { name: /Heading 1/ }).click();
-  await expect(text(page).locator('h1')).toHaveCount(1);
+  await expect(text(page).locator('h2[data-level="1"]')).toHaveCount(1);
 });
 
 test('on a very wide screen the box grows with the interface scale, and the plus stays at its middle', async ({

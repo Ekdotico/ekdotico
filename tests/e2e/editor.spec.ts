@@ -1689,7 +1689,7 @@ test('the slash palette: Tab, the cursor inside the command and out of it, and o
   await expect(rows(page)).toHaveText(['Heading 1/h1', 'Heading 2/h2', 'Heading 3/h3']);
   await expect(doc).toHaveAttribute('aria-controls', LIST_ID);
   await page.keyboard.press('Enter');
-  await expect(doc.locator('h1')).toHaveCount(1);
+  await expect(doc.locator('h2[data-level="1"]')).toHaveCount(1);
   await expect(doc.locator(':scope > p').filter({ hasText: /^a $/ })).toHaveCount(1);
   // Nothing of the command is left: no "e" in a paragraph of its own.
   await expect(doc.getByText('e', { exact: true })).toHaveCount(0);
@@ -1717,9 +1717,9 @@ test('the slash palette: Tab, the cursor inside the command and out of it, and o
   await newLastLine(page);
   await page.waitForTimeout(700);
   await page.keyboard.type('## ');
-  await expect(doc.locator('h2')).toHaveCount(1);
+  await expect(doc.locator('h3[data-level="2"]')).toHaveCount(1);
   await page.keyboard.press('ControlOrMeta+z');
-  await expect(doc.locator('h2')).toHaveCount(0);
+  await expect(doc.locator('h3[data-level="2"]')).toHaveCount(0);
   expect(
     await doc
       .locator(':scope > p')
@@ -1765,7 +1765,7 @@ test('the slash palette does not open in the read-only state, and one that is op
   await page.keyboard.type(' /h1');
   await expect(rows(page)).toHaveText(['Heading 1/h1']);
   await page.keyboard.press('Enter');
-  await expect(doc.locator('h1')).toHaveCount(1);
+  await expect(doc.locator('h2[data-level="1"]')).toHaveCount(1);
   await expect(doc.locator('p').first()).toHaveText('/h ');
 });
 
@@ -1808,13 +1808,13 @@ test('the closing of the slash palette is said after a dismissal, and nothing is
   // Enter on a row: nothing.
   await opened(' /h');
   await page.keyboard.press('Enter');
-  await expect(doc.locator('h1')).toHaveCount(1);
+  await expect(doc.locator('h2[data-level="1"]')).toHaveCount(1);
   expect(await afterClosing()).toBe('');
 
   // A click on a row: nothing.
   await opened('/h');
   await rows(page).nth(1).click();
-  await expect(doc.locator('h2')).toHaveCount(1);
+  await expect(doc.locator('h3[data-level="2"]')).toHaveCount(1);
   expect(await afterClosing()).toBe('');
 
   // The choice is not remembered: the cursor leaving the command of the next list is said.
@@ -2187,7 +2187,7 @@ test('an attribute outside its rule, sent by another client or pasted, becomes t
       { start: null, type: null },
       { start: null, type: null },
     ]);
-    expect(found.headings).toEqual(['h1 level nine', 'h1 level object']);
+    expect(found.headings).toEqual(['h2 level nine', 'h2 level object']);
     expect(found.depths).toEqual(['3', '3']);
     expect(found.links).toEqual([
       { words: 'pasted link', href: 'https://example.com/ok', goes: false },
@@ -3855,7 +3855,8 @@ test('a document the browser cannot build is said to be so, and the page stays',
   );
   await expect(statement).toBeFocused();
   // The page is the document's own still, and not the page of a fault on the server.
-  await expect(page.getByRole('heading', { level: 1, name: 'Untitled document' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Untitled document');
   await expect(page.getByText(MARK)).toBeVisible();
   await expect(page.getByText('fault on the server')).toHaveCount(0);
   await expect(text(page)).toHaveCount(0);
@@ -5279,7 +5280,7 @@ test('each entry of the contents list leads to its heading, for an Editor and a 
     page,
     `<nav class="ekd-toc" data-depth="3"></nav><p>Intro</p><h1>Alpha</h1>${filler}<h2>Beta</h2>${filler}<h1>Gamma</h1>`,
   );
-  await expect(text(page).locator('h1')).toHaveText(['Alpha', 'Gamma']);
+  await expect(text(page).locator('h2[data-level="1"]')).toHaveText(['Alpha', 'Gamma']);
 
   // What each entry's address finds in the page: the element, by the browser's own lookup.
   const found = (who: Page) =>
@@ -5308,7 +5309,7 @@ test('each entry of the contents list leads to its heading, for an Editor and a 
   await placeAtEnd(text(page).locator('p', { hasText: 'Intro' }));
   await page.keyboard.press('Enter');
   await page.keyboard.type('# Zero');
-  await expect(text(page).locator('h1')).toHaveText(['Zero', 'Alpha', 'Gamma']);
+  await expect(text(page).locator('h2[data-level="1"]')).toHaveText(['Zero', 'Alpha', 'Gamma']);
   const second = [['Zero', 'H1 Zero'], ...first];
   await expect.poll(() => found(page)).toEqual(second);
   await expect.poll(() => found(theirs)).toEqual(second);
