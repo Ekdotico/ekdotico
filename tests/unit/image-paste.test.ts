@@ -74,6 +74,32 @@ describe('pastedFiles', () => {
     ).toEqual([]);
   });
 
+  it('takes a lone picture from an office application: a style block and comments are not words', () => {
+    const file = png();
+    const html =
+      '<html><head><style>p { margin: 0 }</style></head><body><!--[if mso]><p>x</p><![endif]--><script>1</script><img src="file:///x.png"></body></html>';
+    expect(pastedFiles(clipboard([file], { 'text/html': html }))).toEqual([file]);
+  });
+
+  it('skips a string item and a file item that gives no file, and throws nothing', () => {
+    const file = png();
+    const data = {
+      items: [
+        { kind: 'string', type: 'text/plain', getAsFile: () => null },
+        { kind: 'file', type: 'image/png', getAsFile: () => null },
+        { kind: 'file', type: 'image/png', getAsFile: () => file },
+      ],
+      getData: () => '',
+    } as unknown as DataTransfer;
+    expect(pastedFiles(data)).toEqual([file]);
+    expect(
+      pastedFiles({
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => null }],
+        getData: () => '',
+      } as unknown as DataTransfer),
+    ).toEqual([]);
+  });
+
   it('takes nothing from a clipboard with no file item, or none at all', () => {
     expect(pastedFiles(clipboard([], { 'text/plain': 'words' }))).toEqual([]);
     expect(pastedFiles(null)).toEqual([]);
@@ -94,6 +120,21 @@ describe('a paste of a picture', () => {
     expect((init.headers as Record<string, string>)['content-type']).toBe('image/png');
     expect(ids()).toEqual([ID]);
     expect(announced).toEqual([IMAGE_TEXT.uploading, IMAGE_TEXT.added]);
+  });
+
+  it('sends the file itself as the body, with its own type, and only its image lands, none from an address', async () => {
+    const fetched = vi.fn(async () => new Response(JSON.stringify({ id: ID }), { status: 201 }));
+    vi.stubGlobal('fetch', fetched);
+    const { paste, ids } = setup();
+    const file = png();
+    const html = '<meta charset="utf-8"><img src="https://example.com/pixel.png">';
+    expect(paste(clipboard([file], { 'text/html': html })).handled).toBe(true);
+    await settle();
+    const [, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(file);
+    expect((init.body as File).size).toBe(3);
+    expect((init.headers as Record<string, string>)['content-type']).toBe(file.type);
+    expect(ids()).toEqual([ID]);
   });
 
   it('uploads one for each file, in turn', async () => {

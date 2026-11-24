@@ -234,12 +234,29 @@ function pick(done: (files: File[]) => void) {
   input.click();
 }
 
+/** The words of the HTML of a clipboard: the body's text, with no style, script, comment or title. */
+function htmlWords(html: string): string {
+  const hidden = /<!--[\s\S]*?-->|<(style|script|head|title)\b[\s\S]*?<\/\1\s*>/gi;
+  // A browser parses the markup and reads the body's text; script and style text and comments (as a picture copied
+  // from an office application brings) are not words. Where there is no parser (a server, a test) the same is
+  // done by stripping them and the tags.
+  if (typeof DOMParser !== 'undefined') {
+    const parsed = new DOMParser().parseFromString(html.replace(hidden, ''), 'text/html');
+    return (parsed.body.textContent ?? '').replace(/ /g, ' ').trim();
+  }
+  return html
+    .replace(hidden, '')
+    .replace(/<[^>]*>|&nbsp;/g, '')
+    .trim();
+}
+
 /**
  * The files of a paste that is only for them: file items on the clipboard and no text. A clipboard that also
  * holds text (plain, or HTML with words in it, as a range copied from a spreadsheet comes with a picture of
  * it) is a paste of that text, which the editor handles as it always did: nothing is inserted twice, and HTML
  * that refers to an image at another address is still inserted without that image (FR-ED-08, NFR-SE-06). An
- * image copied from a page, whose HTML is only an <img>, has no text and is taken as the file.
+ * image copied from a page or an office application, whose HTML is only an <img> and styles, has no text and
+ * is taken as the file.
  */
 export function pastedFiles(data: DataTransfer | null): File[] {
   if (!data) return [];
@@ -248,8 +265,7 @@ export function pastedFiles(data: DataTransfer | null): File[] {
     .map((item) => item.getAsFile())
     .filter((file): file is File => file !== null);
   if (files.length === 0) return [];
-  const words = (value: string) => value.replace(/<[^>]*>|&nbsp;/g, '').trim();
-  if (words(data.getData('text/plain')) !== '' || words(data.getData('text/html')) !== '') return [];
+  if (data.getData('text/plain').trim() !== '' || htmlWords(data.getData('text/html')) !== '') return [];
   return files;
 }
 
