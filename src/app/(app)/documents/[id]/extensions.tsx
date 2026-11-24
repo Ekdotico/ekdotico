@@ -81,6 +81,7 @@ import { limitRefusal, overLimits } from './block-limits.ts';
 import { CODE_NOT_COLOURED, codeColours } from './code-colours.ts';
 import { Cursors } from './cursors.ts';
 import { HeadingIds, headingsOf } from './heading-ids.ts';
+import { HeadingLevels } from './heading-levels.ts';
 import { HISTORY_DONE, REDONE, UNDONE } from './spoken.ts';
 import {
   TABLE_MOST,
@@ -1574,7 +1575,8 @@ export function extensions(
 ) {
   return [
     StarterKit.configure({
-      heading: { levels: [1, 2, 3] },
+      // Replaced by the headings of ./heading-levels.ts, which draw one level lower.
+      heading: false,
       // The document that takes the list of footnotes after its blocks, and the paragraph kept at its end
       // that goes before that list, are ./footnotes.ts's.
       document: false,
@@ -1586,6 +1588,7 @@ export function extensions(
       // Replaced by the link below.
       link: false,
     }),
+    HeadingLevels,
     // Where the kit's own stood, which is before the table's repair in the order of the plugins.
     TrailingParagraph,
     Link.extend({

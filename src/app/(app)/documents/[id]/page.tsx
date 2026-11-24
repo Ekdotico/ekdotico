@@ -13,7 +13,7 @@
 import type { Metadata } from 'next';
 import { cache } from 'react';
 import { notFound } from 'next/navigation';
-import { ButtonLink, Cluster, PageHeading, Stack, Tooltip } from '@ekdotico/domico/components';
+import { ButtonLink, Cluster, Stack, Tooltip } from '@ekdotico/domico/components';
 import { noticeRuns } from '../../../../lib/clearing/period.ts';
 import { authorise } from '../../../../lib/documents/access.ts';
 import { holds } from '../../../../lib/documents/permissions.ts';
@@ -22,6 +22,7 @@ import { reading } from '../../../page-fault.ts';
 import styles from '../../../pages.module.css';
 import { currentAccount, titled } from '../../account.ts';
 import { NOT_RECORDED, NOT_RECORDED_EXPLANATION } from '../../not-recorded.ts';
+import { DocumentTitle } from './document-title.tsx';
 import { DocumentView } from './document-view.tsx';
 import { ExportDraft } from './export-draft.tsx';
 import { PEOPLE_SLOT, STATUS_SLOT } from './people-slot.ts';
@@ -57,7 +58,16 @@ export default async function DocumentPage({ params }: Props) {
           Sharing, Export, status. */}
       <Stack gap={3}>
         {/* The title is text, whatever it holds (NFR-SE-08). */}
-        <PageHeading className={styles.breakable}>{document.title}</PageHeading>
+        {/* FR-ED-35: an account that may rename the document renames it here, where the title stands. */}
+        <DocumentTitle
+          documentId={document.id}
+          title={document.title}
+          canRename={
+            holds(document.permissionSet, role, 'document.rename') &&
+            document.deletedAt === null &&
+            document.clearingAt === null
+          }
+        />
         <Cluster gap={3} align="center">
           {document.recording === 'UNRECORDED' ? (
             <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>

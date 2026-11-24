@@ -42,7 +42,9 @@ test('a new account is given the Onboarding paper once, as an ordinary document 
   try {
     await expect(editor).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole('button', { name: 'In sync' })).toBeVisible({ timeout: 20_000 });
-    await expect(editor.locator('h2').filter({ hasText: 'Welcome to Ekdotico α' })).toBeVisible({
+    await expect(
+      editor.locator('h3[data-level="2"]').filter({ hasText: 'Welcome to Ekdotico α' }),
+    ).toBeVisible({
       timeout: 20_000,
     });
   } catch (error) {

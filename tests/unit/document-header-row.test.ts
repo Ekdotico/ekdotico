@@ -18,10 +18,10 @@ describe('the document header row (modernisation A2)', () => {
   it('keeps the order title, Sharing, Export, people, status on one baseline', () => {
     // The title is its own line, the controls one Cluster under it.
     expect(page).toMatch(
-      /<Stack gap=\{3\}>\s*\{\/\*[^]*?<PageHeading[^]*?<Cluster gap=\{3\} align="center">/,
+      /<Stack gap=\{3\}>\s*\{\/\*[^]*?<DocumentTitle[^]*?<Cluster gap=\{3\} align="center">/,
     );
     const order = [
-      '<PageHeading',
+      '<DocumentTitle',
       'href={`/documents/${document.id}/sharing`}',
       '<ExportDraft',
       'id={PEOPLE_SLOT}',
