@@ -83,11 +83,12 @@ export const NODES: Record<string, NodeSpec> = {
   blockquote: { content: 'block+', group: 'block' },
   bulletList: { content: 'listItem+', group: 'block list' },
   hardBreak: { group: 'inline', inline: true },
-  heading: { content: 'inline*', group: 'block' },
   horizontalRule: { group: 'block' },
   listItem: { content: 'paragraph block*' },
   orderedList: { content: 'listItem+', group: 'block list' },
   text: { group: 'inline' },
+  // After `text`, where the editor's list has it: its headings are an extension of their own (heading-levels.ts).
+  heading: { content: 'inline*', group: 'block' },
   codeBlock: { content: 'text*', group: 'block' },
   callout: { content: 'paragraph+', group: 'block' },
   tableOfContents: { group: 'block' },

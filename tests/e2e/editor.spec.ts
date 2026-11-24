@@ -167,6 +167,29 @@ const EVERYTHING = `
   <hr>
   <p>Last paragraph.</p>`;
 
+test('the title is renamed where it stands: said when it is saved, refused with the rule beside it', async ({
+  page,
+}) => {
+  await enter(page);
+  await openNew(page);
+  const title = page.getByRole('textbox', { name: 'Title' });
+  const heard = page.locator('[data-heard="title"]');
+
+  // FR-ED-35: a title of more than 200 characters is refused, and the page says so where it says its faults.
+  await title.fill('a'.repeat(201));
+  await title.press('Enter');
+  await expect(title).toHaveAttribute('aria-invalid', 'true');
+  await expect(heard).toContainText('at most 200 characters');
+
+  await title.fill('A title named in the document');
+  await title.press('Enter');
+  await expect(heard).toHaveText('Document renamed.');
+  await expect(title).not.toHaveAttribute('aria-invalid', 'true');
+
+  await page.reload();
+  await expect(title).toHaveValue('A title named in the document');
+});
+
 test('a document opens at its address, is edited, and is there after a reload', async ({ page }) => {
   const elsewhere = watchOrigins(page);
   await enter(page);
@@ -175,7 +198,9 @@ test('a document opens at its address, is edited, and is there after a reload', 
   // The owner's decision E4: the address. FR-ED-43: the mark beside the title.
   expect(new URL(page.url()).pathname).toBe(`/documents/${id}`);
   await expect(page).toHaveTitle('Untitled document – Ekdotico');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Untitled document');
+  // The title is the page's one h1, and for its Owner it is edited where it stands.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Untitled document');
   await expect(page.getByRole('main').getByRole('button', { name: MARK })).toBeVisible();
 
   // NFR-IC-19: the region has a role and a name, and says how its controls are reached.
@@ -216,7 +241,17 @@ test('every block and every mark, the controls inside each block, and the toolba
   const doc = text(page);
 
   // FR-ED-01: the blocks.
-  for (const tag of ['h1', 'h2', 'h3', 'ol:not(.ekd-toc-list)', 'ul', 'blockquote', 'table', 'pre', 'hr']) {
+  for (const tag of [
+    'h2[data-level="1"]',
+    'h3[data-level="2"]',
+    'h4[data-level="3"]',
+    'ol:not(.ekd-toc-list)',
+    'ul',
+    'blockquote',
+    'table',
+    'pre',
+    'hr',
+  ]) {
     await expect(doc.locator(tag), tag).toHaveCount(1);
   }
   await expect(doc.locator('th')).toHaveText(['Head A', 'Head B']);
@@ -265,7 +300,7 @@ test('every block and every mark, the controls inside each block, and the toolba
   ).toEqual(['none', 'none']);
   await contents.getByRole('radio', { name: 'Levels 1–3' }).check();
   await expect(contents.getByRole('link')).toHaveText(['Heading one', 'Heading two', 'Heading three']);
-  await placeAtEnd(doc.locator('h2'));
+  await placeAtEnd(doc.locator('h3[data-level="2"]'));
   await page.keyboard.type(' renamed');
   await expect(contents.getByRole('link')).toHaveText([
     'Heading one',
@@ -274,7 +309,7 @@ test('every block and every mark, the controls inside each block, and the toolba
   ]);
   await contents.getByRole('link', { name: 'Heading three' }).click();
   await page.keyboard.type('In ');
-  await expect(doc.locator('h3')).toHaveText('In Heading three');
+  await expect(doc.locator('h4[data-level="3"]')).toHaveText('In Heading three');
 
   // FR-ED-09: the operations are in the block, and act on the cell the cursor is in; the caption is below.
   await place(doc.locator('td', { hasText: 'One' }));
@@ -362,9 +397,9 @@ test('every block and every mark, the controls inside each block, and the toolba
   await expect(status(page, 'In sync')).toBeVisible();
   await page.reload();
   for (const tag of [
-    'h1',
-    'h2',
-    'h3',
+    'h2[data-level="1"]',
+    'h3[data-level="2"]',
+    'h4[data-level="3"]',
     'ol:not(.ekd-toc-list)',
     'ul',
     'blockquote',
@@ -543,7 +578,7 @@ async function selectText(block: Locator) {
 }
 
 // Every element a mark or a block of the editor is drawn as, apart from the paragraph.
-const FORMATTED = 'strong, em, u, s, code, sub, sup, mark, a, h1, h2, h3, ol, ul, blockquote, pre, hr';
+const FORMATTED = 'strong, em, u, s, code, sub, sup, mark, a, h2, h3, h4, ol, ul, blockquote, pre, hr';
 
 test('the keyboard shortcuts of the requirement act, and the others the library ships do not', async ({
   page,
@@ -633,7 +668,7 @@ test('the keyboard shortcuts of the requirement act, and the others the library 
   await page.keyboard.press('Enter');
   await page.keyboard.type('# Heading');
   await page.keyboard.press('ControlOrMeta+Alt+Digit0');
-  await expect(doc.locator('h1')).toHaveText('Heading');
+  await expect(doc.locator('h2[data-level="1"]')).toHaveText('Heading');
 
   // Tab and Shift+Tab indent and outdent a list item.
   await page.keyboard.press('Enter');
@@ -673,9 +708,9 @@ test('the Markdown input of the requirement converts as it is typed, and nothing
   await lines('# One', '## Two', '### Three', '- dash', '', '* star', '', '1. first', '', '> quoted', '');
   await lines('---', 'Marks: **bold** *italic* ~~struck~~ `code` and on.');
   const converted = async () => {
-    await expect(doc.locator('h1')).toHaveText('One');
-    await expect(doc.locator('h2')).toHaveText('Two');
-    await expect(doc.locator('h3')).toHaveText('Three');
+    await expect(doc.locator('h2[data-level="1"]')).toHaveText('One');
+    await expect(doc.locator('h3[data-level="2"]')).toHaveText('Two');
+    await expect(doc.locator('h4[data-level="3"]')).toHaveText('Three');
     await expect(doc.locator('ul > li')).toHaveText(['dash', 'star']);
     await expect(doc.locator('ol > li')).toHaveText('first');
     await expect(doc.locator('blockquote')).toHaveText('quoted');
@@ -829,9 +864,9 @@ async function newLastLine(page: Page) {
 // row, the element its block is drawn as, and what is then typed into it.
 const SLASH_ROWS: [command: string, row: string, made: string, words?: string][] = [
   ['text', 'Text', ':scope > p', 'A paragraph.'],
-  ['h1', 'Heading 1', 'h1', 'First heading'],
-  ['h2', 'Heading 2', 'h2', 'Second heading'],
-  ['h3', 'Heading 3', 'h3', 'Third heading'],
+  ['h1', 'Heading 1', 'h2[data-level="1"]', 'First heading'],
+  ['h2', 'Heading 2', 'h3[data-level="2"]', 'Second heading'],
+  ['h3', 'Heading 3', 'h4[data-level="3"]', 'Third heading'],
   ['bullet', 'Bulleted list', 'ul > li', 'A point'],
   ['numbered', 'Numbered list', 'ol > li', 'A step'],
   ['quote', 'Quote', 'blockquote', 'A quotation'],
@@ -1060,16 +1095,16 @@ test('the slash palette opens where the requirement says, filters by name and al
   await newLastLine(page);
   await page.keyboard.type('/h2');
   await page.keyboard.press('Enter');
-  await expect(doc.locator('h2')).toHaveCount(1);
+  await expect(doc.locator('h3[data-level="2"]')).toHaveCount(1);
   await page.waitForTimeout(700);
   await page.keyboard.press('ControlOrMeta+z');
-  await expect(doc.locator('h2')).toHaveCount(0);
+  await expect(doc.locator('h3[data-level="2"]')).toHaveCount(0);
   await expect(doc.locator(':scope > p').filter({ hasText: '/h2' })).toHaveText('/h2');
   await expect(doc.locator('blockquote')).toHaveText('Quoted');
   // An undo is no request.
   await staysClosed('after undo');
   await page.keyboard.press('ControlOrMeta+Shift+Z');
-  await expect(doc.locator('h2')).toHaveCount(1);
+  await expect(doc.locator('h3[data-level="2"]')).toHaveCount(1);
   await expect(doc.getByText('/h2', { exact: true })).toHaveCount(0);
 
   // Not in a code block, which is text as it is typed.
@@ -1180,10 +1215,10 @@ test('the slash palette stays open through another client’s change elsewhere, 
     await expect(doc).toBeFocused();
     // And Enter chooses the row the writer moved to.
     await page.keyboard.press('Enter');
-    await expect(doc.locator('h2')).toHaveCount(1);
+    await expect(doc.locator('h3[data-level="2"]')).toHaveCount(1);
     await expect(doc.getByText('/h', { exact: true })).toHaveCount(0);
     await page.keyboard.type('Chosen');
-    await expect(doc.locator('h2')).toHaveText('Chosen');
+    await expect(doc.locator('h3[data-level="2"]')).toHaveText('Chosen');
 
     // The other client rewrites the command itself: the list goes, and Enter inserts nothing.
     await newLastLine(page);
@@ -1210,8 +1245,8 @@ test('the slash palette stays open through another client’s change elsewhere, 
     await expect(doc).not.toHaveAttribute('aria-controls');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
-    await expect(doc.locator('h1, h3, hr')).toHaveCount(0);
-    await expect(doc.locator('h2')).toHaveCount(1);
+    await expect(doc.locator('h2[data-level="1"], h4[data-level="3"], hr')).toHaveCount(0);
+    await expect(doc.locator('h3[data-level="2"]')).toHaveCount(1);
     // Enter was the text's key: it broke the line at the cursor, and the command is still text.
     await expect(doc.getByText('/h', { exact: true })).toHaveCount(1);
     await expect(doc.getByText('zz', { exact: true })).toHaveCount(1);

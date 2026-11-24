@@ -18,6 +18,7 @@ import { send, sendFor, type Fault } from '../../components/send.ts';
 import styles from '../pages.module.css';
 import { InBrowser, LocalTime } from './local-time.tsx';
 import { NOT_RECORDED, NOT_RECORDED_EXPLANATION } from './not-recorded.ts';
+import { RENAMED_STATEMENT } from './renamed-statement.ts';
 
 // FR-ED-35: the limit of a title and its default, stated where a title is typed.
 const TITLE_HINT = 'A title has at most 200 characters. An empty title is stored as “Untitled document”.';
@@ -35,7 +36,7 @@ export interface DocumentItem {
   deleteOn: string | null;
 }
 
-export const RENAMED_STATEMENT = 'Document renamed.';
+export { RENAMED_STATEMENT };
 export const LEFT_STATEMENT = 'You left the document. It is no longer in your list of documents.';
 /** The marker the list of documents is opened with after a leave: no personal data, read once and removed. */
 export const LEFT_MARKER = { name: 'left', value: '1' } as const;
