@@ -62,7 +62,7 @@ async function withImage(page: Page, person?: Person) {
   const who = await enter(page, person);
   const id = await openNew(page);
   await choose(page, picture);
-  await expect(page.getByText('Image added')).toBeVisible();
+  await expect(page.locator('p', { hasText: 'Image added' })).toBeVisible();
   await expect(figure(page).locator('img.ekd-image-img')).toBeVisible();
   return { id, who };
 }
@@ -77,8 +77,10 @@ test('uploads an image by the picker, shows it from a link of the store under th
   await enter(page);
   const id = await openNew(page);
   await choose(page, picture);
-  await expect(page.getByText('Uploading the image…').or(page.getByText('Image added'))).toBeVisible();
-  await expect(page.getByText('Image added')).toBeVisible();
+  await expect(
+    page.getByText('Uploading the image…').or(page.locator('p', { hasText: 'Image added' })),
+  ).toBeVisible();
+  await expect(page.locator('p', { hasText: 'Image added' })).toBeVisible();
 
   const img = figure(page).locator('img.ekd-image-img');
   await expect(figure(page)).toHaveCount(1);
@@ -233,7 +235,7 @@ test('takes an image of 15 MB whole, and refuses one of 21 MB with its size', as
   await openNew(page);
   const big = (size: number) => png({ before: [pngChunk('IDAT', Buffer.alloc(size - png().length - 12))] });
   await choose(page, { name: 'big.png', mimeType: 'image/png', buffer: big(15 * 1024 * 1024) });
-  await expect(page.getByText('Image added')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('p', { hasText: 'Image added' })).toBeVisible({ timeout: 30_000 });
   await expect(figure(page)).toHaveCount(1);
   await choose(page, { name: 'bigger.png', mimeType: 'image/png', buffer: big(21 * 1024 * 1024) });
   await expect(

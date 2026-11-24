@@ -4080,9 +4080,9 @@ test('a document deleted while it is open closes with its words, and the page do
   // FR-ED-41: a neutral statement, not the error state, and the document is left.
   const statement = page.getByRole('status').filter({ hasText: 'Access to this document has ended' });
   await expect(statement).toBeVisible();
-  await expect(statement).toContainText(
-    'Ekdotico closed the document in this tab. Ekdotico discarded the changes that it had not yet sent.',
-  );
+  // Nothing was unsent when the document closed, so the second sentence is not said.
+  await expect(statement).toContainText('Ekdotico closed the document in this tab.');
+  await expect(statement).not.toContainText('discarded');
   await expect(statement.getByRole('link', { name: 'Documents', exact: true })).toHaveAttribute('href', '/');
   await expect(text(page)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
@@ -5037,9 +5037,9 @@ test.describe('a change acts on an open page within 5 seconds (FR-ED-40)', () =>
     // Neither the re-check (60 seconds here) nor a reconnection: the notice, and the close it asks for.
     for (const closed of [theirs, second]) {
       await expect(ended(closed)).toBeVisible({ timeout: 5000 });
-      await expect(ended(closed)).toContainText(
-        'Ekdotico closed the document in this tab. Ekdotico discarded the changes that it had not yet sent.',
-      );
+      await expect(ended(closed)).toContainText('Ekdotico closed the document in this tab.');
+      // Nothing was typed in these pages, so nothing was unsent, and the sentence about discarded changes is not said (ux-discarded-sentence).
+      await expect(ended(closed)).not.toContainText('discarded the changes');
       await expect(text(closed)).toHaveCount(0);
       await expect(closed.getByRole('button', { name: /Not connected|Restoring|In sync/ })).toHaveCount(0);
     }

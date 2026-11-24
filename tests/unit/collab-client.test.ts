@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { BATCH_MS, BURST_MESSAGES, DocumentConnection, syncStatus } from '../../src/lib/collab/client.ts';
+import { REFUSAL } from '../../src/lib/collab/protocol.ts';
 
 const ID = '3f2b8c1e-5d4a-4e6f-9a7b-0c1d2e3f4a5b';
 // The frames of the socket: the name of the document behind its length (36
@@ -991,5 +992,25 @@ describe('the browser warns on leaving only while changes are unsent', () => {
     expect(leave()).toBe(true);
     connection.stop();
     expect(leave()).toBe(false);
+  });
+});
+
+describe('the ending of a document remembers whether changes were unsent', () => {
+  const ended = (connection: DocumentConnection) =>
+    (connection as unknown as { refused(reason: string): void }).refused(REFUSAL.ACCESS_ENDED);
+
+  it('says so when changes had been sent and not acknowledged', async () => {
+    const { connection, changes } = await opened();
+    changes.push(['not acknowledged']);
+    await vi.advanceTimersByTimeAsync(BATCH_MS);
+    expect(connection.getState().unsent).toBe(true);
+    ended(connection);
+    expect(connection.getState()).toMatchObject({ phase: 'ended', unsent: false, hadUnsent: true });
+  });
+
+  it('says none when nothing was unsent', async () => {
+    const { connection } = await opened();
+    ended(connection);
+    expect(connection.getState()).toMatchObject({ phase: 'ended', unsent: false, hadUnsent: false });
   });
 });
