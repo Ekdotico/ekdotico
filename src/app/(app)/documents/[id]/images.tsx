@@ -236,6 +236,41 @@ function pick(done: (files: File[]) => void) {
   input.click();
 }
 
+/** The words of the HTML of a clipboard: the body's text, with no style, script, comment or title. */
+function htmlWords(html: string): string {
+  const hidden = /<!--[\s\S]*?-->|<(style|script|head|title)\b[\s\S]*?<\/\1\s*>/gi;
+  // A browser parses the markup and reads the body's text; script and style text and comments (as a picture copied
+  // from an office application brings) are not words. Where there is no parser (a server, a test) the same is
+  // done by stripping them and the tags.
+  if (typeof DOMParser !== 'undefined') {
+    const parsed = new DOMParser().parseFromString(html.replace(hidden, ''), 'text/html');
+    return (parsed.body.textContent ?? '').replace(/ /g, ' ').trim();
+  }
+  return html
+    .replace(hidden, '')
+    .replace(/<[^>]*>|&nbsp;/g, '')
+    .trim();
+}
+
+/**
+ * The files of a paste that is only for them: file items on the clipboard and no text. A clipboard that also
+ * holds text (plain, or HTML with words in it, as a range copied from a spreadsheet comes with a picture of
+ * it) is a paste of that text, which the editor handles as it always did: nothing is inserted twice, and HTML
+ * that refers to an image at another address is still inserted without that image (FR-ED-08, NFR-SE-06). An
+ * image copied from a page or an office application, whose HTML is only an <img> and styles, has no text and
+ * is taken as the file.
+ */
+export function pastedFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const files = [...(data.items ?? [])]
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  if (files.length === 0) return [];
+  if (data.getData('text/plain').trim() !== '' || htmlWords(data.getData('text/html')) !== '') return [];
+  return files;
+}
+
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     imageUpload: {
@@ -249,10 +284,11 @@ declare module '@tiptap/core' {
  * FR-ED-08: "The image block shall accept uploads via a file picker dialog and
  * via drag-and-drop directly into the editor canvas." The command opens the
  * picker (the slash palette's "Image" and the button of the page call it), and
- * a drop of files on the text uploads them. Neither works where the document
- * cannot be edited. Nothing else makes an image block: no paste of an address
- * (src/app/(app)/documents/[id]/extensions.tsx, `ImageBlock`), no paste of a
- * file, and no address a person supplies is ever loaded.
+ * a drop of files on the text, or a paste of files, uploads them: all three go
+ * through `take`, with the same limits, refusals and words. None works where the
+ * document cannot be edited. Nothing else makes an image block: no paste of an
+ * address (src/app/(app)/documents/[id]/extensions.tsx, `ImageBlock`), and no
+ * address a person supplies is ever loaded.
  */
 export const ImageUpload = Extension.create<UploadOptions>({
   name: 'imageUpload',
@@ -283,6 +319,14 @@ export const ImageUpload = Extension.create<UploadOptions>({
             event.preventDefault();
             const at = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
             void take(editor, options, files, at);
+            return true;
+          },
+          handlePaste(_view, event) {
+            const files = pastedFiles(event.clipboardData);
+            // A paste of text, or of nothing that is a file, is the editor's own.
+            if (files.length === 0 || !editor.isEditable || !options.documentId) return false;
+            event.preventDefault();
+            void take(editor, options, files);
             return true;
           },
         },
