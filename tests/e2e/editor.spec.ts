@@ -464,6 +464,36 @@ test('the toolbar stands below a selection on the first line, where there is no 
   expect(bar.y + bar.height).toBeLessThanOrEqual(third.y);
 });
 
+// The owner's answer "hold-still" to ui-load-jump (24 November 2026): the text of a document does not move between
+// the first paint of the page and the page being ready. The places of the people and the status keep their size
+// from the first paint, so neither the avatar nor the label that comes with each unsent change adds to the header.
+for (const width of [375, 1280]) {
+  test(`the text of a document stands still while the page opens, at ${width}`, async ({ page }) => {
+    await enter(page);
+    const id = await openNew(page);
+    await page.setViewportSize({ width, height: 800 });
+    await page.addInitScript(() => {
+      const tops: number[] = [];
+      (window as unknown as { __tops: number[] }).__tops = tops;
+      const tick = () => {
+        const el = document.querySelector('[aria-label="Document text"]');
+        if (el) {
+          const top = Math.round(el.getBoundingClientRect().top * 10) / 10;
+          if (tops[tops.length - 1] !== top) tops.push(top);
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    await page.goto(`/documents/${id}`);
+    await expect(status(page, 'In sync')).toBeVisible();
+    await page.waitForTimeout(1000);
+    const tops = await page.evaluate(() => (window as unknown as { __tops: number[] }).__tops);
+    expect(tops.length).toBeGreaterThan(0);
+    expect(new Set(tops).size).toBe(1);
+  });
+}
+
 test('two browsers that edit one document converge', async ({ page, browser }) => {
   const person = await enter(page);
   await openNew(page);
