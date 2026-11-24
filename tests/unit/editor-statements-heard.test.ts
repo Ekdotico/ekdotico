@@ -18,7 +18,9 @@ describe('the statements about the open document', () => {
   it('and the region of refusals are told apart by name, for a test that watches one of them', () => {
     // tests/e2e/editor.spec.ts watches the refusal region; two hidden status regions stand in the page.
     expect(source).toContain('data-heard="refusal"');
-    expect(source).toContain('data-heard="statements"');
+    // The standing region of the statements is the default kind of Heard (the others are named where they are used).
+    expect(source).toMatch(/kind = 'statements'/);
+    expect(source).toContain('data-heard={kind}');
   });
 
   it('are not announced a second time by their visible copy', () => {
