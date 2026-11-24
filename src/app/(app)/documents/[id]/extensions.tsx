@@ -69,6 +69,8 @@ import { linkAddress } from '../../../../lib/editor/link.ts';
 import { isFootnoteId } from '../../../../lib/footnotes/node.ts';
 import { IMAGE_WIDTH_MOST, imageAttributeAllowed } from '../../../../lib/images/node.ts';
 import { BLOCK_CONTROLS, BlockControls, Editable } from './block-controls.tsx';
+import { useBlockPlace } from './block-place.ts';
+import { codeBlockName } from '../../../../lib/editor/block-names.ts';
 import styles from './editor.module.css';
 import { ENTRY, ENTRY_PROMPT, Footnotes, MARKER, TrailingParagraph } from './footnotes.ts';
 import { ImageBlockView, ImageUpload } from './images.tsx';
@@ -117,11 +119,14 @@ const CODE_NOT_COPIED =
 // Markdown draft export reads too. Exported from here as before.
 export { codeLanguage };
 
-function CodeBlockView({ node, updateAttributes, editor, decorations }: NodeViewProps) {
+function CodeBlockView({ node, updateAttributes, editor, decorations, getPos }: NodeViewProps) {
   const editable = useContext(Editable);
   const id = useId();
   const [copied, setCopied] = useState<'no' | 'yes' | 'refused'>('no');
   const language = codeLanguage(node.attrs.language);
+  // "No language set" is plain text, the language of a new block: the name then says "code block" alone.
+  const place = useBlockPlace(editor, getPos, 'codeBlock');
+  const shownLanguage = language === 'plaintext' ? null : (LANGUAGES[language] ?? null);
 
   async function copy() {
     if (!(await copyText(node.textContent))) return setCopied('refused');
@@ -137,6 +142,7 @@ function CodeBlockView({ node, updateAttributes, editor, decorations }: NodeView
           id={id}
           label="Code language"
           labelHidden
+          aria-label={codeBlockName('Code language', shownLanguage, place)}
           size="small"
           value={language}
           disabled={!editable}
@@ -148,7 +154,11 @@ function CodeBlockView({ node, updateAttributes, editor, decorations }: NodeView
             </option>
           ))}
         </Select>
-        <Button variant="quiet" onClick={copy}>
+        <Button
+          variant="quiet"
+          onClick={copy}
+          aria-label={copied === 'yes' ? undefined : codeBlockName('Copy', shownLanguage, place)}
+        >
           {copied === 'yes' ? 'Copied' : 'Copy'}
         </Button>
         {/* A refusal is said where it is seen as well as heard: the button does not say it. */}
