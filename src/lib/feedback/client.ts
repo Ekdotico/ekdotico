@@ -12,6 +12,23 @@ import type { Kind } from './validate.ts';
 
 /** The host of the intake and the base path of Praktico's tool, both fixed by the contract (fw-intake-path). */
 export const INTAKE_ORIGIN = 'https://internal.ekdoti.co';
+
+/**
+ * The origin the intake is called at: the contract's host, unless the end-to-end tests name a stand-in in
+ * `FEEDBACK_INTAKE_TEST_ORIGIN` (tests/e2e/intake-server.ts). It is kept out of production by what it accepts:
+ * only plain http to the machine's own loopback address, so a value set by mistake in production throws and
+ * never redirects the signed requests to another host. Nothing sets it outside playwright.config.ts.
+ */
+export function intakeOrigin(env: Record<string, string | undefined> = process.env): string {
+  const test = env.FEEDBACK_INTAKE_TEST_ORIGIN;
+  if (test === undefined || test === '') return INTAKE_ORIGIN;
+  const url = new URL(test);
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+    throw new Error('FEEDBACK_INTAKE_TEST_ORIGIN must be an http address on the loopback interface.');
+  }
+  return url.origin;
+}
+
 export const INTAKE_PATH = '/praktico/api/feedback/intake';
 export const PSEUDONYMISE_PATH = '/praktico/api/feedback/pseudonymise';
 /** FR-AU-77: no answer within 10 seconds is a failure. One attempt of the detach call waits as long. */
@@ -44,7 +61,7 @@ async function post(
   const key = secret();
   // The caller signs the bytes it sends; a body written out again would not verify.
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
-  const response = await send(`${INTAKE_ORIGIN}${path}`, {
+  const response = await send(`${intakeOrigin()}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...signedHeaders(key, 'POST', path, body, now()) },
     body,

@@ -1,8 +1,8 @@
 // The Feedback Widget's dialog in a browser (FR-AU-60 to FR-AU-80): keyboard path, focus on opening and on closing,
-// the statements a screen reader is given, and the sizes of the targets. WRITTEN, NOT RUN: the widget is behind
-// `FEEDBACK_INTAKE_ENABLED`, which no test environment of this slice turns on, so the spec runs only where the owner has
-// set `E2E_FEEDBACK_WIDGET=1` for a server that has the switch on. The answers of `POST /api/feedback` are the test's own
-// (`page.route`), so nothing reaches Praktico. What it cannot cover: a real screen reader, which no browser test can.
+// the statements a screen reader is given, and the sizes of the targets. The widget is behind `FEEDBACK_INTAKE_ENABLED`:
+// playwright.config.ts turns it on for the application it starts (and sets `E2E_FEEDBACK_WIDGET=1`), with a stand-in for
+// the intake (tests/e2e/intake-server.ts) in place of Praktico's host. The answers of `POST /api/feedback` are the test's
+// own (`page.route`), so nothing reaches the intake at all. What it cannot cover: a real screen reader, which no browser test can.
 import { expect, test, type Page } from './fixtures.ts';
 import { newPerson, signUp } from './account.ts';
 import { WIDGET_TEXT } from '../../src/lib/feedback/widget.ts';
@@ -80,7 +80,7 @@ test('shows the feedback notice first, before the kind and the message, and the 
   await enter(page, { acknowledged: false });
   await control(page).click();
   // The notice is announced and "Continue" takes the focus; no kind or message is shown yet, and there is no tick box.
-  await expect(dialog(page).getByText(/^Your message goes to the Ekdotico team/)).toBeVisible();
+  await expect(dialog(page).locator('#feedback-notice-text')).toBeVisible();
   const proceed = dialog(page).getByRole('button', { name: 'Continue', exact: true });
   await expect(proceed).toBeFocused();
   const box = await proceed.boundingBox();
@@ -109,7 +109,8 @@ test('counts in code points: 4,000 emoji are 0 remaining, not 8,000 over', async
   await enter(page);
   await control(page).click();
   await dialog(page).getByRole('textbox', { name: WIDGET_TEXT.label }).fill('😀'.repeat(4000));
-  await expect(dialog(page).getByText('0 characters remaining')).toBeVisible();
+  // The visible count: the screen reader's own copy (sr-only, aria-live) is not the one a person reads.
+  await expect(dialog(page).locator('.ekd-field-count')).toHaveText('0 characters remaining');
 });
 
 test('asks for a kind and a message in text beside the field, and moves focus to the first', async ({
@@ -289,7 +290,7 @@ test('is in the drawer below 921px, opens from it, and returns focus to the draw
   await expect(dialog(page)).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog(page)).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Menu' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Menu', exact: true })).toBeFocused();
 });
 
 test('is usable at 320 CSS pixels without a second scroll', async ({ page }) => {

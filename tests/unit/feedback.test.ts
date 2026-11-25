@@ -15,6 +15,8 @@ import {
   deliver,
   deliverOutcome,
   feedbackIntake,
+  INTAKE_ORIGIN,
+  intakeOrigin,
   INTAKE_PATH,
   PSEUDONYMISE_PATH,
   type IntakeBody,
@@ -841,5 +843,23 @@ describe('POST /api/feedback', () => {
     await handleFeedback(request({ ...FIRST, message: 'private words' }), dependencies);
     expect(logs.join('\n')).not.toContain('acc-1');
     expect(logs.join('\n')).not.toContain('private words');
+  });
+});
+
+describe('the test-only origin of the intake', () => {
+  it('is the contract host unless a loopback address is named, and refuses any other', () => {
+    expect(intakeOrigin({})).toBe(INTAKE_ORIGIN);
+    expect(intakeOrigin({ FEEDBACK_INTAKE_TEST_ORIGIN: '' })).toBe(INTAKE_ORIGIN);
+    expect(intakeOrigin({ FEEDBACK_INTAKE_TEST_ORIGIN: 'http://127.0.0.1:3002' })).toBe(
+      'http://127.0.0.1:3002',
+    );
+    for (const bad of [
+      'https://internal.ekdoti.co',
+      'http://internal.ekdoti.co',
+      'https://127.0.0.1:3002',
+      'http://127.0.0.1.evil.test',
+    ]) {
+      expect(() => intakeOrigin({ FEEDBACK_INTAKE_TEST_ORIGIN: bad })).toThrow();
+    }
   });
 });
