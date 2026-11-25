@@ -253,7 +253,9 @@ export function SelectionToolbar({
         >
           <Toolbar label="Formatting" floating>
             {MARKS.map(([name, label, Icon], index) => (
-              <Tooltip key={name} content={label} placement="top">
+              // Above the selection the row stands under "Choose an image" and the hint, so its tooltips
+              // open downwards and cover the selection, not them (live walk W-2).
+              <Tooltip key={name} content={label} placement={place?.below ? 'top' : 'bottom'}>
                 <ToggleButton
                   label={label}
                   pressed={selection.active[index]!}
