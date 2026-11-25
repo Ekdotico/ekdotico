@@ -30,8 +30,9 @@ process.env.E2E_FOUNDER ??= `E2E-Founder-${randomBytes(6).toString('hex')}@examp
 // The Feedback Widget's spec runs with the rest (tests/e2e/feedback-widget.spec.ts), against the app started below with
 // the switch on.
 process.env.E2E_FEEDBACK_WIDGET ??= '1';
-// The port of the intake's stand-in: two above the application's (the collaboration server has the next).
-const INTAKE_PORT = Number(APP_PORT) + 2;
+// The port of the intake's stand-in: three above the application's. The collaboration server has +1, and the specs
+// that start a second server of their own have +2 (fault-page.spec.ts) and +7 (visitors-page.spec.ts).
+const INTAKE_PORT = Number(APP_PORT) + 3;
 // The key of the signed requests to the stand-in, for this run and nothing else (43 characters or more, and not the
 // admission or authentication secret).
 const FEEDBACK_TEST_SECRET = 'a-feedback-test-value-for-the-end-to-end-tests-and-nothing-else';
