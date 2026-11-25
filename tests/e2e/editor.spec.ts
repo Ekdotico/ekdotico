@@ -263,7 +263,9 @@ test('a selection that crosses blocks with no text shows no toolbar; Alt+F10 goe
   await placeAtEnd(doc.locator('aside.callout p'));
   await page.keyboard.press('Shift+ArrowRight');
   await expect.poll(() => page.evaluate(() => window.getSelection()!.isCollapsed)).toBe(false);
-  expect(await page.evaluate(() => window.getSelection()!.toString().trim())).toBe('');
+  // The browser's own string for the selection would include the words of the callout's controls, which lie
+  // between the two blocks, so it is no measure of "no text": the editor decides from its own selection, and
+  // the toolbar's absence, for a selection that is not collapsed, is what shows it found no text to mark.
   await expect(toolbar(page)).toHaveCount(0);
 
   await page.keyboard.press('Alt+F10');
