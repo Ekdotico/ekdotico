@@ -43,6 +43,10 @@
 .toolbar {
   position: absolute;
   z-index: 1;
+  /* One row at its own width wherever the selection starts: an absolute box is only as wide as the room to its
+     right, so near the right edge it wrapped onto two rows (live walk W-8). The component then moves it left
+     by what it measures. Only a surface narrower than the row makes it wrap. */
+  inline-size: max-content;
   max-inline-size: 100%;
   transform: translateY(calc(-100% - var(--sp-2)));
   /* The gap, read by the component to judge the room above (an absolute box ignores its bottom margin). */

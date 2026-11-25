@@ -10,6 +10,11 @@ describe('live walk, batch 1', () => {
     expect(page).toMatch(/aria-labelledby="sessions-heading" className=\{styles\.narrow\}/);
   });
 
+  it('W-8: the toolbar keeps one row at its own width, so the component can move it left', () => {
+    const css = read('src/app/(app)/documents/[id]/editor.module.css');
+    expect(css).toMatch(/\.toolbar \{[^}]*inline-size: max-content;[^}]*max-inline-size: 100%;/s);
+  });
+
   it('W-2: above the selection the toolbar tooltips open downwards, off "Choose an image"', () => {
     const toolbar = read('src/app/(app)/documents/[id]/selection-toolbar.tsx');
     expect(toolbar).toContain("placement={place?.below ? 'top' : 'bottom'}");
