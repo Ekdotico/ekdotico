@@ -386,7 +386,17 @@ function Text({
 
   return (
     <Editable.Provider value={editable}>
-      <div className={styles.sheet}>
+      <div
+        className={styles.sheet}
+        // W-15: a press on the sheet itself (its padding, below the last block) is a press on the text, and the cursor
+        // goes to the end of it. A press on any control, or on the text, is that element's own.
+        onMouseDown={(event) => {
+          if (!editor || !editable || reads || event.button !== 0) return;
+          if (event.target !== event.currentTarget && event.target !== surface.current) return;
+          event.preventDefault();
+          editor.commands.focus('end');
+        }}
+      >
         {reads ? (
           <p className={pageStyles.meta}>{readerLine(role)}</p>
         ) : (
