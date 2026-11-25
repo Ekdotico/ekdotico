@@ -243,6 +243,10 @@ test('two-factor authentication is turned on in the settings, asked for at each 
 
   // "Turning two-factor authentication off requires the password and either
   // a current code or a recovery code."
+  // W-6: the heading names what is turned off, in full.
+  await expect(
+    part(page).getByRole('heading', { level: 3, name: 'Turn off two-factor authentication', exact: true }),
+  ).toBeVisible();
   const turnOff = part(page).locator('form', {
     has: page.getByRole('button', { name: 'Turn off two-factor authentication' }),
   });
