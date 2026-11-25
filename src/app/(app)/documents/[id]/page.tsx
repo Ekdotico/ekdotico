@@ -13,7 +13,7 @@
 import type { Metadata } from 'next';
 import { cache } from 'react';
 import { notFound } from 'next/navigation';
-import { ButtonLink, Cluster, Stack, Tooltip } from '@ekdotico/domico/components';
+import { ButtonLink, Stack, Tooltip } from '@ekdotico/domico/components';
 import { noticeRuns } from '../../../../lib/clearing/period.ts';
 import { authorise } from '../../../../lib/documents/access.ts';
 import { holds } from '../../../../lib/documents/permissions.ts';
@@ -68,7 +68,7 @@ export default async function DocumentPage({ params }: Props) {
             document.clearingAt === null
           }
         />
-        <Cluster gap={3} align="center" className={styles.titleRow}>
+        <div className={styles.titleRow}>
           {document.recording === 'UNRECORDED' ? (
             <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
           ) : null}
@@ -88,7 +88,7 @@ export default async function DocumentPage({ params }: Props) {
           <span id={PEOPLE_SLOT} className={styles.peopleSlot} />
           {/* The status of the connection, after the people (modernisation A2). */}
           <span id={STATUS_SLOT} className={`${styles.peopleSlot} ${styles.statusSlot}`} />
-        </Cluster>
+        </div>
       </Stack>
       <DocumentView
         documentId={document.id}

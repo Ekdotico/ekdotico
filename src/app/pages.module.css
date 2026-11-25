@@ -222,7 +222,16 @@
 /* The row of quiet controls under a document's title ("Not recorded", Sharing, Export, the people, the status).
    At phone width it is one control to a line, so that every line starts on one edge with one gap between lines;
    wrapped, its lines began at different edges and ran to three lines of uneven breadth (narrow-widths walk,
-   N-4). Only the direction is set here: the gap is the cluster's own. Tablet and desktop keep the row. */
+   N-4). The row's layout is the app's own, not the package's Cluster, which sets `align-items` by its own
+   selector and so could not be told to start the lines at one edge: from 768px up it is what the Cluster
+   (gap 3, centred) drew, and below it is a column. */
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
 @media (max-width: 767.98px) {
   .titleRow {
     flex-direction: column;

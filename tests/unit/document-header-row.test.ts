@@ -16,10 +16,10 @@ describe('the document header row (modernisation A2)', () => {
   });
 
   it('keeps the order title, Sharing, Export, people, status on one baseline', () => {
-    // The title is its own line, the controls one Cluster under it. The cluster's class (`titleRow`) makes it a
+    // The title is its own line, the controls one row under it. The row is the app's own box (`titleRow`), a
     // column below 768px only (narrow-widths walk N-4); the one row from 768px up is what the pin guards.
     expect(page).toMatch(
-      /<Stack gap=\{3\}>\s*\{\/\*[^]*?<DocumentTitle[^]*?<Cluster gap=\{3\} align="center" className=\{styles\.titleRow\}>/,
+      /<Stack gap=\{3\}>\s*\{\/\*[^]*?<DocumentTitle[^]*?<div className=\{styles\.titleRow\}>/,
     );
     const order = [
       '<DocumentTitle',
