@@ -44,7 +44,7 @@ import {
   type SlashCommand,
 } from '../../../../lib/editor/slash-commands.ts';
 import { limitRefusal, passesLimits } from './block-limits.ts';
-import { insertingFootnote } from './footnotes.ts';
+import { insertingFootnote, LIST } from './footnotes.ts';
 import { tableRoom, tablesIn } from './table-bounds.ts';
 
 /** The id of the list, which the text names while the list shows a row. */
@@ -391,8 +391,11 @@ function putting(state: EditorState, range: Range, node: PMNode): Transaction {
   // that held a table and nothing else could not be written in, and the menu
   // of the table round it could not be reached from that cell, by keyboard.
   // (At the end of the document the library puts the same paragraph itself.)
+  // The list of footnotes at the end is not text to rest in: a block put last in the body is followed by a
+  // paragraph, and the cursor does not go into an entry (W-11).
+  const noText = !next || next.type.name === LIST;
   if (
-    (node.isLeaf ? !next || next.isLeaf : !next && tablesIn(node).levels > 0) &&
+    (node.isLeaf ? noText || next.isLeaf : noText && tablesIn(node).levels > 0) &&
     $after.parent.canReplaceWith($after.index(), $after.index(), paragraph)
   ) {
     tr.insert($after.pos, paragraph.create());

@@ -1406,6 +1406,28 @@ describe('what the closing of the list says (R44; NFR-IC-19)', () => {
     expect(closing(editor)).toBeUndefined();
   });
 
+  it.each(['toc', 'divider', 'page-break'])(
+    'leaves the cursor in a paragraph after /%s put last in a document that has footnotes (W-11)',
+    (name) => {
+      const id = 'a'.repeat(24);
+      const editor = editorOf(paragraph(words('Text'), { type: 'footnoteReference', attrs: { id } }), {
+        type: 'footnotes',
+        content: [{ type: 'footnote', attrs: { id } }],
+      });
+      expect(editor.state.doc.lastChild?.type.name).toBe('footnotes');
+      // The end of the first paragraph, for a block at the end of the body.
+      editor.commands.setTextSelection(editor.state.doc.child(0).nodeSize - 1);
+      type(editor, ` /${name}`);
+      expect(press(editor, 'Enter')).toBe(true);
+      const { $from } = editor.state.selection;
+      expect($from.parent.type.name).toBe('paragraph');
+      expect($from.parent.content.size).toBe(0);
+      expect($from.depth).toBe(1);
+      // Not an entry of the list of footnotes, which stands at the end.
+      expect($from.index(0)).toBeLessThan(editor.state.doc.childCount - 1);
+    },
+  );
+
   it('is not set by a choice that is not made: a row that is not listed', () => {
     const editor = editorOf();
     type(editor, '/h');
