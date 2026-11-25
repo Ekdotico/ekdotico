@@ -86,7 +86,7 @@ export default async function AccountSettings() {
           />
         </Stack>
       </section>
-      <section aria-labelledby="sessions-heading">
+      <section aria-labelledby="sessions-heading" className={styles.narrow}>
         <Stack gap={5}>
           <h2 id="sessions-heading" className={styles.heading}>
             Sessions
