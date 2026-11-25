@@ -228,6 +228,23 @@ test('a document opens at its address, is edited, and is there after a reload', 
   expect(elsewhere).toEqual([]);
 });
 
+test('a press in the sheet below the text puts the cursor at the end of it', async ({ page }) => {
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await page.keyboard.type('First line');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Second line');
+  // Away from the text, then into the padding under the last block (W-15).
+  await page.getByRole('textbox', { name: 'Title' }).focus();
+  const sheet = text(page).locator('xpath=ancestor::div[contains(@class,"sheet")]');
+  const box = await sheet.boundingBox();
+  await sheet.click({ position: { x: 20, y: box!.height - 8 } });
+  await expect(text(page)).toBeFocused();
+  await page.keyboard.type(' end');
+  await expect(text(page)).toContainText('Second line end');
+});
+
 test('every block and every mark, the controls inside each block, and the toolbar on the selection', async ({
   page,
   context,
