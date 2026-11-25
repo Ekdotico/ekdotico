@@ -219,6 +219,17 @@
   min-block-size: calc(2 * var(--fs-sm) * var(--lh-normal) + 2 * (var(--sp-1) + 1px));
 }
 
+/* The row of quiet controls under a document's title ("Not recorded", Sharing, Export, the people, the status).
+   At phone width it is one control to a line, so that every line starts on one edge with one gap between lines;
+   wrapped, its lines began at different edges and ran to three lines of uneven breadth (narrow-widths walk,
+   N-4). Only the direction is set here: the gap is the cluster's own. Tablet and desktop keep the row. */
+@media (max-width: 767.98px) {
+  .titleRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 /* The same, of a title set as the heading of its page. */
 .breakable {
   min-inline-size: 0;

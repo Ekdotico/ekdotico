@@ -68,7 +68,7 @@ export default async function DocumentPage({ params }: Props) {
             document.clearingAt === null
           }
         />
-        <Cluster gap={3} align="center">
+        <Cluster gap={3} align="center" className={styles.titleRow}>
           {document.recording === 'UNRECORDED' ? (
             <Tooltip content={NOT_RECORDED_EXPLANATION}>{NOT_RECORDED}</Tooltip>
           ) : null}
