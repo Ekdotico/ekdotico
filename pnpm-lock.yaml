@@ -27,8 +27,8 @@ importers:
         specifier: 3.1169.0
         version: 3.1169.0
       '@ekdotico/domico':
-        specifier: 0.51.0
-        version: 0.51.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: 0.51.1
+        version: 0.51.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@hocuspocus/provider':
         specifier: 4.8.0
         version: 4.8.0(y-protocols@1.0.7(yjs@13.6.33))(yjs@13.6.33)
@@ -396,18 +396,13 @@ packages:
   '@better-fetch/fetch@1.3.3':
     resolution: {integrity: sha512-U6SlDt/GUWtK2JAxS/NhdoYTEim+EL1G5byz2TUj83KjLZBUpYzb5SmX0aXaCnbGkAjFKnV/o/0+cyXMbEcqqg==}
 
-  '@ekdotico/domico@0.51.0':
-    resolution: {integrity: sha512-CvgIt3+2zU1XuTUDEuZkS6Nhui9OVkNeE597vmCi9jQfcVXNINJ8kBmJ43M4MBlipPz8zQC5FI7vSnLo+y0DvA==, tarball: https://npm.pkg.github.com/download/@ekdotico/domico/0.51.0/5cd2f5e980867ba9770284968c76e3289acda60c}
+  '@ekdotico/domico@0.51.1':
+    resolution: {integrity: sha512-ZedVQeSToJFth8IlglpApsZ/z67Q9yD6KG0Y0GpstC8+Ahju7Ou2TnErqTPlnKnGwDb08gK6KEnlG30wpXuCYg==, tarball: https://npm.pkg.github.com/download/@ekdotico/domico/0.51.1/eaa92ea3dd0ed2dd6a9d7f25b166a676e5611af9}
     engines: {node: '>=24 <27'}
     hasBin: true
     peerDependencies:
       react: '>=18'
       react-dom: '>=18'
-    peerDependenciesMeta:
-      react:
-        optional: true
-      react-dom:
-        optional: true
 
   '@electric-sql/pglite-socket@0.1.3':
     resolution: {integrity: sha512-LAciWM0M1dCL8hlsxu2venbVZcdxema0BtDfpWYVqr+Y468UADw0pFWidhKw1M8sfJ8rdLT71tjMmnirf/IZRQ==}
@@ -3938,8 +3933,8 @@ snapshots:
 
   '@better-fetch/fetch@1.3.3': {}
 
-  '@ekdotico/domico@0.51.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
-    optionalDependencies:
+  '@ekdotico/domico@0.51.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+    dependencies:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
