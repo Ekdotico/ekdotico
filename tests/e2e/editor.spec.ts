@@ -397,7 +397,7 @@ test('every block and every mark, the controls inside each block, and the toolba
   await link.getByRole('button', { name: 'Save' }).click();
   await expect(link.getByRole('alert')).toContainText('The link was not saved');
   await expect(link.getByRole('alert')).toContainText(
-    'Enter an address that begins with https://, http://, or mailto: — for example, https://example.org.',
+    'Enter an address that begins with https://, http://, or mailto: (for example, https://example.org).',
   );
   await expect(doc.locator('p a')).toHaveCount(1);
   await link.getByLabel('Link address').fill('https://example.org/page');
