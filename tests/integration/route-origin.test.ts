@@ -68,6 +68,9 @@ const ELSEWHERE: Record<string, string> = {
     'tests/integration/export.test.ts: "checks the origin before anything is locked, counted or read"',
   'src/app/api/feedback/route.ts POST':
     'tests/integration/feedback-route.test.ts: "refuses a request of another origin 403 and sends nothing"',
+  // Closed as a route that does not exist while FEEDBACK_INTAKE_ENABLED is off, which the cases here leave off.
+  'src/app/api/account/feedback-notice/acknowledgement/route.ts POST':
+    'tests/integration/feedback-notice.test.ts: "refuses a request of another origin 403 and records nothing"',
 };
 
 // The proxy's answer, byte for byte (src/lib/auth/route-answers.ts).

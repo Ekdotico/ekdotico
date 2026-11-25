@@ -1432,6 +1432,8 @@ describe('steps (e) and (f), the tombstone and what refers to the account (FR-AU
         'lockedUntil',
         'closedAlphaNoticeAcknowledgedAt',
         'closedAlphaNoticeVersion',
+        'feedbackNoticeAcknowledgedAt',
+        'feedbackNoticeVersion',
         'onboardingPaperSeededAt',
         'erasedAt',
         'createdAt',

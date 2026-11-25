@@ -17,7 +17,7 @@ export interface Fault {
 const NOT_REACHED = 'The request did not reach Ekdotico. Check the connection and try again.';
 // An answer that cannot be read says nothing of whether the request was
 // carried out, so the statement does not say that it was not.
-const NOT_READ =
+export const NOT_READ =
   'Ekdotico could not read the answer to the request, so the result is not known. Reload the page to see the current state, then try again.';
 
 /**
@@ -39,7 +39,7 @@ export async function send(
 export async function sendFor(
   path: string,
   body?: unknown,
-  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'POST',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'POST',
 ): Promise<{ fault: Fault } | { answer: unknown }> {
   let response: Response;
   try {

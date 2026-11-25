@@ -9,10 +9,20 @@ import { WIDGET_TEXT } from '../../src/lib/feedback/widget.ts';
 
 test.skip(process.env.E2E_FEEDBACK_WIDGET !== '1', 'the switch is off in this environment');
 
-async function enter(page: Page) {
+// The feedback notice of FR-AU-95 is acknowledged by the account's own request, unless the test is of the notice: so that the
+// tests of the form begin at the form. Version 1 is the text while posting to Discord is off, which this spec assumes.
+async function enter(page: Page, { acknowledged = true }: { acknowledged?: boolean } = {}) {
   await signUp(page, newPerson());
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  if (acknowledged) {
+    const origin = new URL(page.url()).origin;
+    const response = await page.request.post('/api/account/feedback-notice/acknowledgement', {
+      data: { version: 1 },
+      headers: { origin },
+    });
+    expect(response.ok()).toBe(true);
+  }
 }
 
 const control = (page: Page) => page.getByRole('button', { name: WIDGET_TEXT.control, exact: true }).first();
@@ -62,6 +72,37 @@ test('shows the notice above Send and gives the text area the notice and the cou
     'href',
     '/privacy',
   );
+});
+
+test('shows the feedback notice first, before the kind and the message, and the form only after "Continue" (FR-AU-95)', async ({
+  page,
+}) => {
+  await enter(page, { acknowledged: false });
+  await control(page).click();
+  // The notice is announced and "Continue" takes the focus; no kind or message is shown yet, and there is no tick box.
+  await expect(dialog(page).getByText(/^Your message goes to the Ekdotico team/)).toBeVisible();
+  const proceed = dialog(page).getByRole('button', { name: 'Continue', exact: true });
+  await expect(proceed).toBeFocused();
+  const box = await proceed.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(24);
+  expect(box!.height).toBeGreaterThanOrEqual(24);
+  await expect(dialog(page).getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog(page).getByRole('radio')).toHaveCount(0);
+  await expect(dialog(page).getByRole('link', { name: WIDGET_TEXT.privacyLink })).toHaveAttribute(
+    'href',
+    '/privacy',
+  );
+  // Closing before "Continue" records nothing: the notice is shown again.
+  await page.keyboard.press('Escape');
+  await control(page).click();
+  await expect(proceed).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).toBeFocused();
+  await expect(proceed).toHaveCount(0);
+  // Acknowledged on the server, so a reload shows the form at once.
+  await page.reload();
+  await control(page).click();
+  await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).toBeVisible();
 });
 
 test('counts in code points: 4,000 emoji are 0 remaining, not 8,000 over', async ({ page }) => {

@@ -489,6 +489,8 @@ describe('POST /api/feedback', () => {
       enabled: () => true,
       session: async () => ({ userId: 'acc-1' }),
       noticeAcknowledged: async () => true,
+      feedbackNoticeAcknowledged: async () => true,
+      accepted: () => {},
       // A place taken now and given back, as `takeLimitReturnable` does: the check and the count are one step.
       reserve: async (name, key) => {
         calls.push(`reserve ${name}`);
@@ -526,6 +528,58 @@ describe('POST /api/feedback', () => {
     const response = await handleFeedback(request(), dependencies);
     expect(response.status).toBe(404);
     expect((await response.json()).error.code).toBe('not_found');
+  });
+
+  it('refuses an account that has not acknowledged the feedback notice, 403, after the Closed α check and before any limit (FR-AU-95)', async () => {
+    const { dependencies, calls } = setup({ feedbackNoticeAcknowledged: async () => false });
+    const response = await handleFeedback(request(), dependencies);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe('feedback_notice_not_acknowledged');
+    expect(calls).toEqual([]);
+    const closed = setup({
+      noticeAcknowledged: async () => false,
+      feedbackNoticeAcknowledged: async () => false,
+    });
+    expect((await (await handleFeedback(request(), closed.dependencies)).json()).error.code).toBe(
+      'notice_not_acknowledged',
+    );
+  });
+
+  it('hands over the kind and the message and the identifier, and nothing else, once the intake has accepted (FR-AU-94)', async () => {
+    const accepted = vi.fn();
+    const { dependencies } = setup({ accepted });
+    const response = await handleFeedback(request({ ...FIRST, message: '  A message  ' }), dependencies);
+    expect(response.status).toBe(201);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(accepted.mock.calls[0]![0]).toEqual({
+      submissionId: '6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35',
+      kind: FIRST.kind,
+      message: 'A message',
+    });
+  });
+
+  it('hands over nothing where the intake refuses, or the body is invalid', async () => {
+    const accepted = vi.fn();
+    const { dependencies } = setup({ accepted, deliver: async () => false });
+    expect((await handleFeedback(request(), dependencies)).status).toBe(502);
+    const invalid = setup({ accepted });
+    expect((await handleFeedback(request({ ...FIRST, kind: 'nope' }), invalid.dependencies)).status).toBe(
+      422,
+    );
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it('answers as it always does where the handing over throws, and logs only the identifier and the outcome', async () => {
+    const { dependencies, logs } = setup({
+      accepted: () => {
+        throw new Error(`secret ${FIRST.message}`);
+      },
+    });
+    const response = await handleFeedback(request(), dependencies);
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ sent: true });
+    expect(logs.join('\n')).not.toContain(FIRST.message);
+    expect(logs.join('\n')).not.toContain('secret');
   });
 
   it('answers 401 without a session, and the answer of the gate for an account it stops', async () => {
