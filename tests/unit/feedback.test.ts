@@ -13,6 +13,7 @@ import {
 } from '../../src/lib/account/feedback-step.ts';
 import {
   deliver,
+  deliverOutcome,
   feedbackIntake,
   INTAKE_PATH,
   PSEUDONYMISE_PATH,
@@ -76,6 +77,17 @@ describe('the client of the intake', () => {
     expect(request!.headers.get('x-ekdotico-nonce')).toMatch(/^[0-9a-f]{32}$/);
     expect(request!.headers.get('x-ekdotico-signature')).toMatch(/^[0-9a-f]{64}$/);
     expect(double.held).toHaveLength(1);
+  });
+
+  it('says created for the intake’s 201 and held for its 200, and false for anything else (FR-AU-94)', async () => {
+    const { dependencies } = setup();
+    await expect(deliverOutcome(body(), dependencies)).resolves.toBe('created');
+    await expect(deliverOutcome(body(), dependencies)).resolves.toBe('held');
+    const double = praktico(SECRET, () => NOW);
+    double.failWith = 500;
+    await expect(
+      deliverOutcome(body(), { fetch: double.fetch, now: () => NOW, secret: () => SECRET }),
+    ).resolves.toBe(false);
   });
 
   it('sends exactly the nine fields, as the bytes it signed', async () => {
@@ -489,6 +501,8 @@ describe('POST /api/feedback', () => {
       enabled: () => true,
       session: async () => ({ userId: 'acc-1' }),
       noticeAcknowledged: async () => true,
+      feedbackNoticeAcknowledged: async () => true,
+      accepted: () => {},
       // A place taken now and given back, as `takeLimitReturnable` does: the check and the count are one step.
       reserve: async (name, key) => {
         calls.push(`reserve ${name}`);
@@ -506,7 +520,7 @@ describe('POST /api/feedback', () => {
       stillAllowed: async () => null,
       limitReached: async () => {},
       readJson: async (req) => (await req.json()) as unknown,
-      deliver: (sent) => deliver(sent, { fetch: double.fetch, now: () => NOW, secret: () => SECRET }),
+      deliver: (sent) => deliverOutcome(sent, { fetch: double.fetch, now: () => NOW, secret: () => SECRET }),
       appVersion: '0.1.2',
       now: () => new Date(NOW),
       newId: () => '6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35',
@@ -526,6 +540,70 @@ describe('POST /api/feedback', () => {
     const response = await handleFeedback(request(), dependencies);
     expect(response.status).toBe(404);
     expect((await response.json()).error.code).toBe('not_found');
+  });
+
+  it('refuses an account that has not acknowledged the feedback notice, 403, after the Closed α check and before any limit (FR-AU-95)', async () => {
+    const { dependencies, calls } = setup({ feedbackNoticeAcknowledged: async () => false });
+    const response = await handleFeedback(request(), dependencies);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe('feedback_notice_not_acknowledged');
+    expect(calls).toEqual([]);
+    const closed = setup({
+      noticeAcknowledged: async () => false,
+      feedbackNoticeAcknowledged: async () => false,
+    });
+    expect((await (await handleFeedback(request(), closed.dependencies)).json()).error.code).toBe(
+      'notice_not_acknowledged',
+    );
+  });
+
+  it('hands over the kind and the message and the identifier, and nothing else, once the intake has accepted (FR-AU-94)', async () => {
+    const accepted = vi.fn();
+    const { dependencies } = setup({ accepted });
+    const response = await handleFeedback(request({ ...FIRST, message: '  A message  ' }), dependencies);
+    expect(response.status).toBe(201);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(accepted.mock.calls[0]![0]).toEqual({
+      submissionId: '6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35',
+      kind: FIRST.kind,
+      message: 'A message',
+    });
+  });
+
+  it('hands over nothing for a pair the intake already held (its 200): the answer is still sent, and no second post is made', async () => {
+    const accepted = vi.fn();
+    const { dependencies } = setup({ accepted });
+    expect((await handleFeedback(request(), dependencies)).status).toBe(201);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    // The same identifier again (the id of `newId` here is constant): the double answers 200, as the intake does.
+    const held = await handleFeedback(request(), dependencies);
+    expect(held.status).toBe(201);
+    expect(await held.json()).toEqual({ sent: true });
+    expect(accepted).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands over nothing where the intake refuses, or the body is invalid', async () => {
+    const accepted = vi.fn();
+    const { dependencies } = setup({ accepted, deliver: async () => false });
+    expect((await handleFeedback(request(), dependencies)).status).toBe(502);
+    const invalid = setup({ accepted });
+    expect((await handleFeedback(request({ ...FIRST, kind: 'nope' }), invalid.dependencies)).status).toBe(
+      422,
+    );
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it('answers as it always does where the handing over throws, and logs only the identifier and the outcome', async () => {
+    const { dependencies, logs } = setup({
+      accepted: () => {
+        throw new Error(`secret ${FIRST.message}`);
+      },
+    });
+    const response = await handleFeedback(request(), dependencies);
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ sent: true });
+    expect(logs.join('\n')).not.toContain(FIRST.message);
+    expect(logs.join('\n')).not.toContain('secret');
   });
 
   it('answers 401 without a session, and the answer of the gate for an account it stops', async () => {
@@ -706,7 +784,7 @@ describe('POST /api/feedback', () => {
       },
       deliver: async () => {
         order.push('sent');
-        return true;
+        return 'created' as const;
       },
     });
     await handleFeedback(request(), dependencies);

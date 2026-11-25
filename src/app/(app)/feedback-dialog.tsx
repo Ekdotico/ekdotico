@@ -4,12 +4,15 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { Button, Dialog, FormFault, RadioGroup, Stack, TextArea } from '@ekdotico/domico/components';
 import { useReady } from '../../components/ready.ts';
+import { NOT_READ, send, sendFor, type Fault } from '../../components/send.ts';
 import {
   checkInput,
   clockTime,
   countOf,
   countText,
-  NOTICE,
+  noticeRefused,
+  noticeText,
+  sentText,
   outcomeOf,
   PRIVACY_HREF,
   rateLimitedText,
@@ -45,8 +48,55 @@ type Status =
   // `time` is worked out once, when the 429 arrives, so that a later render shows the same moment.
   | { state: 'rate_limited'; time: string };
 
+/**
+ * The feedback notice of FR-AU-95, as the dialog holds it. `idle` is not read yet, or is to be read again; the server's answer decides between `due`
+ * (the notice, then "Continue") and `acknowledged` (the form). Never decided here: the browser only reads what the server says.
+ */
+type NoticeState =
+  | { state: 'idle' }
+  | { state: 'failed'; fault: Fault }
+  | { state: 'due'; version: number; discordPosting: boolean; fault?: Fault }
+  | { state: 'acknowledged'; discordPosting: boolean };
+
+/**
+ * The link to the privacy notice, in the notice before the form and in the notice above the send control. The owner's written
+ * exception of 23 November 2026 to the rule that an internal link stays in the same tab: this one opens a new tab, so that a
+ * half-written message is kept (FR-AU-80 (f)). The spoken words are the ones of the rule for external links.
+ */
+function PrivacyLink() {
+  return (
+    <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer">
+      {WIDGET_TEXT.privacyLink}
+      <span className="sr-only"> (opens in a new tab)</span>
+    </a>
+  );
+}
+
+const NOTICE_PATH = '/api/account/feedback-notice';
+const CONTINUE_ID = 'feedback-notice-continue';
+const NOTICE_TEXT_ID = 'feedback-notice-text';
+
+function noticeOf(answer: unknown): NoticeState | null {
+  const found = answer as {
+    currentVersion?: unknown;
+    acknowledgedVersion?: unknown;
+    discordPosting?: unknown;
+  } | null;
+  const version = found?.currentVersion;
+  if (typeof version !== 'number' || typeof found?.discordPosting !== 'boolean') return null;
+  const recorded = found.acknowledgedVersion;
+  // D508: acknowledged only where the recorded version is the current one, not where it is merely not lower.
+  return recorded === version
+    ? { state: 'acknowledged', discordPosting: found.discordPosting }
+    : { state: 'due', version, discordPosting: found.discordPosting };
+}
+
 export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ready = useReady();
+  const [notice, setNotice] = useState<NoticeState>({ state: 'idle' });
+  const [continuing, setContinuing] = useState(false);
+  const acknowledging = useRef(false);
+  const reading = useRef(false);
   const pathname = usePathname();
   const params = useParams<Record<string, string | string[]>>();
   const [kind, setKind] = useState<Kind | null>(null);
@@ -62,15 +112,56 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
   const area = useRef<HTMLTextAreaElement>(null);
   const wasOpen = useRef(false);
 
-  // The first radio is the first field, and where focus lands on opening (FR-AU-80 (b)).
+  // Where focus lands on opening (FR-AU-80 (b)): the first radio, which is the first field, while the form is shown; "Close"
+  // while it is hidden (the notice is loading, due or failed to be read), and not whatever `showModal()` happens to pick.
+  // Set after every render, so that the dialog reads what is shown now.
   useEffect(() => {
-    first.current = document.getElementById('feedback-kind');
-  }, []);
+    first.current = document.getElementById(notice.state === 'acknowledged' ? 'feedback-kind' : CLOSE_ID);
+  });
   // A statement of "sent" is read once; the next opening shows the form.
   const dismiss = () => {
     if (status.state === 'sent') setStatus({ state: 'idle' });
+    // A failed read is tried again at the next opening.
+    if (notice.state === 'failed') setNotice({ state: 'idle' });
     onClose();
   };
+
+  // FR-AU-95: whether the notice is due is read from the server when the dialog is opened, and again where a read failed or
+  // a send was refused for it. Closing before "Continue" records nothing, so a notice still due is shown at the next opening.
+  useEffect(() => {
+    if (!open || notice.state !== 'idle' || reading.current) return;
+    reading.current = true;
+    sendFor(NOTICE_PATH, undefined, 'GET').then((result) => {
+      reading.current = false;
+      if ('fault' in result) return setNotice({ state: 'failed', fault: result.fault });
+      setNotice(
+        noticeOf(result.answer) ?? { state: 'failed', fault: { code: 'not_read', message: NOT_READ } },
+      );
+    });
+  }, [open, notice.state]);
+
+  // Focus follows the state of the notice and nothing else (FR-AU-80 (b), (d), (e)): "Continue" when the notice is shown, the
+  // first kind once the form is. It does not follow the state of a send, so a refusal or a failed send leaves it where it was.
+  useEffect(() => {
+    if (!open) return;
+    if (notice.state === 'due') document.getElementById(CONTINUE_ID)?.focus();
+    else if (notice.state === 'acknowledged') document.getElementById('feedback-kind')?.focus();
+  }, [open, notice.state]);
+
+  async function acknowledge() {
+    if (notice.state !== 'due' || acknowledging.current) return;
+    acknowledging.current = true;
+    setContinuing(true);
+    const { version, discordPosting } = notice;
+    const fault = await send('/api/account/feedback-notice/acknowledgement', { version });
+    acknowledging.current = false;
+    setContinuing(false);
+    // A 409 means the text changed since it was read: read it again, and show the new one.
+    if (fault?.code === 'notice_version_not_current') return setNotice({ state: 'idle' });
+    setNotice(
+      fault ? { state: 'due', version, discordPosting, fault } : { state: 'acknowledged', discordPosting },
+    );
+  }
 
   useEffect(() => {
     if (open && !wasOpen.current) {
@@ -128,6 +219,12 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
       } catch {
         // An answer that cannot be read is not an acceptance.
       }
+      // The server's own refusal for a notice not yet acknowledged (FR-AU-95): the notice is read again, and shown.
+      if (noticeRefused(response.status, body)) {
+        setNotice({ state: 'idle' });
+        setStatus({ state: 'idle' });
+        return;
+      }
       outcome = outcomeOf(response.status, body);
     } catch {
       // No answer: offline, or none in time. The same sentence as any other answer that is not an acceptance (FR-AU-77).
@@ -174,15 +271,44 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
       <div role="status">
         {sent ? (
           <FormFault announce="off" tone="neutral" autoFocus={false}>
-            <p>{WIDGET_TEXT.sent}</p>
+            <p>{sentText(notice.state === 'acknowledged' && notice.discordPosting)}</p>
           </FormFault>
         ) : null}
       </div>
+      {/* FR-AU-95: the feedback notice, before the kind and the message. It is the description of "Continue", which takes
+          the focus, so a screen reader reads it with the button and not as a live region that competes with the focus.
+          "Continue" records that it was shown and is not a consent: no tick box. Closing before it records nothing. */}
+      {notice.state === 'due' ? (
+        <p id={NOTICE_TEXT_ID}>
+          {noticeText(notice.discordPosting)} <PrivacyLink />
+        </p>
+      ) : null}
+      {notice.state === 'failed' || (notice.state === 'due' && notice.fault) ? (
+        <FormFault
+          title={(notice.state === 'failed' ? notice.fault : notice.fault!).message}
+          autoFocus={false}
+        />
+      ) : null}
+      {notice.state === 'due' ? (
+        <Stack gap={5}>
+          <Button
+            id={CONTINUE_ID}
+            aria-describedby={NOTICE_TEXT_ID}
+            variant="primary"
+            disabled={!ready}
+            pending={continuing}
+            pendingLabel="Continuing…"
+            onClick={acknowledge}
+          >
+            Continue
+          </Button>
+        </Stack>
+      ) : null}
       <form
         key={form}
         method="post"
         noValidate
-        hidden={sent}
+        hidden={sent || notice.state !== 'acknowledged'}
         onSubmit={submit}
         aria-busy={status.state === 'sending' || undefined}
       >
@@ -219,14 +345,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
             required
             hint={
               <>
-                {/* The owner's written exception of 23 November 2026 to the rule that an internal link stays in
-                    the same tab: this one opens a new tab, so that a half-written message is kept (FR-AU-80 (f)).
-                    The spoken words are the ones of the rule for external links. */}
-                {NOTICE}{' '}
-                <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer">
-                  {WIDGET_TEXT.privacyLink}
-                  <span className="sr-only"> (opens in a new tab)</span>
-                </a>
+                {noticeText(notice.state === 'acknowledged' && notice.discordPosting)} <PrivacyLink />
               </>
             }
             error={messageFault}

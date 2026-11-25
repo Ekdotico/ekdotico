@@ -44,6 +44,11 @@ model User {
   closedAlphaNoticeAcknowledgedAt DateTime?
   closedAlphaNoticeVersion        Int?
 
+  // The acknowledgement of the feedback notice (FR-AU-95): the server time and the version, as for the Closed α
+  // notice. Both null until the account acts on "Continue".
+  feedbackNoticeAcknowledgedAt DateTime?
+  feedbackNoticeVersion        Int?
+
   // When the Onboarding paper was made for this account, once and for ever: set in the
   // transaction that inserts it, and never cleared, so that a paper the person deleted is not
   // made again (src/lib/documents/onboarding-paper.ts). Null until then.

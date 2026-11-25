@@ -9,10 +9,20 @@ import { WIDGET_TEXT } from '../../src/lib/feedback/widget.ts';
 
 test.skip(process.env.E2E_FEEDBACK_WIDGET !== '1', 'the switch is off in this environment');
 
-async function enter(page: Page) {
+// The feedback notice of FR-AU-95 is acknowledged by the account's own request, unless the test is of the notice: so that the
+// tests of the form begin at the form. Version 1 is the text while posting to Discord is off, which this spec assumes.
+async function enter(page: Page, { acknowledged = true }: { acknowledged?: boolean } = {}) {
   await signUp(page, newPerson());
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
+  if (acknowledged) {
+    const origin = new URL(page.url()).origin;
+    const response = await page.request.post('/api/account/feedback-notice/acknowledgement', {
+      data: { version: 1 },
+      headers: { origin },
+    });
+    expect(response.ok()).toBe(true);
+  }
 }
 
 const control = (page: Page) => page.getByRole('button', { name: WIDGET_TEXT.control, exact: true }).first();
@@ -64,6 +74,37 @@ test('shows the notice above Send and gives the text area the notice and the cou
   );
 });
 
+test('shows the feedback notice first, before the kind and the message, and the form only after "Continue" (FR-AU-95)', async ({
+  page,
+}) => {
+  await enter(page, { acknowledged: false });
+  await control(page).click();
+  // The notice is announced and "Continue" takes the focus; no kind or message is shown yet, and there is no tick box.
+  await expect(dialog(page).getByText(/^Your message goes to the Ekdotico team/)).toBeVisible();
+  const proceed = dialog(page).getByRole('button', { name: 'Continue', exact: true });
+  await expect(proceed).toBeFocused();
+  const box = await proceed.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(24);
+  expect(box!.height).toBeGreaterThanOrEqual(24);
+  await expect(dialog(page).getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog(page).getByRole('radio')).toHaveCount(0);
+  await expect(dialog(page).getByRole('link', { name: WIDGET_TEXT.privacyLink })).toHaveAttribute(
+    'href',
+    '/privacy',
+  );
+  // Closing before "Continue" records nothing: the notice is shown again.
+  await page.keyboard.press('Escape');
+  await control(page).click();
+  await expect(proceed).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).toBeFocused();
+  await expect(proceed).toHaveCount(0);
+  // Acknowledged on the server, so a reload shows the form at once.
+  await page.reload();
+  await control(page).click();
+  await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).toBeVisible();
+});
+
 test('counts in code points: 4,000 emoji are 0 remaining, not 8,000 over', async ({ page }) => {
   await enter(page);
   await control(page).click();
@@ -80,6 +121,35 @@ test('asks for a kind and a message in text beside the field, and moves focus to
   await expect(dialog(page).getByText(WIDGET_TEXT.noKind)).toBeVisible();
   await expect(dialog(page).getByText(WIDGET_TEXT.empty)).toBeVisible();
   await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).toBeFocused();
+});
+
+test('leaves focus where the refusal puts it, and never moves it back to the first kind (FR-AU-80 (d), (e))', async ({
+  page,
+}) => {
+  await enter(page);
+  await page.route('**/api/feedback', (route) =>
+    route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: { code: 'invalid', message: '', fields: [{ field: 'message', rule: 'too_long' }] },
+      }),
+    }),
+  );
+  await control(page).click();
+  await fill(page, 'a message the server refuses');
+  await dialog(page).getByRole('button', { name: WIDGET_TEXT.send }).click();
+  // A 422 for the message: focus goes to the message, the field with the fault, and not to the first kind.
+  await expect(dialog(page).getByRole('textbox', { name: WIDGET_TEXT.label })).toBeFocused();
+  await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).not.toBeFocused();
+  // A send that fails: focus stays on Send.
+  await page.unroute('**/api/feedback');
+  await page.route('**/api/feedback', (route) =>
+    route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":{"code":"not_sent"}}' }),
+  );
+  await dialog(page).getByRole('button', { name: WIDGET_TEXT.send }).click();
+  await expect(dialog(page).getByRole('alert')).toHaveText(WIDGET_TEXT.notSent);
+  await expect(dialog(page).getByRole('button', { name: WIDGET_TEXT.send })).toBeFocused();
 });
 
 test('refuses a hidden character by its own sentence, and keeps the text', async ({ page }) => {

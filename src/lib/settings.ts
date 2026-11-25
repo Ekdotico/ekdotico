@@ -430,6 +430,12 @@ export function loadSettings(env: Env = process.env, sendsEmail = true): Setting
       `Unset ${noLimit.join(', ')}: no limit has that name. The names are in src/lib/settings.ts.`,
     );
   }
+  // FR-AU-94: a mistake in the second switch stops the process here, rather than turning every read of the notice and every
+  // send into a 500. The switch itself is read in src/lib/feedback/discord.ts (this module cannot import it: a cycle).
+  const discordSwitch = env.FEEDBACK_DISCORD_ENABLED;
+  if (discordSwitch !== undefined && !['', 'true', 'false'].includes(discordSwitch)) {
+    throw new Error('FEEDBACK_DISCORD_ENABLED must be true or false.');
+  }
   const list = env.FOUNDING_TEAM_EMAILS;
   // A102: a process refuses to start where the setting is absent, so that a
   // deployment cannot lose the two-factor requirement by losing the setting.

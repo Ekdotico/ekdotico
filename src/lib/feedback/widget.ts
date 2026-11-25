@@ -28,6 +28,29 @@ export const WIDGET_TEXT = {
 export const NOTICE =
   'Your message goes to the Ekdotico team. With it, Ekdotico sends the kind of page you are on, the Ekdotico version, your browser and its window size, and your account identifier. The content of your documents is not sent. Leave out of the message anything you do not want the team to read. Feedback is kept until 12 months after the last Closed α release.';
 
+/**
+ * FR-AU-72 as the margin note of D503 amends it, verbatim: the notice while posting to Discord is on. The note replaces the first
+ * sentence and the sentence that begins "Leave out"; the "With it" sentence it quotes stands in the place of the original one.
+ */
+export const NOTICE_DISCORD =
+  'Your message goes to the Ekdotico team, and the message and its kind, with nothing else, are posted to the Ekdotico community on Discord, where its members can read them and vote. With it, Ekdotico sends the team the kind of page you are on, the Ekdotico version, your browser and its window size, and your account identifier; none of these is posted. The content of your documents is not sent. Leave out of the message anything you do not want the community to read. Feedback is kept until 12 months after the last Closed α release.';
+
+/** The notice for the state of the Discord switch (`discordPostingOn`): FR-AU-72 while posting is off, D503 while it is on. */
+export function noticeText(discordPosting: boolean): string {
+  return discordPosting ? NOTICE_DISCORD : NOTICE;
+}
+
+/** D507: the statement that feedback was sent while posting to Discord is on. */
+export const SENT_DISCORD = 'Your feedback was sent and posted to the community.';
+
+/**
+ * The statement after a send. Chosen by the switch (`discordPostingOn`) and not by whether the post succeeded: a post that
+ * fails never changes the answer the user receives (FR-AU-94), so it still reads as this.
+ */
+export function sentText(discordPosting: boolean): string {
+  return discordPosting ? SENT_DISCORD : WIDGET_TEXT.sent;
+}
+
 /** The public page the link leads to. Built in another slice; the control is hidden behind the switch until then. */
 export const PRIVACY_HREF = '/privacy';
 
@@ -134,6 +157,11 @@ export function outcomeOf(status: number | null, body: unknown): Outcome {
   if (status === 502 && typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id))
     return { kind: 'not_sent', submissionId: id };
   return { kind: 'not_sent' };
+}
+
+/** FR-AU-95: whether an answer is the server's refusal of a send for a feedback notice not yet acknowledged (by its code alone). */
+export function noticeRefused(status: number | null, body: unknown): boolean {
+  return status === 403 && record(record(body)?.error)?.code === 'feedback_notice_not_acknowledged';
 }
 
 /** What a failed send leaves: the identifier the server issued and what it was issued for (fw-retry-id, fw-retry-edit). */

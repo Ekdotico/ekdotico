@@ -30,6 +30,9 @@ async function person(acknowledged = true) {
       data: {
         closedAlphaNoticeVersion: CLOSED_ALPHA_NOTICE_VERSION,
         closedAlphaNoticeAcknowledgedAt: new Date(),
+        // FR-AU-95: the feedback notice, version 1 while posting to Discord is off (the switch these tests leave off).
+        feedbackNoticeVersion: 1,
+        feedbackNoticeAcknowledgedAt: new Date(),
       },
     });
   return { id, cookie: cookiesOf(await signIn(auth, email)) };

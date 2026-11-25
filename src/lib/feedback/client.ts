@@ -67,12 +67,21 @@ async function post(
  * Throws only for the configuration (no usable secret).
  */
 export async function deliver(body: IntakeBody, dependencies: Dependencies = {}): Promise<boolean> {
+  return (await deliverOutcome(body, dependencies)) !== false;
+}
+
+/** What the intake said: `created` for a new submission (201), `held` for a pair it already held (200, fw-wire-align), false for a failure. */
+export type Delivery = 'created' | 'held' | false;
+
+/** As `deliver`, saying which acceptance it was. Only `created` is a submission the intake did not hold before (FR-AU-94). */
+export async function deliverOutcome(body: IntakeBody, dependencies: Dependencies = {}): Promise<Delivery> {
   // Resolve the secret first so a configuration fault is not taken for a failed send.
   const secret = dependencies.secret ?? feedbackSecret;
   secret();
   try {
     const { status, answer } = await post(INTAKE_PATH, body, dependencies);
-    return (status === 200 || status === 201) && answer?.accepted === true;
+    if (answer?.accepted !== true) return false;
+    return status === 201 ? 'created' : status === 200 ? 'held' : false;
   } catch {
     return false;
   }

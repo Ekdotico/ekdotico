@@ -68,6 +68,10 @@ const ELSEWHERE: Record<string, string> = {
     'tests/integration/export.test.ts: "checks the origin before anything is locked, counted or read"',
   'src/app/api/feedback/route.ts POST':
     'tests/integration/feedback-route.test.ts: "refuses a request of another origin 403 and sends nothing"',
+  // The origin is checked before the switch, so a request of another origin is refused 403 whatever the switch says; but the
+  // legitimate request of this case answers 404 while FEEDBACK_INTAKE_ENABLED is off, which the cases here leave off.
+  'src/app/api/account/feedback-notice/acknowledgement/route.ts POST':
+    'tests/integration/feedback-notice.test.ts: "refuses a request of another origin 403 and records nothing"',
 };
 
 // The proxy's answer, byte for byte (src/lib/auth/route-answers.ts).

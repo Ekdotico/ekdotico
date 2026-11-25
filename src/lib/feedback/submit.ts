@@ -5,8 +5,8 @@
 // body carries an empty `message`. The application keeps no copy of a submission and logs only its identifier
 // and the outcome, never the account (FR-AU-76, appsec rule 12).
 import { describeUserAgent } from '../user-agent.ts';
-import type { IntakeBody } from './client.ts';
-import { MAX_REQUEST_BYTES, validateSubmission } from './validate.ts';
+import type { Delivery, IntakeBody } from './client.ts';
+import { MAX_REQUEST_BYTES, validateSubmission, type Kind } from './validate.ts';
 import type { LimitName } from '../settings.ts';
 
 type Reservation = { ok: true; giveBack: () => Promise<void> } | { ok: false; retryAfterSeconds: number };
@@ -17,6 +17,13 @@ export interface Dependencies {
   /** The account of the verified session; otherwise the answer of the other routes (`notAdmitted`): 401, or 403 for a session the founding-team gate stops. */
   session: (headers: Headers) => Promise<{ userId: string } | { userId: null; denied: Response }>;
   noticeAcknowledged: (userId: string) => Promise<boolean>;
+  /** FR-AU-95: whether the account has acknowledged the current version of the feedback notice. */
+  feedbackNoticeAcknowledged: (userId: string) => Promise<boolean>;
+  /**
+   * FR-AU-94: called once, after the intake accepted a submission, with what may be posted to Discord. The route
+   * schedules the post after the response; whatever this does or throws, the answer to the user is the same.
+   */
+  accepted: (submission: { submissionId: string; kind: Kind; message: string }) => void;
   /** Takes one place of the limit now, to be given back (`takeLimitReturnable`). */
   reserve: (name: LimitName, key: string) => Promise<Reservation>;
   /** Null where the account may still send; otherwise the answer of a signed-out caller (its deletion is confirmed). */
@@ -24,7 +31,7 @@ export interface Dependencies {
   /** Writes the entry of a limit reached (NFR-SE-19). */
   limitReached: (name: LimitName, userId: string, seconds: number) => Promise<void>;
   readJson: (request: Request, maxBytes: number) => Promise<unknown>;
-  deliver: (body: IntakeBody) => Promise<boolean>;
+  deliver: (body: IntakeBody) => Promise<Delivery>;
   appVersion: string;
   now: () => Date;
   newId: () => string;
@@ -77,6 +84,8 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
   const { userId } = session;
   // 3. The Closed α notice.
   if (!(await d.noticeAcknowledged(userId))) return refuse(403, 'notice_not_acknowledged');
+  // 3b. The feedback notice of FR-AU-95, for the version now current. Not stated in FR-AU-95: assumed (see the pull request).
+  if (!(await d.feedbackNoticeAcknowledged(userId))) return refuse(403, 'feedback_notice_not_acknowledged');
   // 4. The limits. A place is taken before anything is sent, so that a burst cannot read "0 of 5" together and
   // be accepted together, and is given back on every path that does not end in an accepted send, a thrown error
   // included: so only an accepted submission stays counted (fw-limit-count).
@@ -115,7 +124,7 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
     if (gone) return gone;
     // 6. The delivery. The identifier is the browser's on a retry and the server's otherwise (fw-retry-id).
     const submissionId = value.submissionId ?? d.newId();
-    accepted = await d.deliver({
+    const delivery = await d.deliver({
       submissionId,
       submittedAt: d.now().toISOString(),
       kind: value.kind,
@@ -126,11 +135,21 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
       viewport: value.viewport,
       accountId: userId,
     });
+    accepted = delivery !== false;
     if (!accepted) {
       d.log(`feedback ${submissionId}: not sent`);
       return refuse(502, 'not_sent', {}, { submissionId });
     }
     d.log(`feedback ${submissionId}: sent`);
+    // Posted only for a submission the intake did not hold before: a repeat of an identifier (200) is answered as sent and
+    // posts nothing, so that a retry cannot post the same text twice (fw-wire-align).
+    if (delivery === 'created') {
+      try {
+        d.accepted({ submissionId, kind: value.kind, message: value.message });
+      } catch {
+        d.log(`feedback ${submissionId}: not posted to discord (error)`);
+      }
+    }
     return Response.json({ sent: true }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
   } finally {
     if (!accepted) {
