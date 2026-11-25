@@ -87,7 +87,8 @@ export async function feedbackStep(
 ): Promise<FeedbackOutcome> {
   if (!enabled()) return 'skipped';
   // Before the call, and not a timeout on it (fw-detach-wait).
-  await wait(DETACH_DELAY_MS);
+  // No wait where the end-to-end tests have named a stand-in for the intake: the other specs delete accounts too.
+  await wait(process.env.FEEDBACK_INTAKE_TEST_ORIGIN ? 0 : DETACH_DELAY_MS);
   await detach(accountId, intake);
   return 'done';
 }
