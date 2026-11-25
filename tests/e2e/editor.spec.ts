@@ -29,7 +29,7 @@ test.afterAll(stopCollab);
 
 // The fixed texts, written out here and not taken from the code under test.
 const MARK = 'Not recorded'; // FR-ED-43
-const IN_SYNC_MESSAGE = 'Document autosaves — working version is in sync.'; // FR-ED-24
+const IN_SYNC_MESSAGE = 'Document autosaves. The working version is in sync.'; // FR-ED-24
 
 const text = (page: Page) => page.getByRole('textbox', { name: 'Document text' });
 const status = (page: Page, words: string | RegExp) => page.getByRole('button', { name: words });

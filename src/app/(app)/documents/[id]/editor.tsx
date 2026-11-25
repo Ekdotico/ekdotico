@@ -42,7 +42,7 @@ import { SelectionToolbar } from './selection-toolbar.tsx';
 import { SlashPaletteList } from './slash-palette.tsx';
 
 // The fixed texts, word for word.
-const IN_SYNC = 'Document autosaves — working version is in sync.'; // FR-ED-24
+const IN_SYNC = 'Document autosaves. The working version is in sync.'; // FR-ED-24
 const AT_CAPACITY =
   'This document has reached its limit of ten connections. Ekdotico tries again every 30 seconds.'; // FR-ED-18
 
