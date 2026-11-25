@@ -245,6 +245,34 @@ test('a press in the sheet below the text puts the cursor at the end of it', asy
   await expect(text(page)).toContainText('Second line end');
 });
 
+// W-9, the owner's decision (question ux-walk-alt-f10-no-text): "Alt+F10 goes to the block's controls, Escape
+// returns to the text", for a selection that crosses blocks and holds no text.
+test('a selection that crosses blocks with no text shows no toolbar; Alt+F10 goes to the controls of the block it starts in, and Escape returns to the text', async ({
+  page,
+}) => {
+  await enter(page);
+  await openNew(page);
+  await text(page).click();
+  await paste(
+    page,
+    '<aside class="callout" data-type="note"><div class="callout-body"><p>Inside</p></div></aside><p>After</p>',
+  );
+  const doc = text(page);
+  await expect(doc.locator('aside.callout')).toContainText('Inside');
+  // From the end of the callout's text one step into the next block: a selection, and not a character of it.
+  await placeAtEnd(doc.locator('aside.callout p'));
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect.poll(() => page.evaluate(() => window.getSelection()!.isCollapsed)).toBe(false);
+  expect(await page.evaluate(() => window.getSelection()!.toString().trim())).toBe('');
+  await expect(toolbar(page)).toHaveCount(0);
+
+  await page.keyboard.press('Alt+F10');
+  await expect(doc.getByRole('radio', { name: 'Note' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(doc).toBeFocused();
+  await expect(toolbar(page)).toHaveCount(0);
+});
+
 test('every block and every mark, the controls inside each block, and the toolbar on the selection', async ({
   page,
   context,
