@@ -251,29 +251,35 @@ export function SelectionToolbar({
             if (event.key === 'Escape' && !event.defaultPrevented) editor.commands.focus();
           }}
         >
-          <Toolbar label="Formatting" floating>
-            {MARKS.map(([name, label, Icon], index) => (
-              // Above the selection the row stands under "Choose an image" and the hint, so its tooltips
-              // open downwards and cover the selection, not them (live walk W-2).
-              <Tooltip key={name} content={label} placement={place?.below ? 'top' : 'bottom'}>
-                <ToggleButton
-                  label={label}
-                  pressed={selection.active[index]!}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    if (name === 'link') {
-                      setLink((count) => count + 1);
-                      setLinking(true);
-                    } else {
-                      editor.chain().toggleMark(name).run();
-                    }
-                  }}
-                >
-                  <Icon />
-                </ToggleButton>
-              </Tooltip>
-            ))}
-          </Toolbar>
+          {/* Two wrappers that do nothing from 768px up (`display: contents`); at phone width the row scrolls
+              sideways inside them instead of wrapping (narrow-widths walk N-3). */}
+          <div className={styles.toolbarScroll}>
+            <div className={styles.toolbarTrack}>
+              <Toolbar label="Formatting" floating>
+                {MARKS.map(([name, label, Icon], index) => (
+                  // Above the selection the row stands under "Choose an image" and the hint, so its tooltips
+                  // open downwards and cover the selection, not them (live walk W-2).
+                  <Tooltip key={name} content={label} placement={place?.below ? 'top' : 'bottom'}>
+                    <ToggleButton
+                      label={label}
+                      pressed={selection.active[index]!}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        if (name === 'link') {
+                          setLink((count) => count + 1);
+                          setLinking(true);
+                        } else {
+                          editor.chain().toggleMark(name).run();
+                        }
+                      }}
+                    >
+                      <Icon />
+                    </ToggleButton>
+                  </Tooltip>
+                ))}
+              </Toolbar>
+            </div>
+          </div>
         </div>
       ) : null}
       <Dialog open={linking} onClose={() => setLinking(false)} title="Link">

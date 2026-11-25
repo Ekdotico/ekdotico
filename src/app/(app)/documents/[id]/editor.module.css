@@ -61,6 +61,47 @@
   margin-block-end: var(--sp-2);
 }
 
+/* Phone width: the row stays one row and scrolls sideways when the surface is narrower than it (narrow-widths
+   walk N-3, the owner's choice `scroll`). From 768px up the two wrappers are not boxes, so nothing changes there
+   and W-8's rule above is what holds.
+
+   The track is as wide as the row at one line, so the package's toolbar, whose own cap is its container, never
+   wraps; the scroller is the surface's width and scrolls it. The scroller's padding, taken back by its negative
+   margin, keeps room above and below inside the clip for the package's tooltips and the toolbar's shadow, which
+   a scrolling box would otherwise cut; it takes no pointer, so the text beneath stays reachable. The cue that
+   there is more is the last control fading out at the end edge, and the end padding keeps the last control clear
+   of the fade when the row is scrolled to the end. The browser scrolls the focused control into view. */
+.toolbarScroll,
+.toolbarTrack {
+  display: contents;
+}
+
+@media (max-width: 767.98px) {
+  .toolbarScroll {
+    --toolbar-room: var(--sp-9);
+    display: block;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding-block: var(--toolbar-room);
+    margin-block: calc(-1 * var(--toolbar-room));
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--sp-6)), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - var(--sp-6)), transparent);
+  }
+
+  .toolbarScroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbarTrack {
+    display: flex;
+    inline-size: max-content;
+    padding-inline-end: var(--sp-6);
+    pointer-events: auto;
+  }
+}
+
 /* Where the space above the line cannot hold the toolbar without covering what lies over the surface (the
    hint, the image picker and its status): under the line the selection starts on, by the same gap. The page
    does not move; the toolbar may cover the next line while it is open. */

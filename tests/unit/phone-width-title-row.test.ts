@@ -20,6 +20,19 @@ describe('the row under the title (N-4)', () => {
     expect(sheet).toMatch(/\.writable \{\s*padding-inline-end: var\(--sp-8\);/);
   });
 
+  it('scrolls the toolbar sideways below 768px, and leaves W-8 alone above it (N-3)', () => {
+    const sheet = readFileSync('src/app/(app)/documents/[id]/editor.module.css', 'utf8');
+    const tsx = readFileSync('src/app/(app)/documents/[id]/selection-toolbar.tsx', 'utf8');
+    expect(sheet).toMatch(/\.toolbarScroll,\s*\.toolbarTrack \{\s*display: contents;/);
+    const phone = /@media \(max-width: 767\.98px\) \{\s*\.toolbarScroll \{([^}]*)\}/.exec(sheet)?.[1] ?? '';
+    expect(phone).toMatch(/overflow-x: auto/);
+    expect(phone).toMatch(/mask-image: linear-gradient/);
+    expect(sheet).toMatch(/inline-size: max-content;\s*max-inline-size: 100%;/);
+    expect(tsx).toMatch(
+      /styles\.toolbarScroll[\s\S]*styles\.toolbarTrack[\s\S]*<Toolbar label="Formatting" floating>/,
+    );
+  });
+
   it('is the class of the header cluster', () => {
     expect(page).toMatch(/<Cluster gap=\{3\} align="center" className=\{styles\.titleRow\}>/);
   });
