@@ -154,7 +154,8 @@ describe('the post to Discord, from the route (FR-AU-94)', () => {
   it('posts nothing while either switch is off, and the answer is the same where only the second is', async () => {
     const who = await person();
     process.env.FEEDBACK_DISCORD_ENABLED = 'false';
-    // The account has acknowledged version 2, which covers version 1 of the text while posting is off.
+    // The account has acknowledged the on-text (2); with posting off the off-text (1) is the current one, so it has it too.
+    await db().user.update({ where: { id: who.id }, data: { feedbackNoticeVersion: 1 } });
     expect((await post(who.cookie, BODY)).status).toBe(201);
     process.env.FEEDBACK_DISCORD_ENABLED = 'true';
     process.env.FEEDBACK_INTAKE_ENABLED = 'false';

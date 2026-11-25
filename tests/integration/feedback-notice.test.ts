@@ -100,6 +100,27 @@ describe('the feedback notice', () => {
     expect(await feedbackNoticeDue(id)).toBe(false);
   });
 
+  it('shows the notice three times as posting goes off, on and off again, and again for a number raised by hand (D508)', async () => {
+    const { id, cookie } = await person();
+    expect(await feedbackNoticeDue(id)).toBe(true);
+    expect((await POST(cookie, { version: 1 })).status).toBe(200);
+    expect(await feedbackNoticeDue(id)).toBe(false);
+    process.env.FEEDBACK_DISCORD_ENABLED = 'true';
+    expect(await feedbackNoticeDue(id)).toBe(true);
+    expect((await POST(cookie, { version: 2 })).status).toBe(200);
+    expect(await feedbackNoticeDue(id)).toBe(false);
+    // Off again: the recorded 2 differs from the current 1, so the off-text is shown once more.
+    process.env.FEEDBACK_DISCORD_ENABLED = 'false';
+    expect(await feedbackNoticeDue(id)).toBe(true);
+    expect((await POST(cookie, { version: 2 })).status).toBe(409);
+    expect((await POST(cookie, { version: 1 })).status).toBe(200);
+    expect((await recorded(id)).feedbackNoticeVersion).toBe(1);
+    expect(await feedbackNoticeDue(id)).toBe(false);
+    // A recorded number that is not the current one, as after the wording of a text is changed by hand and its number raised.
+    await db().user.update({ where: { id }, data: { feedbackNoticeVersion: 3 } });
+    expect(await feedbackNoticeDue(id)).toBe(true);
+  });
+
   it('refuses a request of another origin 403 and records nothing', async () => {
     const { id, cookie } = await person();
     expect((await POST(cookie, { version: 1 }, 'https://evil.example')).status).toBe(403);

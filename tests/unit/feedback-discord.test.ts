@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   discordPostingOn,
+  escapeMarkdown,
   feedbackDiscordEnabled,
   forgetSaid,
   payloadOf,
@@ -11,7 +12,7 @@ import {
   titleOf,
   webhookFor,
 } from '../../src/lib/feedback/discord.ts';
-import { acknowledged, noticeVersion } from '../../src/lib/feedback/notice.ts';
+import { acknowledged, NOTICE_VERSIONS, noticeVersion } from '../../src/lib/feedback/notice.ts';
 import {
   NOTICE,
   NOTICE_DISCORD,
@@ -269,16 +270,63 @@ describe('the refusal for the feedback notice (FR-AU-95)', () => {
   });
 });
 
-describe('the version of the feedback notice (FR-AU-95, D506)', () => {
-  it('is 1 while posting is off and 2 while it is on', () => {
+describe('the version of the feedback notice (FR-AU-95, D506, D508)', () => {
+  it('has a number of its own for each of the two texts: 1 while posting is off and 2 while it is on', () => {
+    expect(NOTICE_VERSIONS).toEqual({ off: 1, on: 2 });
     expect(noticeVersion(false)).toBe(1);
     expect(noticeVersion(true)).toBe(2);
+    expect(new Set(Object.values(NOTICE_VERSIONS)).size).toBe(Object.keys(NOTICE_VERSIONS).length);
   });
-  it('shows the notice again to an account that acknowledged a lower version, and never to one that has the current', () => {
+  it('shows the notice again whenever the recorded version differs from the current one, a lower or a higher', () => {
     expect(acknowledged(null, 1)).toBe(false);
     expect(acknowledged(1, 1)).toBe(true);
     expect(acknowledged(1, 2)).toBe(false);
     expect(acknowledged(2, 2)).toBe(true);
-    expect(acknowledged(2, 1)).toBe(true);
+    // The off-text once more after the on-text: the recorded 2 is not the current 1.
+    expect(acknowledged(2, 1)).toBe(false);
+    // A number raised by hand for a reworded text.
+    expect(acknowledged(2, 3)).toBe(false);
+    expect(acknowledged(3, 3)).toBe(true);
+  });
+});
+
+describe('the Markdown of a post (D509)', () => {
+  it('escapes every character of Discord’s Markdown, and a list marker at the start of a line', () => {
+    expect(escapeMarkdown('\\ * _ ~ ` | > # - [ ] ( )')).toBe(
+      '\\\\ \\* \\_ \\~ \\` \\| \\> \\# \\- \\[ \\] \\( \\)',
+    );
+    expect(escapeMarkdown('-# small')).toBe('\\-\\# small');
+    expect(escapeMarkdown('+ one\n  + two\n1. first\n 22. second\nnot 3. here')).toBe(
+      '\\+ one\n  \\+ two\n1\\. first\n 22\\. second\nnot 3. here',
+    );
+    expect(escapeMarkdown('plain words, 3.5 and a+b')).toBe('plain words, 3.5 and a+b');
+  });
+  it('leaves a masked link, bold text and a heading as literal text', () => {
+    const post = payloadOf('[text](https://x)\n**bold**\n# heading', 'idea');
+    expect(post.embeds[0]!.description).toBe('\\[text\\]\\(https://x\\)\n\\*\\*bold\\*\\*\n\\# heading');
+    expect(post.thread_name).toBe('\\[text\\]\\(https://x\\) \\*\\*bold\\*\\* \\# heading');
+  });
+  it('keeps @everyone as text and mentions no one', () => {
+    const post = payloadOf('hello @everyone and @here', 'idea');
+    expect(post.embeds[0]!.description).toBe('hello @everyone and @here');
+    expect(post.allowed_mentions).toEqual({ parse: [] });
+  });
+  it('cuts the title before escaping, and cuts it further where the escaped title passes 100', () => {
+    const plain = payloadOf(`${'word '.repeat(30)}`, 'idea').thread_name;
+    expect(Array.from(plain).length).toBeLessThanOrEqual(90);
+    const stars = payloadOf(`${'* '.repeat(80)}`, 'idea').thread_name;
+    expect(Array.from(stars).length).toBeLessThanOrEqual(100);
+    expect(stars.startsWith('\\*')).toBe(true);
+    const hard = payloadOf('*'.repeat(300), 'idea').thread_name;
+    expect(Array.from(hard).length).toBeLessThanOrEqual(100);
+    expect(hard).toBe('\\*'.repeat(50));
+  });
+  it('holds the 4,000 characters of the message within 4,096 after escaping, ending in an ellipsis where it was cut', () => {
+    const whole = payloadOf('y'.repeat(4000), 'idea').embeds[0]!.description;
+    expect(whole).toBe('y'.repeat(4000));
+    const cut = payloadOf('*'.repeat(4000), 'idea').embeds[0]!.description;
+    expect(Array.from(cut).length).toBeLessThanOrEqual(4096);
+    expect(cut.endsWith('…')).toBe(true);
+    expect(cut.slice(0, -1)).toMatch(/^(\\\*)+$/);
   });
 });

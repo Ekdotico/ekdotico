@@ -2,19 +2,27 @@
 // has acknowledged the current one, and the record of an acknowledgement. Modelled on src/lib/closed-alpha-notice.ts.
 //
 // The text is the widget's notice for the state of the Discord switch, followed by the privacy link (src/lib/feedback/widget.ts).
-// So the version follows the switch: 1 while posting to Discord is off, 2 while it is on, and turning posting on shows the
-// notice once more (D506). Assumed, not stated in FR-AU-95: that the numbers are 1 and 2 and move with the switch.
+// Each of the two texts has a version number of its own (D508, "on any change"), and an account is shown the notice again
+// whenever its recorded version differs from the version of the text now shown. So turning posting on shows it once more, and
+// turning it off again shows the off-text once more.
 import { db } from '../db.ts';
 import { discordPostingOn } from './discord.ts';
 
-/** The version of the notice for the state of the Discord switch. Raised whenever the fixed text changes (FR-AU-95). */
-export function noticeVersion(discordPosting: boolean): 1 | 2 {
-  return discordPosting ? 2 : 1;
+/**
+ * The version of each of the two texts of the notice (D508). Raised by hand, and only when that text's wording changes: the
+ * next free number is the next one, and a number is never reused for another text. Today: posting off 1, posting on 2; a
+ * rewording of either takes 3, then 4. The numbers are not compared for order, only for equality.
+ */
+export const NOTICE_VERSIONS = { off: 1, on: 2 } as const;
+
+/** The version of the notice for the state of the Discord switch. */
+export function noticeVersion(discordPosting: boolean): number {
+  return discordPosting ? NOTICE_VERSIONS.on : NOTICE_VERSIONS.off;
 }
 
-/** Whether a recorded version covers the current one: nothing recorded, or a lower version, is shown the notice again. */
+/** Whether the account has acknowledged the text now shown: nothing recorded, or any other version, is shown the notice again. */
 export function acknowledged(recorded: number | null, current: number): boolean {
-  return recorded !== null && recorded >= current;
+  return recorded === current;
 }
 
 /** What `GET /api/account/feedback-notice` reports. */
@@ -56,7 +64,8 @@ export async function acknowledgeFeedbackNotice(userId: string, version: unknown
   await db().user.updateMany({
     where: {
       id: userId,
-      OR: [{ feedbackNoticeVersion: null }, { feedbackNoticeVersion: { lt: version } }],
+      // A null is not "different" to the database, so it is named; a version that already is the current one is not written.
+      OR: [{ feedbackNoticeVersion: null }, { feedbackNoticeVersion: { not: version } }],
     },
     data: { feedbackNoticeVersion: version, feedbackNoticeAcknowledgedAt: new Date() },
   });

@@ -85,7 +85,8 @@ function noticeOf(answer: unknown): NoticeState | null {
   const version = found?.currentVersion;
   if (typeof version !== 'number' || typeof found?.discordPosting !== 'boolean') return null;
   const recorded = found.acknowledgedVersion;
-  return typeof recorded === 'number' && recorded >= version
+  // D508: acknowledged only where the recorded version is the current one, not where it is merely not lower.
+  return recorded === version
     ? { state: 'acknowledged', discordPosting: found.discordPosting }
     : { state: 'due', version, discordPosting: found.discordPosting };
 }
