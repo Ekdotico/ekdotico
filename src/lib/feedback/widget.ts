@@ -40,6 +40,17 @@ export function noticeText(discordPosting: boolean): string {
   return discordPosting ? NOTICE_DISCORD : NOTICE;
 }
 
+/** D507: the statement that feedback was sent while posting to Discord is on. */
+export const SENT_DISCORD = 'Your feedback was sent and posted to the community.';
+
+/**
+ * The statement after a send. Chosen by the switch (`discordPostingOn`) and not by whether the post succeeded: a post that
+ * fails never changes the answer the user receives (FR-AU-94), so it still reads as this.
+ */
+export function sentText(discordPosting: boolean): string {
+  return discordPosting ? SENT_DISCORD : WIDGET_TEXT.sent;
+}
+
 /** The public page the link leads to. Built in another slice; the control is hidden behind the switch until then. */
 export const PRIVACY_HREF = '/privacy';
 

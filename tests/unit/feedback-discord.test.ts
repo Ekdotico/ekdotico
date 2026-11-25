@@ -12,7 +12,14 @@ import {
   webhookFor,
 } from '../../src/lib/feedback/discord.ts';
 import { acknowledged, noticeVersion } from '../../src/lib/feedback/notice.ts';
-import { NOTICE, NOTICE_DISCORD, noticeRefused, noticeText } from '../../src/lib/feedback/widget.ts';
+import {
+  NOTICE,
+  NOTICE_DISCORD,
+  noticeRefused,
+  noticeText,
+  SENT_DISCORD,
+  sentText,
+} from '../../src/lib/feedback/widget.ts';
 
 const HOOK = {
   problem: 'https://discord.com/api/webhooks/111111111111111111/aaaa_TOKEN-problem',
@@ -228,6 +235,14 @@ describe('the texts of the notice (FR-AU-72, D503)', () => {
     expect(NOTICE_DISCORD).toBe(
       'Your message goes to the Ekdotico team, and the message and its kind, with nothing else, are posted to the Ekdotico community on Discord, where its members can read them and vote. With it, Ekdotico sends the team the kind of page you are on, the Ekdotico version, your browser and its window size, and your account identifier; none of these is posted. The content of your documents is not sent. Leave out of the message anything you do not want the community to read. Feedback is kept until 12 months after the last Closed α release.',
     );
+  });
+});
+
+describe('the statement after a send (D507)', () => {
+  it('is chosen by the switch alone, each text pinned whole', () => {
+    expect(sentText(false)).toBe('Your feedback was sent to the Ekdotico team.');
+    expect(sentText(true)).toBe('Your feedback was sent and posted to the community.');
+    expect(SENT_DISCORD).toBe('Your feedback was sent and posted to the community.');
   });
 });
 

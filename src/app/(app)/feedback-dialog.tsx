@@ -12,6 +12,7 @@ import {
   countText,
   noticeRefused,
   noticeText,
+  sentText,
   outcomeOf,
   PRIVACY_HREF,
   rateLimitedText,
@@ -265,7 +266,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
       <div role="status">
         {sent ? (
           <FormFault announce="off" tone="neutral" autoFocus={false}>
-            <p>{WIDGET_TEXT.sent}</p>
+            <p>{sentText(notice.state === 'acknowledged' && notice.discordPosting)}</p>
           </FormFault>
         ) : null}
       </div>
