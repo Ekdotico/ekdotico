@@ -14,6 +14,12 @@ describe('the row under the title (N-4)', () => {
     expect(rule?.[1]).not.toMatch(/gap/);
   });
 
+  it('narrows only the sheet side padding below 768px and keeps the Insert room (N-2)', () => {
+    const sheet = readFileSync('src/app/(app)/documents/[id]/editor.module.css', 'utf8');
+    expect(sheet).toMatch(/@media \(max-width: 767\.98px\) \{\s*\.sheet \{\s*padding-inline: var\(--sp-2\);/);
+    expect(sheet).toMatch(/\.writable \{\s*padding-inline-end: var\(--sp-8\);/);
+  });
+
   it('is the class of the header cluster', () => {
     expect(page).toMatch(/<Cluster gap=\{3\} align="center" className=\{styles\.titleRow\}>/);
   });

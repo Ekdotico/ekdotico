@@ -19,6 +19,14 @@
   }
 }
 
+/* Phone width: half the side room, so the text takes the sheet's width more evenly (narrow-widths walk N-2).
+   The surface keeps the end room of the Insert control (`.writable`); only the sheet's own padding narrows. */
+@media (max-width: 767.98px) {
+  .sheet {
+    padding-inline: var(--sp-2);
+  }
+}
+
 /* Paper has no shadow, hairline or inset. */
 @media print {
   .sheet {
