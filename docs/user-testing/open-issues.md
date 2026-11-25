@@ -142,3 +142,127 @@ Add an entry whenever the owner decides something provisionally. When a point ha
 - An Owner who finds the notice of an offer that ended after their own removal of the Editor redundant.
 
 **What would change the decision.** The owner's answer to Q55 to Q58.
+
+## Reaching the formatting toolbar from the keyboard on a Mac (ux-toolbar-keys)
+
+**Where the behaviour lives:** `src/app/(app)/documents/[id]/editor.tsx` (the sentence that tells of the key) and the toolbar's key handling in `extensions.tsx`.
+
+**What happens.** Alt+F10 is the only key that moves from the text to the formatting toolbar and to the controls of a block. On an Apple laptop F10 is the Mute key unless Fn is held, and Option+F10 may be taken by the system.
+
+**Decided** by the owner (ux-toolbar-keys, "Leave Alt+F10 as the only key"). Not run on a Mac with a screen reader.
+
+**Alternatives considered:**
+
+- A second chord, proposed as Alt+Shift+T, checked first against the browsers' own shortcuts.
+
+**Watch for**, with a tester on a Mac who uses the keyboard:
+
+- Whether they find the toolbar at all, and what they press.
+- Whether the sentence in the description of the text region is read and understood.
+
+**What would change the decision.** If a Mac tester has no keyboard route to formatting, add the second chord.
+
+## A notification count that is not announced (ux-unread-count)
+
+**Where the behaviour lives:** the header link Notifications and its "N unread" badge.
+
+**What happens.** The number changes when a notification arrives or is read, and a screen reader is not told.
+
+**Decided** by the owner (ux-unread-count, "Leave it: no announcement"). No screen reader was run.
+
+**Alternatives considered:**
+
+- A status region that says "2 unread notifications" at each change (new words).
+
+**Watch for**, with a screen reader user:
+
+- Whether they learn of a new notification only by visiting the page, and whether that costs them an invitation or an offer.
+
+**What would change the decision.** If a tester misses a notification that mattered, announce it, with words the owner approves.
+
+## Forms at the left on a tablet, and three left edges on a phone (ui-forms-tablet, ui-header-edges-phone)
+
+**Where the behaviour lives:** the account settings pages at tablet width; the header of a document on a phone.
+
+**What happens.** At tablet width the settings forms sit against the left edge while sign-in and the lists are centred. On a phone the header of a document starts its rows at three different left edges ("Not recorded", "In sync", and the text of "Export as Markdown").
+
+**Decided** by the owner (ui-forms-tablet, 23 November 2026, "Leave at left"; ui-header-edges-phone, "Leave it as it is").
+
+**Alternatives considered:**
+
+- Centre the settings forms, after the same page is shown at 1280 before and after.
+- Align the quiet button's text with the edge on the header too (the edge option for quiet buttons is ordered from Domico; this header case was left out).
+
+**Watch for**, on a tablet and on a phone:
+
+- Whether a tester remarks that settings look different from sign-in, or that the header looks ragged.
+
+**What would change the decision.** More than one tester who says it looks unfinished.
+
+## The selection toolbar below the first line (ui-toolbar-first-line)
+
+**Where the behaviour lives:** the placement of the formatting toolbar, in the application.
+
+**What happens.** When the selection is on the first line, the toolbar appears below it, where there is no room above. It can cover the second line of text while it is open.
+
+**Decided** by the owner on 23 November 2026: "Below the selection".
+
+**Alternatives considered:**
+
+- The page keeps room above the text at all times.
+- Leave it as it was, covering "Choose an image" and the upload line.
+
+**Watch for:**
+
+- A writer who selects the first line and then cannot see the second line they meant to select next.
+- A writer who is surprised that the toolbar is in two places.
+
+**What would change the decision.** If the covered second line gets in the way, keep room above the text.
+
+## A heading one level lower than its label (ux-heading-levels)
+
+**Where the behaviour lives:** `src/app/(app)/documents/[id]/heading-levels.ts`; Domico's editor styles by `data-level`.
+
+**What happens.** The labels in the Insert list say "Heading 1" to "Heading 3", and the page draws them as levels 2 to 4 under the one level-one heading, the title. Looks are unchanged. A copy puts the stored level on the clipboard.
+
+**Decided** by the owner (ux-heading-levels, "Draw the text's headings one level lower, keep the labels"; ux-headings-domico, 24 November 2026). Built in pull request 170, not yet seen with a screen reader.
+
+**Alternatives considered:**
+
+- Labels that match the drawn levels (new words).
+
+**Watch for**, with a screen reader user who lists the headings:
+
+- Whether the outline reads as one tree, and whether "Heading 1" in the menu and level 2 in the list puzzle them.
+
+**What would change the decision.** If the difference confuses, rename the labels, with words the owner approves.
+
+## A title that holds Greek letters while it is edited (ux-title-greek)
+
+**Where the behaviour lives:** Domico's editable title, used in `src/app/(app)/documents/[id]/document-title.tsx`.
+
+**What happens.** While a title that holds a Greek letter is edited, the whole field is set in the sans face; once editing ends it looks as before, with the Greek letters in the sans and the Latin letters in the serif. A mixed title therefore changes its look when it is edited.
+
+**Decided** by the owner (ux-title-greek, "While editing, set the whole title in the sans face if it contains Greek"). Not seen in forced colours, nor with a screen reader.
+
+**Watch for:**
+
+- A writer who types a Greek word into a title and is startled when the whole title changes face.
+- Whether Enter and Escape are found, and whether a refused title (too long) is understood.
+
+**What would change the decision.** If the change of face is jarring, set mixed titles in the serif and accept the fallback face for Greek.
+
+## Pasting a picture (ux-paste-picture)
+
+**Where the behaviour lives:** the image upload in `src/app/(app)/documents/[id]/images.tsx`.
+
+**What happens.** A picture on the clipboard is accepted as an upload, with the same formats, limit and words as the picker and drag-and-drop.
+
+**Decided** by the owner (ux-paste-picture, "Accept pasted pictures, with the same limits and words as the picker"; the margin note on FR-ED-08 approved).
+
+**Watch for:**
+
+- A tester who pastes a screenshot and sees a refusal they do not understand (a large file, a format).
+- A tester who pastes by accident and gets an upload they did not want.
+
+**What would change the decision.** If accidental uploads are common, ask first.
