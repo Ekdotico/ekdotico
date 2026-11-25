@@ -165,7 +165,7 @@ export function TwoFactorSettings({
         />
       </Stack>
       <Stack gap={5}>
-        <h3 className={styles.heading}>Turn off</h3>
+        <h3 className={styles.heading}>Turn off two-factor authentication</h3>
         {foundingTeam ? (
           <p className={styles.text}>{TEXT.team}</p>
         ) : (
