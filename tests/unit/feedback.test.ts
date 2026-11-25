@@ -13,6 +13,7 @@ import {
 } from '../../src/lib/account/feedback-step.ts';
 import {
   deliver,
+  deliverOutcome,
   feedbackIntake,
   INTAKE_PATH,
   PSEUDONYMISE_PATH,
@@ -76,6 +77,17 @@ describe('the client of the intake', () => {
     expect(request!.headers.get('x-ekdotico-nonce')).toMatch(/^[0-9a-f]{32}$/);
     expect(request!.headers.get('x-ekdotico-signature')).toMatch(/^[0-9a-f]{64}$/);
     expect(double.held).toHaveLength(1);
+  });
+
+  it('says created for the intake’s 201 and held for its 200, and false for anything else (FR-AU-94)', async () => {
+    const { dependencies } = setup();
+    await expect(deliverOutcome(body(), dependencies)).resolves.toBe('created');
+    await expect(deliverOutcome(body(), dependencies)).resolves.toBe('held');
+    const double = praktico(SECRET, () => NOW);
+    double.failWith = 500;
+    await expect(
+      deliverOutcome(body(), { fetch: double.fetch, now: () => NOW, secret: () => SECRET }),
+    ).resolves.toBe(false);
   });
 
   it('sends exactly the nine fields, as the bytes it signed', async () => {
@@ -508,7 +520,7 @@ describe('POST /api/feedback', () => {
       stillAllowed: async () => null,
       limitReached: async () => {},
       readJson: async (req) => (await req.json()) as unknown,
-      deliver: (sent) => deliver(sent, { fetch: double.fetch, now: () => NOW, secret: () => SECRET }),
+      deliver: (sent) => deliverOutcome(sent, { fetch: double.fetch, now: () => NOW, secret: () => SECRET }),
       appVersion: '0.1.2',
       now: () => new Date(NOW),
       newId: () => '6f1d2c9e-3b7a-4f58-9a0e-2d4c8b1e7a35',
@@ -556,6 +568,18 @@ describe('POST /api/feedback', () => {
       kind: FIRST.kind,
       message: 'A message',
     });
+  });
+
+  it('hands over nothing for a pair the intake already held (its 200): the answer is still sent, and no second post is made', async () => {
+    const accepted = vi.fn();
+    const { dependencies } = setup({ accepted });
+    expect((await handleFeedback(request(), dependencies)).status).toBe(201);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    // The same identifier again (the id of `newId` here is constant): the double answers 200, as the intake does.
+    const held = await handleFeedback(request(), dependencies);
+    expect(held.status).toBe(201);
+    expect(await held.json()).toEqual({ sent: true });
+    expect(accepted).toHaveBeenCalledTimes(1);
   });
 
   it('hands over nothing where the intake refuses, or the body is invalid', async () => {
@@ -760,7 +784,7 @@ describe('POST /api/feedback', () => {
       },
       deliver: async () => {
         order.push('sent');
-        return true;
+        return 'created' as const;
       },
     });
     await handleFeedback(request(), dependencies);

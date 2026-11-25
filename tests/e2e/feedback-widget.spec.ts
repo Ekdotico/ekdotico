@@ -123,6 +123,35 @@ test('asks for a kind and a message in text beside the field, and moves focus to
   await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).toBeFocused();
 });
 
+test('leaves focus where the refusal puts it, and never moves it back to the first kind (FR-AU-80 (d), (e))', async ({
+  page,
+}) => {
+  await enter(page);
+  await page.route('**/api/feedback', (route) =>
+    route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: { code: 'invalid', message: '', fields: [{ field: 'message', rule: 'too_long' }] },
+      }),
+    }),
+  );
+  await control(page).click();
+  await fill(page, 'a message the server refuses');
+  await dialog(page).getByRole('button', { name: WIDGET_TEXT.send }).click();
+  // A 422 for the message: focus goes to the message, the field with the fault, and not to the first kind.
+  await expect(dialog(page).getByRole('textbox', { name: WIDGET_TEXT.label })).toBeFocused();
+  await expect(dialog(page).getByRole('radio', { name: WIDGET_TEXT.kinds.problem })).not.toBeFocused();
+  // A send that fails: focus stays on Send.
+  await page.unroute('**/api/feedback');
+  await page.route('**/api/feedback', (route) =>
+    route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":{"code":"not_sent"}}' }),
+  );
+  await dialog(page).getByRole('button', { name: WIDGET_TEXT.send }).click();
+  await expect(dialog(page).getByRole('alert')).toHaveText(WIDGET_TEXT.notSent);
+  await expect(dialog(page).getByRole('button', { name: WIDGET_TEXT.send })).toBeFocused();
+});
+
 test('refuses a hidden character by its own sentence, and keeps the text', async ({ page }) => {
   await enter(page);
   await control(page).click();

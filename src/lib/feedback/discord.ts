@@ -9,6 +9,7 @@
 // the message, and is not repeated, so it can never change the answer the user receives.
 import { feedbackIntakeEnabled } from '../account/feedback-step.ts';
 import type { Kind } from './validate.ts';
+import { WIDGET_TEXT } from './widget.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -64,11 +65,16 @@ export function titleOf(message: string): string {
   return (space > 0 ? head.slice(0, space) : head).join('');
 }
 
+// A letter, a number, a mark of punctuation or a symbol: what a reader can see. Format characters (U+200B and the like) are none.
+const VISIBLE = /[\p{L}\p{N}\p{P}\p{S}]/u;
+
 /** The body of the request to the webhook: the title, the message whole in an embed, and no one mentioned. */
-export function payloadOf(message: string) {
+export function payloadOf(message: string, kind: Kind) {
   const whole = message.trim();
+  const title = titleOf(whole);
   return {
-    thread_name: titleOf(whole),
+    // A title with nothing to see in it (white space and zero-width characters only) is the label of the kind instead.
+    thread_name: VISIBLE.test(title) ? title : WIDGET_TEXT.kinds[kind],
     embeds: [{ description: whole }],
     allowed_mentions: { parse: [] as string[] },
   };
@@ -120,7 +126,7 @@ export async function postToDiscord(accepted: Accepted, dependencies: Dependenci
     const response = await send(`${webhook}?wait=true`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payloadOf(message)),
+      body: JSON.stringify(payloadOf(message, kind)),
       redirect: 'error',
       cache: 'no-store',
       signal: AbortSignal.timeout(timeoutMs),

@@ -73,16 +73,28 @@ describe('the title of a post (FR-AU-94)', () => {
 describe('the payload of a post (FR-AU-94)', () => {
   it('is the title, the whole message in an embed, and no mentions, and no other field', () => {
     const message = 'x'.repeat(95) + '\nand more';
-    expect(payloadOf(`  ${message}  `)).toEqual({
+    expect(payloadOf(`  ${message}  `, 'idea')).toEqual({
       thread_name: 'x'.repeat(90),
       embeds: [{ description: message }],
       allowed_mentions: { parse: [] },
     });
-    expect(Object.keys(payloadOf('m')).sort()).toEqual(['allowed_mentions', 'embeds', 'thread_name']);
-    expect(Object.keys(payloadOf('m').embeds[0]!)).toEqual(['description']);
+    expect(Object.keys(payloadOf('m', 'idea')).sort()).toEqual(['allowed_mentions', 'embeds', 'thread_name']);
+    expect(Object.keys(payloadOf('m', 'idea').embeds[0]!)).toEqual(['description']);
+  });
+  it('takes the label of the kind as the title where the cut title has nothing to see', () => {
+    for (const [kind, label] of [
+      ['problem', 'Problem'],
+      ['idea', 'Idea'],
+      ['other', 'Other'],
+    ] as const) {
+      const message = `​​​${'​'.repeat(100)}`;
+      expect(payloadOf(`${message}x`, kind).thread_name).toBe(label);
+      expect(payloadOf(message, kind).thread_name).toBe(label);
+    }
+    expect(payloadOf('​hello', 'idea').thread_name).toBe('​hello');
   });
   it('holds the 4,000 characters whole', () => {
-    expect(payloadOf('y'.repeat(4000)).embeds[0]!.description).toHaveLength(4000);
+    expect(payloadOf('y'.repeat(4000), 'idea').embeds[0]!.description).toHaveLength(4000);
   });
 });
 
@@ -131,7 +143,7 @@ describe('postToDiscord (FR-AU-94)', () => {
       expect(url).toBe(`${HOOK[kind]}?wait=true`);
       expect(init.method).toBe('POST');
       expect(init.signal).toBeInstanceOf(AbortSignal);
-      expect(JSON.parse(init.body as string)).toEqual(payloadOf(ACCEPTED.message));
+      expect(JSON.parse(init.body as string)).toEqual(payloadOf(ACCEPTED.message, kind));
       expect(log).toHaveBeenCalledWith('feedback sub-1: posted to discord');
     }
   });

@@ -5,7 +5,7 @@
 // body carries an empty `message`. The application keeps no copy of a submission and logs only its identifier
 // and the outcome, never the account (FR-AU-76, appsec rule 12).
 import { describeUserAgent } from '../user-agent.ts';
-import type { IntakeBody } from './client.ts';
+import type { Delivery, IntakeBody } from './client.ts';
 import { MAX_REQUEST_BYTES, validateSubmission, type Kind } from './validate.ts';
 import type { LimitName } from '../settings.ts';
 
@@ -31,7 +31,7 @@ export interface Dependencies {
   /** Writes the entry of a limit reached (NFR-SE-19). */
   limitReached: (name: LimitName, userId: string, seconds: number) => Promise<void>;
   readJson: (request: Request, maxBytes: number) => Promise<unknown>;
-  deliver: (body: IntakeBody) => Promise<boolean>;
+  deliver: (body: IntakeBody) => Promise<Delivery>;
   appVersion: string;
   now: () => Date;
   newId: () => string;
@@ -124,7 +124,7 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
     if (gone) return gone;
     // 6. The delivery. The identifier is the browser's on a retry and the server's otherwise (fw-retry-id).
     const submissionId = value.submissionId ?? d.newId();
-    accepted = await d.deliver({
+    const delivery = await d.deliver({
       submissionId,
       submittedAt: d.now().toISOString(),
       kind: value.kind,
@@ -135,15 +135,20 @@ export async function handleFeedback(request: Request, d: Dependencies): Promise
       viewport: value.viewport,
       accountId: userId,
     });
+    accepted = delivery !== false;
     if (!accepted) {
       d.log(`feedback ${submissionId}: not sent`);
       return refuse(502, 'not_sent', {}, { submissionId });
     }
     d.log(`feedback ${submissionId}: sent`);
-    try {
-      d.accepted({ submissionId, kind: value.kind, message: value.message });
-    } catch {
-      d.log(`feedback ${submissionId}: not posted to discord (error)`);
+    // Posted only for a submission the intake did not hold before: a repeat of an identifier (200) is answered as sent and
+    // posts nothing, so that a retry cannot post the same text twice (fw-wire-align).
+    if (delivery === 'created') {
+      try {
+        d.accepted({ submissionId, kind: value.kind, message: value.message });
+      } catch {
+        d.log(`feedback ${submissionId}: not posted to discord (error)`);
+      }
     }
     return Response.json({ sent: true }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
   } finally {

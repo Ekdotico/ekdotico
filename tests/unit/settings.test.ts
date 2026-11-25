@@ -177,6 +177,16 @@ describe('loadSettings: what a process cannot start without', () => {
     },
   );
 
+  // FR-AU-94: the second switch is checked at start, and empty is off.
+  it.each(['yes', 'TRUE', '1'])('refuses to start where FEEDBACK_DISCORD_ENABLED is %s', (value) => {
+    expect(() => loadSettings({ ...env, FEEDBACK_DISCORD_ENABLED: value })).toThrow(
+      /FEEDBACK_DISCORD_ENABLED/,
+    );
+  });
+  it.each(['', 'true', 'false'])('starts where FEEDBACK_DISCORD_ENABLED is %j', (value) => {
+    expect(() => loadSettings({ ...env, FEEDBACK_DISCORD_ENABLED: value })).not.toThrow();
+  });
+
   // NFR-SE-07: a limit under a misspelt name would change nothing, in silence.
   it.each(['RATE_LIMIT_API_PER_USR', 'RATE_LIMIT_', 'RATE_LIMIT_api_per_user', 'RATE_LIMIT_toString'])(
     'refuses to start where %s is set, which names no limit, and does not repeat its value',

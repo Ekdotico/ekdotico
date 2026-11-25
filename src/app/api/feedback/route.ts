@@ -9,7 +9,7 @@ import { inDeletion } from '../../../lib/account/in-deletion.ts';
 import { fault, notAdmitted, refusedOrigin, unauthenticated } from '../../../lib/auth/route-answers.ts';
 import { validateSessionRow } from '../../../lib/auth/session.ts';
 import { closedAlphaNoticeDue } from '../../../lib/closed-alpha-notice.ts';
-import { deliver } from '../../../lib/feedback/client.ts';
+import { deliverOutcome } from '../../../lib/feedback/client.ts';
 import { discordPostingOn, postToDiscord } from '../../../lib/feedback/discord.ts';
 import { feedbackNoticeDue } from '../../../lib/feedback/notice.ts';
 import { handleFeedback } from '../../../lib/feedback/submit.ts';
@@ -42,7 +42,7 @@ export async function POST(request: Request): Promise<Response> {
       stillAllowed: async (userId) => ((await inDeletion(userId)) ? unauthenticated() : null),
       limitReached: (name, userId, seconds) => logLimitReached(name, userId, seconds, userId),
       readJson,
-      deliver: (body) => deliver(body),
+      deliver: (body) => deliverOutcome(body),
       appVersion: pkg.version,
       now: () => new Date(),
       newId: randomUUID,

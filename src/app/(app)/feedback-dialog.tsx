@@ -74,6 +74,7 @@ function PrivacyLink() {
 
 const NOTICE_PATH = '/api/account/feedback-notice';
 const CONTINUE_ID = 'feedback-notice-continue';
+const NOTICE_TEXT_ID = 'feedback-notice-text';
 
 function noticeOf(answer: unknown): NoticeState | null {
   const found = answer as {
@@ -110,10 +111,12 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
   const area = useRef<HTMLTextAreaElement>(null);
   const wasOpen = useRef(false);
 
-  // The first radio is the first field, and where focus lands on opening (FR-AU-80 (b)).
+  // Where focus lands on opening (FR-AU-80 (b)): the first radio, which is the first field, while the form is shown; "Close"
+  // while it is hidden (the notice is loading, due or failed to be read), and not whatever `showModal()` happens to pick.
+  // Set after every render, so that the dialog reads what is shown now.
   useEffect(() => {
-    first.current = document.getElementById('feedback-kind');
-  }, []);
+    first.current = document.getElementById(notice.state === 'acknowledged' ? 'feedback-kind' : CLOSE_ID);
+  });
   // A statement of "sent" is read once; the next opening shows the form.
   const dismiss = () => {
     if (status.state === 'sent') setStatus({ state: 'idle' });
@@ -136,12 +139,13 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
     });
   }, [open, notice.state]);
 
-  // Focus follows what is shown (FR-AU-80 (b)): "Continue" while the notice is, the first kind once the form is.
+  // Focus follows the state of the notice and nothing else (FR-AU-80 (b), (d), (e)): "Continue" when the notice is shown, the
+  // first kind once the form is. It does not follow the state of a send, so a refusal or a failed send leaves it where it was.
   useEffect(() => {
-    if (!open || status.state === 'sent') return;
+    if (!open) return;
     if (notice.state === 'due') document.getElementById(CONTINUE_ID)?.focus();
     else if (notice.state === 'acknowledged') document.getElementById('feedback-kind')?.focus();
-  }, [open, notice.state, status.state]);
+  }, [open, notice.state]);
 
   async function acknowledge() {
     if (notice.state !== 'due' || acknowledging.current) return;
@@ -270,15 +274,14 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
           </FormFault>
         ) : null}
       </div>
-      {/* FR-AU-95: the feedback notice, before the kind and the message. Announced where it appears, as the statement above is.
+      {/* FR-AU-95: the feedback notice, before the kind and the message. It is the description of "Continue", which takes
+          the focus, so a screen reader reads it with the button and not as a live region that competes with the focus.
           "Continue" records that it was shown and is not a consent: no tick box. Closing before it records nothing. */}
-      <div role="status">
-        {notice.state === 'due' ? (
-          <p>
-            {noticeText(notice.discordPosting)} <PrivacyLink />
-          </p>
-        ) : null}
-      </div>
+      {notice.state === 'due' ? (
+        <p id={NOTICE_TEXT_ID}>
+          {noticeText(notice.discordPosting)} <PrivacyLink />
+        </p>
+      ) : null}
       {notice.state === 'failed' || (notice.state === 'due' && notice.fault) ? (
         <FormFault
           title={(notice.state === 'failed' ? notice.fault : notice.fault!).message}
@@ -289,6 +292,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
         <Stack gap={5}>
           <Button
             id={CONTINUE_ID}
+            aria-describedby={NOTICE_TEXT_ID}
             variant="primary"
             disabled={!ready}
             pending={continuing}
